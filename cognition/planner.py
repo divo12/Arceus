@@ -9,8 +9,8 @@ class Planner:
     """Builds a practical plan using the available skills inventory."""
 
     _PHASE_TO_SKILLS = {
-        "understand": ["problem-statement", "problem-framing-canvas", "discovery-process"],
-        "validate": ["jobs-to-be-done", "company-research", "pol-probe"],
+        "understand": ["web-search", "problem-statement", "problem-framing-canvas", "discovery-process"],
+        "validate": ["web-search", "jobs-to-be-done", "company-research", "pol-probe"],
         "decide": ["prioritization-advisor", "product-strategy-session", "opportunity-solution-tree"],
         "plan": ["prd-development", "user-story", "roadmap-planning"],
     }

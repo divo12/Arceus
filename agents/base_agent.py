@@ -163,6 +163,17 @@ class BaseAgent:
         )
         skills_to_use = cognition_result.get("skills_to_use", [])
         prompts_to_reference = cognition_result.get("prompts_to_reference", [])
+        skill_gaps = self.skills.detect_skill_gaps(cognition_result.get("plan", {}))
+        skill_drafts: List[str] = []
+        if context and context.get("draft_skill_specs"):
+            for gap in skill_gaps:
+                path = self.skills.create_skill_draft(
+                    skill_name=gap["suggested_skill_name"],
+                    problem=problem_description,
+                    rationale=gap["reason"],
+                    evidence=[cognition_result.get("reflection", {})],
+                )
+                skill_drafts.append(str(path))
 
         messages = self.build_context(
             user_message=f"""Problem: {problem_description}
@@ -183,6 +194,8 @@ Please use the selected skills and provide a holistic recommendation on what to 
             "messages": messages,
             "recommended_skills": skills_to_use,
             "recommended_prompts": prompts_to_reference,
+            "skill_gaps": skill_gaps,
+            "skill_drafts": skill_drafts,
             "available_skills": available_skill_names,
             "available_prompts": available_prompt_names,
             "problem": problem_description,

@@ -1,0 +1,59 @@
+# PM Core-First Runtime Architecture
+
+## Overview
+
+This repository now follows a nanobot-inspired core runtime specialized for product-management execution:
+
+1. iterative execution loop (`context -> provider -> tools -> iterate`)
+2. PM cognition cycle (`interpret -> reason -> plan -> decide -> act -> reflect`)
+3. policy-gated web learning when confidence is low
+4. memory traces with run and iteration metadata
+5. skill-gap detection with draft-skill generation and human review gate
+
+## Runtime Flow
+
+1. `execution/agent_loop.py` starts a run with `run_id`.
+2. `agents/base_agent.py` builds context (identity + skills + prompt references).
+3. `cognition/cognitive_loop.py` produces plan/decision/reflection for each iteration.
+4. `providers/adapter.py` contract drives provider output (content + optional tool calls).
+5. `agents/tools/registry.py` executes tool calls and appends tool outputs to context.
+6. Web evidence is captured from `web_search`/`web_fetch` results and reused in later iterations.
+7. `cognition/memory/memory_manager.py` writes episodic traces + run summaries.
+8. Repeated missing-skill phases produce draft specs under `skills/workspace_skills/_drafts/`.
+
+## Core Modules
+
+- `execution/agent_loop.py`: loop control, iteration budget, tool execution, evidence capture.
+- `providers/adapter.py`: provider abstraction (`ProviderAdapter`, `ProviderResponse`, `ToolCall`).
+- `providers/rule_based_provider.py`: deterministic default provider for local runtime/tests.
+- `cognition/cognitive_loop.py`: adds explicit `reflect` output used by loop and memory.
+- `cognition/decision_policy.py`: confidence scoring + web-evidence requirement policy.
+- `agents/skills.py`: skill-gap detection and draft skill file generation.
+- `cognition/memory/long_term_memory.py`: hardened memory schema (`episodes`, `traces`, `runs`, `facts`).
+
+## Web Learning Policy
+
+When decision confidence is low, `requires_web_evidence=true` is set by policy.
+
+- The provider is expected to call `web_search`/`web_fetch`.
+- The loop does not finalize until evidence is available or max iterations are reached.
+- Final outputs include evidence metadata for traceability.
+
+## Skill Drafting Gate
+
+Draft skills are generated only as review artifacts:
+
+- location: `skills/workspace_skills/_drafts/<skill-name>/SKILL.md`
+- frontmatter includes:
+  - `status: draft`
+  - `review_required: true`
+- drafts are not auto-enabled into active workspace skills.
+
+## Validation Commands
+
+```bash
+scripts/run_local.sh smoke
+uv run python -m unittest tests/execution/test_agent_loop.py
+scripts/run_local.sh test
+scripts/run_local.sh lint
+```

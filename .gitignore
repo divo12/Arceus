@@ -5,3 +5,7 @@ models/prompts/user_prompts/
 uv.lock
 .venv/
 .python-version
+
+# Python
+__pycache__/
+*.pyc

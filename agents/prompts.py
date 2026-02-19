@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
-DEFAULT_PROMPTS_DIR = (
+DEFAULT_PROMPTS_DIR = Path(__file__).parent.parent / "models" / "prompts" / "task_prompts"
+USER_PROMPTS_DIR = Path(__file__).parent.parent / "models" / "prompts" / "user_prompts"
+LEGACY_PROMPTS_DIR = (
     Path(__file__).parent.parent / "PM_Skills" / "product-manager-prompts" / "prompts"
 )
 
@@ -15,7 +17,15 @@ class PromptLoader:
 
     def __init__(self, workspace: Path, prompts_dir: Optional[Path] = None):
         self.workspace = workspace
-        self.prompts_dir = prompts_dir or DEFAULT_PROMPTS_DIR
+        configured = prompts_dir or DEFAULT_PROMPTS_DIR
+        if configured.exists():
+            self.prompts_dir = configured
+        elif USER_PROMPTS_DIR.exists():
+            self.prompts_dir = USER_PROMPTS_DIR
+        elif LEGACY_PROMPTS_DIR.exists():
+            self.prompts_dir = LEGACY_PROMPTS_DIR
+        else:
+            self.prompts_dir = configured
 
     def list_prompts(self) -> List[Dict[str, str]]:
         """List markdown prompts with basic metadata."""

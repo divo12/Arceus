@@ -1,0 +1,16 @@
+[project]
+name = "arceus-pm-agent"
+version = "0.1.0"
+description = "Product manager autonomous agent core runtime"
+readme = "docs/usage.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "httpx>=0.27.0",
+  "loguru>=0.7.2",
+  "mcp>=1.0.0",
+  "PyYAML>=6.0.2",
+  "readability-lxml>=0.8.1",
+]
+
+[dependency-groups]
+dev = []

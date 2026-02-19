@@ -1,5 +1,6 @@
 """Memory manager that coordinates short-term and long-term memory."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -15,8 +16,24 @@ class MemoryManager:
         self.long_term = LongTermMemory(workspace)
 
     def record_episode(self, episode: Dict[str, Any]) -> None:
-        self.short_term.add(episode)
-        self.long_term.append_episode(episode)
+        enriched = dict(episode)
+        enriched.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        self.short_term.add(enriched)
+        self.long_term.append_episode(enriched)
+
+    def record_trace(self, trace: Dict[str, Any]) -> None:
+        enriched = dict(trace)
+        enriched.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        self.short_term.add({"trace": enriched})
+        self.long_term.append_trace(enriched)
+
+    def record_run_summary(self, run_summary: Dict[str, Any]) -> None:
+        enriched = dict(run_summary)
+        enriched.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        self.long_term.append_run(enriched)
+
+    def remember_fact(self, key: str, value: Any) -> None:
+        self.long_term.upsert_fact(key, value)
 
     def get_memory_snapshot(self) -> Dict[str, Any]:
         return {

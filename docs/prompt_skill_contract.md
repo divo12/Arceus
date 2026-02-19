@@ -20,6 +20,12 @@ Prompts are often lost across chats. Converting useful prompts into file-backed 
    - stakeholder communication framing,
    - domain wording not present in skills.
 
+## Runtime Integration Notes
+
+- Prompt references are selected during planning, but execution decisions rely on skills/tools.
+- Web-evidence policy and loop iteration controls are policy-level behaviors, not prompt behaviors.
+- Skill-gap drafting creates draft `SKILL.md` files for human review; prompts are never used as capability replacements.
+
 ## Anti-Redundancy Rule
 
 If a selected prompt fully overlaps with currently selected skills, skip that prompt and rely on skill instructions.

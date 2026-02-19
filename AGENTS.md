@@ -5,6 +5,8 @@ You can refer to examples folder for testing
 Also whenever you feel you made a new change just push the code
 Also Add docs for every step whenever you make a change and test it
 
+Whenever you add a new tool in agents folder, use ./skill-creator/creator/Skill.md to create relevant built-in skill
+
 ### Prompt-vs-Skill Contract
 
 - Skill: an executable capability/procedure the agent knows how to perform.

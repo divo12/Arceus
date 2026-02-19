@@ -7,6 +7,14 @@ description: Create or update AgentSkills. Use when designing, structuring, or p
 
 This skill provides guidance for creating effective skills.
 
+## Draft Skill Review Gate
+
+When draft skills are auto-generated from runtime gap detection, treat them as proposal artifacts only:
+
+- keep drafts under `skills/workspace_skills/_drafts/`
+- require explicit human review before promotion
+- move approved drafts into `skills/workspace_skills/<skill-name>/SKILL.md`
+
 ## About Skills
 
 Skills are modular, self-contained packages that extend the agent's capabilities by providing

@@ -4,8 +4,9 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "built-in_skills"
@@ -22,6 +23,7 @@ class SkillsLoader:
     def __init__(self, workspace: Path, builtin_skills_dir: Optional[Path] = None):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills" / "workspace_skills"
+        self.workspace_skill_drafts = self.workspace_skills / "_drafts"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
     
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
@@ -227,3 +229,79 @@ class SkillsLoader:
                 return metadata
         
         return None
+
+    def detect_skill_gaps(self, plan: Dict[str, Any]) -> list[dict[str, str]]:
+        """
+        Detect missing capability areas from plan phases with no mapped skills.
+
+        Returns:
+            List of gap descriptors with phase and suggested skill name.
+        """
+        gaps: list[dict[str, str]] = []
+        for phase in plan.get("phases", []):
+            phase_name = phase.get("phase", "")
+            if phase_name and not phase.get("skills", []):
+                gaps.append(
+                    {
+                        "phase": phase_name,
+                        "reason": "No available skill mapped to this phase",
+                        "suggested_skill_name": f"{phase_name}-support-skill",
+                    }
+                )
+        return gaps
+
+    def create_skill_draft(
+        self,
+        skill_name: str,
+        problem: str,
+        rationale: str,
+        evidence: Optional[list[Any]] = None,
+    ) -> Path:
+        """
+        Create a workspace skill draft for human review.
+
+        Drafts are created under skills/workspace_skills/_drafts and are not auto-enabled.
+        """
+        draft_dir = self.workspace_skill_drafts / skill_name
+        draft_dir.mkdir(parents=True, exist_ok=True)
+        draft_file = draft_dir / "SKILL.md"
+        evidence = evidence or []
+        created_at = datetime.now(timezone.utc).isoformat()
+        draft_file.write_text(
+            "\n".join(
+                [
+                    "---",
+                    f"name: {skill_name}",
+                    "status: draft",
+                    "review_required: true",
+                    f"created_at: {created_at}",
+                    "source: skill-gap-detection",
+                    "---",
+                    "",
+                    f"# Draft Skill: {skill_name}",
+                    "",
+                    "## Why this draft exists",
+                    rationale,
+                    "",
+                    "## Problem context",
+                    problem,
+                    "",
+                    "## Proposed procedure",
+                    "1. Clarify the missing objective and expected output.",
+                    "2. Define inputs required from context, tools, and stakeholders.",
+                    "3. Provide repeatable steps with checkpoints and quality gates.",
+                    "4. Define evidence and validation criteria.",
+                    "",
+                    "## Evidence snippets",
+                    json.dumps(evidence, indent=2),
+                    "",
+                    "## Human review checklist",
+                    "- [ ] Validate this capability is repeatedly required",
+                    "- [ ] Confirm no existing built-in/workspace skill already covers it",
+                    "- [ ] Refine the procedure and examples",
+                    "- [ ] Move from `_drafts` to `workspace_skills/<name>/SKILL.md` when approved",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return draft_file

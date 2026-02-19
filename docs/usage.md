@@ -1,0 +1,85 @@
+# Arceus Development Workflow (uv + Python 3.11)
+
+## Prerequisites
+
+- Install `uv` (https://docs.astral.sh/uv/getting-started/installation/).
+- Use a shell on macOS/Linux with project root at `Arceus/`.
+
+## One-command setup
+
+From project root:
+
+```bash
+scripts/run_local.sh setup
+```
+
+This command:
+- creates `.venv` pinned to Python 3.11
+- syncs dependencies from `pyproject.toml` using `uv sync`
+
+## Daily commands
+
+From project root:
+
+```bash
+scripts/run_local.sh smoke
+```
+
+Runs:
+- interpreter check (`Python 3.11.x`)
+- selected smoke test suites:
+  - `tests/agents/test_skills.py`
+  - `tests/cognition/test_cognition.py`
+  - `tests/cognition/test_prompt_integration.py`
+
+Run full unit discovery:
+
+```bash
+scripts/run_local.sh test
+```
+
+Run the loop-focused suite:
+
+```bash
+uv run python -m unittest tests/execution/test_agent_loop.py
+```
+
+Run lightweight lint-style check (bytecode compile):
+
+```bash
+scripts/run_local.sh lint
+```
+
+## Manual uv workflow (optional)
+
+If you prefer direct commands:
+
+```bash
+uv venv --python 3.11 .venv
+uv sync
+uv run python --version
+uv run python -m unittest discover -s tests -p "test_*.py"
+```
+
+## Run the PM core loop
+
+Minimal direct invocation from repo root:
+
+```bash
+uv run python -c "from pathlib import Path; from execution.agent_loop import AgentLoop; out=AgentLoop(Path('.')).run_sync('Users drop during onboarding'); print(out['final'])"
+```
+
+The output includes:
+- final response content + confidence
+- per-iteration traces
+- web evidence captured during runtime
+- drafted skill paths (when repeated capability gaps are detected)
+
+## Troubleshooting
+
+- If Python is not 3.11, re-run:
+  - `uv venv --python 3.11 .venv`
+- If dependency resolution changes:
+  - `uv sync`
+- If command permissions fail for helper script:
+  - `chmod +x scripts/run_local.sh`
