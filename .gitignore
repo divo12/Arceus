@@ -1,0 +1,7 @@
+PM_Skills/
+models/prompts/user_prompts/
+
+# uv / Python environment
+uv.lock
+.venv/
+.python-version
