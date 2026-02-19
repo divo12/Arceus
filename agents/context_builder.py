@@ -6,6 +6,7 @@ import platform
 from pathlib import Path
 from typing import Any, Optional, List
 
+from agents.prompts import PromptLoader
 from agents.skills import SkillsLoader
 
 
@@ -22,8 +23,13 @@ class ContextBuilder:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.skills = SkillsLoader(workspace)
+        self.prompts = PromptLoader(workspace)
     
-    def build_system_prompt(self, skill_names: Optional[List[str]] = None) -> str:
+    def build_system_prompt(
+        self,
+        skill_names: Optional[List[str]] = None,
+        prompt_names: Optional[List[str]] = None,
+    ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
         
@@ -73,6 +79,24 @@ Skills with available="false" need dependencies installed first - you can try in
                 requested_content = self.skills.load_skills_for_context(requested_skills)
                 if requested_content:
                     parts.append(f"# Requested Skills\n\n{requested_content}")
+
+        # 4. Prompt references: separate from skills (instruction scaffolding only)
+        prompt_summary = self.prompts.build_prompts_summary()
+        if prompt_summary:
+            parts.append(
+                f"""# Prompt References
+
+Prompt references improve framing, clarifying questions, and output structure.
+They are not capabilities. Skills remain the execution source of truth.
+If a prompt overlaps a selected skill, prefer the skill and avoid redundant instructions.
+
+{prompt_summary}"""
+            )
+
+        if prompt_names:
+            selected_prompt_content = self.prompts.load_prompts_for_context(prompt_names)
+            if selected_prompt_content:
+                parts.append(f"# Selected Prompt References\n\n{selected_prompt_content}")
         
         return "\n\n---\n\n".join(parts)
     
@@ -167,6 +191,7 @@ Always be thorough, strategic, and user-focused. Think holistically about the en
         history: List[dict],
         current_message: str,
         skill_names: Optional[List[str]] = None,
+        prompt_names: Optional[List[str]] = None,
         media: Optional[List[str]] = None,
         channel: Optional[str] = None,
         chat_id: Optional[str] = None,
@@ -188,7 +213,7 @@ Always be thorough, strategic, and user-focused. Think holistically about the en
         messages = []
 
         # System prompt
-        system_prompt = self.build_system_prompt(skill_names)
+        system_prompt = self.build_system_prompt(skill_names, prompt_names)
         if channel and chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
         messages.append({"role": "system", "content": system_prompt})

@@ -2,7 +2,8 @@
 
 from agents.base_agent import BaseAgent
 from agents.context_builder import ContextBuilder
+from agents.prompts import PromptLoader
 from agents.skills import SkillsLoader
 from cognition.cognitive_loop import CognitiveLoop
 
-__all__ = ["BaseAgent", "ContextBuilder", "SkillsLoader", "CognitiveLoop"]
+__all__ = ["BaseAgent", "ContextBuilder", "SkillsLoader", "PromptLoader", "CognitiveLoop"]

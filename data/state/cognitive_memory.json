@@ -1,0 +1,26 @@
+{
+  "episodes": [
+    {
+      "problem": "\n    Users are complaining that our mobile app takes too long to load.\n    The app currently takes 8-10 seconds to show the home screen on average devices.\n    We're losing users during the loading phase.\n    ",
+      "objectives": [
+        "Improve user outcomes and experience"
+      ],
+      "skills_to_use": [
+        "problem-statement",
+        "problem-framing-canvas",
+        "discovery-process",
+        "jobs-to-be-done",
+        "company-research",
+        "pol-probe",
+        "prioritization-advisor",
+        "product-strategy-session",
+        "opportunity-solution-tree",
+        "prd-development",
+        "user-story",
+        "roadmap-planning"
+      ],
+      "decision": "Proceed with phased discovery-to-delivery plan"
+    }
+  ],
+  "facts": {}
+}

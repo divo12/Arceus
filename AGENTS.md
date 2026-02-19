@@ -4,3 +4,10 @@ Don't create multiple files for one test . if you have to try multiple ways, jus
 You can refer to examples folder for testing
 Also whenever you feel you made a new change just push the code
 Also Add docs for every step whenever you make a change and test it
+
+### Prompt-vs-Skill Contract
+
+- Skill: an executable capability/procedure the agent knows how to perform.
+- Prompt: a reusable reference scaffold used to improve framing, questions, and output structure.
+- Do not duplicate skill instructions with prompt text.
+- Prefer skills for execution; use prompts only when they add net-new guidance.

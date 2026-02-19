@@ -26,10 +26,11 @@ class CognitiveLoop:
         problem_description: str,
         context: Optional[Dict[str, Any]],
         available_skills: List[str],
+        available_prompts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         interpreted = self.interpreter.interpret(problem_description, context, available_skills)
         reasoning = self.reasoner.reason(interpreted)
-        plan = self.planner.build_plan(reasoning, available_skills)
+        plan = self.planner.build_plan(reasoning, available_skills, available_prompts)
         decision = self.policy.choose(interpreted, plan)
 
         episode = {
@@ -46,5 +47,6 @@ class CognitiveLoop:
             "plan": plan,
             "decision": decision,
             "skills_to_use": plan.get("skills_to_use", []),
+            "prompts_to_reference": plan.get("prompts_to_reference", []),
             "memory_snapshot": self.memory.get_memory_snapshot(),
         }

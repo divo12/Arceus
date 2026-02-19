@@ -5,6 +5,7 @@ from typing import Any, Optional, List, Dict
 import json
 
 from agents.context_builder import ContextBuilder
+from agents.prompts import PromptLoader
 from agents.skills import SkillsLoader
 from cognition.cognitive_loop import CognitiveLoop
 
@@ -30,6 +31,7 @@ class BaseAgent:
         self.workspace = Path(workspace).expanduser().resolve()
         self.context_builder = ContextBuilder(self.workspace)
         self.skills = SkillsLoader(self.workspace)
+        self.prompts = PromptLoader(self.workspace)
         self.cognitive_loop = CognitiveLoop(self.workspace)
         self.conversation_history: List[Dict[str, Any]] = []
     
@@ -73,11 +75,20 @@ class BaseAgent:
             Skill content or None if not found.
         """
         return self.skills.load_skill(skill_name)
+
+    def get_available_prompts(self) -> List[Dict[str, str]]:
+        """Get available prompt references."""
+        return self.prompts.list_prompts()
+
+    def load_prompt(self, prompt_name: str) -> Optional[str]:
+        """Load a specific prompt reference by name."""
+        return self.prompts.load_prompt(prompt_name)
     
     def build_context(
         self,
         user_message: str,
         skill_names: Optional[List[str]] = None,
+        prompt_names: Optional[List[str]] = None,
         media: Optional[List[str]] = None,
         channel: Optional[str] = None,
         chat_id: Optional[str] = None,
@@ -99,6 +110,7 @@ class BaseAgent:
             history=self.conversation_history,
             current_message=user_message,
             skill_names=skill_names,
+            prompt_names=prompt_names,
             media=media,
             channel=channel,
             chat_id=chat_id,
@@ -142,12 +154,15 @@ class BaseAgent:
         and then builds LLM-ready context based on selected skills.
         """
         available_skill_names = [s["name"] for s in self.get_available_skills()]
+        available_prompt_names = [p["name"] for p in self.get_available_prompts()]
         cognition_result = self.cognitive_loop.run(
             problem_description=problem_description,
             context=context,
             available_skills=available_skill_names,
+            available_prompts=available_prompt_names,
         )
         skills_to_use = cognition_result.get("skills_to_use", [])
+        prompts_to_reference = cognition_result.get("prompts_to_reference", [])
 
         messages = self.build_context(
             user_message=f"""Problem: {problem_description}
@@ -161,12 +176,15 @@ Cognitive Analysis:
 
 Please use the selected skills and provide a holistic recommendation on what to build, why, and in what sequence.""",
             skill_names=skills_to_use,
+            prompt_names=prompts_to_reference,
         )
 
         return {
             "messages": messages,
             "recommended_skills": skills_to_use,
+            "recommended_prompts": prompts_to_reference,
             "available_skills": available_skill_names,
+            "available_prompts": available_prompt_names,
             "problem": problem_description,
             "context": context or {},
             "cognition": cognition_result,
@@ -185,7 +203,11 @@ Please use the selected skills and provide a holistic recommendation on what to 
         
         return "\n".join(parts)
     
-    def get_system_prompt(self, skill_names: Optional[List[str]] = None) -> str:
+    def get_system_prompt(
+        self,
+        skill_names: Optional[List[str]] = None,
+        prompt_names: Optional[List[str]] = None,
+    ) -> str:
         """
         Get the system prompt.
         
@@ -195,4 +217,4 @@ Please use the selected skills and provide a holistic recommendation on what to 
         Returns:
             System prompt string.
         """
-        return self.context_builder.build_system_prompt(skill_names)
+        return self.context_builder.build_system_prompt(skill_names, prompt_names)
