@@ -6,6 +6,7 @@ import json
 
 from agents.context_builder import ContextBuilder
 from agents.skills import SkillsLoader
+from cognition.cognitive_loop import CognitiveLoop
 
 
 class BaseAgent:
@@ -29,6 +30,7 @@ class BaseAgent:
         self.workspace = Path(workspace).expanduser().resolve()
         self.context_builder = ContextBuilder(self.workspace)
         self.skills = SkillsLoader(self.workspace)
+        self.cognitive_loop = CognitiveLoop(self.workspace)
         self.conversation_history: List[Dict[str, Any]] = []
     
     def get_available_skills(self) -> List[Dict[str, str]]:
@@ -135,78 +137,39 @@ class BaseAgent:
     ) -> Dict[str, Any]:
         """
         Process a product management problem using a holistic approach.
-        
-        This is the main entry point for the product manager agent.
-        It takes a problem and applies PM methodologies to decide what to build.
-        
-        Args:
-            problem_description: Description of the problem to solve.
-            context: Optional additional context (user data, market info, etc.).
-        
-        Returns:
-            Dictionary with analysis, recommendations, and next steps.
+
+        Uses the cognition loop (interpret -> reason -> plan -> decide)
+        and then builds LLM-ready context based on selected skills.
         """
-        # Step 1: Understand the problem
-        # Use discovery and problem-framing skills
-        understanding_skills = [
-            "problem-statement",
-            "problem-framing-canvas",
-            "discovery-process",
-        ]
-        
-        # Step 2: Research and validate
-        # Use research and validation skills
-        research_skills = [
-            "company-research",
-            "jobs-to-be-done",
-            "pol-probe",
-        ]
-        
-        # Step 3: Decide what to build
-        # Use prioritization and strategy skills
-        decision_skills = [
-            "prioritization-advisor",
-            "product-strategy-session",
-            "opportunity-solution-tree",
-        ]
-        
-        # Step 4: Plan the solution
-        # Use planning and documentation skills
-        planning_skills = [
-            "prd-development",
-            "user-story",
-            "roadmap-planning",
-        ]
-        
-        # Build context with relevant skills
-        recommended_skills = understanding_skills + research_skills + decision_skills + planning_skills
-        
-        # Filter to only available skills
         available_skill_names = [s["name"] for s in self.get_available_skills()]
-        skills_to_use = [s for s in recommended_skills if s in available_skill_names]
-        
-        # Build the context
+        cognition_result = self.cognitive_loop.run(
+            problem_description=problem_description,
+            context=context,
+            available_skills=available_skill_names,
+        )
+        skills_to_use = cognition_result.get("skills_to_use", [])
+
         messages = self.build_context(
             user_message=f"""Problem: {problem_description}
 
 {self._format_context(context) if context else ''}
 
-Please take a holistic approach to this problem:
-1. First, understand the problem deeply from multiple perspectives
-2. Research and validate assumptions
-3. Decide what to build using data and frameworks
-4. Create a plan with clear next steps
+Cognitive Analysis:
+- Objectives: {', '.join(cognition_result['interpreted_state'].get('objectives', []))}
+- Decision: {cognition_result['decision'].get('decision', '')}
+- Priority: {cognition_result['decision'].get('priority', '')}
 
-Use the available skills to guide your approach.""",
+Please use the selected skills and provide a holistic recommendation on what to build, why, and in what sequence.""",
             skill_names=skills_to_use,
         )
-        
+
         return {
             "messages": messages,
             "recommended_skills": skills_to_use,
             "available_skills": available_skill_names,
             "problem": problem_description,
             "context": context or {},
+            "cognition": cognition_result,
         }
     
     def _format_context(self, context: Dict[str, Any]) -> str:
