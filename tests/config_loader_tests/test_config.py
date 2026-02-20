@@ -1,5 +1,6 @@
 """Tests for config loader (nanobot-style)."""
 
+import io
 import json
 import os
 import shutil
@@ -109,7 +110,11 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_agent_loop_uses_config_max_iterations(self):
         from execution.agent_loop import AgentLoop
-        from providers.rule_based_provider import RuleBasedProvider
+        from providers.adapter import ProviderAdapter, ProviderResponse
+
+        class _TestProvider(ProviderAdapter):
+            async def complete(self, messages, tool_schemas, iteration, runtime_context):
+                return ProviderResponse(content="ok", done=True)
 
         path = self.workspace / "config.json"
         path.write_text(
@@ -117,9 +122,10 @@ class TestConfigLoader(unittest.TestCase):
             encoding="utf-8",
         )
         config = load_config(config_path=path)
+        provider = _TestProvider()
         loop = AgentLoop(
             self.workspace,
-            provider=RuleBasedProvider(),
+            provider=provider,
             config=config,
         )
         self.assertEqual(loop.max_iterations, 3)
@@ -194,6 +200,60 @@ class TestConfigLoader(unittest.TestCase):
         heartbeat.write_text("# Custom\n\nMy tasks", encoding="utf-8")
         run_onboard(workspace=self.workspace)
         self.assertEqual(heartbeat.read_text(), "# Custom\n\nMy tasks")
+
+    def test_chat_plain_text_with_no_markdown(self):
+        """run_chat with use_markdown=False produces plain text output."""
+        from main import run_chat
+
+        inputs = ["hello", "exit"]
+        mock_session = mock.MagicMock()
+        mock_session.prompt.side_effect = inputs
+        with mock.patch("prompt_toolkit.PromptSession", return_value=mock_session):
+            with mock.patch("execution.controller.Controller") as MockCtrl:
+                mock_result = {"final": {"content": "Hi there!"}}
+                MockCtrl.return_value.run_problem.return_value = mock_result
+                out = io.StringIO()
+                with mock.patch("sys.stdout", out):
+                    run_chat(session_key="test:plain", use_markdown=False, workspace=self.workspace)
+        text = out.getvalue()
+        self.assertIn("Arceus:", text)
+        self.assertIn("Hi there!", text)
+
+    def test_chat_markdown_renders_via_rich(self):
+        """run_chat with use_markdown=True uses rich Markdown."""
+        from main import run_chat
+
+        inputs = ["hello", "exit"]
+        mock_session = mock.MagicMock()
+        mock_session.prompt.side_effect = inputs
+        with mock.patch("prompt_toolkit.PromptSession", return_value=mock_session):
+            with mock.patch("execution.controller.Controller") as MockCtrl:
+                mock_result = {"final": {"content": "# Hello\n\n- item"}}
+                MockCtrl.return_value.run_problem.return_value = mock_result
+                out = io.StringIO()
+                with mock.patch("sys.stdout", out):
+                    run_chat(session_key="test:md", use_markdown=True, workspace=self.workspace)
+        text = out.getvalue()
+        self.assertIn("Arceus", text)
+        self.assertIn("Hello", text)
+
+    def test_chat_uses_file_history(self):
+        """run_chat uses PromptSession with FileHistory for up/down arrow history."""
+        from main import run_chat
+        from prompt_toolkit.history import FileHistory
+
+        mock_session = mock.MagicMock()
+        mock_session.prompt.side_effect = ["hi", "exit"]
+        with mock.patch("prompt_toolkit.PromptSession", return_value=mock_session) as mock_ps:
+            with mock.patch("execution.controller.Controller") as MockCtrl:
+                MockCtrl.return_value.run_problem.return_value = {"final": {"content": "Hi"}}
+                out = io.StringIO()
+                with mock.patch("sys.stdout", out):
+                    run_chat(session_key="test:hist", use_markdown=False, workspace=self.workspace)
+        mock_ps.assert_called_once()
+        call_kwargs = mock_ps.call_args[1]
+        self.assertIn("history", call_kwargs)
+        self.assertIsInstance(call_kwargs["history"], FileHistory)
 
 
 if __name__ == "__main__":

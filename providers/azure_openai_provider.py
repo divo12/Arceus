@@ -137,8 +137,13 @@ class AzureOpenAIProvider(ProviderAdapter):
                     rationale=f"Exception: {type(e).__name__}",
                 )
 
+        err_msg = str(last_error)
+        hint = (
+            " Check: (1) endpoint format (https://<resource>.openai.azure.com), "
+            "(2) network/proxy access, (3) run from terminal with network enabled."
+        )
         return ProviderResponse(
-            content=f"Error: {str(last_error)}",
+            content=f"Error: {err_msg}{hint}",
             confidence=0.0,
             done=True,
             rationale="Connection failed after retries",

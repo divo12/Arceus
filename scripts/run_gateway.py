@@ -19,6 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from observability import configure_logging
+configure_logging(ROOT)
+
 
 def _add(args):
     from cron.service import CronService

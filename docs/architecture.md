@@ -27,7 +27,7 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 
 - `execution/agent_loop.py`: loop control, iteration budget, tool execution, evidence capture.
 - `providers/adapter.py`: provider abstraction (`ProviderAdapter`, `ProviderResponse`, `ToolCall`).
-- `providers/rule_based_provider.py`: deterministic default provider for local runtime/tests.
+- `providers/azure_openai_provider.py`: Azure OpenAI for LLM generation (credentials required).
 - `cognition/cognitive_loop.py`: adds explicit `reflect` output used by loop and memory.
 - `cognition/decision_policy.py`: confidence scoring + web-evidence requirement policy.
 - `agents/skills.py`: skill-gap detection and draft skill file generation.
@@ -36,7 +36,8 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 - `cron/service.py`: scheduled jobs; persists to `.arceus/cron.json`, runs agent when due.
 - `session/manager.py`: conversation sessions; JSONL in `workspace/sessions/` keyed by `channel:chat_id` (from nanobot).
 - `config/schema.py` + `config/loader.py`: JSON config (nanobot-style); agents, providers, tools, channels; config overrides env when both exist.
-- `main.py`: Entrypoint; gateway, single problem, or `chat` for interactive REPL (nanobot-style).
+- `main.py`: Entrypoint; gateway (heartbeat + cron), `chat` (interactive REPL with Rich Markdown), `status`, `onboard`, or single problem.
+- `observability/logger.py`: logging to `.arceus/logs/arceus.log`; rotation/retention configured.
 
 ## Heartbeat
 
@@ -87,6 +88,12 @@ Draft skills are generated only as review artifacts:
   - `status: draft`
   - `review_required: true`
 - drafts are not auto-enabled into active workspace skills.
+
+## Chat Mode
+
+Interactive chat (`main.py chat`) uses:
+- **Rich** for Markdown-rendered responses; `--no-markdown` for plain text.
+- **prompt_toolkit** + `FileHistory` for up/down arrow input history at `~/.arceus/history/cli_history`.
 
 ## Validation Commands
 

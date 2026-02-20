@@ -35,19 +35,15 @@ MCP is wired: add `tools.mcpServers` to config; AgentLoop connects at run start 
 
 ---
 
-### 4. Rich CLI Output (Low effort)
+### 4. ~~Rich CLI Output~~ ✅ Done
 
-Nanobot uses `rich` for Markdown rendering in chat.
-
-**Add:** `rich` dependency; render agent responses as Markdown in `main.py chat` (optional `--no-markdown` for plain text).
+`rich` dependency added; agent responses rendered as Markdown in `main.py chat`. Use `--no-markdown` for plain text.
 
 ---
 
-### 5. Chat History (Low effort)
+### 5. ~~Chat History~~ ✅ Done
 
-Nanobot: `prompt_toolkit` + `FileHistory` for up/down arrow history.
-
-**Add:** `~/.arceus/history/cli_history` via `prompt_toolkit.history.FileHistory` in chat mode.
+`prompt_toolkit` + `FileHistory` for up/down arrow history in chat. History stored at `~/.arceus/history/cli_history`.
 
 ---
 

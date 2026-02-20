@@ -17,7 +17,6 @@ from execution.agent_loop import AgentLoop
 from execution.controller import Controller
 from heartbeat.service import HEARTBEAT_OK_TOKEN, _is_heartbeat_empty, HeartbeatService
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
-from providers.rule_based_provider import RuleBasedProvider
 
 
 class DummyTool(Tool):
@@ -117,9 +116,17 @@ class TestAgentLoop(unittest.TestCase):
     def test_web_learning_policy_requires_evidence_when_low_confidence(self):
         registry = ToolRegistry()
         registry.register(DummyTool("web_search", "1. Source\n   https://example.com/evidence"))
+        provider = SequencedProvider([
+            ProviderResponse(
+                content="Need data",
+                done=False,
+                tool_calls=[ToolCall(name="web_search", arguments={"query": "evidence", "count": 3}, call_id="w1")],
+            ),
+            ProviderResponse(content="Recommendation with evidence.", done=True, confidence=0.8),
+        ])
         loop = AgentLoop(
             self.workspace,
-            provider=RuleBasedProvider(),
+            provider=provider,
             registry=registry,
             max_iterations=3,
         )
@@ -204,7 +211,8 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(result, HEARTBEAT_OK_TOKEN)
 
     def test_controller_run_heartbeat_once(self):
-        ctrl = Controller(self.workspace, provider=RuleBasedProvider())
+        provider = SequencedProvider([ProviderResponse(content="Heartbeat done", done=True)])
+        ctrl = Controller(self.workspace, provider=provider)
         result = ctrl.run_heartbeat_once()
         self.assertIsNotNone(result)
         self.assertIsInstance(result, str)
@@ -253,7 +261,8 @@ class TestCron(unittest.TestCase):
         self.assertEqual(len(svc.list_jobs()), 0)
 
     def test_cron_tool_via_controller(self):
-        ctrl = Controller(self.workspace)
+        provider = SequencedProvider([ProviderResponse(content="ok", done=True)])
+        ctrl = Controller(self.workspace, provider=provider)
 
         async def run():
             add_result = await ctrl.loop.registry.execute(

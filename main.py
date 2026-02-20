@@ -4,7 +4,8 @@ Arceus entrypoint. Runs the gateway (heartbeat + cron) by default.
 
 Usage:
   uv run python main.py                         # Run gateway (heartbeat + cron)
-  uv run python main.py chat                     # Interactive chat (nanobot-style)
+  uv run python main.py chat                     # Interactive chat (Markdown rendering)
+  uv run python main.py chat --no-markdown       # Chat with plain text output
   uv run python main.py status                   # Show config, provider, cron, sessions
   uv run python main.py onboard                  # Create .arceus/config.json, sessions/, skills/
   uv run python main.py --no-cron               # Run gateway without cron
@@ -20,6 +21,10 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Configure logging to workspace/.arceus/logs/arceus.log
+from observability import configure_logging
+configure_logging(ROOT)
+
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 
@@ -33,7 +38,10 @@ def run_status(workspace: Path | None = None) -> None:
     workspace = workspace or ROOT
     config = load_config(workspace=workspace)
     config_path = find_config_path(workspace)
-    provider = "Azure" if (config.providers.azure.api_key and config.providers.azure.endpoint) else "RuleBased"
+    from settings import Settings
+    has_key = config.providers.azure.api_key or Settings.AZURE_OPENAI_API_KEY
+    has_ep = config.providers.azure.endpoint or Settings.AZURE_OPENAI_ENDPOINT
+    provider = "Azure" if (has_key and has_ep) else "Not configured"
 
     store_path = workspace / ".arceus" / "cron.json"
     cron_svc = CronService(store_path=store_path, on_job=None)
@@ -91,17 +99,28 @@ def run_onboard(workspace: Path | None = None) -> None:
         print(f"  {path}")
 
 
-def run_chat(session_key: str = "console:default") -> None:
+def run_chat(
+    session_key: str = "console:default",
+    use_markdown: bool = True,
+    workspace: Path | None = None,
+) -> None:
     """Interactive chat mode (nanobot-style). Multi-turn with session persistence."""
     from execution.controller import Controller
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
 
-    ctrl = Controller(ROOT)
-    print("Arceus chat. Type your problem, or exit/quit/:q to end.")
+    base = workspace or Path.home()
+    history_path = base / ".arceus" / "history" / "cli_history"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    session = PromptSession(history=FileHistory(str(history_path)))
+
+    ctrl = Controller(workspace or ROOT)
+    print("Arceus chat. Type your problem, or exit/quit/:q to end. (↑/↓ for history)")
     print()
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = session.prompt("You: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye.")
             break
@@ -114,7 +133,15 @@ def run_chat(session_key: str = "console:default") -> None:
 
         result = ctrl.run_problem(user_input, session_key=session_key)
         content = result.get("final", {}).get("content", "No response")
-        print(f"\nArceus:\n{content}\n")
+        if use_markdown:
+            from rich.console import Console
+            from rich.markdown import Markdown
+            console = Console()
+            console.print("\n[bold]Arceus:[/bold]")
+            console.print(Markdown(content))
+            console.print()
+        else:
+            print(f"\nArceus:\n{content}\n")
 
 
 def main() -> None:
@@ -124,10 +151,11 @@ def main() -> None:
     parser.add_argument("--no-heartbeat", action="store_true", help="Disable heartbeat")
     parser.add_argument("--heartbeat", type=int, default=30 * 60, help="Heartbeat interval (seconds)")
     parser.add_argument("--session", default="console:default", help="Session key for chat (default: console:default)")
+    parser.add_argument("--no-markdown", action="store_true", help="Plain text output in chat (no Markdown rendering)")
     args = parser.parse_args()
 
     if args.problem and args.problem[0].lower() == "chat":
-        run_chat(session_key=args.session)
+        run_chat(session_key=args.session, use_markdown=not args.no_markdown)
         return
     if args.problem and args.problem[0].lower() == "status":
         run_status()

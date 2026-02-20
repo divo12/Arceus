@@ -20,26 +20,25 @@ from cognition.memory.memory_manager import MemoryManager
 from config import Config, load_config
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from providers.azure_openai_provider import AzureOpenAIProvider
-from providers.rule_based_provider import RuleBasedProvider
 from session.manager import SessionManager
 
 
 def _build_provider(config: Config) -> ProviderAdapter:
     """Build provider from config; config overrides env when both exist."""
-    try:
-        from settings import Settings
-        api_key = config.providers.azure.api_key or Settings.AZURE_OPENAI_API_KEY or ""
-        endpoint = config.providers.azure.endpoint or Settings.AZURE_OPENAI_ENDPOINT or ""
-        if api_key and endpoint:
-            return AzureOpenAIProvider(
-                model=config.providers.azure.deployment,
-                temperature=config.agents.defaults.temperature,
-                api_key=api_key,
-                endpoint=endpoint,
-            )
-    except Exception:
-        pass
-    return RuleBasedProvider()
+    from settings import Settings
+    api_key = config.providers.azure.api_key or Settings.AZURE_OPENAI_API_KEY or ""
+    endpoint = config.providers.azure.endpoint or Settings.AZURE_OPENAI_ENDPOINT or ""
+    if not api_key or not endpoint:
+        raise ValueError(
+            "Azure OpenAI credentials required. Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT "
+            "in .env or in .arceus/config.json under providers.azure"
+        )
+    return AzureOpenAIProvider(
+        model=config.providers.azure.deployment,
+        temperature=config.agents.defaults.temperature,
+        api_key=api_key,
+        endpoint=endpoint,
+    )
 
 
 class AgentLoop:

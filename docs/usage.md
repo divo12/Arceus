@@ -1,5 +1,17 @@
 # Arceus Development Workflow (uv + Python 3.11)
 
+## Entrypoint commands
+
+| Command | Description |
+|---------|-------------|
+| `main.py` | Run gateway (heartbeat + cron) |
+| `main.py --no-cron` | Run gateway without cron |
+| `main.py chat` | Interactive chat (Markdown) |
+| `main.py chat --no-markdown` | Chat with plain text |
+| `main.py status` | Config path, provider, cron, sessions |
+| `main.py onboard` | Create .arceus/config.json, sessions/, skills/ |
+| `main.py "problem"` | Run single problem |
+
 ## Prerequisites
 
 - Install `uv` (https://docs.astral.sh/uv/getting-started/installation/).
@@ -117,9 +129,14 @@ uv run python -m unittest tests.config_loader_tests.test_config.TestConfigLoader
 
 ## Azure OpenAI (LLM provider)
 
-When `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` are set in `.env` (or in config), the agent uses Azure OpenAI for real LLM generation. Otherwise it falls back to the rule-based provider (deterministic, for tests).
+When `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` are set in `.env` (or in config), the agent uses Azure OpenAI for LLM generation. Both are required; if missing, the agent will raise a clear error.
 
 Set `AZURE_OPENAI_DEPLOYMENT` to your Azure deployment name (e.g. `gpt-5.2`, `gpt-4o`). Default is `gpt-5.2`.
+
+**Connection errors:** If you see `APIConnectionError` or "Connection error", check:
+1. **Endpoint format:** `https://<resource>.openai.azure.com` (no trailing path)
+2. **Network:** Run from a terminal with outbound HTTPS allowed (e.g. not a sandboxed environment)
+3. **Proxy/VPN:** Ensure Azure endpoints are reachable
 
 ## Sessions (multi-turn conversations)
 
@@ -128,10 +145,11 @@ When you pass `session_key` (e.g. `"console:user123"`), the agent loads prior co
 **Interactive chat mode** (nanobot-style):
 
 ```bash
-uv run python main.py chat
+uv run python main.py chat              # Markdown-rendered responses
+uv run python main.py chat --no-markdown  # Plain text output
 ```
 
-Type your problem, get a response, continue the conversation. Use `exit`, `quit`, or `:q` to end. Sessions persist in `workspace/sessions/`.
+Type your problem, get a response, continue the conversation. Use `exit`, `quit`, or `:q` to end. Sessions persist in `workspace/sessions/`. Use ↑/↓ for input history (`~/.arceus/history/cli_history`).
 
 **Programmatic:**
 
@@ -145,7 +163,15 @@ c.run_problem('Explain the first principle in more detail', session_key='console
 "
 ```
 
-## Run the PM core loop
+## Run single problem
+
+```bash
+uv run python main.py "your problem"
+```
+
+Runs one problem through the agent and prints the final response.
+
+## Run the PM core loop (programmatic)
 
 Minimal direct invocation from repo root:
 
@@ -172,6 +198,8 @@ uv run python -c "from pathlib import Path; from execution.controller import Con
 **Run gateway (heartbeat loop, 30 min default):**
 
 ```bash
+uv run python main.py                              # Gateway with heartbeat + cron
+uv run python main.py --no-cron                    # Gateway without cron jobs
 uv run python -c "from pathlib import Path; from execution.controller import Controller; c=Controller(Path('.')); c.run_gateway_sync(heartbeat_interval_s=60)"
 ```
 
@@ -227,6 +255,14 @@ When the agent has the cron skill, it can add jobs via the `cron` tool:
 ### Cronitor monitoring (optional)
 
 Set `CRONITOR_API_KEY` in `.env` to send run/complete/fail pings to [Cronitor](https://cronitor.io). Each job execution will ping: `run` at start, `complete` on success, `fail` on error.
+
+## Observability (logging)
+
+All logs are stored in `workspace/.arceus/logs/arceus.log`. Configured automatically when running `main.py` or `scripts/run_gateway.py`.
+
+- **Rotation:** 10 MB
+- **Retention:** 7 days
+- **Format:** `{time} | {level} | {name}:{function}:{line} - {message}`
 
 ## Troubleshooting
 
