@@ -92,22 +92,25 @@ class BaseAgent:
         media: Optional[List[str]] = None,
         channel: Optional[str] = None,
         chat_id: Optional[str] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Build the complete context for an LLM call.
-        
+
         Args:
             user_message: The user's message.
             skill_names: Optional list of specific skills to include.
             media: Optional list of media file paths.
             channel: Optional channel identifier.
             chat_id: Optional chat/user ID.
-        
+            history: Optional conversation history (overrides conversation_history when provided).
+
         Returns:
             List of messages ready for LLM API call.
         """
+        h = history if history is not None else self.conversation_history
         return self.context_builder.build_messages(
-            history=self.conversation_history,
+            history=h,
             current_message=user_message,
             skill_names=skill_names,
             prompt_names=prompt_names,
