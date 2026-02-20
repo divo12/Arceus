@@ -10,9 +10,13 @@ from loguru import logger
 DEFAULT_HEARTBEAT_INTERVAL_S = 30 * 60
 
 # The prompt sent to agent during heartbeat
-HEARTBEAT_PROMPT = """Read HEARTBEAT.md in your workspace (if it exists).
-Follow any instructions or tasks listed there.
-If nothing needs attention, reply with just: HEARTBEAT_OK"""
+HEARTBEAT_PROMPT = """Process HEARTBEAT.md tasks:
+
+1. Use read_file to read HEARTBEAT.md from your workspace root.
+2. If the file is empty or has no actionable tasks, reply with exactly: HEARTBEAT_OK
+3. If there are tasks: work through each one. Use web_search to research, read relevant skills, and apply PM frameworks.
+4. Research and iterate until you have substantive output for each task.
+5. When all tasks are done, reply with exactly: HEARTBEAT_OK"""
 
 # Token that indicates "nothing to do"
 HEARTBEAT_OK_TOKEN = "HEARTBEAT_OK"

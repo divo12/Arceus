@@ -29,13 +29,23 @@ class Controller:
         self.loop.registry.register(CronTool(self._cron))
 
     def run_problem(
-        self, problem_description: str, context: Optional[Dict[str, Any]] = None
+        self,
+        problem_description: str,
+        context: Optional[Dict[str, Any]] = None,
+        max_iterations: Optional[int] = None,
     ) -> Dict[str, Any]:
-        return self.loop.run_sync(problem_description=problem_description, context=context)
+        return self.loop.run_sync(
+            problem_description=problem_description,
+            context=context,
+            max_iterations=max_iterations,
+        )
 
     async def _on_heartbeat(self, prompt: str) -> str:
-        """Callback for heartbeat: run agent and return final response text."""
-        result = await self.loop.run(problem_description=prompt)
+        """Callback for heartbeat: run agent with extra iterations for relentless task execution."""
+        result = await self.loop.run(
+            problem_description=prompt,
+            max_iterations=12,
+        )
         return result.get("final", {}).get("content", "HEARTBEAT_OK")
 
     async def _on_cron_job(self, job: CronJob) -> str | None:

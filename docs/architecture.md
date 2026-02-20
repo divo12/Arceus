@@ -40,8 +40,8 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 The heartbeat service (from nanobot) periodically wakes the agent:
 
 - Default interval: 30 minutes
-- Reads `HEARTBEAT.md` in workspace
-- If actionable content exists, runs agent with heartbeat prompt
+- Agent reads `HEARTBEAT.md` via read_file, works through tasks, researches with web_search
+- Runs with 12 iterations for relentless task execution
 - Agent replies `HEARTBEAT_OK` when nothing to do
 - Use `Controller.run_heartbeat_once()` or `Controller.run_gateway_sync()` for execution
 
@@ -56,6 +56,16 @@ The cron service (from nanobot) schedules agent tasks:
 - When a job is due, the controller runs the agent with the job message
 - Use `cron` tool (add/list/remove) when the agent has the cron skill
 - Cron service starts with the gateway when `cron_enabled=True`
+
+## Think & Research Relentlessly
+
+The agent is instructed to work autonomously and persistently:
+
+- **Research first**: Use web_search and web_fetch before making recommendations
+- **Use skills**: Read SKILL.md files and apply PM frameworks
+- **Iterate**: Do not finalize until substantive evidence supports the answer
+- **Default 8 iterations** (12 for heartbeat) to allow multiple research passes
+- **Web evidence required** when confidence < 0.7 (policy); high-confidence responses (≥0.85) can finalize without evidence
 
 ## Web Learning Policy
 

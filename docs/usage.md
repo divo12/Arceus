@@ -83,7 +83,7 @@ The output includes:
 
 ## Heartbeat (periodic autonomous wake-up)
 
-The heartbeat service periodically wakes the agent to check `HEARTBEAT.md` in the workspace. If the file contains actionable tasks, the agent executes them.
+The heartbeat service periodically wakes the agent to check `HEARTBEAT.md` in the workspace. The agent reads the file, works through each task, researches with web_search, and persists until done. Use for relentless autonomous PM work (backlog review, research sweeps, status updates).
 
 **Run one heartbeat tick:**
 

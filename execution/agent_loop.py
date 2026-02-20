@@ -42,7 +42,7 @@ class AgentLoop:
         workspace: Path,
         provider: Optional[ProviderAdapter] = None,
         registry: Optional[ToolRegistry] = None,
-        max_iterations: int = 4,
+        max_iterations: int = 8,
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.base_agent = BaseAgent(self.workspace)
@@ -160,8 +160,9 @@ class AgentLoop:
             traces.append(trace)
             self.memory.record_trace(trace)
 
+            req_web = cognition.get("decision", {}).get("requires_web_evidence")
             if response.done and (
-                not cognition.get("decision", {}).get("requires_web_evidence") or web_evidence
+                not req_web or web_evidence or response.confidence >= 0.85
             ):
                 break
 
