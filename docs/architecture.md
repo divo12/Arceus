@@ -35,7 +35,8 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 - `heartbeat/service.py`: periodic agent wake-up; reads `HEARTBEAT.md` and executes tasks.
 - `cron/service.py`: scheduled jobs; persists to `.arceus/cron.json`, runs agent when due.
 - `session/manager.py`: conversation sessions; JSONL in `workspace/sessions/` keyed by `channel:chat_id` (from nanobot).
-- `config/schema.py` + `config/loader.py`: JSON config (nanobot-style); agents, providers, tools; config overrides env when both exist.
+- `config/schema.py` + `config/loader.py`: JSON config (nanobot-style); agents, providers, tools, channels; config overrides env when both exist.
+- `main.py`: Entrypoint; gateway, single problem, or `chat` for interactive REPL (nanobot-style).
 
 ## Heartbeat
 

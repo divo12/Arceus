@@ -267,6 +267,42 @@ class TestCron(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_mcp_empty_config_runs_ok(self):
+        """AgentLoop runs normally when mcp_servers is empty."""
+        provider = SequencedProvider(
+            [ProviderResponse(content="done", done=True, confidence=0.9)]
+        )
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=2)
+        result = loop.run_sync("Test problem")
+        self.assertEqual(result["final"]["done"], True)
+        self.assertEqual(len(result["traces"]), 1)
+
+    def test_mcp_invalid_command_skipped_run_completes(self):
+        """AgentLoop completes when mcp_servers has invalid command (graceful skip)."""
+        import json
+        from config import Config, load_config
+        from config.schema import MCPServerConfig
+
+        path = self.workspace / ".arceus" / "config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({
+                "tools": {
+                    "mcpServers": {
+                        "bogus": {"command": "/nonexistent/binary", "args": []}
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+        config = load_config(config_path=path)
+        provider = SequencedProvider(
+            [ProviderResponse(content="done", done=True, confidence=0.9)]
+        )
+        loop = AgentLoop(self.workspace, provider=provider, config=config, max_iterations=2)
+        result = loop.run_sync("Test problem")
+        self.assertEqual(result["final"]["done"], True)
+
 
 class TestSession(unittest.TestCase):
     """Session manager tests (from nanobot)."""

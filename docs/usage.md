@@ -89,12 +89,31 @@ Arceus loads configuration from JSON (nanobot-style). Config file overrides envi
   "tools": {
     "web": { "apiKey": "", "maxResults": 5 },
     "exec": { "timeout": 60 },
-    "restrictToWorkspace": false
+    "restrictToWorkspace": false,
+    "mcpServers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+      }
+    }
   }
 }
 ```
 
-Use `config.load_config()` and `config.save_config()` for programmatic access.
+Use `config.load_config()` and `config.loader.save_config()` for programmatic access.
+
+**Status and onboard:**
+
+```bash
+uv run python main.py status    # Config path, provider, cron jobs, sessions
+uv run python main.py onboard   # Create .arceus/config.json, sessions/, skills/, HEARTBEAT.md
+```
+
+**Tests for MCP, status, onboard:**
+
+```bash
+uv run python -m unittest tests.config_loader_tests.test_config.TestConfigLoader.test_mcp_servers_in_config_schema tests.config_loader_tests.test_config.TestConfigLoader.test_status_command_output tests.config_loader_tests.test_config.TestConfigLoader.test_onboard_creates_files tests.config_loader_tests.test_config.TestConfigLoader.test_onboard_idempotent tests.execution.test_agent_loop.TestCron.test_mcp_empty_config_runs_ok tests.execution.test_agent_loop.TestCron.test_mcp_invalid_command_skipped_run_completes -v
+```
 
 ## Azure OpenAI (LLM provider)
 
@@ -106,6 +125,16 @@ Set `AZURE_OPENAI_DEPLOYMENT` to your Azure deployment name (e.g. `gpt-5.2`, `gp
 
 When you pass `session_key` (e.g. `"console:user123"`), the agent loads prior conversation history and persists new messages. Use for multi-turn chats.
 
+**Interactive chat mode** (nanobot-style):
+
+```bash
+uv run python main.py chat
+```
+
+Type your problem, get a response, continue the conversation. Use `exit`, `quit`, or `:q` to end. Sessions persist in `workspace/sessions/`.
+
+**Programmatic:**
+
 ```bash
 uv run python -c "
 from pathlib import Path
@@ -115,8 +144,6 @@ c.run_problem('What is PM?', session_key='console:demo')
 c.run_problem('Explain the first principle in more detail', session_key='console:demo')
 "
 ```
-
-Sessions are stored as JSONL in `workspace/sessions/`.
 
 ## Run the PM core loop
 

@@ -18,6 +18,14 @@ def get_default_config_paths(workspace: Path | None = None) -> list[Path]:
     return paths
 
 
+def find_config_path(workspace: Path | None = None) -> Path | None:
+    """Return the first existing config path, or None if using defaults."""
+    for path in get_default_config_paths(workspace):
+        if path.exists():
+            return path
+    return None
+
+
 def load_config(config_path: Path | None = None, workspace: Path | None = None) -> Config:
     """
     Load configuration from JSON file or return defaults.

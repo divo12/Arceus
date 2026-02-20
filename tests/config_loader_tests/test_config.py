@@ -6,13 +6,14 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from config import Config, load_config
-from config.loader import get_default_config_paths, save_config
+from config.loader import find_config_path, get_default_config_paths, save_config
 
 
 class TestConfigLoader(unittest.TestCase):
@@ -122,6 +123,77 @@ class TestConfigLoader(unittest.TestCase):
             config=config,
         )
         self.assertEqual(loop.max_iterations, 3)
+
+    def test_find_config_path_returns_workspace_config_when_present(self):
+        """When workspace has .arceus/config.json, find_config_path returns it."""
+        arceus = self.workspace / ".arceus"
+        arceus.mkdir(parents=True)
+        cfg = arceus / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        found = find_config_path(workspace=self.workspace)
+        self.assertIsNotNone(found)
+        self.assertTrue(found.exists())
+        self.assertEqual(found.resolve(), cfg.resolve())
+
+    def test_mcp_servers_in_config_schema(self):
+        path = self.workspace / "mcp.json"
+        path.write_text(
+            json.dumps({
+                "tools": {
+                    "mcpServers": {
+                        "fs": {
+                            "command": "npx",
+                            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                            "env": {"FOO": "bar"},
+                            "url": ""
+                        }
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+        config = load_config(config_path=path)
+        self.assertIn("fs", config.tools.mcp_servers)
+        self.assertEqual(config.tools.mcp_servers["fs"].command, "npx")
+        self.assertEqual(config.tools.mcp_servers["fs"].args, ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"])
+        self.assertEqual(config.tools.mcp_servers["fs"].env, {"FOO": "bar"})
+
+    def test_status_command_output(self):
+        """run_status produces expected output format."""
+        import io
+        import sys
+        from main import run_status
+
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            run_status(workspace=self.workspace)
+        text = out.getvalue()
+        self.assertIn("Arceus status", text)
+        self.assertIn("Config:", text)
+        self.assertIn("Provider:", text)
+        self.assertIn("Cron jobs:", text)
+        self.assertIn("Sessions:", text)
+
+    def test_onboard_creates_files(self):
+        """run_onboard creates config, sessions, skills, HEARTBEAT.md when missing."""
+        from main import run_onboard
+
+        run_onboard(workspace=self.workspace)
+        self.assertTrue((self.workspace / ".arceus" / "config.json").exists())
+        self.assertTrue((self.workspace / "sessions").is_dir())
+        self.assertTrue((self.workspace / "skills" / "workspace_skills").is_dir())
+        self.assertTrue((self.workspace / "HEARTBEAT.md").exists())
+        content = (self.workspace / "HEARTBEAT.md").read_text()
+        self.assertIn("Heartbeat", content)
+
+    def test_onboard_idempotent(self):
+        """run_onboard does not overwrite existing HEARTBEAT.md."""
+        from main import run_onboard
+
+        heartbeat = self.workspace / "HEARTBEAT.md"
+        heartbeat.write_text("# Custom\n\nMy tasks", encoding="utf-8")
+        run_onboard(workspace=self.workspace)
+        self.assertEqual(heartbeat.read_text(), "# Custom\n\nMy tasks")
 
 
 if __name__ == "__main__":

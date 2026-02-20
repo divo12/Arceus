@@ -54,12 +54,34 @@ class ExecToolConfig(Base):
     timeout: int = 60
 
 
+class MCPServerConfig(Base):
+    """MCP server config (stdio or HTTP)."""
+
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
     web: WebSearchConfig = Field(default_factory=WebSearchConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     restrict_to_workspace: bool = False
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
+class ConsoleConfig(Base):
+    """Console/chat channel config (nanobot-style). Empty allow_from = allow all."""
+
+    allow_from: list[str] = Field(default_factory=list)
+
+
+class ChannelsConfig(Base):
+    """Channel configuration (for future Discord, Slack, etc.)."""
+
+    console: ConsoleConfig = Field(default_factory=ConsoleConfig)
 
 
 class Config(Base):
@@ -68,6 +90,7 @@ class Config(Base):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
 
     def get_web_search_api_key(self) -> str:
         """Get web search API key (config or BRAVE_API_KEY env)."""
