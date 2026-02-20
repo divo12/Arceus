@@ -115,6 +115,8 @@ Arceus loads configuration from JSON (nanobot-style). Config file overrides envi
 
 Use `config.load_config()` and `config.loader.save_config()` for programmatic access.
 
+**Built-in skills:** Arceus includes 43+ built-in skills (core + [open-skills](https://github.com/besoeasy/open-skills)): pdf-manipulation, web-search-api, send-email-programmatically, free-weather-data, database-query-and-export, and more. See `skills/built-in_skills/README.md`.
+
 **Status and onboard:**
 
 ```bash
