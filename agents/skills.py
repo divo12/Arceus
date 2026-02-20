@@ -8,27 +8,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-# Default builtin skills directory (relative to this file)
-BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "built-in_skills"
+# Default skill directories (relative to this file)
+SKILLS_ROOT = Path(__file__).parent.parent / "skills"
+ESSENTIAL_SKILLS_DIR = SKILLS_ROOT / "essential"
+OPEN_SKILLS_DIR = SKILLS_ROOT / "open_skills"
 
 
 class SkillsLoader:
     """
     Loader for agent skills.
     
-    Skills are markdown files (SKILL.md) that teach the agent how to use
-    specific tools or perform certain tasks.
+    Three-tier structure:
+    - Essential: survival skills (heartbeat, memory, web-search) — always loaded
+    - Workspace: PM designation skills — workspace-specific
+    - Open: tool-level skills (pdf-manipulation, web-search-api, etc.) — on-demand
     """
     
-    def __init__(self, workspace: Path, builtin_skills_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        workspace: Path,
+        essential_skills_dir: Optional[Path] = None,
+        open_skills_dir: Optional[Path] = None,
+    ):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills" / "workspace_skills"
         self.workspace_skill_drafts = self.workspace_skills / "_drafts"
-        self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
+        self.essential_skills = essential_skills_dir or ESSENTIAL_SKILLS_DIR
+        self.open_skills = open_skills_dir or OPEN_SKILLS_DIR
     
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
         List all available skills.
+        
+        Order: workspace (highest) > essential > open (lowest).
         
         Args:
             filter_unavailable: If True, filter out skills with unmet requirements.
@@ -37,22 +49,36 @@ class SkillsLoader:
             List of skill info dicts with 'name', 'path', 'source'.
         """
         skills = []
+        seen = set()
         
-        # Workspace skills (highest priority)
+        def add_skill(name: str, path: str, source: str) -> None:
+            if name not in seen:
+                seen.add(name)
+                skills.append({"name": name, "path": path, "source": source})
+        
+        # 1. Workspace skills (PM designation) — highest priority
         if self.workspace_skills.exists():
             for skill_dir in self.workspace_skills.iterdir():
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+                        add_skill(skill_dir.name, str(skill_file), "workspace")
         
-        # Built-in skills
-        if self.builtin_skills and self.builtin_skills.exists():
-            for skill_dir in self.builtin_skills.iterdir():
+        # 2. Essential skills (survival)
+        if self.essential_skills and self.essential_skills.exists():
+            for skill_dir in self.essential_skills.iterdir():
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "builtin"})
+                    if skill_file.exists():
+                        add_skill(skill_dir.name, str(skill_file), "essential")
+        
+        # 3. Open skills (tool-level)
+        if self.open_skills and self.open_skills.exists():
+            for skill_dir in self.open_skills.iterdir():
+                if skill_dir.is_dir():
+                    skill_file = skill_dir / "SKILL.md"
+                    if skill_file.exists():
+                        add_skill(skill_dir.name, str(skill_file), "open")
         
         # Filter by requirements
         if filter_unavailable:
@@ -62,6 +88,8 @@ class SkillsLoader:
     def load_skill(self, name: str) -> Optional[str]:
         """
         Load a skill by name.
+        
+        Search order: workspace > essential > open.
         
         Args:
             name: Skill name (directory name).
@@ -74,11 +102,17 @@ class SkillsLoader:
         if workspace_skill.exists():
             return workspace_skill.read_text(encoding="utf-8")
         
-        # Check built-in
-        if self.builtin_skills:
-            builtin_skill = self.builtin_skills / name / "SKILL.md"
-            if builtin_skill.exists():
-                return builtin_skill.read_text(encoding="utf-8")
+        # Check essential
+        if self.essential_skills:
+            essential_skill = self.essential_skills / name / "SKILL.md"
+            if essential_skill.exists():
+                return essential_skill.read_text(encoding="utf-8")
+        
+        # Check open
+        if self.open_skills:
+            open_skill = self.open_skills / name / "SKILL.md"
+            if open_skill.exists():
+                return open_skill.read_text(encoding="utf-8")
         
         return None
     
@@ -194,13 +228,17 @@ class SkillsLoader:
         return self._parse_nanobot_metadata(meta.get("metadata", ""))
     
     def get_always_skills(self) -> list[str]:
-        """Get skills marked as always=true that meet requirements."""
+        """Get essential skills (always-loaded for survival) plus any with always=true."""
         result = []
         for s in self.list_skills(filter_unavailable=True):
-            meta = self.get_skill_metadata(s["name"]) or {}
-            skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
-            if skill_meta.get("always") or meta.get("always"):
+            # Essential skills are always loaded (by location)
+            if s["source"] == "essential":
                 result.append(s["name"])
+            else:
+                meta = self.get_skill_metadata(s["name"]) or {}
+                skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+                if skill_meta.get("always") or meta.get("always"):
+                    result.append(s["name"])
         return result
     
     def get_skill_metadata(self, name: str) -> Optional[dict]:

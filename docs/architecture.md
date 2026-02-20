@@ -30,7 +30,7 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 - `providers/azure_openai_provider.py`: Azure OpenAI for LLM generation (credentials required).
 - `cognition/cognitive_loop.py`: adds explicit `reflect` output used by loop and memory.
 - `cognition/decision_policy.py`: confidence scoring + web-evidence requirement policy.
-- `agents/skills.py`: skill-gap detection and draft skill file generation.
+- `agents/skills.py`: skill-gap detection and draft skill file generation. Three-tier structure: essential (always), workspace (PM), open (tool-level).
 - `cognition/memory/long_term_memory.py`: hardened memory schema (`episodes`, `traces`, `runs`, `facts`).
 - `heartbeat/service.py`: periodic agent wake-up; reads `HEARTBEAT.md` and executes tasks.
 - `cron/service.py`: scheduled jobs; persists to `.arceus/cron.json`, runs agent when due.
@@ -78,6 +78,14 @@ When decision confidence is low, `requires_web_evidence=true` is set by policy.
 - The provider is expected to call `web_search`/`web_fetch`.
 - The loop does not finalize until evidence is available or max iterations are reached.
 - Final outputs include evidence metadata for traceability.
+
+## Skills Structure
+
+Three tiers:
+
+1. **Essential** (`skills/essential/`) — always loaded: heartbeat, memory, web-search
+2. **Workspace** (`skills/workspace_skills/`) — PM designation skills (frameworks, methodologies)
+3. **Open** (`skills/open_skills/`) — tool-level skills (pdf-manipulation, web-search-api, github, etc.)
 
 ## Skill Drafting Gate
 

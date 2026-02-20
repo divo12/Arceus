@@ -24,11 +24,13 @@ for skill in skills[:10]:  # Show first 10
 if len(skills) > 10:
     print(f"  ... and {len(skills) - 10} more")
 
-# Show workspace vs built-in breakdown
+# Show workspace vs essential vs open breakdown
 workspace_count = sum(1 for s in skills if s['source'] == 'workspace')
-builtin_count = sum(1 for s in skills if s['source'] == 'builtin')
+essential_count = sum(1 for s in skills if s['source'] == 'essential')
+open_count = sum(1 for s in skills if s['source'] == 'open')
 print(f"\n  Workspace skills: {workspace_count}")
-print(f"  Built-in skills: {builtin_count}")
+print(f"  Essential skills: {essential_count}")
+print(f"  Open skills: {open_count}")
 
 # Try loading a specific skill
 print("\n2. Loading a specific skill:")

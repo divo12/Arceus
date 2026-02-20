@@ -12,7 +12,7 @@ from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from agents.skills import SkillsLoader, BUILTIN_SKILLS_DIR
+from agents.skills import SkillsLoader, ESSENTIAL_SKILLS_DIR, OPEN_SKILLS_DIR
 
 
 class TestSkillsLoader(unittest.TestCase):
@@ -23,13 +23,19 @@ class TestSkillsLoader(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         self.workspace = Path(self.temp_dir)
         self.workspace_skills_dir = self.workspace / "skills" / "workspace_skills"
-        self.builtin_skills_dir = self.workspace / "skills" / "built-in_skills"
+        self.essential_skills_dir = self.workspace / "skills" / "essential"
+        self.open_skills_dir = self.workspace / "skills" / "open_skills"
         
         # Create directory structure
         self.workspace_skills_dir.mkdir(parents=True)
-        self.builtin_skills_dir.mkdir(parents=True)
+        self.essential_skills_dir.mkdir(parents=True)
+        self.open_skills_dir.mkdir(parents=True)
         
-        self.loader = SkillsLoader(self.workspace, self.builtin_skills_dir)
+        self.loader = SkillsLoader(
+            self.workspace,
+            essential_skills_dir=self.essential_skills_dir,
+            open_skills_dir=self.open_skills_dir,
+        )
     
     def tearDown(self):
         """Clean up test fixtures."""
@@ -40,7 +46,7 @@ class TestSkillsLoader(unittest.TestCase):
         if in_workspace:
             skill_dir = self.workspace_skills_dir / name
         else:
-            skill_dir = self.builtin_skills_dir / name
+            skill_dir = self.open_skills_dir / name
         
         skill_dir.mkdir(exist_ok=True)
         skill_file = skill_dir / "SKILL.md"
@@ -50,10 +56,15 @@ class TestSkillsLoader(unittest.TestCase):
     # Initialization tests
     def test_init(self):
         """Test SkillsLoader initialization."""
-        loader = SkillsLoader(self.workspace, self.builtin_skills_dir)
+        loader = SkillsLoader(
+            self.workspace,
+            essential_skills_dir=self.essential_skills_dir,
+            open_skills_dir=self.open_skills_dir,
+        )
         self.assertEqual(loader.workspace, self.workspace)
         self.assertEqual(loader.workspace_skills, self.workspace_skills_dir)
-        self.assertEqual(loader.builtin_skills, self.builtin_skills_dir)
+        self.assertEqual(loader.essential_skills, self.essential_skills_dir)
+        self.assertEqual(loader.open_skills, self.open_skills_dir)
     
     # List skills tests
     def test_list_skills_empty(self):
@@ -70,18 +81,18 @@ class TestSkillsLoader(unittest.TestCase):
         self.assertEqual(skills[0]["source"], "workspace")
         self.assertIn("SKILL.md", skills[0]["path"])
     
-    def test_list_skills_builtin(self):
-        """Test listing built-in skills."""
-        self.create_test_skill("builtin-skill", "# Built-in Skill", in_workspace=False)
+    def test_list_skills_open(self):
+        """Test listing open skills."""
+        self.create_test_skill("open-skill", "# Open Skill", in_workspace=False)
         skills = self.loader.list_skills(filter_unavailable=False)
         self.assertEqual(len(skills), 1)
-        self.assertEqual(skills[0]["name"], "builtin-skill")
-        self.assertEqual(skills[0]["source"], "builtin")
+        self.assertEqual(skills[0]["name"], "open-skill")
+        self.assertEqual(skills[0]["source"], "open")
     
     def test_list_skills_workspace_priority(self):
-        """Test that workspace skills take priority over built-in."""
+        """Test that workspace skills take priority over open."""
         self.create_test_skill("duplicate-skill", "# Workspace Version", in_workspace=True)
-        self.create_test_skill("duplicate-skill", "# Built-in Version", in_workspace=False)
+        self.create_test_skill("duplicate-skill", "# Open Version", in_workspace=False)
         
         skills = self.loader.list_skills(filter_unavailable=False)
         self.assertEqual(len(skills), 1)
@@ -115,12 +126,12 @@ metadata: '{"nanobot": {"requires": {"bins": ["nonexistent-tool"]}}}'
         loaded = self.loader.load_skill("test-skill")
         self.assertEqual(loaded, content)
     
-    def test_load_skill_builtin(self):
-        """Test loading a built-in skill."""
-        content = "# Built-in Skill\n\nThis is a built-in skill."
-        self.create_test_skill("builtin-skill", content, in_workspace=False)
+    def test_load_skill_open(self):
+        """Test loading an open skill."""
+        content = "# Open Skill\n\nThis is an open skill."
+        self.create_test_skill("open-skill", content, in_workspace=False)
         
-        loaded = self.loader.load_skill("builtin-skill")
+        loaded = self.loader.load_skill("open-skill")
         self.assertEqual(loaded, content)
     
     def test_load_skill_not_found(self):
@@ -129,12 +140,12 @@ metadata: '{"nanobot": {"requires": {"bins": ["nonexistent-tool"]}}}'
         self.assertIsNone(loaded)
     
     def test_load_skill_workspace_priority(self):
-        """Test that workspace skills are loaded before built-in."""
+        """Test that workspace skills are loaded before open."""
         workspace_content = "# Workspace Version"
-        builtin_content = "# Built-in Version"
+        open_content = "# Open Version"
         
         self.create_test_skill("test-skill", workspace_content, in_workspace=True)
-        self.create_test_skill("test-skill", builtin_content, in_workspace=False)
+        self.create_test_skill("test-skill", open_content, in_workspace=False)
         
         loaded = self.loader.load_skill("test-skill")
         self.assertEqual(loaded, workspace_content)
@@ -315,7 +326,12 @@ description: A test skill
     
     # Always skills tests
     def test_get_always_skills(self):
-        """Test getting always skills."""
+        """Test getting always skills (essential by location + always=true in frontmatter)."""
+        # Essential skill: always loaded by location
+        essential_dir = self.essential_skills_dir / "essential-skill"
+        essential_dir.mkdir(parents=True)
+        (essential_dir / "SKILL.md").write_text("# Essential Skill")
+        # Open skill with always=true
         content1 = """---
 metadata: '{"nanobot": {"always": true}}'
 ---
@@ -333,6 +349,7 @@ always: true
         self.create_test_skill("normal-skill", "# Normal Skill")
         
         always_skills = self.loader.get_always_skills()
+        self.assertIn("essential-skill", always_skills)
         self.assertIn("always-skill-1", always_skills)
         self.assertIn("always-skill-2", always_skills)
         self.assertNotIn("normal-skill", always_skills)

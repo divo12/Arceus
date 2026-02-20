@@ -56,13 +56,13 @@ class BaseAgent:
     
     def get_builtin_skills(self) -> List[Dict[str, str]]:
         """
-        Get only built-in skills.
+        Get non-workspace skills (essential + open).
         
         Returns:
-            List of built-in skill info dicts.
+            List of skill info dicts from essential and open sources.
         """
         all_skills = self.get_available_skills()
-        return [s for s in all_skills if s["source"] == "builtin"]
+        return [s for s in all_skills if s["source"] in ("essential", "open")]
     
     def load_skill(self, skill_name: str) -> Optional[str]:
         """
