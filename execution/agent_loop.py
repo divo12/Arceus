@@ -16,7 +16,22 @@ from agents.tools.web import WebFetchTool, WebSearchTool
 from cognition.cognitive_loop import CognitiveLoop
 from cognition.memory.memory_manager import MemoryManager
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
+from providers.azure_openai_provider import AzureOpenAIProvider
 from providers.rule_based_provider import RuleBasedProvider
+
+
+def _default_provider() -> ProviderAdapter:
+    """Use Azure OpenAI when credentials are configured, else RuleBasedProvider."""
+    try:
+        from settings import Settings
+        if Settings.AZURE_OPENAI_API_KEY and Settings.AZURE_OPENAI_ENDPOINT:
+            return AzureOpenAIProvider(
+                model=Settings.AZURE_OPENAI_DEPLOYMENT,
+                temperature=0.3,
+            )
+    except Exception:
+        pass
+    return RuleBasedProvider()
 
 
 class AgentLoop:
@@ -34,7 +49,7 @@ class AgentLoop:
         self.skills = SkillsLoader(self.workspace)
         self.cognition = CognitiveLoop(self.workspace)
         self.memory = MemoryManager(self.workspace)
-        self.provider = provider or RuleBasedProvider()
+        self.provider = provider or _default_provider()
         self.registry = registry or self._build_default_registry()
         self.max_iterations = max_iterations
 

@@ -61,6 +61,12 @@ uv run python --version
 uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
+## Azure OpenAI (LLM provider)
+
+When `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` are set in `.env`, the agent uses Azure OpenAI for real LLM generation. Otherwise it falls back to the rule-based provider (deterministic, for tests).
+
+Set `AZURE_OPENAI_DEPLOYMENT` to your Azure deployment name (e.g. `gpt-5.2`, `gpt-4o`). Default is `gpt-5.2`.
+
 ## Run the PM core loop
 
 Minimal direct invocation from repo root:
