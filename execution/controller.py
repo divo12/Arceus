@@ -35,12 +35,14 @@ class Controller:
         context: Optional[Dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         session_key: Optional[str] = None,
+        stream_callback: Optional[Any] = None,
     ) -> Dict[str, Any]:
         return self.loop.run_sync(
             problem_description=problem_description,
             context=context,
             max_iterations=max_iterations,
             session_key=session_key,
+            stream_callback=stream_callback,
         )
 
     async def _on_heartbeat(self, prompt: str) -> str:

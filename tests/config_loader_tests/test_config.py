@@ -214,7 +214,12 @@ class TestConfigLoader(unittest.TestCase):
                 MockCtrl.return_value.run_problem.return_value = mock_result
                 out = io.StringIO()
                 with mock.patch("sys.stdout", out):
-                    run_chat(session_key="test:plain", use_markdown=False, workspace=self.workspace)
+                    run_chat(
+                        session_key="test:plain",
+                        use_markdown=False,
+                        workspace=self.workspace,
+                        stream=False,
+                    )
         text = out.getvalue()
         self.assertIn("Arceus:", text)
         self.assertIn("Hi there!", text)
@@ -232,7 +237,12 @@ class TestConfigLoader(unittest.TestCase):
                 MockCtrl.return_value.run_problem.return_value = mock_result
                 out = io.StringIO()
                 with mock.patch("sys.stdout", out):
-                    run_chat(session_key="test:md", use_markdown=True, workspace=self.workspace)
+                    run_chat(
+                        session_key="test:md",
+                        use_markdown=True,
+                        workspace=self.workspace,
+                        stream=False,
+                    )
         text = out.getvalue()
         self.assertIn("Arceus", text)
         self.assertIn("Hello", text)
@@ -249,11 +259,38 @@ class TestConfigLoader(unittest.TestCase):
                 MockCtrl.return_value.run_problem.return_value = {"final": {"content": "Hi"}}
                 out = io.StringIO()
                 with mock.patch("sys.stdout", out):
-                    run_chat(session_key="test:hist", use_markdown=False, workspace=self.workspace)
+                    run_chat(
+                        session_key="test:hist",
+                        use_markdown=False,
+                        workspace=self.workspace,
+                        stream=False,
+                    )
         mock_ps.assert_called_once()
         call_kwargs = mock_ps.call_args[1]
         self.assertIn("history", call_kwargs)
         self.assertIsInstance(call_kwargs["history"], FileHistory)
+
+    def test_chat_streaming_passes_callback(self):
+        """run_chat with stream=True passes stream_callback to run_problem."""
+        from main import run_chat
+
+        mock_session = mock.MagicMock()
+        mock_session.prompt.side_effect = ["hi", "exit"]
+        with mock.patch("prompt_toolkit.PromptSession", return_value=mock_session):
+            with mock.patch("execution.controller.Controller") as MockCtrl:
+                MockCtrl.return_value.run_problem.return_value = {"final": {"content": "Hi"}}
+                run_chat(
+                    session_key="test:stream",
+                    use_markdown=False,
+                    workspace=self.workspace,
+                    stream=True,
+                )
+                run_problem_calls = MockCtrl.return_value.run_problem.call_args_list
+                self.assertGreaterEqual(len(run_problem_calls), 1)
+                call_kwargs = run_problem_calls[0][1]
+                self.assertIn("stream_callback", call_kwargs)
+                self.assertIsNotNone(call_kwargs["stream_callback"])
+                self.assertTrue(callable(call_kwargs["stream_callback"]))
 
 
 if __name__ == "__main__":

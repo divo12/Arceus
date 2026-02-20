@@ -4,8 +4,9 @@ Arceus entrypoint. Runs the gateway (heartbeat + cron) by default.
 
 Usage:
   uv run python main.py                         # Run gateway (heartbeat + cron)
-  uv run python main.py chat                     # Interactive chat (Markdown rendering)
+  uv run python main.py chat                     # Interactive chat (Markdown, streaming)
   uv run python main.py chat --no-markdown       # Chat with plain text output
+  uv run python main.py chat --no-stream         # Chat without token streaming
   uv run python main.py status                   # Show config, provider, cron, sessions
   uv run python main.py onboard                  # Create .arceus/config.json, sessions/, skills/
   uv run python main.py --no-cron               # Run gateway without cron
@@ -103,6 +104,7 @@ def run_chat(
     session_key: str = "console:default",
     use_markdown: bool = True,
     workspace: Path | None = None,
+    stream: bool = True,
 ) -> None:
     """Interactive chat mode (nanobot-style). Multi-turn with session persistence."""
     from execution.controller import Controller
@@ -131,17 +133,48 @@ def run_chat(
             print("Bye.")
             break
 
-        result = ctrl.run_problem(user_input, session_key=session_key)
-        content = result.get("final", {}).get("content", "No response")
-        if use_markdown:
-            from rich.console import Console
-            from rich.markdown import Markdown
-            console = Console()
-            console.print("\n[bold]Arceus:[/bold]")
-            console.print(Markdown(content))
-            console.print()
+        stream_callback = None
+        if stream:
+            if use_markdown:
+                from rich.console import Console
+                from rich.live import Live
+                from rich.markdown import Markdown
+                console = Console()
+                console.print("\n[bold]Arceus:[/bold]")
+                content_buf: list[str] = [""]
+
+                def _cb(chunk: str) -> None:
+                    content_buf[0] += chunk
+                    live.update(Markdown(content_buf[0]))
+
+                with Live(Markdown(""), refresh_per_second=8, console=console) as live:
+                    result = ctrl.run_problem(
+                        user_input, session_key=session_key, stream_callback=_cb
+                    )
+                print()
+            else:
+                def _cb(chunk: str) -> None:
+                    print(chunk, end="", flush=True)
+
+                print("\nArceus: ", end="", flush=True)
+                result = ctrl.run_problem(
+                    user_input, session_key=session_key, stream_callback=_cb
+                )
+                print()
         else:
-            print(f"\nArceus:\n{content}\n")
+            result = ctrl.run_problem(user_input, session_key=session_key)
+
+        content = result.get("final", {}).get("content", "No response")
+        if not stream:
+            if use_markdown:
+                from rich.console import Console
+                from rich.markdown import Markdown
+                console = Console()
+                console.print("\n[bold]Arceus:[/bold]")
+                console.print(Markdown(content))
+                console.print()
+            else:
+                print(f"\nArceus:\n{content}\n")
 
 
 def main() -> None:
@@ -152,10 +185,15 @@ def main() -> None:
     parser.add_argument("--heartbeat", type=int, default=30 * 60, help="Heartbeat interval (seconds)")
     parser.add_argument("--session", default="console:default", help="Session key for chat (default: console:default)")
     parser.add_argument("--no-markdown", action="store_true", help="Plain text output in chat (no Markdown rendering)")
+    parser.add_argument("--no-stream", action="store_true", help="Disable token streaming in chat (wait for full response)")
     args = parser.parse_args()
 
     if args.problem and args.problem[0].lower() == "chat":
-        run_chat(session_key=args.session, use_markdown=not args.no_markdown)
+        run_chat(
+            session_key=args.session,
+            use_markdown=not args.no_markdown,
+            stream=not args.no_stream,
+        )
         return
     if args.problem and args.problem[0].lower() == "status":
         run_status()

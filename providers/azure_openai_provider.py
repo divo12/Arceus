@@ -66,6 +66,85 @@ class AzureOpenAIProvider(ProviderAdapter):
             result.append(ToolCall(name=name, arguments=arguments, call_id=call_id))
         return result
 
+    def _parse_response(self, response: Any) -> ProviderResponse:
+        """Parse non-streaming chat completion response into ProviderResponse."""
+        choice = response.choices[0] if response.choices else None
+        if not choice:
+            logger.error("Azure OpenAI returned no choices")
+            return ProviderResponse(
+                content="Error: No response from model.",
+                confidence=0.0,
+                done=True,
+                rationale="API returned empty choices.",
+            )
+        msg = choice.message
+        content = msg.content or ""
+        raw_tool_calls = msg.tool_calls if hasattr(msg, "tool_calls") else []
+        tool_calls = self._parse_tool_calls(list(raw_tool_calls) if raw_tool_calls else [])
+        done = len(tool_calls) == 0
+        finish = getattr(choice, "finish_reason", None) or ""
+        confidence = 0.8 if done and finish == "stop" else 0.6
+        rationale = f"finish_reason={finish}" if finish else ""
+        return ProviderResponse(
+            content=content,
+            tool_calls=tool_calls,
+            confidence=confidence,
+            done=done,
+            rationale=rationale,
+        )
+
+    async def _complete_stream(
+        self, kwargs: Dict[str, Any], stream_callback: Any
+    ) -> ProviderResponse:
+        """Stream completion, call stream_callback with each content chunk, return full response."""
+        stream = await self.client.chat.completions.create(**kwargs)
+        content_parts: List[str] = []
+        tool_calls_acc: Dict[int, Dict[str, Any]] = {}
+
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if not delta:
+                continue
+            if getattr(delta, "content", None) and delta.content:
+                content_parts.append(delta.content)
+                stream_callback(delta.content)
+            tc_deltas = getattr(delta, "tool_calls", None) or []
+            for tc in tc_deltas:
+                idx = getattr(tc, "index", 0)
+                if idx not in tool_calls_acc:
+                    tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                acc = tool_calls_acc[idx]
+                if getattr(tc, "id", None):
+                    acc["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn:
+                    if getattr(fn, "name", None):
+                        acc["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        acc["arguments"] = acc.get("arguments", "") + fn.arguments
+
+        content = "".join(content_parts)
+        raw_tool_calls = []
+        for idx in sorted(tool_calls_acc.keys()):
+            a = tool_calls_acc[idx]
+            if a["id"] or a["name"]:
+                raw_tool_calls.append({
+                    "id": a["id"],
+                    "function": {"name": a["name"], "arguments": a.get("arguments", "")},
+                })
+        tool_calls = self._parse_tool_calls(raw_tool_calls) if raw_tool_calls else []
+        done = len(tool_calls) == 0
+        confidence = 0.8 if done else 0.6
+        return ProviderResponse(
+            content=content,
+            tool_calls=tool_calls,
+            confidence=confidence,
+            done=done,
+            rationale="finish_reason=stop" if done else "stream_with_tools",
+        )
+
     async def complete(
         self,
         messages: List[Dict[str, Any]],
@@ -73,12 +152,16 @@ class AzureOpenAIProvider(ProviderAdapter):
         iteration: int,
         runtime_context: Dict[str, Any],
     ) -> ProviderResponse:
-        """Produce a response via Azure OpenAI chat completion."""
+        """Produce a response via Azure OpenAI chat completion. Streams tokens when stream_callback in runtime_context."""
         tools = self._tools_for_api(tool_schemas)
+        stream_callback = runtime_context.get("stream_callback")
+        stream = bool(stream_callback)
+
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "temperature": self.temperature,
             "messages": messages,
+            "stream": stream,
         }
         if tools:
             kwargs["tools"] = tools
@@ -87,36 +170,10 @@ class AzureOpenAIProvider(ProviderAdapter):
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES + 1):
             try:
+                if stream:
+                    return await self._complete_stream(kwargs, stream_callback)
                 response = await self.client.chat.completions.create(**kwargs)
-                choice = response.choices[0] if response.choices else None
-                if not choice:
-                    logger.error("Azure OpenAI returned no choices")
-                    return ProviderResponse(
-                        content="Error: No response from model.",
-                        confidence=0.0,
-                        done=True,
-                        rationale="API returned empty choices.",
-                    )
-
-                msg = choice.message
-                content = msg.content or ""
-                raw_tool_calls = msg.tool_calls if hasattr(msg, "tool_calls") else []
-
-                tool_calls = self._parse_tool_calls(list(raw_tool_calls) if raw_tool_calls else [])
-
-                # Heuristic: done when no tool calls; confidence based on finish reason
-                done = len(tool_calls) == 0
-                finish = getattr(choice, "finish_reason", None) or ""
-                confidence = 0.8 if done and finish == "stop" else 0.6
-                rationale = f"finish_reason={finish}" if finish else ""
-
-                return ProviderResponse(
-                    content=content,
-                    tool_calls=tool_calls,
-                    confidence=confidence,
-                    done=done,
-                    rationale=rationale,
-                )
+                return self._parse_response(response)
             except (APIConnectionError, APITimeoutError, ConnectionError, OSError, asyncio.TimeoutError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES:

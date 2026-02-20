@@ -6,8 +6,9 @@
 |---------|-------------|
 | `main.py` | Run gateway (heartbeat + cron) |
 | `main.py --no-cron` | Run gateway without cron |
-| `main.py chat` | Interactive chat (Markdown) |
+| `main.py chat` | Interactive chat (Markdown, streaming) |
 | `main.py chat --no-markdown` | Chat with plain text |
+| `main.py chat --no-stream` | Chat without token streaming |
 | `main.py status` | Config path, provider, cron, sessions |
 | `main.py onboard` | Create .arceus/config.json, sessions/, skills/ |
 | `main.py "problem"` | Run single problem |
@@ -145,11 +146,12 @@ When you pass `session_key` (e.g. `"console:user123"`), the agent loads prior co
 **Interactive chat mode** (nanobot-style):
 
 ```bash
-uv run python main.py chat              # Markdown-rendered responses
+uv run python main.py chat              # Markdown-rendered, tokens stream as they arrive
 uv run python main.py chat --no-markdown  # Plain text output
+uv run python main.py chat --no-stream   # Wait for full response (no streaming)
 ```
 
-Type your problem, get a response, continue the conversation. Use `exit`, `quit`, or `:q` to end. Sessions persist in `workspace/sessions/`. Use ↑/↓ for input history (`~/.arceus/history/cli_history`).
+Type your problem, get a response, continue the conversation. Use `exit`, `quit`, or `:q` to end. Sessions persist in `workspace/sessions/`. Use ↑/↓ for input history (`~/.arceus/history/cli_history`). LLM tokens stream by default; use `--no-stream` to disable.
 
 **Programmatic:**
 

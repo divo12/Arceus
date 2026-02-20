@@ -94,6 +94,7 @@ Draft skills are generated only as review artifacts:
 Interactive chat (`main.py chat`) uses:
 - **Rich** for Markdown-rendered responses; `--no-markdown` for plain text.
 - **prompt_toolkit** + `FileHistory` for up/down arrow input history at `~/.arceus/history/cli_history`.
+- **Streaming** by default: LLM tokens stream as they arrive; `--no-stream` to disable.
 
 ## Validation Commands
 

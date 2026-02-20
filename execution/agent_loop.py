@@ -103,6 +103,7 @@ class AgentLoop:
         context: Optional[Dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         session_key: Optional[str] = None,
+        stream_callback: Optional[Any] = None,
     ) -> Dict[str, Any]:
         run_id = str(uuid4())
         context = context or {}
@@ -154,19 +155,22 @@ class AgentLoop:
                 for phase in missing_phases:
                     skill_gaps_seen[phase] = skill_gaps_seen.get(phase, 0) + 1
 
+                runtime_ctx: Dict[str, Any] = {
+                    "problem": problem_description,
+                    "run_id": run_id,
+                    "cognition": cognition,
+                    "require_web_evidence": cognition.get("decision", {}).get(
+                        "requires_web_evidence", False
+                    ),
+                    "web_evidence": web_evidence,
+                }
+                if stream_callback is not None:
+                    runtime_ctx["stream_callback"] = stream_callback
                 response = await self.provider.complete(
                     messages=messages,
                     tool_schemas=self.registry.get_definitions(),
                     iteration=iteration,
-                    runtime_context={
-                        "problem": problem_description,
-                        "run_id": run_id,
-                        "cognition": cognition,
-                        "require_web_evidence": cognition.get("decision", {}).get(
-                            "requires_web_evidence", False
-                        ),
-                        "web_evidence": web_evidence,
-                    },
+                    runtime_context=runtime_ctx,
                 )
                 final_response = response
 
@@ -313,6 +317,7 @@ class AgentLoop:
         context: Optional[Dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         session_key: Optional[str] = None,
+        stream_callback: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Synchronous wrapper used by scripts/tests."""
         return asyncio.run(
@@ -321,5 +326,6 @@ class AgentLoop:
                 context,
                 max_iterations,
                 session_key,
+                stream_callback,
             )
         )

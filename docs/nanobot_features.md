@@ -47,11 +47,11 @@ MCP is wired: add `tools.mcpServers` to config; AgentLoop connects at run start 
 
 ---
 
-### 6. Progress Streaming (Medium effort)
+### 6. ~~Progress Streaming~~ ✅ Done
 
 Nanobot v0.1.4: stream LLM tokens as they arrive.
 
-**Add:** Azure provider streaming; print tokens in chat/gateway as they arrive instead of waiting for full response.
+Azure provider streams tokens when `stream_callback` is in `runtime_context`. Chat mode streams by default; use `--no-stream` to disable. Rich Live + Markdown for streaming markdown rendering.
 
 ---
 
@@ -104,7 +104,7 @@ Nanobot: `agent/subagent.py` — spawn background tasks.
 | 3 | Onboard command | Low | Medium |
 | 4 | Rich Markdown in chat | Low | Medium |
 | 5 | Chat history (prompt_toolkit) | Low | Medium |
-| 6 | Progress streaming | Medium | High |
+| 6 | Progress streaming | Medium | High ✅ |
 | 7 | Docker | Medium | Medium |
 | 8 | Provider registry | Medium | Medium |
 | 9 | Message bus + channels | High | High (if needed) |
