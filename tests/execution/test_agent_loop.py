@@ -204,7 +204,7 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(result, HEARTBEAT_OK_TOKEN)
 
     def test_controller_run_heartbeat_once(self):
-        ctrl = Controller(self.workspace)
+        ctrl = Controller(self.workspace, provider=RuleBasedProvider())
         result = ctrl.run_heartbeat_once()
         self.assertIsNotNone(result)
         self.assertIsInstance(result, str)
@@ -266,6 +266,50 @@ class TestCron(unittest.TestCase):
             self.assertIn("id:", list_result)
 
         asyncio.run(run())
+
+
+class TestSession(unittest.TestCase):
+    """Session manager tests (from nanobot)."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.workspace = Path(self.temp_dir)
+        for skill_name in ["problem-statement"]:
+            skill_dir = self.workspace / "skills" / "workspace_skills" / skill_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {skill_name}\ndescription: test\n---\n\n# {skill_name}",
+                encoding="utf-8",
+            )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_session_manager_persists_messages(self):
+        from session.manager import SessionManager
+
+        mgr = SessionManager(self.workspace)
+        session = mgr.get_or_create("console:test1")
+        session.add_message("user", "Hello")
+        session.add_message("assistant", "Hi there")
+        mgr.save(session)
+
+        mgr.invalidate("console:test1")
+        loaded = mgr.get_or_create("console:test1")
+        self.assertEqual(len(loaded.messages), 2)
+        self.assertEqual(loaded.messages[0]["content"], "Hello")
+        self.assertEqual(loaded.messages[1]["content"], "Hi there")
+
+    def test_agent_loop_with_session_key_persists(self):
+        provider = SequencedProvider(
+            [ProviderResponse(content="Got it.", done=True, confidence=0.9)]
+        )
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=2)
+        loop.run_sync("First message", session_key="console:multi")
+        result = loop.run_sync("Second message", session_key="console:multi")
+        self.assertIn("Got it", result["final"]["content"])
+        session = loop.session_manager.get_or_create("console:multi")
+        self.assertGreaterEqual(len(session.messages), 2)
 
 
 if __name__ == "__main__":

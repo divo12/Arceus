@@ -1,13 +1,18 @@
 """Azure OpenAI provider for the agent loop."""
 
+import asyncio
 import json
 from typing import Any, Dict, List
 
-from openai import AsyncAzureOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncAzureOpenAI
 
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from settings import Settings
 from utils.logger import logger
+
+# Retry config for transient connection errors
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # seconds
 
 
 class AzureOpenAIProvider(ProviderAdapter):
@@ -79,42 +84,62 @@ class AzureOpenAIProvider(ProviderAdapter):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        try:
-            response = await self.client.chat.completions.create(**kwargs)
-            choice = response.choices[0] if response.choices else None
-            if not choice:
-                logger.error("Azure OpenAI returned no choices")
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+                choice = response.choices[0] if response.choices else None
+                if not choice:
+                    logger.error("Azure OpenAI returned no choices")
+                    return ProviderResponse(
+                        content="Error: No response from model.",
+                        confidence=0.0,
+                        done=True,
+                        rationale="API returned empty choices.",
+                    )
+
+                msg = choice.message
+                content = msg.content or ""
+                raw_tool_calls = msg.tool_calls if hasattr(msg, "tool_calls") else []
+
+                tool_calls = self._parse_tool_calls(list(raw_tool_calls) if raw_tool_calls else [])
+
+                # Heuristic: done when no tool calls; confidence based on finish reason
+                done = len(tool_calls) == 0
+                finish = getattr(choice, "finish_reason", None) or ""
+                confidence = 0.8 if done and finish == "stop" else 0.6
+                rationale = f"finish_reason={finish}" if finish else ""
+
                 return ProviderResponse(
-                    content="Error: No response from model.",
+                    content=content,
+                    tool_calls=tool_calls,
+                    confidence=confidence,
+                    done=done,
+                    rationale=rationale,
+                )
+            except (APIConnectionError, APITimeoutError, ConnectionError, OSError, asyncio.TimeoutError) as e:
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        f"Azure OpenAI connection attempt {attempt + 1}/{MAX_RETRIES + 1} failed: {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Azure OpenAI completion failed after {MAX_RETRIES + 1} attempts: {e}")
+            except Exception as e:
+                logger.error(f"Azure OpenAI completion failed: {e}")
+                return ProviderResponse(
+                    content=f"Error: {str(e)}",
                     confidence=0.0,
                     done=True,
-                    rationale="API returned empty choices.",
+                    rationale=f"Exception: {type(e).__name__}",
                 )
 
-            msg = choice.message
-            content = msg.content or ""
-            raw_tool_calls = msg.tool_calls if hasattr(msg, "tool_calls") else []
-
-            tool_calls = self._parse_tool_calls(list(raw_tool_calls) if raw_tool_calls else [])
-
-            # Heuristic: done when no tool calls; confidence based on finish reason
-            done = len(tool_calls) == 0
-            finish = getattr(choice, "finish_reason", None) or ""
-            confidence = 0.8 if done and finish == "stop" else 0.6
-            rationale = f"finish_reason={finish}" if finish else ""
-
-            return ProviderResponse(
-                content=content,
-                tool_calls=tool_calls,
-                confidence=confidence,
-                done=done,
-                rationale=rationale,
-            )
-        except Exception as e:
-            logger.error(f"Azure OpenAI completion failed: {e}")
-            return ProviderResponse(
-                content=f"Error: {str(e)}",
-                confidence=0.0,
-                done=True,
-                rationale=f"Exception: {type(e).__name__}",
-            )
+        return ProviderResponse(
+            content=f"Error: {str(last_error)}",
+            confidence=0.0,
+            done=True,
+            rationale="Connection failed after retries",
+        )

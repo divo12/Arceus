@@ -9,14 +9,15 @@ from cron.service import CronService
 from cron.types import CronJob
 from execution.agent_loop import AgentLoop
 from heartbeat.service import HeartbeatService
+from providers.adapter import ProviderAdapter
 
 
 class Controller:
     """Thin orchestration layer over AgentLoop, HeartbeatService, and CronService."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, provider: Optional[ProviderAdapter] = None):
         self.workspace = Path(workspace).expanduser().resolve()
-        self.loop = AgentLoop(self.workspace)
+        self.loop = AgentLoop(self.workspace, provider=provider)
         self._heartbeat: Optional[HeartbeatService] = None
         self._cron: Optional[CronService] = None
 
@@ -33,11 +34,13 @@ class Controller:
         problem_description: str,
         context: Optional[Dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
+        session_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.loop.run_sync(
             problem_description=problem_description,
             context=context,
             max_iterations=max_iterations,
+            session_key=session_key,
         )
 
     async def _on_heartbeat(self, prompt: str) -> str:
