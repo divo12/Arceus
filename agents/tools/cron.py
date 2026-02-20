@@ -1,19 +1,9 @@
 """Cron tool for scheduling reminders and tasks."""
 
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from agents.tools.base import Tool
-
-
-@dataclass
-class CronSchedule:
-    """Local schedule model compatible with minimal cron service interfaces."""
-    kind: str
-    every_ms: Optional[int] = None
-    expr: Optional[str] = None
-    tz: Optional[str] = None
-    at_ms: Optional[int] = None
+from cron.types import CronSchedule
 
 
 class CronTool(Tool):
@@ -104,8 +94,6 @@ class CronTool(Tool):
     ) -> str:
         if not message:
             return "Error: message is required for add"
-        if not self._channel or not self._chat_id:
-            return "Error: no session context (channel/chat_id)"
         if tz and not cron_expr:
             return "Error: tz can only be used with cron_expr"
         if tz:
@@ -130,13 +118,14 @@ class CronTool(Tool):
         else:
             return "Error: either every_seconds, cron_expr, or at is required"
         
+        deliver = bool(self._channel and self._chat_id)
         job = self._cron.add_job(
             name=message[:30],
             schedule=schedule,
             message=message,
-            deliver=True,
-            channel=self._channel,
-            to=self._chat_id,
+            deliver=deliver,
+            channel=self._channel or None,
+            to=self._chat_id or None,
             delete_after_run=delete_after,
         )
         return f"Created job '{job.name}' (id: {job.id})"

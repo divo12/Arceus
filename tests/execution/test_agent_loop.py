@@ -211,5 +211,62 @@ class TestHeartbeat(unittest.TestCase):
         self.assertGreater(len(result), 0)
 
 
+class TestCron(unittest.TestCase):
+    """Cron service and tool tests (nanobot concept)."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.workspace = Path(self.temp_dir)
+        (self.workspace / "skills" / "workspace_skills" / "cron").mkdir(
+            parents=True, exist_ok=True
+        )
+        (self.workspace / "skills" / "workspace_skills" / "cron" / "SKILL.md").write_text(
+            "---\nname: cron\ndescription: test\n---\n\n# cron",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_cron_service_add_list_remove(self):
+        from cron.service import CronService
+        from cron.types import CronSchedule
+
+        store_path = self.workspace / ".arceus" / "cron.json"
+        svc = CronService(store_path=store_path)
+        schedule = CronSchedule(kind="every", every_ms=60_000)
+        job = svc.add_job(
+            name="test job",
+            schedule=schedule,
+            message="Remind me",
+        )
+        self.assertIsNotNone(job.id)
+        self.assertEqual(job.name, "test job")
+        self.assertEqual(job.schedule.kind, "every")
+
+        jobs = svc.list_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].id, job.id)
+
+        removed = svc.remove_job(job.id)
+        self.assertTrue(removed)
+        self.assertEqual(len(svc.list_jobs()), 0)
+
+    def test_cron_tool_via_controller(self):
+        ctrl = Controller(self.workspace)
+
+        async def run():
+            add_result = await ctrl.loop.registry.execute(
+                "cron",
+                {"action": "add", "message": "Break time!", "every_seconds": 1200},
+            )
+            self.assertIn("Created job", add_result)
+            list_result = await ctrl.loop.registry.execute("cron", {"action": "list"})
+            self.assertIn("Break time!", list_result)
+            self.assertIn("id:", list_result)
+
+        asyncio.run(run())
+
+
 if __name__ == "__main__":
     unittest.main()

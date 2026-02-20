@@ -1,5 +1,6 @@
 PM_Skills/
 models/prompts/user_prompts/
+.arceus/
 
 # uv / Python environment
 uv.lock

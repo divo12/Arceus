@@ -102,6 +102,23 @@ Create `HEARTBEAT.md` in the workspace with tasks:
 
 If nothing needs attention, the agent replies `HEARTBEAT_OK`.
 
+## Cron (scheduled tasks)
+
+The cron service lets the agent schedule reminders and recurring tasks. Jobs are persisted in `.arceus/cron.json`. When the gateway runs, due jobs execute and the agent processes each job's message.
+
+**Use the cron tool** (when the agent has the cron skill):
+
+- `cron(action="add", message="Break time!", every_seconds=1200)` — every 20 min
+- `cron(action="add", message="Morning standup", cron_expr="0 9 * * 1-5", tz="America/Vancouver")`
+- `cron(action="list")` — list jobs
+- `cron(action="remove", job_id="abc123")` — remove a job
+
+**Gateway** (heartbeat + cron):
+
+```bash
+uv run python -c "from pathlib import Path; from execution.controller import Controller; c=Controller(Path('.')); c.run_gateway_sync(heartbeat_interval_s=60, cron_enabled=True)"
+```
+
 ## Troubleshooting
 
 - If Python is not 3.11, re-run:

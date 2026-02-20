@@ -10,6 +10,7 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 4. memory traces with run and iteration metadata
 5. skill-gap detection with draft-skill generation and human review gate
 6. heartbeat service for periodic autonomous wake-up (nanobot-style)
+7. cron service for scheduled reminders and recurring tasks (nanobot-style)
 
 ## Runtime Flow
 
@@ -32,6 +33,7 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 - `agents/skills.py`: skill-gap detection and draft skill file generation.
 - `cognition/memory/long_term_memory.py`: hardened memory schema (`episodes`, `traces`, `runs`, `facts`).
 - `heartbeat/service.py`: periodic agent wake-up; reads `HEARTBEAT.md` and executes tasks.
+- `cron/service.py`: scheduled jobs; persists to `.arceus/cron.json`, runs agent when due.
 
 ## Heartbeat
 
@@ -44,6 +46,16 @@ The heartbeat service (from nanobot) periodically wakes the agent:
 - Use `Controller.run_heartbeat_once()` or `Controller.run_gateway_sync()` for execution
 
 Implementation: the controller's `_on_heartbeat` callback uses `await self.loop.run()` (async) so it can be invoked from within the heartbeat service's async `trigger_now` without nesting `asyncio.run()`.
+
+## Cron
+
+The cron service (from nanobot) schedules agent tasks:
+
+- Jobs stored in `.arceus/cron.json`
+- Supports `every` (interval), `cron` (cron expression), `at` (one-shot)
+- When a job is due, the controller runs the agent with the job message
+- Use `cron` tool (add/list/remove) when the agent has the cron skill
+- Cron service starts with the gateway when `cron_enabled=True`
 
 ## Web Learning Policy
 
