@@ -10,6 +10,7 @@ from typing import Any, Callable, Coroutine
 
 from loguru import logger
 
+from cron.cronitor_ping import ping as cronitor_ping
 from cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
 
 
@@ -233,7 +234,10 @@ class CronService:
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
         start_ms = _now_ms()
+        series = f"{job.id}-{start_ms}"
         logger.info(f"Cron: executing job '{job.name}' ({job.id})")
+
+        await cronitor_ping(job.id, job.name, "run", series=series)
 
         try:
             if self.on_job:
@@ -241,10 +245,19 @@ class CronService:
             job.state.last_status = "ok"
             job.state.last_error = None
             logger.info(f"Cron: job '{job.name}' completed")
+            duration_s = (_now_ms() - start_ms) / 1000.0
+            await cronitor_ping(
+                job.id, job.name, "complete",
+                duration_seconds=duration_s, series=series,
+            )
         except Exception as e:
             job.state.last_status = "error"
             job.state.last_error = str(e)
             logger.error(f"Cron: job '{job.name}' failed: {e}")
+            await cronitor_ping(
+                job.id, job.name, "fail",
+                message=str(e)[:2000], series=series,
+            )
 
         job.state.last_run_at_ms = start_ms
         job.updated_at_ms = _now_ms()

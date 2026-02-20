@@ -1,7 +1,9 @@
 PM_Skills/
 models/prompts/user_prompts/
 .arceus/
+sessions/
 .env
+darwin_arm64.tar.gz
 
 # uv / Python environment
 uv.lock

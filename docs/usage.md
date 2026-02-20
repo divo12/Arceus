@@ -163,18 +163,43 @@ If nothing needs attention, the agent replies `HEARTBEAT_OK`.
 
 The cron service lets the agent schedule reminders and recurring tasks. Jobs are persisted in `.arceus/cron.json`. When the gateway runs, due jobs execute and the agent processes each job's message.
 
-**Use the cron tool** (when the agent has the cron skill):
+### CLI (add jobs without running the agent)
+
+```bash
+# Add a job (every 20 min)
+uv run python scripts/run_gateway.py add --message "Break time!" --every 1200
+
+# Add with cron expression (weekdays 9am Vancouver)
+uv run python scripts/run_gateway.py add --message "Morning standup" --cron "0 9 * * 1-5" --tz "America/Vancouver"
+
+# List jobs
+uv run python scripts/run_gateway.py list
+
+# Remove a job
+uv run python scripts/run_gateway.py remove <job_id>
+
+# Run gateway (heartbeat + cron) - keeps running until Ctrl+C
+uv run python scripts/run_gateway.py run --heartbeat-interval 1800
+```
+
+### Via agent (cron skill)
+
+When the agent has the cron skill, it can add jobs via the `cron` tool:
 
 - `cron(action="add", message="Break time!", every_seconds=1200)` — every 20 min
 - `cron(action="add", message="Morning standup", cron_expr="0 9 * * 1-5", tz="America/Vancouver")`
 - `cron(action="list")` — list jobs
 - `cron(action="remove", job_id="abc123")` — remove a job
 
-**Gateway** (heartbeat + cron):
+### What you need
 
-```bash
-uv run python -c "from pathlib import Path; from execution.controller import Controller; c=Controller(Path('.')); c.run_gateway_sync(heartbeat_interval_s=60, cron_enabled=True)"
-```
+1. **Add jobs** — Use the CLI above or ask the agent to schedule something.
+2. **Run the gateway** — `uv run python scripts/run_gateway.py run` (or `run_gateway_sync` in code). The gateway must stay running for cron jobs to execute.
+3. **Azure/LLM** — Cron jobs run the agent; ensure `.env` has Azure credentials if you want real LLM responses.
+
+### Cronitor monitoring (optional)
+
+Set `CRONITOR_API_KEY` in `.env` to send run/complete/fail pings to [Cronitor](https://cronitor.io). Each job execution will ping: `run` at start, `complete` on success, `fail` on error.
 
 ## Troubleshooting
 
