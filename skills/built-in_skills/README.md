@@ -17,7 +17,6 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 
 | Skill | Description |
 |-------|-------------|
-| `open-skills-workflow` | Sync ~/open-skills from repo; use/extend skills; contribute back via PR (always loaded) |
 | `github` | Interact with GitHub using the `gh` CLI |
 | `weather` | Get weather info using wttr.in and Open-Meteo |
 | `summarize` | Summarize URLs, files, and YouTube videos |
