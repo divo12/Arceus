@@ -1,5 +1,6 @@
-"""Consolidated tests for the core AgentLoop runtime."""
+"""Consolidated tests for the core AgentLoop runtime and heartbeat."""
 
+import asyncio
 import shutil
 import tempfile
 import unittest
@@ -13,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from agents.tools.base import Tool
 from agents.tools.registry import ToolRegistry
 from execution.agent_loop import AgentLoop
+from execution.controller import Controller
+from heartbeat.service import HEARTBEAT_OK_TOKEN, _is_heartbeat_empty, HeartbeatService
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from providers.rule_based_provider import RuleBasedProvider
 
@@ -159,6 +162,53 @@ class TestAgentLoop(unittest.TestCase):
                 self.assertIn("review_required: true", content)
         finally:
             shutil.rmtree(empty_workspace, ignore_errors=True)
+
+
+class TestHeartbeat(unittest.TestCase):
+    """Heartbeat service tests (nanobot concept)."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.workspace = Path(self.temp_dir)
+        for skill_name in ["problem-statement", "heartbeat"]:
+            skill_dir = self.workspace / "skills" / "workspace_skills" / skill_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {skill_name}\ndescription: test\n---\n\n# {skill_name}",
+                encoding="utf-8",
+            )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_is_heartbeat_empty_none(self):
+        self.assertTrue(_is_heartbeat_empty(None))
+
+    def test_is_heartbeat_empty_blank(self):
+        self.assertTrue(_is_heartbeat_empty(""))
+        self.assertTrue(_is_heartbeat_empty("\n\n  \n"))
+
+    def test_is_heartbeat_empty_headers_only(self):
+        self.assertTrue(_is_heartbeat_empty("# Tasks\n## Section\n"))
+
+    def test_is_heartbeat_empty_actionable_content(self):
+        self.assertFalse(_is_heartbeat_empty("- [ ] Review backlog"))
+        self.assertFalse(_is_heartbeat_empty("Check for new research"))
+
+    def test_heartbeat_service_trigger_now_empty(self):
+        async def on_hb(prompt: str) -> str:
+            return HEARTBEAT_OK_TOKEN
+
+        svc = HeartbeatService(self.workspace, on_heartbeat=on_hb, enabled=True)
+        result = asyncio.run(svc.trigger_now())
+        self.assertEqual(result, HEARTBEAT_OK_TOKEN)
+
+    def test_controller_run_heartbeat_once(self):
+        ctrl = Controller(self.workspace)
+        result = ctrl.run_heartbeat_once()
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, str)
+        self.assertGreater(len(result), 0)
 
 
 if __name__ == "__main__":

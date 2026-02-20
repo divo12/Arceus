@@ -75,6 +75,33 @@ The output includes:
 - web evidence captured during runtime
 - drafted skill paths (when repeated capability gaps are detected)
 
+## Heartbeat (periodic autonomous wake-up)
+
+The heartbeat service periodically wakes the agent to check `HEARTBEAT.md` in the workspace. If the file contains actionable tasks, the agent executes them.
+
+**Run one heartbeat tick:**
+
+```bash
+uv run python -c "from pathlib import Path; from execution.controller import Controller; c=Controller(Path('.')); print(c.run_heartbeat_once())"
+```
+
+**Run gateway (heartbeat loop, 30 min default):**
+
+```bash
+uv run python -c "from pathlib import Path; from execution.controller import Controller; c=Controller(Path('.')); c.run_gateway_sync(heartbeat_interval_s=60)"
+```
+
+Create `HEARTBEAT.md` in the workspace with tasks:
+
+```markdown
+# Tasks for next heartbeat
+
+- [ ] Review backlog and flag stale items
+- [ ] Check for new PM research on [topic]
+```
+
+If nothing needs attention, the agent replies `HEARTBEAT_OK`.
+
 ## Troubleshooting
 
 - If Python is not 3.11, re-run:

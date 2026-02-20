@@ -9,6 +9,7 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 3. policy-gated web learning when confidence is low
 4. memory traces with run and iteration metadata
 5. skill-gap detection with draft-skill generation and human review gate
+6. heartbeat service for periodic autonomous wake-up (nanobot-style)
 
 ## Runtime Flow
 
@@ -30,6 +31,19 @@ This repository now follows a nanobot-inspired core runtime specialized for prod
 - `cognition/decision_policy.py`: confidence scoring + web-evidence requirement policy.
 - `agents/skills.py`: skill-gap detection and draft skill file generation.
 - `cognition/memory/long_term_memory.py`: hardened memory schema (`episodes`, `traces`, `runs`, `facts`).
+- `heartbeat/service.py`: periodic agent wake-up; reads `HEARTBEAT.md` and executes tasks.
+
+## Heartbeat
+
+The heartbeat service (from nanobot) periodically wakes the agent:
+
+- Default interval: 30 minutes
+- Reads `HEARTBEAT.md` in workspace
+- If actionable content exists, runs agent with heartbeat prompt
+- Agent replies `HEARTBEAT_OK` when nothing to do
+- Use `Controller.run_heartbeat_once()` or `Controller.run_gateway_sync()` for execution
+
+Implementation: the controller's `_on_heartbeat` callback uses `await self.loop.run()` (async) so it can be invoked from within the heartbeat service's async `trigger_now` without nesting `asyncio.run()`.
 
 ## Web Learning Policy
 
