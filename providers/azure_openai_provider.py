@@ -18,6 +18,8 @@ class AzureOpenAIProvider(ProviderAdapter):
         model: str | None = None,
         temperature: float = 0.3,
         deployment_name: str | None = None,
+        api_key: str | None = None,
+        endpoint: str | None = None,
     ):
         from settings import Settings
         self.model = (
@@ -25,9 +27,11 @@ class AzureOpenAIProvider(ProviderAdapter):
             or "gpt-5.2"
         )
         self.temperature = temperature
+        ep = endpoint or Settings.AZURE_OPENAI_ENDPOINT or ""
+        key = api_key or Settings.AZURE_OPENAI_API_KEY or ""
         self.client = AsyncAzureOpenAI(
-            azure_endpoint=Settings.AZURE_OPENAI_ENDPOINT,
-            api_key=Settings.AZURE_OPENAI_API_KEY,
+            azure_endpoint=ep,
+            api_key=key,
             api_version="2025-04-01-preview",
             timeout=120,
         )

@@ -15,19 +15,25 @@ from agents.tools.shell import ExecTool
 from agents.tools.web import WebFetchTool, WebSearchTool
 from cognition.cognitive_loop import CognitiveLoop
 from cognition.memory.memory_manager import MemoryManager
+from config import Config, load_config
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from providers.azure_openai_provider import AzureOpenAIProvider
 from providers.rule_based_provider import RuleBasedProvider
+from session.manager import SessionManager
 
 
-def _default_provider() -> ProviderAdapter:
-    """Use Azure OpenAI when credentials are configured, else RuleBasedProvider."""
+def _build_provider(config: Config) -> ProviderAdapter:
+    """Build provider from config; config overrides env when both exist."""
     try:
         from settings import Settings
-        if Settings.AZURE_OPENAI_API_KEY and Settings.AZURE_OPENAI_ENDPOINT:
+        api_key = config.providers.azure.api_key or Settings.AZURE_OPENAI_API_KEY or ""
+        endpoint = config.providers.azure.endpoint or Settings.AZURE_OPENAI_ENDPOINT or ""
+        if api_key and endpoint:
             return AzureOpenAIProvider(
-                model=Settings.AZURE_OPENAI_DEPLOYMENT,
-                temperature=0.3,
+                model=config.providers.azure.deployment,
+                temperature=config.agents.defaults.temperature,
+                api_key=api_key,
+                endpoint=endpoint,
             )
     except Exception:
         pass
@@ -42,16 +48,19 @@ class AgentLoop:
         workspace: Path,
         provider: Optional[ProviderAdapter] = None,
         registry: Optional[ToolRegistry] = None,
-        max_iterations: int = 8,
+        max_iterations: Optional[int] = None,
+        config: Optional[Config] = None,
     ):
         self.workspace = Path(workspace).expanduser().resolve()
+        self.config = config or load_config(workspace=self.workspace)
         self.base_agent = BaseAgent(self.workspace)
         self.skills = SkillsLoader(self.workspace)
         self.cognition = CognitiveLoop(self.workspace)
         self.memory = MemoryManager(self.workspace)
-        self.provider = provider or _default_provider()
+        self.provider = provider or _build_provider(self.config)
         self.registry = registry or self._build_default_registry()
-        self.max_iterations = max_iterations
+        self.max_iterations = max_iterations or self.config.agents.defaults.max_iterations
+        self.session_manager = SessionManager(self.workspace)
 
     def _build_default_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
@@ -60,8 +69,18 @@ class AgentLoop:
         registry.register(WriteFileTool(allowed_dir))
         registry.register(EditFileTool(allowed_dir))
         registry.register(ListDirTool(allowed_dir))
-        registry.register(ExecTool(working_dir=str(self.workspace), restrict_to_workspace=True))
-        registry.register(WebSearchTool())
+        restrict = self.config.tools.restrict_to_workspace
+        registry.register(
+            ExecTool(
+                working_dir=str(self.workspace),
+                restrict_to_workspace=restrict,
+                timeout=self.config.tools.exec.timeout,
+            )
+        )
+        web_key = self.config.get_web_search_api_key()
+        registry.register(
+            WebSearchTool(api_key=web_key or None, max_results=self.config.tools.web.max_results)
+        )
         registry.register(WebFetchTool())
         return registry
 
@@ -70,6 +89,7 @@ class AgentLoop:
         problem_description: str,
         context: Optional[Dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
+        session_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_id = str(uuid4())
         context = context or {}
@@ -77,10 +97,16 @@ class AgentLoop:
         available_skills = [item["name"] for item in self.base_agent.get_available_skills()]
         available_prompts = [item["name"] for item in self.base_agent.get_available_prompts()]
 
+        history: List[Dict[str, Any]] = []
+        if session_key:
+            session = self.session_manager.get_or_create(session_key)
+            history = session.get_history()
+
         messages = self.base_agent.build_context(
             user_message=problem_description,
             skill_names=None,
             prompt_names=None,
+            history=history,
         )
 
         web_evidence: List[Dict[str, str]] = []
@@ -185,6 +211,15 @@ class AgentLoop:
             },
         }
         self.memory.record_run_summary(run_summary)
+
+        if session_key:
+            session = self.session_manager.get_or_create(session_key)
+            new_msgs = messages[1 + len(history) :]
+            for msg in new_msgs:
+                extra = {k: msg[k] for k in ("tool_calls", "tool_call_id", "name") if k in msg}
+                session.add_message(msg["role"], msg.get("content", ""), **extra)
+            self.session_manager.save(session)
+
         return {
             "run_id": run_id,
             "messages": messages,
@@ -253,6 +288,14 @@ class AgentLoop:
         problem_description: str,
         context: Optional[Dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
+        session_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronous wrapper used by scripts/tests."""
-        return asyncio.run(self.run(problem_description, context, max_iterations))
+        return asyncio.run(
+            self.run(
+                problem_description,
+                context,
+                max_iterations,
+                session_key,
+            )
+        )

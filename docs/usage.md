@@ -61,11 +61,62 @@ uv run python --version
 uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
+## Configuration (config loader)
+
+Arceus loads configuration from JSON (nanobot-style). Config file overrides environment variables when both exist.
+
+**Search order:** `workspace/.arceus/config.json` → `workspace/config.json` → `~/.arceus/config.json` → `cwd/.arceus/config.json` → `cwd/config.json`
+
+**Example `.arceus/config.json`:**
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "gpt-5.2",
+      "maxIterations": 8,
+      "temperature": 0.3,
+      "maxTokens": 8192
+    }
+  },
+  "providers": {
+    "azure": {
+      "apiKey": "",
+      "endpoint": "",
+      "deployment": "gpt-5.2"
+    }
+  },
+  "tools": {
+    "web": { "apiKey": "", "maxResults": 5 },
+    "exec": { "timeout": 60 },
+    "restrictToWorkspace": false
+  }
+}
+```
+
+Use `config.load_config()` and `config.save_config()` for programmatic access.
+
 ## Azure OpenAI (LLM provider)
 
-When `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` are set in `.env`, the agent uses Azure OpenAI for real LLM generation. Otherwise it falls back to the rule-based provider (deterministic, for tests).
+When `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` are set in `.env` (or in config), the agent uses Azure OpenAI for real LLM generation. Otherwise it falls back to the rule-based provider (deterministic, for tests).
 
 Set `AZURE_OPENAI_DEPLOYMENT` to your Azure deployment name (e.g. `gpt-5.2`, `gpt-4o`). Default is `gpt-5.2`.
+
+## Sessions (multi-turn conversations)
+
+When you pass `session_key` (e.g. `"console:user123"`), the agent loads prior conversation history and persists new messages. Use for multi-turn chats.
+
+```bash
+uv run python -c "
+from pathlib import Path
+from execution.controller import Controller
+c = Controller(Path('.'))
+c.run_problem('What is PM?', session_key='console:demo')
+c.run_problem('Explain the first principle in more detail', session_key='console:demo')
+"
+```
+
+Sessions are stored as JSONL in `workspace/sessions/`.
 
 ## Run the PM core loop
 
