@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from agents.base_agent import BaseAgent
+from agents.context_builder import ContextBuilder
+from agents.prompts import PromptLoader
 from agents.skills import SkillsLoader
 from agents.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from agents.tools.mcp import connect_mcp_servers
@@ -57,11 +58,17 @@ class AgentLoop:
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.config = config or load_config(workspace=self.workspace)
-        self.base_agent = BaseAgent(self.workspace)
+        self.context_builder = ContextBuilder(self.workspace)
+        self.prompts = PromptLoader(self.workspace)
         self.skills = SkillsLoader(self.workspace)
         self.cognition = CognitiveLoop(self.workspace)
         self.memory = MemoryManager(self.workspace)
         self.provider = provider or _build_provider(self.config)
+        self.subagent_manager = SubagentManager(
+            provider=self.provider,
+            workspace=self.workspace,
+            config=self.config,
+        )
         self.registry = registry or self._build_default_registry()
         self.max_iterations = max_iterations or self.config.agents.defaults.max_iterations
         self.session_manager = SessionManager(self.workspace)
@@ -88,12 +95,7 @@ class AgentLoop:
         registry.register(SearXSearchTool(max_results=self.config.tools.web.max_results))
         registry.register(WebFetchTool())
         registry.register(SupportQueryTool(self.workspace))
-        subagent_manager = SubagentManager(
-            provider=self.provider,
-            workspace=self.workspace,
-            config=self.config,
-        )
-        registry.register(SpawnTool(subagent_manager))
+        registry.register(SpawnTool(self.subagent_manager))
         return registry
 
     def _mcp_servers_dict(self) -> Dict[str, Any]:
@@ -163,19 +165,19 @@ class AgentLoop:
                 mcp_added = [n for n in self.registry.tool_names if n.startswith("mcp_")]
 
             iterations = max_iterations or self.max_iterations
-            available_skills = [item["name"] for item in self.base_agent.get_available_skills()]
-            available_prompts = [item["name"] for item in self.base_agent.get_available_prompts()]
+            available_skills = [s["name"] for s in self.skills.list_skills(filter_unavailable=False)]
+            available_prompts = [p["name"] for p in self.prompts.list_prompts()]
 
             history: List[Dict[str, Any]] = []
             if session_key:
                 session = self.session_manager.get_or_create(session_key)
                 history = session.get_history()
 
-            messages = self.base_agent.build_context(
-                user_message=problem_description,
+            messages = self.context_builder.build_messages(
+                history=history,
+                current_message=problem_description,
                 skill_names=None,
                 prompt_names=None,
-                history=history,
             )
 
             web_evidence: List[Dict[str, str]] = []
@@ -185,6 +187,13 @@ class AgentLoop:
             prev_feedback: Optional[Dict[str, Any]] = None
 
             for iteration in range(1, iterations + 1):
+                # Integrate completed subagent results (feedback, learnings, new_angle)
+                completed_subagents = self.subagent_manager.get_completed_results()
+                if completed_subagents:
+                    prev_feedback = self._merge_subagent_results(
+                        prev_feedback or {},
+                        completed_subagents,
+                    )
                 if prev_feedback:
                     feedback_msg = self._format_feedback_message(prev_feedback)
                     messages.append({"role": "user", "content": feedback_msg})
@@ -229,7 +238,7 @@ class AgentLoop:
                 final_response = response
 
                 tool_results: List[Dict[str, Any]] = []
-                self.base_agent.context_builder.add_assistant_message(
+                self.context_builder.add_assistant_message(
                     messages,
                     content=response.content,
                     tool_calls=[self._tool_call_to_message(tc) for tc in response.tool_calls]
@@ -243,7 +252,7 @@ class AgentLoop:
                         tool_results.append(
                             {"tool": call.name, "arguments": call.arguments, "result": result}
                         )
-                        self.base_agent.context_builder.add_tool_result(
+                        self.context_builder.add_tool_result(
                             messages, call.call_id, call.name, result
                         )
                         web_evidence.extend(self._extract_web_evidence(call.name, result))
@@ -318,6 +327,52 @@ class AgentLoop:
                 "memory_snapshot": self.memory.get_memory_snapshot(),
             }
 
+    def _merge_subagent_results(
+        self,
+        prev_feedback: Dict[str, Any],
+        completed_subagents: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Merge completed subagent results (feedback, learnings, new_angle) into prev_feedback."""
+        out = dict(prev_feedback)
+        subagent_results = list(out.get("subagent_results", []))
+        new_angles = list(out.get("new_angles", []))
+        learnings = list(out.get("learnings", []))
+
+        for sr in completed_subagents:
+            label = sr.get("label", "subagent")
+            subagent_results.append({
+                "task": sr.get("task", ""),
+                "result": sr.get("summary", sr.get("raw", "")),
+                "feedback": sr.get("feedback", ""),
+                "learnings": sr.get("learnings", ""),
+                "new_angle": sr.get("new_angle", ""),
+            })
+            if sr.get("new_angle"):
+                new_angles.append(f"[{label}] {sr['new_angle']}")
+            if sr.get("learnings"):
+                learnings.append(f"[{label}] {sr['learnings']}")
+
+        parts: List[str] = []
+        if out.get("web_evidence_count", 0):
+            parts.append(f"Gathered {out['web_evidence_count']} web evidence item(s).")
+        for sr in subagent_results:
+            fb = sr.get("feedback") or sr.get("result", "")
+            if fb:
+                parts.append(f"Subagent ({sr.get('task', '')[:40]}): {str(fb)[:300]}...")
+        if new_angles:
+            parts.append("New angles to consider: " + "; ".join(new_angles[:3]))
+        if learnings:
+            parts.append("Learnings: " + "; ".join(learnings[:2]))
+        if out.get("summary"):
+            parts.append(out["summary"])
+        summary = " ".join(parts) if parts else "No new feedback from tools."
+
+        out["subagent_results"] = subagent_results
+        out["new_angles"] = new_angles
+        out["learnings"] = learnings
+        out["summary"] = summary
+        return out
+
     def _compute_feedback(
         self,
         tool_results: List[Dict[str, Any]],
@@ -350,13 +405,22 @@ class AgentLoop:
         return {
             "web_evidence_count": len(web_evidence),
             "subagent_results": subagent_results,
+            "new_angles": [],
+            "learnings": [],
             "summary": summary,
         }
 
     def _format_feedback_message(self, feedback: Dict[str, Any]) -> str:
         """Format feedback as a user message for the next iteration."""
-        summary = feedback.get("summary", "")
-        return f"[Feedback from last iteration]\n\n{summary}\n\nConsider this when refining your plan or recommendations."
+        parts = [feedback.get("summary", "")]
+        new_angles = feedback.get("new_angles", [])
+        if new_angles:
+            parts.append("\n\nNew angles to validate/solve: " + "; ".join(new_angles))
+        learnings = feedback.get("learnings", [])
+        if learnings:
+            parts.append("\n\nLearnings to incorporate: " + "; ".join(learnings[:3]))
+        body = "\n".join(parts).strip()
+        return f"[Feedback from last iteration]\n\n{body}\n\nConsider this when refining your plan. Validate new angles before solving."
 
     @staticmethod
     def _tool_call_to_message(call: ToolCall) -> Dict[str, Any]:

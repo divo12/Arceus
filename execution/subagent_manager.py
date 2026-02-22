@@ -1,17 +1,21 @@
-"""Subagent manager for PM skill-based validation and focused research tasks.
+"""Subagent manager for background task execution.
 
-Adapted from nanobot's subagent pattern. Runs synchronously (no MessageBus);
-result is returned directly as tool output.
+Spawned agents run in the background. They use tools and PM skills to:
+- Give feedback to improve the main agent's response
+- Add learnings to known skills
+- Suggest a new angle for the main agent to validate and solve
+
+Results are queued for the main agent to consume between iterations.
 """
 
 import asyncio
-import json
-from datetime import datetime, timezone
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
+from agents.agent import Agent
 from agents.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from agents.tools.registry import ToolRegistry
 from agents.tools.shell import ExecTool
@@ -23,53 +27,13 @@ if TYPE_CHECKING:
     from providers.adapter import ProviderAdapter
 
 
-def _build_subagent_prompt(task: str, skill_names: Optional[List[str]] = None) -> str:
-    """Build a focused system prompt for the subagent."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M (%A) UTC")
-    skill_hint = ""
-    if skill_names:
-        skill_hint = f"\nFocus on these skills: {', '.join(skill_names)}. Read their SKILL.md files as needed."
-    return f"""# PM Subagent
-
-## Current Time
-{now}
-
-You are a PM subagent spawned by the main agent to complete a specific task.
-
-## Task
-{task}
-{skill_hint}
-
-## Rules
-1. Stay focused - complete only the assigned task, nothing else
-2. Your final response will be returned to the main agent
-3. Do not initiate side tasks or broad explorations
-4. Be concise but informative in your findings
-5. Use web_search, searx_search, or web_fetch to validate claims when needed
-
-## What You Can Do
-- Read and write files in the workspace
-- Execute shell commands
-- Search the web and fetch web pages
-- Query the support agent for workspace context
-
-## What You Cannot Do
-- Spawn other subagents
-- Schedule cron jobs
-
-## Workspace
-Workspace: {{workspace}}
-Skills at: {{workspace}}/skills/ (read SKILL.md as needed)
-
-When done, provide a clear summary of your findings or actions."""
-
-
 class SubagentManager:
     """
-    Manages synchronous subagent execution for PM validation and research tasks.
+    Manages background subagent execution.
 
-    Subagents run with a focused prompt and limited tools (no spawn, no cron).
-    Result is returned directly to the caller.
+    Subagents run in the background (asyncio.create_task). When they complete,
+    results (feedback, learnings, new_angle) are pushed to a queue for the main
+    agent to consume. Subagents cannot spawn other agents or use the spawn tool.
     """
 
     def __init__(
@@ -79,7 +43,7 @@ class SubagentManager:
         config: "Config",
         model: Optional[str] = None,
         temperature: float = 0.3,
-        max_iterations: int = 10,
+        max_iterations: int = 15,
     ):
         self.provider = provider
         self.workspace = Path(workspace).expanduser().resolve()
@@ -87,6 +51,8 @@ class SubagentManager:
         self.model = model
         self.temperature = temperature
         self.max_iterations = max_iterations
+        self._running_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._completed_results: List[Dict[str, Any]] = []
 
     def _build_subagent_registry(self) -> ToolRegistry:
         """Build tool registry for subagent (no spawn, no cron)."""
@@ -114,87 +80,90 @@ class SubagentManager:
         registry.register(SupportQueryTool(self.workspace))
         return registry
 
-    async def spawn(
+    def spawn(
         self,
         task: str,
         label: Optional[str] = None,
         skill_names: Optional[List[str]] = None,
     ) -> str:
         """
-        Run a subagent to complete the task synchronously. Returns the final result.
+        Spawn a subagent to execute a task in the background.
 
-        Args:
-            task: The task description for the subagent.
-            label: Optional short label (for logging).
-            skill_names: Optional list of PM skills to focus on.
-
-        Returns:
-            The subagent's final response string.
+        Returns immediately with a status message. Results are queued for
+        the main agent to consume via get_completed_results().
         """
+        task_id = str(uuid.uuid4())[:8]
         display_label = label or (task[:40] + "..." if len(task) > 40 else task)
-        logger.info("Subagent starting: %s", display_label)
+
+        bg_task = asyncio.create_task(
+            self._run_subagent(task_id, task, display_label, skill_names)
+        )
+        self._running_tasks[task_id] = bg_task
+        bg_task.add_done_callback(lambda _: self._running_tasks.pop(task_id, None))
+
+        logger.info("Spawned subagent [%s]: %s", task_id, display_label)
+        return f"Subagent [{display_label}] started (id: {task_id}). I'll integrate results when ready."
+
+    async def _run_subagent(
+        self,
+        task_id: str,
+        task: str,
+        label: str,
+        skill_names: Optional[List[str]],
+    ) -> None:
+        """Execute the subagent task and push result to completed queue."""
+        logger.info("Subagent [%s] starting: %s", task_id, label)
 
         try:
             tools = self._build_subagent_registry()
-            system_prompt = _build_subagent_prompt(task, skill_names).replace(
-                "{workspace}", str(self.workspace)
+            agent = Agent(workspace=self.workspace, skill_names=skill_names)
+            result = await agent.run(
+                task=task,
+                tools=tools,
+                provider=self.provider,
+                max_iterations=self.max_iterations,
             )
 
-            messages: List[Dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task},
-            ]
-
-            final_result: Optional[str] = None
-            for iteration in range(1, self.max_iterations + 1):
-                runtime_ctx: Dict[str, Any] = {
-                    "problem": task,
-                    "iteration": iteration,
-                }
-                response = await self.provider.complete(
-                    messages=messages,
-                    tool_schemas=tools.get_definitions(),
-                    iteration=iteration,
-                    runtime_context=runtime_ctx,
-                )
-
-                if response.tool_calls:
-                    from providers.adapter import ToolCall
-
-                    tool_call_dicts = [
-                        {
-                            "id": tc.call_id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                        }
-                        for tc in response.tool_calls
-                        if isinstance(tc, ToolCall)
-                    ]
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": tool_call_dicts,
-                    })
-                    for call in response.tool_calls:
-                        if not isinstance(call, ToolCall):
-                            continue
-                        result = await tools.execute(call.name, call.arguments)
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.call_id,
-                            "name": call.name,
-                            "content": result,
-                        })
-                else:
-                    final_result = response.content or ""
-                    break
-
-            if final_result is None:
-                final_result = "Task completed but no final response was generated."
-
-            logger.info("Subagent completed: %s", display_label)
-            return final_result
+            completed = {
+                "task_id": task_id,
+                "label": label,
+                "task": task,
+                "feedback": result.get("feedback", ""),
+                "learnings": result.get("learnings", ""),
+                "new_angle": result.get("new_angle", ""),
+                "summary": result.get("summary", ""),
+                "raw": result.get("raw", ""),
+                "status": "ok",
+            }
+            self._completed_results.append(completed)
+            logger.info("Subagent [%s] completed successfully", task_id)
 
         except Exception as e:
-            logger.error("Subagent failed: %s", e)
-            return f"Error: {str(e)}"
+            error_msg = str(e)
+            logger.error("Subagent [%s] failed: %s", task_id, e)
+            self._completed_results.append({
+                "task_id": task_id,
+                "label": label,
+                "task": task,
+                "feedback": f"Error: {error_msg}",
+                "learnings": "",
+                "new_angle": "",
+                "summary": f"Subagent failed: {error_msg}",
+                "raw": "",
+                "status": "error",
+            })
+
+    def get_completed_results(self) -> List[Dict[str, Any]]:
+        """
+        Pop and return all completed subagent results.
+
+        Main agent calls this at the start of each iteration to integrate
+        feedback, learnings, and new angles.
+        """
+        results = self._completed_results.copy()
+        self._completed_results.clear()
+        return results
+
+    def get_running_count(self) -> int:
+        """Return the number of currently running subagents."""
+        return len(self._running_tasks)

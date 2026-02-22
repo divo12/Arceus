@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from agents.base_agent import BaseAgent
+from agents.context_builder import ContextBuilder
 from agents.prompt_policy import PromptPolicy
 from agents.prompts import PromptLoader
 from cognition.cognitive_loop import CognitiveLoop
@@ -110,25 +110,28 @@ class TestPromptIntegration(unittest.TestCase):
         self.assertIsInstance(result["prompts_to_reference"], list)
 
     def test_base_agent_returns_recommended_prompts(self):
-        agent = BaseAgent(self.workspace)
-        # Force prompt loader to use temp prompt path for deterministic tests.
-        agent.prompts = PromptLoader(self.workspace, self.prompts_dir)
-        agent.context_builder.prompts = PromptLoader(self.workspace, self.prompts_dir)
+        prompts = PromptLoader(self.workspace, self.prompts_dir)
+        context_builder = ContextBuilder(self.workspace)
+        context_builder.prompts = prompts
+        loop = CognitiveLoop(self.workspace)
 
-        result = agent.process_problem(
-            "Users drop off before activation because value is unclear.",
-            {"funnel_drop": "step 1"},
+        available_skills = [s["name"] for s in context_builder.skills.list_skills(filter_unavailable=False)]
+        available_prompts = [p["name"] for p in prompts.list_prompts()]
+        result = loop.run(
+            problem_description="Users drop off before activation because value is unclear.",
+            context={"funnel_drop": "step 1"},
+            available_skills=available_skills,
+            available_prompts=available_prompts,
         )
-        self.assertIn("recommended_prompts", result)
-        self.assertIsInstance(result["recommended_prompts"], list)
-        self.assertIn("available_prompts", result)
+        self.assertIn("prompts_to_reference", result)
+        self.assertIsInstance(result["prompts_to_reference"], list)
+        self.assertIn("skills_to_use", result)
 
     def test_context_has_separate_prompt_section(self):
-        agent = BaseAgent(self.workspace)
-        agent.prompts = PromptLoader(self.workspace, self.prompts_dir)
-        agent.context_builder.prompts = PromptLoader(self.workspace, self.prompts_dir)
+        context_builder = ContextBuilder(self.workspace)
+        context_builder.prompts = PromptLoader(self.workspace, self.prompts_dir)
 
-        system_prompt = agent.get_system_prompt(
+        system_prompt = context_builder.build_system_prompt(
             skill_names=["problem-statement"],
             prompt_names=["visionary-press-release"],
         )

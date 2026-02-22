@@ -8,7 +8,8 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from agents.base_agent import BaseAgent
+from agents.context_builder import ContextBuilder
+from agents.skills import SkillsLoader
 from cognition.cognitive_loop import CognitiveLoop
 from cognition.decision_policy import DecisionPolicy
 from cognition.planner import Planner
@@ -106,15 +107,26 @@ class TestCognition(unittest.TestCase):
         self.assertIn("skills_to_use", result)
 
     def test_base_agent_integration(self):
-        agent = BaseAgent(self.workspace)
-        out = agent.process_problem(
-            "Users struggle to complete signup",
-            {"funnel_drop": "65% at step 2"},
+        skills = SkillsLoader(self.workspace)
+        context_builder = ContextBuilder(self.workspace)
+        loop = CognitiveLoop(self.workspace)
+        available_skills = [s["name"] for s in skills.list_skills(filter_unavailable=False)]
+        available_prompts = []
+        cognition = loop.run(
+            problem_description="Users struggle to complete signup",
+            context={"funnel_drop": "65% at step 2"},
+            available_skills=available_skills,
+            available_prompts=available_prompts,
         )
-        self.assertIn("messages", out)
-        self.assertIn("cognition", out)
-        self.assertIn("recommended_skills", out)
-        self.assertGreater(len(out["messages"]), 0)
+        messages = context_builder.build_messages(
+            history=[],
+            current_message="Users struggle to complete signup",
+            skill_names=cognition.get("skills_to_use"),
+            prompt_names=cognition.get("prompts_to_reference"),
+        )
+        self.assertIn("interpreted_state", cognition)
+        self.assertIn("skills_to_use", cognition)
+        self.assertGreater(len(messages), 0)
 
 
 if __name__ == "__main__":
