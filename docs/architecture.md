@@ -125,7 +125,7 @@ flowchart TB
 **Data flow (single run):**
 
 1. **Controller** receives a problem (user, heartbeat, or cron job).
-2. **AgentLoop** builds context (ContextBuilder + SkillsLoader + PromptLoader), runs **CognitiveLoop** (plan/decision/reflection).
+2. **AgentLoop** builds context (ContextBuilder + SkillsLoader), runs **CognitiveLoop** (plan/decision/reflection).
 3. **Provider** (Azure OpenAI) returns content and optional tool calls.
 4. **ToolRegistry** executes tools (filesystem, web, spawn, cron, MCP); **feedback** is computed from tool results and completed subagent results (feedback, learnings, new_angle).
 5. Next iteration: feedback is injected as a user message; cognition and provider run again.
@@ -197,8 +197,7 @@ Arceus/
 │   ├── agent.py                # Agent: spawned subagent class (feedback, learnings, new_angle)
 │   ├── context_builder.py     # System prompt: identity, bootstrap, memory, skills
 │   ├── skills.py              # SkillsLoader: essential / workspace / open
-│   ├── prompts.py             # PromptLoader: task_prompts
-│   ├── prompt_policy.py       # Skill/prompt selection policy
+│   ├── memory.py              # MemoryStore: MEMORY.md + HISTORY.md
 │   └── tools/                 # All callable tools
 │       ├── registry.py        # ToolRegistry
 │       ├── base.py            # Base tool + schema validation
@@ -320,7 +319,7 @@ Arceus/
 
 **Responsibilities:**
 
-- Load config (or use defaults), build **ContextBuilder**, **SkillsLoader**, **PromptLoader**, **CognitiveLoop**, **MemoryManager**, **SessionManager**, **ToolRegistry**, **SubagentManager**, **Provider** (Azure OpenAI).
+- Load config (or use defaults), build **ContextBuilder**, **SkillsLoader**, **CognitiveLoop**, **MemoryManager**, **SessionManager**, **ToolRegistry**, **SubagentManager**, **Provider** (Azure OpenAI).
 - For each run: connect MCP servers from config (e.g. Web Search MCP), build messages (context + optional feedback from previous iteration).
 - Per iteration:
   1. Optionally append **feedback message** (from previous tool run).
@@ -346,7 +345,7 @@ Arceus/
 |------|--------|------|
 | Interpret | StateInterpreter | Problem + context → objectives, constraints. |
 | Reason | Reasoner | Reasoning + risks. |
-| Plan | Planner | Phases, skills_to_use, prompts_to_reference. |
+| Plan | Planner | Phases, skills_to_use. |
 | Decide | DecisionPolicy | next_actions, confidence, requires_web_evidence. |
 | Reflect | CognitiveLoop._reflect | learning, subagent_count, web_evidence_count, next_iteration_focus. |
 
@@ -430,7 +429,9 @@ Sweep that uses the main agent (with open skills + spawn + support agent) to sea
 
 **Drafts:** Generated into `skills/workspace_skills/_drafts/<name>/SKILL.md` when skill gaps are detected; not auto-enabled (review gate).
 
-**Prompts:** Loaded from `models/prompts/task_prompts/` (PromptLoader); referenced in plans as prompts_to_reference. No duplication of skill instructions (see AGENTS.md prompt-vs-skill contract).
+**Cursor skills:** When developing in Cursor, `.cursor/skills/skill-creator/` guides the AI to create and update Agent Skills correctly. See [docs/cursor_skills.md](cursor_skills.md).
+
+**Memory:** MemoryStore (agents/memory.py) provides MEMORY.md + HISTORY.md for long-term facts and grep-searchable log. Prompts moved to experiments/ for later exploration.
 
 ---
 
