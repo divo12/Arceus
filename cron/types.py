@@ -19,7 +19,7 @@ class CronSchedule:
 class CronPayload:
     """What to do when the job runs."""
 
-    kind: Literal["system_event", "agent_turn"] = "agent_turn"
+    kind: Literal["system_event", "agent_turn", "ideas_sweep", "new_ideas"] = "agent_turn"
     message: str = ""
     deliver: bool = False
     channel: str | None = None

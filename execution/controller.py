@@ -54,7 +54,14 @@ class Controller:
         return result.get("final", {}).get("content", "HEARTBEAT_OK")
 
     async def _on_cron_job(self, job: CronJob) -> str | None:
-        """Callback for cron: run agent with job message."""
+        """Callback for cron: run agent with job message or dispatch to ideas sweep."""
+        kind = job.payload.kind
+        if kind == "ideas_sweep":
+            from pm_ideas.service import run_ideas_sweep_async
+            return await run_ideas_sweep_async(self.workspace)
+        if kind == "new_ideas":
+            from pm_ideas.service import run_new_ideas_sweep_async
+            return await run_new_ideas_sweep_async(self.workspace)
         prompt = job.payload.message or job.name
         result = await self.loop.run(problem_description=prompt)
         return result.get("final", {}).get("content")

@@ -2,6 +2,8 @@
 
 Surfs the web for product ideas and creates a todo list in `PM_IDEAS.md`.
 
+For the **Cursor-for-PMs** problem (what to build next, spawn subagents, repo context), see [new_ideas_flow.md](new_ideas_flow.md). Output goes to `new_ideas.md`.
+
 ## Architecture
 
 - **Main agent:** Open skills (web_search, web_fetch, spawn, etc.) for searching and validation.

@@ -4,9 +4,12 @@ CLI for cron jobs and gateway (heartbeat + cron).
 
 Usage:
   uv run python scripts/run_gateway.py add --message "Break time!" --every 1200
-  uv run python scripts/run_gateway.py add --message "Morning standup" --cron "0 9 * * 1-5" --tz "America/Vancouver"
+  uv run python scripts/run_gateway.py add --new-ideas --cron "0 9 * * *"   # Cursor for PMs → new_ideas.md
+  uv run python scripts/run_gateway.py add --ideas --cron "0 9 * * *"       # PM ideas → PM_IDEAS.md
   uv run python scripts/run_gateway.py list
   uv run python scripts/run_gateway.py remove <job_id>
+  uv run python scripts/run_gateway.py new_ideas   # Run new ideas sweep once
+  uv run python scripts/run_gateway.py ideas       # Run PM ideas sweep once
   uv run python scripts/run_gateway.py run [--heartbeat-interval 1800] [--no-heartbeat] [--no-cron]
 """
 
@@ -42,11 +45,28 @@ def _add(args):
         print("Error: specify --every, --cron, or --at")
         sys.exit(1)
 
+    if not args.ideas and not args.new_ideas and not args.message:
+        print("Error: specify --message, --ideas, or --new-ideas")
+        sys.exit(1)
+
+    payload_kind = "agent_turn"
+    name = args.message[:30] if args.message else "PM ideas sweep"
+    message = args.message or "PM ideas sweep"
+    if args.ideas:
+        payload_kind = "ideas_sweep"
+        name = "PM ideas sweep"
+        message = "PM ideas sweep"
+    elif args.new_ideas:
+        payload_kind = "new_ideas"
+        name = "New ideas (Cursor for PMs)"
+        message = "New ideas sweep: Cursor for product managers — what to build next"
+
     job = svc.add_job(
-        name=args.message[:30],
+        name=name,
         schedule=schedule,
-        message=args.message,
+        message=message,
         delete_after_run=bool(args.at),
+        payload_kind=payload_kind,
     )
     print(f"Created job '{job.name}' (id: {job.id})")
 
@@ -80,6 +100,22 @@ def _remove(args):
         sys.exit(1)
 
 
+def _ideas(args):
+    """Run PM ideas sweep once (creates PM_IDEAS.md)."""
+    from pm_ideas.service import run_ideas_sweep
+    print("Running PM ideas sweep...")
+    run_ideas_sweep(ROOT, max_iterations=args.max_iterations)
+    print("Done. Check PM_IDEAS.md")
+
+
+def _new_ideas(args):
+    """Run new ideas sweep once: Cursor-for-PMs problem, spawn subagents, creates new_ideas.md."""
+    from pm_ideas.service import run_new_ideas_sweep
+    print("Running new ideas sweep (Cursor for PMs)...")
+    run_new_ideas_sweep(ROOT, max_iterations=args.max_iterations)
+    print("Done. Check new_ideas.md")
+
+
 def _run(args):
     from execution.controller import Controller
 
@@ -101,11 +137,13 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     add_p = sub.add_parser("add", help="Add a cron job")
-    add_p.add_argument("--message", "-m", required=True, help="Job message")
+    add_p.add_argument("--message", "-m", help="Job message (required for agent_turn)")
     add_p.add_argument("--every", "-e", type=int, help="Interval in seconds (e.g. 1200 = 20 min)")
     add_p.add_argument("--cron", "-c", help="Cron expression (e.g. '0 9 * * 1-5')")
     add_p.add_argument("--tz", help="IANA timezone for cron (e.g. America/Vancouver)")
     add_p.add_argument("--at", help="One-time ISO datetime (e.g. 2026-02-21T10:00:00)")
+    add_p.add_argument("--ideas", action="store_true", help="PM ideas sweep → PM_IDEAS.md")
+    add_p.add_argument("--new-ideas", action="store_true", help="New ideas sweep (Cursor for PMs) → new_ideas.md")
     add_p.set_defaults(func=_add)
 
     list_p = sub.add_parser("list", help="List cron jobs")
@@ -115,6 +153,14 @@ def main():
     rm_p = sub.add_parser("remove", help="Remove a cron job")
     rm_p.add_argument("job_id", help="Job ID from list")
     rm_p.set_defaults(func=_remove)
+
+    ideas_p = sub.add_parser("ideas", help="Run PM ideas sweep once (PM_IDEAS.md)")
+    ideas_p.add_argument("--max-iterations", type=int, default=12)
+    ideas_p.set_defaults(func=_ideas)
+
+    new_ideas_p = sub.add_parser("new_ideas", help="Run new ideas sweep once (new_ideas.md, Cursor for PMs)")
+    new_ideas_p.add_argument("--max-iterations", type=int, default=12)
+    new_ideas_p.set_defaults(func=_new_ideas)
 
     run_p = sub.add_parser("run", help="Run gateway (heartbeat + cron)")
     run_p.add_argument("--heartbeat-interval", type=int, default=30 * 60, help="Heartbeat interval (seconds)")

@@ -247,7 +247,7 @@ Arceus/
 │   └── service.py            # HeartbeatService, HEARTBEAT.md
 │
 ├── pm_ideas/                  # PM ideas sweep (cron-driven)
-│   └── service.py            # run_ideas_sweep_with_loop, PM_IDEAS.md
+│   └── service.py            # run_ideas_sweep_with_loop (PM_IDEAS.md), run_new_ideas_sweep_with_loop (new_ideas.md)
 │
 ├── observability/
 │   └── logger.py             # configure_logging, .arceus/logs/arceus.log
@@ -309,8 +309,10 @@ Arceus/
 | `uv run python main.py status` | Print config path, provider, cron count, sessions. |
 | `uv run python main.py onboard` | Create `.arceus/config.json`, `sessions/`, `skills/workspace_skills/`, `HEARTBEAT.md`. |
 | `uv run python main.py --no-cron` | Gateway without cron. |
-| `uv run python scripts/run_gateway.py add --ideas --cron "0 9 * * *"` | Add PM ideas job. |
+| `uv run python scripts/run_gateway.py add --ideas --cron "0 9 * * *"` | Add PM ideas job (PM_IDEAS.md). |
+| `uv run python scripts/run_gateway.py add --new-ideas --cron "0 9 * * *"` | Add new ideas job (new_ideas.md, Cursor for PMs). |
 | `uv run python scripts/run_gateway.py ideas` | Run PM ideas sweep once. |
+| `uv run python scripts/run_gateway.py new_ideas` | Run new ideas sweep once (spawn subagents, new_ideas.md). |
 | `uv run python scripts/run_gateway.py run` | Run gateway (same idea as main.py). |
 
 ---
