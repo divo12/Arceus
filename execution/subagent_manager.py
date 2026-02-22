@@ -77,7 +77,7 @@ class SubagentManager:
         )
         registry.register(SearXSearchTool(max_results=self.config.tools.web.max_results))
         registry.register(WebFetchTool())
-        registry.register(SupportQueryTool(self.workspace))
+        registry.register(SupportQueryTool(self.workspace, provider=self.provider))
         return registry
 
     def spawn(

@@ -18,6 +18,14 @@ Subagents are spawned by the main PM agent to complete focused tasks in the back
 | **SubagentManager** (`execution/subagent_manager.py`) | Manages background spawns; queues completed results |
 | **SpawnTool** (`agents/tools/spawn.py`) | Tool the main agent calls to spawn; returns immediately |
 
+## Subagent Tools
+
+Subagents have **SupportQueryTool** (`query_support_agent`), which the main agent does **not** have. This tool:
+
+- Accepts `query`, `problem_or_skill`, and `research_context`
+- Uses an LLM to suggest: new angles, problem structure, skill gaps/improvements, learnings
+- Appends learnings to skill `references/Learnings.md` (does not modify SKILL.md)
+
 ## Subagent Behavior
 
 - **Runs in background**: `asyncio.create_task`; main agent does not block.
@@ -42,3 +50,4 @@ Subagents are spawned by the main PM agent to complete focused tasks in the back
 4. On completion, SubagentManager appends result to `_completed_results`.
 5. At the start of the next iteration, AgentLoop calls `get_completed_results()` and merges into `prev_feedback`.
 6. Feedback message (including new angles and learnings) is appended as a user message for the next cognition/provider cycle.
+7. New angles and learnings are stored in **problem memory** (`data/state/problem_memory.json`) for the current problem.

@@ -94,9 +94,12 @@ flowchart TB
         SHELL[shell]
         WEB[web_search, searx, web_fetch]
         SPAWN[spawn]
-        SUPPORT[query_support_agent]
         CRON[cron]
         MCP[MCP servers]
+    end
+
+    subgraph SubagentTools["Subagent-only tools"]
+        SUPPORT[query_support_agent]
     end
 
     subgraph Services["Services"]

@@ -16,11 +16,11 @@ from agents.tools.mcp import connect_mcp_servers
 from agents.tools.registry import ToolRegistry
 from agents.tools.shell import ExecTool
 from agents.tools.spawn import SpawnTool
-from agents.tools.support_query import SupportQueryTool
 from agents.tools.web import SearXSearchTool, WebFetchTool, WebSearchTool
 from execution.subagent_manager import SubagentManager
 from cognition.cognitive_loop import CognitiveLoop
 from cognition.memory.memory_manager import MemoryManager
+from cognition.memory.problem_memory import ProblemMemory
 from config import Config, load_config
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from providers.azure_openai_provider import AzureOpenAIProvider
@@ -63,6 +63,7 @@ class AgentLoop:
         self.skills = SkillsLoader(self.workspace)
         self.cognition = CognitiveLoop(self.workspace)
         self.memory = MemoryManager(self.workspace)
+        self.problem_memory = ProblemMemory(self.workspace)
         self.provider = provider or _build_provider(self.config)
         self.subagent_manager = SubagentManager(
             provider=self.provider,
@@ -94,7 +95,6 @@ class AgentLoop:
         )
         registry.register(SearXSearchTool(max_results=self.config.tools.web.max_results))
         registry.register(WebFetchTool())
-        registry.register(SupportQueryTool(self.workspace))
         registry.register(SpawnTool(self.subagent_manager))
         return registry
 
@@ -180,6 +180,8 @@ class AgentLoop:
                 prompt_names=None,
             )
 
+            self.problem_memory.record_initial(problem_description, run_id=run_id)
+
             web_evidence: List[Dict[str, str]] = []
             traces: List[Dict[str, Any]] = []
             final_response = ProviderResponse(content="", done=False)
@@ -193,6 +195,8 @@ class AgentLoop:
                     prev_feedback = self._merge_subagent_results(
                         prev_feedback or {},
                         completed_subagents,
+                        problem_description=problem_description,
+                        run_id=run_id,
                     )
                 if prev_feedback:
                     feedback_msg = self._format_feedback_message(prev_feedback)
@@ -331,6 +335,8 @@ class AgentLoop:
         self,
         prev_feedback: Dict[str, Any],
         completed_subagents: List[Dict[str, Any]],
+        problem_description: str = "",
+        run_id: str = "",
     ) -> Dict[str, Any]:
         """Merge completed subagent results (feedback, learnings, new_angle) into prev_feedback."""
         out = dict(prev_feedback)
@@ -349,8 +355,16 @@ class AgentLoop:
             })
             if sr.get("new_angle"):
                 new_angles.append(f"[{label}] {sr['new_angle']}")
+                if problem_description:
+                    self.problem_memory.append_improvement(
+                        problem_description, sr["new_angle"], source="subagent", run_id=run_id or None
+                    )
             if sr.get("learnings"):
                 learnings.append(f"[{label}] {sr['learnings']}")
+                if problem_description:
+                    self.problem_memory.append_improvement(
+                        problem_description, sr["learnings"], source="subagent_learnings", run_id=run_id or None
+                    )
 
         parts: List[str] = []
         if out.get("web_evidence_count", 0):
