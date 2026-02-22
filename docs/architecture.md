@@ -423,7 +423,7 @@ Sweep that uses the main agent (with open skills + spawn + support agent) to sea
 
 **Skills (three tiers):**
 
-1. **Essential** (`skills/essential/`) — Always loaded (e.g. heartbeat, memory, web-search).
+1. **Essential** (`skills/essential/`) — Always loaded (e.g. first-principles-thinking, heartbeat, memory, web-search).
 2. **Workspace** (`skills/workspace_skills/`) — PM designation; per-workspace.
 3. **Open** (`skills/open_skills/`) — Tool-level; on-demand.
 

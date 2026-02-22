@@ -6,6 +6,7 @@ Three-tier skill organization:
 
 Survival skills — always loaded in every session.
 
+- **first-principles-thinking** — Break down problems into fundamentals; challenge assumptions
 - **heartbeat** — HEARTBEAT.md for periodic autonomous tasks
 - **memory** — Episodic memory and run traces
 - **web-search** — web_search/web_fetch for domain context
