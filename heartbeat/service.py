@@ -83,6 +83,7 @@ class HeartbeatService:
         """Start the heartbeat service."""
         if not self.enabled:
             logger.info("Heartbeat disabled")
+            self._running = True  # Keep gateway loop alive when cron-only
             return
 
         self._running = True

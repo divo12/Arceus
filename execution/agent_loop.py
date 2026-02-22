@@ -14,7 +14,10 @@ from agents.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, Wri
 from agents.tools.mcp import connect_mcp_servers
 from agents.tools.registry import ToolRegistry
 from agents.tools.shell import ExecTool
-from agents.tools.web import WebFetchTool, WebSearchTool
+from agents.tools.spawn import SpawnTool
+from agents.tools.support_query import SupportQueryTool
+from agents.tools.web import SearXSearchTool, WebFetchTool, WebSearchTool
+from execution.subagent_manager import SubagentManager
 from cognition.cognitive_loop import CognitiveLoop
 from cognition.memory.memory_manager import MemoryManager
 from config import Config, load_config
@@ -82,17 +85,61 @@ class AgentLoop:
         registry.register(
             WebSearchTool(api_key=web_key or None, max_results=self.config.tools.web.max_results)
         )
+        registry.register(SearXSearchTool(max_results=self.config.tools.web.max_results))
         registry.register(WebFetchTool())
+        registry.register(SupportQueryTool(self.workspace))
+        subagent_manager = SubagentManager(
+            provider=self.provider,
+            workspace=self.workspace,
+            config=self.config,
+        )
+        registry.register(SpawnTool(subagent_manager))
         return registry
 
     def _mcp_servers_dict(self) -> Dict[str, Any]:
         """Convert config mcp_servers to dict for connect_mcp_servers."""
+        import os
+
+        def expand_env(env: dict) -> dict:
+            out = {}
+            for k, v in (env or {}).items():
+                s = str(v)
+                s = os.path.expanduser(s)
+                s = os.path.expandvars(s)
+                out[k] = s
+            return out
+
         out = {}
         for name, cfg in self.config.tools.mcp_servers.items():
+            env = expand_env(cfg.env)
+            command, args = cfg.command, cfg.args or []
+            # Web Search MCP: inject workspace-aware defaults if not set
+            if name == "web_search":
+                if "NPM_CONFIG_CACHE" not in env:
+                    env.setdefault(
+                        "NPM_CONFIG_CACHE",
+                        str((self.workspace / ".arceus" / ".npm-cache").resolve()),
+                    )
+                if "PLAYWRIGHT_BROWSERS_PATH" not in env:
+                    env.setdefault(
+                        "PLAYWRIGHT_BROWSERS_PATH",
+                        str((Path.home() / "mcp-servers" / "web-search-mcp" / ".playwright").resolve()),
+                    )
+                # Use local build: WEB_SEARCH_MCP_PATH env, or expand args[0] if path
+                mcp_path = os.environ.get("WEB_SEARCH_MCP_PATH", "").strip()
+                if mcp_path:
+                    resolved = Path(mcp_path).expanduser().resolve()
+                    if resolved.exists():
+                        command, args = "node", [str(resolved)]
+                elif args:
+                    # Expand $HOME in first arg (path to dist/index.js)
+                    expanded = os.path.expanduser(os.path.expandvars(args[0]))
+                    if Path(expanded).exists():
+                        command, args = "node", [expanded]
             out[name] = type("Cfg", (), {
-                "command": cfg.command,
-                "args": cfg.args or [],
-                "env": cfg.env or {},
+                "command": command,
+                "args": args,
+                "env": env,
                 "url": cfg.url or "",
             })()
         return out
@@ -135,8 +182,13 @@ class AgentLoop:
             traces: List[Dict[str, Any]] = []
             final_response = ProviderResponse(content="", done=False)
             skill_gaps_seen: Dict[str, int] = {}
+            prev_feedback: Optional[Dict[str, Any]] = None
 
             for iteration in range(1, iterations + 1):
+                if prev_feedback:
+                    feedback_msg = self._format_feedback_message(prev_feedback)
+                    messages.append({"role": "user", "content": feedback_msg})
+
                 cognition = self.cognition.run(
                     problem_description=problem_description,
                     context=context,
@@ -145,6 +197,7 @@ class AgentLoop:
                     run_id=run_id,
                     iteration=iteration,
                     web_evidence=web_evidence,
+                    feedback=prev_feedback,
                 )
 
                 missing_phases = [
@@ -163,6 +216,7 @@ class AgentLoop:
                         "requires_web_evidence", False
                     ),
                     "web_evidence": web_evidence,
+                    "feedback": prev_feedback,
                 }
                 if stream_callback is not None:
                     runtime_ctx["stream_callback"] = stream_callback
@@ -211,6 +265,12 @@ class AgentLoop:
                 traces.append(trace)
                 self.memory.record_trace(trace)
 
+                if response.tool_calls:
+                    prev_feedback = self._compute_feedback(
+                        tool_results=tool_results,
+                        web_evidence=web_evidence,
+                    )
+
                 req_web = cognition.get("decision", {}).get("requires_web_evidence")
                 if response.done and (
                     not req_web or web_evidence or response.confidence >= 0.85
@@ -258,6 +318,46 @@ class AgentLoop:
                 "memory_snapshot": self.memory.get_memory_snapshot(),
             }
 
+    def _compute_feedback(
+        self,
+        tool_results: List[Dict[str, Any]],
+        web_evidence: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Compute feedback from tool results and web evidence for the next iteration."""
+        subagent_results: List[Dict[str, str]] = []
+        tool_summaries: List[str] = []
+        for tr in tool_results:
+            name = tr.get("tool", "")
+            result = str(tr.get("result", ""))
+            if name == "spawn":
+                args = tr.get("arguments", {})
+                task = args.get("task", "subagent task")[:60]
+                subagent_results.append({"task": task, "result": result[:1000]})
+            elif result and len(result) < 200:
+                tool_summaries.append(f"{name}: {result[:150]}")
+            elif result:
+                tool_summaries.append(f"{name}: {result[:150]}...")
+
+        parts: List[str] = []
+        if web_evidence:
+            parts.append(f"Gathered {len(web_evidence)} web evidence item(s).")
+        for sr in subagent_results:
+            parts.append(f"Subagent ({sr['task']}): {sr['result'][:300]}...")
+        if tool_summaries:
+            parts.append("Tool outputs: " + "; ".join(tool_summaries[:3]))
+        summary = " ".join(parts) if parts else "No new feedback from tools."
+
+        return {
+            "web_evidence_count": len(web_evidence),
+            "subagent_results": subagent_results,
+            "summary": summary,
+        }
+
+    def _format_feedback_message(self, feedback: Dict[str, Any]) -> str:
+        """Format feedback as a user message for the next iteration."""
+        summary = feedback.get("summary", "")
+        return f"[Feedback from last iteration]\n\n{summary}\n\nConsider this when refining your plan or recommendations."
+
     @staticmethod
     def _tool_call_to_message(call: ToolCall) -> Dict[str, Any]:
         return {
@@ -268,8 +368,10 @@ class AgentLoop:
 
     @staticmethod
     def _extract_web_evidence(tool_name: str, result: str) -> List[Dict[str, str]]:
-        if tool_name not in {"web_search", "web_fetch"}:
+        if tool_name not in {"web_search", "web_fetch"} and not tool_name.startswith("mcp_web_search_"):
             return []
+        if tool_name.startswith("mcp_web_search_"):
+            return [{"source": "web_search_mcp", "summary": (result or "")[:500]}]
         if tool_name == "web_fetch":
             try:
                 payload = json.loads(result)

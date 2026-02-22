@@ -276,6 +276,11 @@ class TestCron(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_spawn_tool_registered(self):
+        """SpawnTool is registered in default registry for PM validation."""
+        loop = AgentLoop(self.workspace, provider=SequencedProvider([ProviderResponse(content="ok", done=True)]))
+        self.assertIn("spawn", loop.registry.tool_names)
+
     def test_mcp_empty_config_runs_ok(self):
         """AgentLoop runs normally when mcp_servers is empty."""
         provider = SequencedProvider(

@@ -33,18 +33,23 @@ class CognitiveLoop:
         iteration: int = 1,
         web_evidence: Optional[List[Dict[str, str]]] = None,
         action_result: Optional[Dict[str, Any]] = None,
+        feedback: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         interpreted = self.interpreter.interpret(problem_description, context, available_skills)
         reasoning = self.reasoner.reason(interpreted)
         plan = self.planner.build_plan(reasoning, available_skills, available_prompts)
         decision = self.policy.choose(interpreted, plan)
+        merged_action = dict(action_result or {})
+        if feedback:
+            merged_action["summary"] = feedback.get("summary", merged_action.get("summary", ""))
+            merged_action["subagent_results"] = feedback.get("subagent_results", [])
         reflection = self._reflect(
             interpreted=interpreted,
             reasoning=reasoning,
             plan=plan,
             decision=decision,
             web_evidence=web_evidence or [],
-            action_result=action_result or {},
+            action_result=merged_action,
         )
 
         active_run_id = run_id or str(uuid4())
@@ -98,10 +103,14 @@ class CognitiveLoop:
         elif confidence >= 0.7:
             learning = "Current context is sufficient for a provisional recommendation."
 
+        subagent_results = action_result.get("subagent_results", [])
+        if subagent_results and learning.startswith("Need more"):
+            learning = "Subagent validation completed. Consider integrating findings into the plan."
         return {
             "confidence": confidence,
             "requires_web_evidence": decision.get("requires_web_evidence", False),
             "web_evidence_count": len(web_evidence),
+            "subagent_count": len(subagent_results),
             "unmet_phases": unmet_phases,
             "learning": learning,
             "next_iteration_focus": (

@@ -55,12 +55,17 @@ class Tool(ABC):
     def validate_params(self, params: dict[str, Any]) -> list[str]:
         """Validate tool parameters against JSON schema. Returns error list (empty if valid)."""
         schema = self.parameters or {}
-        if schema.get("type", "object") != "object":
+        root_type = schema.get("type", "object")
+        root_type = root_type[0] if isinstance(root_type, list) else root_type
+        if root_type != "object":
             raise ValueError(f"Schema must be object type, got {schema.get('type')!r}")
         return self._validate(params, {**schema, "type": "object"}, "")
 
     def _validate(self, val: Any, schema: dict[str, Any], path: str) -> list[str]:
-        t, label = schema.get("type"), path or "parameter"
+        raw_type = schema.get("type")
+        # JSON Schema allows type: ["string", "null"]; use first non-null for validation
+        t = raw_type[0] if isinstance(raw_type, list) else raw_type
+        label = path or "parameter"
         if t in self._TYPE_MAP and not isinstance(val, self._TYPE_MAP[t]):
             return [f"{label} should be {t}"]
         

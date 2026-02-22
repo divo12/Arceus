@@ -175,7 +175,8 @@ Work thoroughly. Do not stop at a surface answer.
 
 - **Research first**: Use web_search and web_fetch to gather evidence before making recommendations. Search for market data, competitor moves, user research, and best practices.
 - **Use skills**: Read relevant SKILL.md files with read_file. Apply frameworks (problem-statement, prioritization-advisor, prd-development, etc.) to structure your thinking.
-- **Iterate**: If you lack evidence or confidence, run another search, read another source, or try a different skill. Do not finalize until you have substantive support.
+- **Spawn subagents**: Use the spawn tool when you need focused validation (e.g. JTBD, PoL) or delegated research. Pass skill_names to constrain the subagent (e.g. ["jobs-to-be-done", "pol-probe"]). The subagent returns its result directly—integrate it into your plan.
+- **Iterate**: If you lack evidence or confidence, run another search, spawn a validation subagent, or try a different skill. Do not finalize until you have substantive support.
 - **Heartbeat mode**: When processing HEARTBEAT.md tasks, read the file first, work through each task, research as needed. Reply HEARTBEAT_OK only when nothing needs attention."""
     
     def _load_bootstrap_files(self) -> str:

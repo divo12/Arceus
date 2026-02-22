@@ -1,0 +1,16 @@
+{
+  "tools": {
+    "mcpServers": {
+      "web_search": {
+        "command": "node",
+        "args": ["$HOME/mcp-servers/web-search-mcp/dist/index.js"],
+        "env": {
+          "MAX_CONTENT_LENGTH": "10000",
+          "BROWSER_HEADLESS": "true",
+          "MAX_BROWSERS": "3",
+          "BROWSER_TYPES": "chromium"
+        }
+      }
+    }
+  }
+}
