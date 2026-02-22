@@ -55,16 +55,28 @@ class Controller:
 
     async def _on_cron_job(self, job: CronJob) -> str | None:
         """Callback for cron: run agent with job message or dispatch to ideas sweep."""
+        def _raise_if_error(content: str | None) -> None:
+            if content and content.strip().startswith("Error:"):
+                raise RuntimeError(content.strip())
+
         kind = job.payload.kind
         if kind == "ideas_sweep":
-            from pm_ideas.service import run_ideas_sweep_async
-            return await run_ideas_sweep_async(self.workspace)
+            from pm_ideas.service import run_ideas_sweep_with_loop_async
+
+            content = await run_ideas_sweep_with_loop_async(self.workspace, self.loop)
+            _raise_if_error(content)
+            return content
         if kind == "new_ideas":
-            from pm_ideas.service import run_new_ideas_sweep_async
-            return await run_new_ideas_sweep_async(self.workspace)
+            from pm_ideas.service import run_new_ideas_sweep_with_loop_async
+
+            content = await run_new_ideas_sweep_with_loop_async(self.workspace, self.loop)
+            _raise_if_error(content)
+            return content
         prompt = job.payload.message or job.name
         result = await self.loop.run(problem_description=prompt)
-        return result.get("final", {}).get("content")
+        content = result.get("final", {}).get("content")
+        _raise_if_error(content)
+        return content
 
     def run_heartbeat_once(self) -> Optional[str]:
         """Run a single heartbeat tick (read HEARTBEAT.md, execute if needed)."""

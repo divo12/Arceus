@@ -34,8 +34,7 @@ This project: Given a Problem, the agent uses PM knowledge and skills to solve i
 
 **Your skills:**
 - **Spawn subagent**: Use spawn to delegate focused validation (e.g. JTBD framework, PoL) or research. Pass skill_names to constrain (e.g. ["jobs-to-be-done"]). Result returns directly for you to integrate.
-- **Web Search MCP** (if available): Use mcp_web_search_full-web-search, mcp_web_search_get-web-search-summaries, mcp_web_search_get-single-web-page-content for rich web research. Prefer these when present.
-- **Open skills** (skills/open_skills/): Use web_search, searx_search (free SearXNG fallback), web_fetch. If web_search returns 422 or "not configured", use searx_search instead.
+- **Web search**: Use web_search (Google Custom Search) and web_fetch (scraper). If web_search returns 422 or "not configured", use searx_search instead.
 - **Support agent**: Call query_support_agent when you need "where to learn more" or "what's missing in our workspace skills" or "what tools could help our PM". The support agent has workspace PM skills context and will point you to relevant skills and gaps.
 
 **Search for:**
@@ -58,11 +57,11 @@ NEW_IDEAS_PROMPT = f"""**Problem:** This project is designing Cursor for product
 {REPO_OVERVIEW}
 
 **Your task:** Explore what to build next for Arceus. Spawn multiple subagents to validate ideas (JTBD, PoL, prioritization), research trends, and surface gaps. Integrate their feedback, learnings, and new angles into your thinking.
+Spawn at least 2 subagents for each run and incorporate their outputs before finalizing.
 
 **Your skills:**
 - **Spawn subagent:** Use spawn to delegate focused validation (e.g. jobs-to-be-done, prioritization-advisor) or research. Pass skill_names to constrain. Result returns directly for you to integrate.
-- **Web Search MCP** (if available): mcp_web_search_full-web-search, mcp_web_search_get-web-search-summaries, mcp_web_search_get-single-web-page-content.
-- **Open skills:** web_search, searx_search, web_fetch. Use searx_search if web_search returns 422.
+- **Web search:** web_search (Google Custom Search) and web_fetch (scraper). Use searx_search if web_search returns 422.
 - **Support agent:** query_support_agent for "what's missing in workspace skills" or "what tools could help our PM".
 
 **Search for:**
@@ -70,13 +69,15 @@ NEW_IDEAS_PROMPT = f"""**Problem:** This project is designing Cursor for product
 - What to build next for problem-to-build workflows
 - Features that would improve PM agent tooling
 
-**Output:** Create new_ideas.md with:
+**Output:** Update new_ideas.md with:
 1. New ideas surfaced (from you + subagents)
 2. Gaps in workspace_skills to add
 3. Tools/capabilities to implement
 4. Actionable todo list with checkboxes (- [ ])
 
-Format: markdown with header and date. Use write_file to save new_ideas.md.
+CRITICAL: Do NOT use write_file on new_ideas.md (that would overwrite and remove prior ideas).
+Put your update in your final response. The system will append it to new_ideas.md automatically.
+Format your response as markdown: new ideas, gaps, tools, and todo checkboxes (- [ ]).
 """
 
 
@@ -93,7 +94,6 @@ def run_ideas_sweep_with_loop(
         problem_description=IDEAS_PROMPT,
         max_iterations=max_iterations,
         session_key="pm_ideas:sweep",
-        skill_sources=["essential", "open"],
     )
     content = result.get("final", {}).get("content", "No response")
 
@@ -109,6 +109,26 @@ def run_ideas_sweep_with_loop(
     return content
 
 
+async def run_ideas_sweep_with_loop_async(
+    workspace: Path,
+    loop: "AgentLoop",
+    max_iterations: int = 12,
+) -> str:
+    """Async variant used by cron callback to avoid nested event loops."""
+    result = await loop.run(
+        problem_description=IDEAS_PROMPT,
+        max_iterations=max_iterations,
+        session_key="pm_ideas:sweep",
+    )
+    content = result.get("final", {}).get("content", "No response")
+    ideas_path = workspace / "PM_IDEAS.md"
+    if not ideas_path.exists() or ideas_path.stat().st_size == 0:
+        header = f"# PM Ideas — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        ideas_path.write_text(header + content, encoding="utf-8")
+    _maybe_create_pr(workspace, ideas_path)
+    return content
+
+
 def run_new_ideas_sweep_with_loop(
     workspace: Path,
     loop: "AgentLoop",
@@ -117,20 +137,91 @@ def run_new_ideas_sweep_with_loop(
     """
     Run new ideas sweep: Cursor-for-PMs problem, repo context, spawn subagents, output to new_ideas.md.
     """
+    ideas_path = workspace / "new_ideas.md"
+    content_before = ideas_path.read_text(encoding="utf-8") if ideas_path.exists() else ""
+
     result = loop.run_sync(
         problem_description=NEW_IDEAS_PROMPT,
         max_iterations=max_iterations,
         session_key="new_ideas:sweep",
-        skill_sources=["essential", "open"],
     )
     content = result.get("final", {}).get("content", "No response")
 
-    ideas_path = workspace / "new_ideas.md"
-    if not ideas_path.exists() or ideas_path.stat().st_size == 0:
-        header = f"# New Ideas — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-        ideas_path.write_text(header + content, encoding="utf-8")
+    _append_new_ideas_update(ideas_path, content, content_before=content_before)
+    _push_new_ideas(workspace, ideas_path)
 
     return content
+
+
+async def run_new_ideas_sweep_with_loop_async(
+    workspace: Path,
+    loop: "AgentLoop",
+    max_iterations: int = 12,
+) -> str:
+    """Async variant used by cron callback to avoid nested event loops."""
+    ideas_path = workspace / "new_ideas.md"
+    content_before = ideas_path.read_text(encoding="utf-8") if ideas_path.exists() else ""
+
+    result = await loop.run(
+        problem_description=NEW_IDEAS_PROMPT,
+        max_iterations=max_iterations,
+        session_key="new_ideas:sweep",
+    )
+    content = result.get("final", {}).get("content", "No response")
+    _append_new_ideas_update(ideas_path, content, content_before=content_before)
+    _push_new_ideas(workspace, ideas_path)
+    return content
+
+
+def _append_new_ideas_update(
+    ideas_path: Path, content: str, content_before: str | None = None
+) -> None:
+    """Append-only writer for new_ideas.md; never deletes prior content.
+    Uses content_before (file state at run start) so agent write_file overwrites are reverted.
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    section = f"\n\n## Update — {timestamp}\n\n{content.strip()}\n"
+    if content_before is not None and content_before.strip():
+        base = content_before.rstrip()
+        ideas_path.write_text(base + section, encoding="utf-8")
+    elif ideas_path.exists() and ideas_path.stat().st_size > 0:
+        existing = ideas_path.read_text(encoding="utf-8")
+        ideas_path.write_text(existing.rstrip() + section, encoding="utf-8")
+    else:
+        header = f"# New Ideas Log\n\nStarted: {timestamp}\n"
+        ideas_path.write_text(header + section, encoding="utf-8")
+
+
+def _push_new_ideas(workspace: Path, ideas_path: Path) -> None:
+    """After each new_ideas run: commit and push new_ideas.md to GitHub if it changed."""
+    import os
+    if not ideas_path.exists() or ideas_path.stat().st_size < 50:
+        return
+    r = subprocess.run(
+        ["git", "status", "--porcelain", str(ideas_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+    if not r.stdout.strip():
+        return
+    subprocess.run(
+        ["git", "add", str(ideas_path)],
+        check=True,
+        cwd=str(workspace),
+    )
+    msg = f"chore: update new_ideas.md — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+    subprocess.run(
+        ["git", "commit", "-m", msg],
+        capture_output=True,
+        cwd=str(workspace),
+    )
+    # Push only current branch in this repo (no other branches/tags)
+    subprocess.run(
+        ["git", "push", "origin", "HEAD"],
+        capture_output=True,
+        cwd=str(workspace),
+    )
 
 
 def _maybe_create_pr(workspace: Path, ideas_path: Path) -> None:

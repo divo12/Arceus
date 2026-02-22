@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any, Dict, List
 
-from openai import APIConnectionError, APITimeoutError, AsyncAzureOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncAzureOpenAI, RateLimitError
 
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from settings import Settings
@@ -13,6 +13,7 @@ from utils.logger import logger
 # Retry config for transient connection errors
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # seconds
+MAX_RATE_LIMIT_RETRIES = 5
 
 
 class AzureOpenAIProvider(ProviderAdapter):
@@ -168,12 +169,47 @@ class AzureOpenAIProvider(ProviderAdapter):
             kwargs["tool_choice"] = "auto"
 
         last_error: Exception | None = None
+        rate_limit_attempts = 0
         for attempt in range(MAX_RETRIES + 1):
             try:
                 if stream:
                     return await self._complete_stream(kwargs, stream_callback)
                 response = await self.client.chat.completions.create(**kwargs)
                 return self._parse_response(response)
+            except RateLimitError as e:
+                # Azure returns retry guidance in error text ("Please retry after X seconds")
+                rate_limit_attempts += 1
+                retry_after = 3.0
+                msg = str(e)
+                try:
+                    import re
+                    m = re.search(r"retry after\s+(\d+)\s+seconds", msg, flags=re.I)
+                    if m:
+                        retry_after = float(m.group(1))
+                except Exception:
+                    pass
+
+                if rate_limit_attempts <= MAX_RATE_LIMIT_RETRIES:
+                    logger.warning(
+                        "Azure OpenAI rate-limited (%d/%d). Retrying in %.1fs",
+                        rate_limit_attempts,
+                        MAX_RATE_LIMIT_RETRIES,
+                        retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+
+                logger.error(
+                    "Azure OpenAI rate limit exceeded after %d retries: %s",
+                    MAX_RATE_LIMIT_RETRIES,
+                    e,
+                )
+                return ProviderResponse(
+                    content=f"Error: Rate limited by Azure OpenAI after retries. {msg}",
+                    confidence=0.0,
+                    done=True,
+                    rationale="RateLimitError after retries",
+                )
             except (APIConnectionError, APITimeoutError, ConnectionError, OSError, asyncio.TimeoutError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES:
