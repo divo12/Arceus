@@ -6,6 +6,7 @@ Three-tier skill organization:
 
 Survival skills — always loaded in every session.
 
+- **finance** — SaaS and product finance metrics for PMs (revenue, margin, CAC, LTV, NRR, decision frameworks)
 - **first-principles-thinking** — Break down problems into fundamentals; challenge assumptions
 - **heartbeat** — HEARTBEAT.md for periodic autonomous tasks
 - **memory** — Episodic memory and run traces

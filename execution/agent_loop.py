@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from agents.context_builder import ContextBuilder
-from agents.prompts import PromptLoader
 from agents.skills import SkillsLoader
 from agents.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from agents.tools.mcp import connect_mcp_servers
@@ -59,7 +58,6 @@ class AgentLoop:
         self.workspace = Path(workspace).expanduser().resolve()
         self.config = config or load_config(workspace=self.workspace)
         self.context_builder = ContextBuilder(self.workspace)
-        self.prompts = PromptLoader(self.workspace)
         self.skills = SkillsLoader(self.workspace)
         self.cognition = CognitiveLoop(self.workspace)
         self.memory = MemoryManager(self.workspace)
@@ -169,7 +167,6 @@ class AgentLoop:
 
             iterations = max_iterations or self.max_iterations
             available_skills = [s["name"] for s in self.skills.list_skills(filter_unavailable=False)]
-            available_prompts = [p["name"] for p in self.prompts.list_prompts()]
 
             history: List[Dict[str, Any]] = []
             if session_key:
@@ -180,7 +177,6 @@ class AgentLoop:
                 history=history,
                 current_message=problem_description,
                 skill_names=None,
-                prompt_names=None,
             )
 
             self.problem_memory.record_initial(problem_description, run_id=run_id)
@@ -209,7 +205,6 @@ class AgentLoop:
                     problem_description=problem_description,
                     context=context,
                     available_skills=available_skills,
-                    available_prompts=available_prompts,
                     run_id=run_id,
                     iteration=iteration,
                     web_evidence=web_evidence,

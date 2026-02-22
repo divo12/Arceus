@@ -28,7 +28,6 @@ class CognitiveLoop:
         problem_description: str,
         context: Optional[Dict[str, Any]],
         available_skills: List[str],
-        available_prompts: Optional[List[str]] = None,
         run_id: Optional[str] = None,
         iteration: int = 1,
         web_evidence: Optional[List[Dict[str, str]]] = None,
@@ -37,7 +36,7 @@ class CognitiveLoop:
     ) -> Dict[str, Any]:
         interpreted = self.interpreter.interpret(problem_description, context, available_skills)
         reasoning = self.reasoner.reason(interpreted)
-        plan = self.planner.build_plan(reasoning, available_skills, available_prompts)
+        plan = self.planner.build_plan(reasoning, available_skills)
         decision = self.policy.choose(interpreted, plan)
         merged_action = dict(action_result or {})
         if feedback:
@@ -78,7 +77,6 @@ class CognitiveLoop:
                 "reflect": reflection,
             },
             "skills_to_use": plan.get("skills_to_use", []),
-            "prompts_to_reference": plan.get("prompts_to_reference", []),
             "memory_snapshot": self.memory.get_memory_snapshot(),
         }
 

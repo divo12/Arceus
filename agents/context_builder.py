@@ -6,29 +6,32 @@ import platform
 from pathlib import Path
 from typing import Any, Optional, List
 
-from agents.prompts import PromptLoader
+from agents.memory import MemoryStore
 from agents.skills import SkillsLoader
 
 
 class ContextBuilder:
     """
     Builds the context (system prompt + messages) for the agent.
-    
+
     Assembles bootstrap files, memory, skills, and conversation history
     into a coherent prompt for the LLM.
+
+    - Essential skills: fully loaded (always in context)
+    - Workspace/open skills: XML summary only; agent uses read_file to load when needed
+    - Memory: MEMORY.md (long-term) + HISTORY.md (grep-searchable) via MemoryStore
     """
-    
+
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
-    
+
     def __init__(self, workspace: Path):
-        self.workspace = workspace
-        self.skills = SkillsLoader(workspace)
-        self.prompts = PromptLoader(workspace)
-    
+        self.workspace = Path(workspace).expanduser().resolve()
+        self.memory = MemoryStore(self.workspace)
+        self.skills = SkillsLoader(self.workspace)
+
     def build_system_prompt(
         self,
         skill_names: Optional[List[str]] = None,
-        prompt_names: Optional[List[str]] = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -49,10 +52,10 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
         
-        # Memory context (if memory file exists)
-        memory = self._get_memory_context()
+        # Memory context (MEMORY.md + HISTORY.md via MemoryStore)
+        memory = self.memory.get_memory_context()
         if memory:
-            parts.append(f"# Memory\n\n{memory}")
+            parts.append(memory)
         
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
@@ -62,7 +65,7 @@ class ContextBuilder:
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
         
-        # 2. Available skills: only show summary (agent uses read_file to load)
+        # 2. Workspace/open skills: XML summary only (agent uses read_file to load when needed)
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
             parts.append(f"""# Skills
@@ -80,24 +83,6 @@ Skills with available="false" need dependencies installed first - you can try in
                 if requested_content:
                     parts.append(f"# Requested Skills\n\n{requested_content}")
 
-        # 4. Prompt references: separate from skills (instruction scaffolding only)
-        prompt_summary = self.prompts.build_prompts_summary()
-        if prompt_summary:
-            parts.append(
-                f"""# Prompt References
-
-Prompt references improve framing, clarifying questions, and output structure.
-They are not capabilities. Skills remain the execution source of truth.
-If a prompt overlaps a selected skill, prefer the skill and avoid redundant instructions.
-
-{prompt_summary}"""
-            )
-
-        if prompt_names:
-            selected_prompt_content = self.prompts.load_prompts_for_context(prompt_names)
-            if selected_prompt_content:
-                parts.append(f"# Selected Prompt References\n\n{selected_prompt_content}")
-        
         return "\n\n---\n\n".join(parts)
     
     def _get_identity(self) -> str:
@@ -135,11 +120,16 @@ You are an AI Product Manager with a holistic approach to product development. Y
 
 ## Workspace
 Your workspace is at: {workspace_path}
+- Long-term memory: {workspace_path}/memory/MEMORY.md
+- History log: {workspace_path}/memory/HISTORY.md (grep-searchable)
 - Essential skills: {workspace_path}/skills/essential/{{skill-name}}/SKILL.md (always loaded)
 - Workspace skills: {workspace_path}/skills/workspace_skills/{{skill-name}}/SKILL.md (PM designation)
 - Open skills: {workspace_path}/skills/open_skills/{{skill-name}}/SKILL.md (tool-level)
-- Research materials: {workspace_path}/skill-creator/research/
-- Skill creation tools: {workspace_path}/skill-creator/scripts/
+- Research materials: {workspace_path}/experiments/skill-creator/research/
+- Skill creation tools: {workspace_path}/experiments/skill-creator/scripts/
+
+When remembering something important, write to {workspace_path}/memory/MEMORY.md
+To recall past events, grep {workspace_path}/memory/HISTORY.md
 
 ## Available Skills
 
@@ -182,28 +172,18 @@ Work thoroughly. Do not stop at a surface answer.
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
         parts = []
-        
         for filename in self.BOOTSTRAP_FILES:
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")
-        
         return "\n\n".join(parts) if parts else ""
-    
-    def _get_memory_context(self) -> str:
-        """Get memory context from memory files if they exist."""
-        memory_file = self.workspace / "data" / "state" / "memory.md"
-        if memory_file.exists():
-            return memory_file.read_text(encoding="utf-8")
-        return ""
-    
+
     def build_messages(
         self,
         history: List[dict],
         current_message: str,
         skill_names: Optional[List[str]] = None,
-        prompt_names: Optional[List[str]] = None,
         media: Optional[List[str]] = None,
         channel: Optional[str] = None,
         chat_id: Optional[str] = None,
@@ -225,7 +205,7 @@ Work thoroughly. Do not stop at a surface answer.
         messages = []
 
         # System prompt
-        system_prompt = self.build_system_prompt(skill_names, prompt_names)
+        system_prompt = self.build_system_prompt(skill_names)
         if channel and chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
         messages.append({"role": "system", "content": system_prompt})
@@ -305,9 +285,8 @@ Work thoroughly. Do not stop at a surface answer.
         """
         msg: dict = {"role": "assistant"}
 
-        # Omit empty content — some backends reject empty text blocks
-        if content:
-            msg["content"] = content
+        # Always include content — some providers (e.g. StepFun) reject assistant messages without it
+        msg["content"] = content if content is not None else ""
 
         if tool_calls:
             msg["tool_calls"] = tool_calls

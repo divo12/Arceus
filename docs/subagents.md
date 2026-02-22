@@ -29,6 +29,7 @@ Subagents have **SupportQueryTool** (`query_support_agent`), which the main agen
 ## Subagent Behavior
 
 - **Runs in background**: `asyncio.create_task`; main agent does not block.
+- **Mandatory skill**: Every subagent always receives `skill-creator` in its skill focus list. When creating or updating Agent Skills, subagents must apply the skill-creator skill.
 - **Similar to main loop**: Uses provider, tools, skills—but **no spawn tool**, **no cron**, **no dictation** of the main agent.
 - **Structured output**: Each subagent must produce:
   - **Feedback**: How to improve the main agent's approach or response

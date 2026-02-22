@@ -1,4 +1,7 @@
-"""Prompt selection policy to avoid redundancy with skills."""
+"""Prompt selection policy to avoid redundancy with skills.
+
+Moved to experiments/ for later exploration. Was used by cognition/planner.py.
+"""
 
 from typing import Dict, List, Set
 
@@ -22,7 +25,6 @@ class PromptPolicy:
         "pestel-analysis-prompt-template": "analysis",
     }
 
-    # Prompt name -> skills with overlapping procedure logic.
     OVERLAP_MAP: Dict[str, List[str]] = {
         "framing-the-problem-statement": ["problem-statement", "problem-framing-canvas"],
         "jobs-to-be-done": ["jobs-to-be-done"],
@@ -61,10 +63,8 @@ class PromptPolicy:
         for phase in phase_names:
             candidates.extend(self.PHASE_TO_PROMPTS.get(phase, []))
 
-        # Keep only available prompts.
         candidates = [name for name in candidates if name in available_prompts]
 
-        # Deduplicate while preserving order.
         seen: Set[str] = set()
         ordered_candidates: List[str] = []
         for name in candidates:
@@ -72,15 +72,12 @@ class PromptPolicy:
                 seen.add(name)
                 ordered_candidates.append(name)
 
-        # Redundancy rule: only include prompt if it adds net-new reference value.
         result: List[str] = []
         selected_skills_set = set(selected_skills)
         for prompt_name in ordered_candidates:
             overlapping = set(self.OVERLAP_MAP.get(prompt_name, []))
             if overlapping and overlapping.issubset(selected_skills_set):
-                # Skip if fully covered by selected skills.
                 continue
             result.append(prompt_name)
 
         return result
-

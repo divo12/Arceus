@@ -111,18 +111,15 @@ class TestCognition(unittest.TestCase):
         context_builder = ContextBuilder(self.workspace)
         loop = CognitiveLoop(self.workspace)
         available_skills = [s["name"] for s in skills.list_skills(filter_unavailable=False)]
-        available_prompts = []
         cognition = loop.run(
             problem_description="Users struggle to complete signup",
             context={"funnel_drop": "65% at step 2"},
             available_skills=available_skills,
-            available_prompts=available_prompts,
         )
         messages = context_builder.build_messages(
             history=[],
             current_message="Users struggle to complete signup",
             skill_names=cognition.get("skills_to_use"),
-            prompt_names=cognition.get("prompts_to_reference"),
         )
         self.assertIn("interpreted_state", cognition)
         self.assertIn("skills_to_use", cognition)

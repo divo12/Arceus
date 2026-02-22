@@ -112,7 +112,7 @@ Examples:
 
 ### Step 3: Initializing the Skill
 
-**If `init_skill.py` exists** (e.g., in skill-creator/scripts/):
+**If `init_skill.py` exists** (e.g., in experiments/skill-creator/scripts/):
 
 ```bash
 scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
@@ -145,7 +145,7 @@ scripts/package_skill.py <path/to/skill-folder>
 **Otherwise:**
 - Validate frontmatter (name, description present and valid)
 - Ensure folder name matches skill name
-- Run `skill-creator/scripts/check-skill-metadata.py` if the skill follows the PM format (type, required sections)
+- Run `experiments/skill-creator/scripts/check-skill-metadata.py` if the skill follows the PM format (type, required sections)
 
 ### Step 6: Iterate
 
@@ -163,4 +163,4 @@ scripts/package_skill.py <path/to/skill-folder>
 | Workspace | `skills/workspace_skills/<skill-name>/` |
 | Drafts | `skills/workspace_skills/_drafts/` |
 
-Per AGENTS.md: When adding a new tool in agents folder, use `./skill-creator/creator/Skill.md` to create the relevant built-in skill.
+Per AGENTS.md: When adding a new tool in agents folder, use `./experiments/skill-creator/creator/Skill.md` to create the relevant built-in skill.

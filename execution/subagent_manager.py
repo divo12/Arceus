@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     from config import Config
     from providers.adapter import ProviderAdapter
 
+# Mandatory skill for every subagent: skill-creator (create/update Agent Skills)
+SUBAGENT_MANDATORY_SKILLS = ["skill-creator"]
+
 
 class SubagentManager:
     """
@@ -117,9 +120,16 @@ class SubagentManager:
         """Execute the subagent task and push result to completed queue."""
         logger.info("Subagent [%s] starting: %s", task_id, label)
 
+        # Merge mandatory skills (skill-creator) with any requested skills
+        merged_skill_names = list(SUBAGENT_MANDATORY_SKILLS)
+        if skill_names:
+            for s in skill_names:
+                if s not in merged_skill_names:
+                    merged_skill_names.append(s)
+
         try:
             tools = self._build_subagent_registry()
-            agent = Agent(workspace=self.workspace, skill_names=skill_names)
+            agent = Agent(workspace=self.workspace, skill_names=merged_skill_names)
             result = await agent.run(
                 task=task,
                 tools=tools,

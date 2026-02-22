@@ -27,6 +27,8 @@ def _build_subagent_system_prompt(task: str, workspace: Path, skill_names: Optio
     skill_hint = ""
     if skill_names:
         skill_hint = f"\n\nFocus on these skills: {', '.join(skill_names)}. Read their SKILL.md files as needed."
+        if "skill-creator" in skill_names:
+            skill_hint += "\n\n**Mandatory:** When creating or updating Agent Skills, always apply the skill-creator skill (read skills/open_skills/skill-creator/SKILL.md)."
 
     return f"""# PM Subagent
 
