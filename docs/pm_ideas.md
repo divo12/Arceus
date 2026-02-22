@@ -46,6 +46,4 @@ Set `PM_IDEAS_CREATE_PR=1` in `.env` to commit, push, and create a PR when `PM_I
 ## Web search
 
 - **Web Search MCP** (recommended): When configured in `.arceus/config.json`, provides `mcp_web_search_full-web-search`, `mcp_web_search_get-web-search-summaries`, `mcp_web_search_get-single-web-page-content`. See [docs/web_search_mcp.md](web_search_mcp.md).
-- **web_search**: Uses Brave Search API when `BRAVE_API_KEY` is set; falls back to SearXNG when Brave fails (422, etc.).
-- **searx_search**: Free SearXNG (web-search-api skill). Fetches instances from searx.space, probes for working ones, caches 30 min, rotates on failure.
-- If both fail (e.g. rate limits on public SearXNG): set `BRAVE_API_KEY` for reliable search, or run your own SearXNG instance.
+- **web_search**: Uses Google Custom Search API. Requires `GOOGLE_API_KEY` and `GOOGLE_SEARCH_ENGINE_ID`.

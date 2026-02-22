@@ -42,9 +42,10 @@ class ProvidersConfig(Base):
 
 
 class WebSearchConfig(Base):
-    """Web search tool configuration (Brave Search API)."""
+    """Web search tool configuration (Google Custom Search)."""
 
-    api_key: str = ""  # BRAVE_API_KEY fallback from env
+    google_api_key: str = ""  # GOOGLE_API_KEY fallback from env
+    google_search_engine_id: str = ""  # GOOGLE_SEARCH_ENGINE_ID fallback from env
     max_results: int = 5
 
 
@@ -92,10 +93,9 @@ class Config(Base):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
 
-    def get_web_search_api_key(self) -> str:
-        """Get web search API key (config or BRAVE_API_KEY env)."""
-        key = self.tools.web.api_key
-        if key:
-            return key
+    def get_google_search_config(self) -> tuple[str, str]:
+        """Get Google Custom Search config (api_key, search_engine_id)."""
         import os
-        return os.environ.get("BRAVE_API_KEY", "")
+        key = self.tools.web.google_api_key or os.environ.get("GOOGLE_API_KEY", "")
+        cx = self.tools.web.google_search_engine_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID", "")
+        return (key, cx)

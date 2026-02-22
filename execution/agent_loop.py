@@ -16,7 +16,7 @@ from agents.tools.mcp import connect_mcp_servers
 from agents.tools.registry import ToolRegistry
 from agents.tools.shell import ExecTool
 from agents.tools.spawn import SpawnTool
-from agents.tools.web import SearXSearchTool, WebFetchTool, WebSearchTool
+from agents.tools.web import WebFetchTool, WebSearchTool
 from execution.subagent_manager import SubagentManager
 from cognition.cognitive_loop import CognitiveLoop
 from cognition.memory.memory_manager import MemoryManager
@@ -89,11 +89,14 @@ class AgentLoop:
                 timeout=self.config.tools.exec.timeout,
             )
         )
-        web_key = self.config.get_web_search_api_key()
+        gkey, gcx = self.config.get_google_search_config()
         registry.register(
-            WebSearchTool(api_key=web_key or None, max_results=self.config.tools.web.max_results)
+            WebSearchTool(
+                google_api_key=gkey or None,
+                google_search_engine_id=gcx or None,
+                max_results=self.config.tools.web.max_results,
+            )
         )
-        registry.register(SearXSearchTool(max_results=self.config.tools.web.max_results))
         registry.register(WebFetchTool())
         registry.register(SpawnTool(self.subagent_manager))
         return registry

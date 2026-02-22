@@ -20,7 +20,7 @@ from agents.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, Wri
 from agents.tools.registry import ToolRegistry
 from agents.tools.shell import ExecTool
 from agents.tools.support_query import SupportQueryTool
-from agents.tools.web import SearXSearchTool, WebFetchTool, WebSearchTool
+from agents.tools.web import WebFetchTool, WebSearchTool
 
 if TYPE_CHECKING:
     from config import Config
@@ -71,11 +71,14 @@ class SubagentManager:
                 timeout=self.config.tools.exec.timeout,
             )
         )
-        web_key = self.config.get_web_search_api_key()
+        gkey, gcx = self.config.get_google_search_config()
         registry.register(
-            WebSearchTool(api_key=web_key or None, max_results=self.config.tools.web.max_results)
+            WebSearchTool(
+                google_api_key=gkey or None,
+                google_search_engine_id=gcx or None,
+                max_results=self.config.tools.web.max_results,
+            )
         )
-        registry.register(SearXSearchTool(max_results=self.config.tools.web.max_results))
         registry.register(WebFetchTool())
         registry.register(SupportQueryTool(self.workspace, provider=self.provider))
         return registry

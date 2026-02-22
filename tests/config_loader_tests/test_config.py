@@ -71,28 +71,40 @@ class TestConfigLoader(unittest.TestCase):
         loaded = load_config(config_path=path)
         self.assertEqual(loaded.agents.defaults.max_iterations, 10)
 
-    def test_get_web_search_api_key_from_config(self):
+    def test_get_google_search_config_from_config(self):
         path = self.workspace / "config.json"
         path.write_text(
-            json.dumps({"tools": {"web": {"apiKey": "test-brave-key"}}}),
+            json.dumps({
+                "tools": {"web": {"googleApiKey": "gkey", "googleSearchEngineId": "gcx123"}},
+            }),
             encoding="utf-8",
         )
         config = load_config(config_path=path)
-        self.assertEqual(config.get_web_search_api_key(), "test-brave-key")
+        key, cx = config.get_google_search_config()
+        self.assertEqual(key, "gkey")
+        self.assertEqual(cx, "gcx123")
 
-    def test_get_web_search_api_key_fallback_to_env(self):
+    def test_get_google_search_config_fallback_to_env(self):
         path = self.workspace / "empty.json"
         path.write_text("{}", encoding="utf-8")
         config = load_config(config_path=path)
-        orig = os.environ.get("BRAVE_API_KEY")
+        orig_key = os.environ.get("GOOGLE_API_KEY")
+        orig_cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
         try:
-            os.environ["BRAVE_API_KEY"] = "env-key"
-            self.assertEqual(config.get_web_search_api_key(), "env-key")
+            os.environ["GOOGLE_API_KEY"] = "env-gkey"
+            os.environ["GOOGLE_SEARCH_ENGINE_ID"] = "env-gcx"
+            key, cx = config.get_google_search_config()
+            self.assertEqual(key, "env-gkey")
+            self.assertEqual(cx, "env-gcx")
         finally:
-            if orig is not None:
-                os.environ["BRAVE_API_KEY"] = orig
-            elif "BRAVE_API_KEY" in os.environ:
-                del os.environ["BRAVE_API_KEY"]
+            if orig_key is not None:
+                os.environ["GOOGLE_API_KEY"] = orig_key
+            elif "GOOGLE_API_KEY" in os.environ:
+                del os.environ["GOOGLE_API_KEY"]
+            if orig_cx is not None:
+                os.environ["GOOGLE_SEARCH_ENGINE_ID"] = orig_cx
+            elif "GOOGLE_SEARCH_ENGINE_ID" in os.environ:
+                del os.environ["GOOGLE_SEARCH_ENGINE_ID"]
 
     def test_camel_case_aliases_accepted(self):
         path = self.workspace / "camel.json"

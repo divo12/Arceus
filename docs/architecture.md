@@ -27,7 +27,7 @@ flowchart LR
     subgraph External["External"]
         AZURE["Azure OpenAI"]
         MCP["MCP Servers\n(Web Search, etc.)"]
-        WEB["Web APIs\n(Brave, SearX)"]
+        WEB["Web APIs\n(Google)"]
         FS["Workspace\nFilesystem"]
     end
 
@@ -204,7 +204,7 @@ Arceus/
 │       ├── base.py            # Base tool + schema validation
 │       ├── filesystem.py      # read_file, write_file, edit_file, list_dir
 │       ├── shell.py           # exec
-│       ├── web.py             # web_search, searx_search, web_fetch
+│       ├── web.py             # web_search, web_fetch
 │       ├── spawn.py           # spawn (subagent)
 │       ├── support_query.py   # query_support_agent (workspace PM context)
 │       ├── cron.py            # cron add/list/remove (when skill enabled)
@@ -368,7 +368,7 @@ Arceus/
 
 - **Filesystem:** read_file, write_file, edit_file, list_dir  
 - **Shell:** exec (workspace-restricted, timeout from config)  
-- **Web:** web_search (Brave), searx_search, web_fetch  
+- **Web:** web_search (Google Custom Search), web_fetch (BeautifulSoup extraction)  
 - **Support:** query_support_agent (workspace PM skills context)  
 - **Spawn:** spawn(task, label?, skill_names?) → SubagentManager starts a subagent in the background; returns immediately with status; results (feedback, learnings, new_angle) are queued for the main agent to consume at the start of the next iteration  
 - **Cron:** cron add/list/remove (Controller registers CronTool with CronService)
@@ -384,7 +384,7 @@ The main agent spawns subagents via the `spawn` tool. Each subagent uses `Agent`
 ## 11. Configuration and Settings
 
 - **Config** (`config/schema.py` + `config/loader.py`): JSON from `.arceus/config.json` (or other search paths). Defines agents (defaults), providers (Azure), tools (web, exec, mcp_servers), channels. Config overrides env when both exist.
-- **Settings** (`settings.py`): Environment-derived (e.g. Azure keys, Cronitor, MongoDB, BRAVE_API_KEY). Used when config does not set a value.
+- **Settings** (`settings.py`): Environment-derived (e.g. Azure keys, Cronitor, MongoDB, GOOGLE_API_KEY). Used when config does not set a value.
 
 ---
 
