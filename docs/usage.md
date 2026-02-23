@@ -57,6 +57,23 @@ Run the loop-focused suite:
 uv run python -m unittest tests/execution/test_agent_loop.py
 ```
 
+## Packet export + publish (MVP)
+
+Generate a packet bundle (writes to `data/packets/<packetId>/v<N>/`):
+
+```bash
+uv run python scripts/generate_packet.py --input /path/to/packet_input.json
+```
+
+Publish a stable packet reference to Jira (adds a comment to an issue):
+
+```bash
+export JIRA_BASE_URL="https://your-domain.atlassian.net"
+export JIRA_EMAIL="you@company.com"
+export JIRA_API_TOKEN="..."
+uv run python scripts/publish_packet_jira.py --packet-id cursor-pm --issue-key PROJ-123
+```
+
 Run lightweight lint-style check (bytecode compile):
 
 ```bash

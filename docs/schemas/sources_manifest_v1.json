@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://arceus.dev/schemas/sources_manifest_v1.json",
+  "title": "Packet sources manifest",
+  "description": "Manifest of evidence and decision records in a shareable packet bundle",
+  "type": "object",
+  "required": ["version", "packetVersion", "packetId", "exportedAt", "sources", "decisions"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "packetVersion": { "type": "string", "format": "date-time" },
+    "packetId": { "type": "string" },
+    "exportedAt": { "type": "string", "format": "date-time" },
+    "exportedBy": { "type": "string" },
+    "exportScope": { "type": "string", "enum": ["team", "org", "legal", "external"] },
+    "exportReason": { "type": "string" },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "uri"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "enum": ["evidence", "link", "document"] },
+          "uri": { "type": "string", "format": "uri" },
+          "title": { "type": "string" },
+          "scope": { "type": "string" },
+          "hash": { "type": "string" },
+          "citedInDecisions": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "decidedAt": { "type": "string", "format": "date-time" },
+          "owner": { "type": "string" },
+          "evidenceIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
