@@ -238,6 +238,35 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("Keep this line", updated)
         self.assertIn("PM Loop Cycle 1", updated)
 
+    def test_pm_loop_derivation_filters_out_of_scope_problems(self):
+        provider = SequencedProvider([ProviderResponse(content="ok", done=True)])
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=1)
+        feedback = (
+            "- New problem to investigate next: optimize kafka consumer lag under packet loss.\n"
+            "- New problem to investigate next: improve PM prioritization workflow in Cursor for Product Managers."
+        )
+        derived = loop._derive_next_problems(
+            current_problem="Improve PM decision quality",
+            feedback=feedback,
+            processed=[],
+            max_new=2,
+        )
+        self.assertEqual(len(derived), 1)
+        self.assertIn("prioritization", derived[0].lower())
+
+    def test_pm_loop_derivation_falls_back_to_pm_scope_problem(self):
+        provider = SequencedProvider([ProviderResponse(content="ok", done=True)])
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=1)
+        feedback = "- New problem to investigate next: debug replication lag and broker offsets."
+        derived = loop._derive_next_problems(
+            current_problem="Improve PM decision quality",
+            feedback=feedback,
+            processed=[],
+            max_new=2,
+        )
+        self.assertGreaterEqual(len(derived), 1)
+        self.assertIn("cursor for product managers", derived[0].lower())
+
     def test_pm_loop_includes_recent_cycle_summaries_in_prompt(self):
         provider = CapturingProvider(
             [

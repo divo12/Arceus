@@ -55,6 +55,20 @@ def _build_provider(config: Config) -> ProviderAdapter:
 class AgentLoop:
     """Nanobot-inspired runtime loop for PM-oriented autonomous execution."""
 
+    PM_SCOPE_KEYWORDS = (
+        "product manager",
+        "pm",
+        "cursor for pms",
+        "what to build next",
+        "prioritization",
+        "roadmap",
+        "discovery",
+        "decision record",
+        "evidence brief",
+        "stakeholder",
+        "prd",
+    )
+
     def __init__(
         self,
         workspace: Path,
@@ -506,13 +520,28 @@ class AgentLoop:
         seen = set(x.strip().lower() for x in processed + [current_problem])
         for c in candidates:
             key = c.strip().lower()
+            if not self._is_pm_scope_problem(c):
+                continue
             if key in seen:
                 continue
             seen.add(key)
             deduped.append(c)
             if len(deduped) >= max_new:
                 break
+        if not deduped:
+            deduped.append(self._fallback_pm_problem(current_problem))
         return deduped
+
+    def _is_pm_scope_problem(self, text: str) -> bool:
+        low = (text or "").lower()
+        return any(k in low for k in self.PM_SCOPE_KEYWORDS)
+
+    def _fallback_pm_problem(self, current_problem: str) -> str:
+        return (
+            "For Cursor for Product Managers, what should we build next to improve "
+            "problem discovery, prioritization quality, and decision traceability "
+            f"given this context: {current_problem[:140]}"
+        )
 
     def _build_pm_cycle_prompt(
         self,
@@ -533,6 +562,8 @@ class AgentLoop:
             summary_block = f"\n\nRecent cycle summaries (N-2 and N-1):\n{joined}\n"
         return (
             "PM Agent mode: Given the problem below, decide what to build next.\n"
+            "Stay in scope: Cursor for Product Managers. Avoid drifting into generic "
+            "infra/debug topics unless they directly impact PM user outcomes.\n"
             "Follow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\n"
             "Spawn focused subagents for weak/unknown areas.\n"
             "Output in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n"
