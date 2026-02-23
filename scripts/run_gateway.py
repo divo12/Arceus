@@ -65,7 +65,10 @@ def _add(args):
     elif args.pm_loop:
         payload_kind = "pm_loop"
         name = "PM loop (continuous)"
-        message = "PM loop: iterate problem->evidence->options->decision->plan->feedback"
+        message = (
+            args.message
+            or "PM loop: iterate problem->evidence->options->decision->plan->feedback"
+        )
 
     job = svc.add_job(
         name=name,

@@ -38,6 +38,7 @@ State tracks:
 - queued/processed problems
 - last feedback
 - last decision summary
+- rolling cycle summaries (bounded context window used in next run prompts)
 
 ## Governance controls
 
@@ -48,6 +49,7 @@ Configured in `config/schema.py` under `agents.pm_loop`:
 - `cooldown_seconds`
 - `simulate_feedback`
 - `deduplicate_problems`
+- `recent_cycle_summaries` (default `2`, i.e. N-2 + N-1 summaries)
 - `kill_switch`
 
 ## Events emitted

@@ -353,6 +353,7 @@ class AgentLoop:
                 "processed_problems": [],
                 "last_feedback": {},
                 "last_decision": {},
+                "cycle_summaries": [],
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         try:
@@ -365,6 +366,7 @@ class AgentLoop:
                 "processed_problems": [],
                 "last_feedback": {},
                 "last_decision": {},
+                "cycle_summaries": [],
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -373,6 +375,66 @@ class AgentLoop:
         path = self._pm_state_path(loop_id)
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
         path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+    def _append_new_ideas_update(
+        self,
+        *,
+        ideas_path: Path,
+        content: str,
+        content_before: str = "",
+    ) -> None:
+        """Append-only writer for new_ideas.md (never overwrite prior sections)."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        section = f"\n\n## Update — {timestamp}\n\n{content.strip()}\n"
+        if content_before.strip():
+            base = content_before.rstrip()
+            ideas_path.write_text(base + section, encoding="utf-8")
+            return
+        if ideas_path.exists() and ideas_path.stat().st_size > 0:
+            existing = ideas_path.read_text(encoding="utf-8")
+            ideas_path.write_text(existing.rstrip() + section, encoding="utf-8")
+            return
+        header = f"# New Ideas Log\n\nStarted: {timestamp}\n"
+        ideas_path.write_text(header + section, encoding="utf-8")
+
+    def _render_new_ideas_cycle_markdown(
+        self,
+        *,
+        cycle: int,
+        problem: str,
+        output: Dict[str, Any],
+    ) -> str:
+        recs = output.get("ranked_recommendations", [])
+        top = recs[0] if recs else {}
+        decision_record = output.get("decision_record", "")
+        exec_plan = output.get("execution_plan", {})
+        feedback = output.get("feedback", "")
+        packet_ref = output.get("packet_ref", "")
+        lines = [
+            f"### PM Loop Cycle {cycle}",
+            "",
+            f"**Problem:** {problem}",
+            "",
+            "#### Recommendation",
+            f"- Priority: {top.get('priority', 1)}",
+            f"- Confidence: {top.get('confidence', 0.5)}",
+            f"- Rationale: {top.get('rationale', '')}",
+            "",
+            "#### Execution Plan Summary",
+            f"{exec_plan.get('summary', '')}",
+            "",
+            "#### Feedback Applied",
+            feedback or "_No feedback_",
+            "",
+            "#### Packet Ref",
+            f"- `{packet_ref}`" if packet_ref else "- _No packet generated_",
+            "",
+            "#### Decision Record Snapshot",
+            "```markdown",
+            (decision_record[:1200] + ("..." if len(decision_record) > 1200 else "")),
+            "```",
+        ]
+        return "\n".join(lines).strip()
 
     async def _simulate_feedback(
         self,
@@ -457,18 +519,42 @@ class AgentLoop:
         *,
         problem: str,
         previous_feedback: str = "",
+        recent_cycle_summaries: Optional[List[str]] = None,
     ) -> str:
         feedback_block = (
             f"\n\nPrevious user feedback to incorporate:\n{previous_feedback}\n"
             if previous_feedback.strip()
             else ""
         )
+        recent = [x.strip() for x in (recent_cycle_summaries or []) if str(x).strip()]
+        summary_block = ""
+        if recent:
+            joined = "\n".join(f"- {item}" for item in recent)
+            summary_block = f"\n\nRecent cycle summaries (N-2 and N-1):\n{joined}\n"
         return (
             "PM Agent mode: Given the problem below, decide what to build next.\n"
             "Follow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\n"
             "Spawn focused subagents for weak/unknown areas.\n"
             "Output in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n"
-            f"\nProblem:\n{problem}{feedback_block}"
+            f"\nProblem:\n{problem}{feedback_block}{summary_block}"
+        )
+
+    def _build_cycle_summary(
+        self,
+        *,
+        cycle: int,
+        problem: str,
+        output: Dict[str, Any],
+    ) -> str:
+        top = (output.get("ranked_recommendations") or [{}])[0]
+        rationale = str(top.get("rationale", "")).replace("\n", " ").strip()
+        feedback = str(output.get("feedback", "")).replace("\n", " ").strip()
+        rationale_short = rationale[:220] + ("..." if len(rationale) > 220 else "")
+        feedback_short = feedback[:160] + ("..." if len(feedback) > 160 else "")
+        return (
+            f"Cycle {cycle}: Problem='{problem[:120]}', "
+            f"Recommendation='{rationale_short}', "
+            f"Feedback='{feedback_short or 'none'}'"
         )
 
     def _build_pm_output(
@@ -561,6 +647,7 @@ class AgentLoop:
         cooldown_seconds = max(cooldown_seconds, int(pm_cfg.cooldown_seconds))
 
         state = self._load_pm_state(loop_id)
+        state.setdefault("cycle_summaries", [])
         if not state.get("problem_queue"):
             state["problem_queue"] = [idea]
         track_event(
@@ -576,12 +663,27 @@ class AgentLoop:
             run_prompt = self._build_pm_cycle_prompt(
                 problem=cycle_problem,
                 previous_feedback=str(state.get("last_feedback", "")),
+                recent_cycle_summaries=list(state.get("cycle_summaries", [])),
             )
-            run_result = await self.run(
-                problem_description=run_prompt,
-                session_key=session_key,
-                skill_names=["evidence-brief", "options-set-generator", "decision-record"],
-            )
+            # PM loop runs in append-only mode for ideas output:
+            # disable direct write/edit tools during the model turn.
+            disabled_tool_names: List[str] = []
+            for tname in ("write_file", "edit_file"):
+                if tname in self.registry.tool_names:
+                    self.registry.unregister(tname)
+                    disabled_tool_names.append(tname)
+            try:
+                run_result = await self.run(
+                    problem_description=run_prompt,
+                    session_key=session_key,
+                    skill_names=["evidence-brief", "options-set-generator", "decision-record"],
+                )
+            finally:
+                # Restore write/edit tools for normal runtime behavior.
+                if "write_file" in disabled_tool_names:
+                    self.registry.register(WriteFileTool(self.workspace))
+                if "edit_file" in disabled_tool_names:
+                    self.registry.register(EditFileTool(self.workspace))
             run_id = str(run_result.get("run_id", ""))
             final_content = str(run_result.get("final", {}).get("content", ""))
             if simulate_feedback:
@@ -602,6 +704,20 @@ class AgentLoop:
             )
             cycle_outputs.append(output)
 
+            # Append-only write to new_ideas.md
+            ideas_path = self.workspace / "new_ideas.md"
+            before = ideas_path.read_text(encoding="utf-8") if ideas_path.exists() else ""
+            cycle_md = self._render_new_ideas_cycle_markdown(
+                cycle=int(state.get("current_cycle", 0)) + 1,
+                problem=cycle_problem,
+                output=output,
+            )
+            self._append_new_ideas_update(
+                ideas_path=ideas_path,
+                content=cycle_md,
+                content_before=before,
+            )
+
             next_problems = self._derive_next_problems(
                 current_problem=cycle_problem,
                 feedback=feedback,
@@ -620,6 +736,17 @@ class AgentLoop:
             state.setdefault("processed_problems", []).append(cycle_problem)
             state["last_feedback"] = feedback
             state["last_decision"] = output.get("ranked_recommendations", [{}])[0]
+            summary_line = self._build_cycle_summary(
+                cycle=int(state.get("current_cycle", 0)),
+                problem=cycle_problem,
+                output=output,
+            )
+            state.setdefault("cycle_summaries", []).append(summary_line)
+            keep_n = max(0, int(pm_cfg.recent_cycle_summaries))
+            if keep_n > 0:
+                state["cycle_summaries"] = state["cycle_summaries"][-keep_n:]
+            else:
+                state["cycle_summaries"] = []
             self._save_pm_state(state)
             track_event(
                 workspace=self.workspace,

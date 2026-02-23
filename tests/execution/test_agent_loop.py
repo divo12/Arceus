@@ -1,6 +1,7 @@
 """Consolidated tests for the core AgentLoop runtime and heartbeat."""
 
 import asyncio
+import json
 import shutil
 import tempfile
 import unittest
@@ -59,6 +60,24 @@ class SequencedProvider(ProviderAdapter):
         idx = min(self.calls, len(self.responses) - 1)
         self.calls += 1
         return self.responses[idx]
+
+
+class CapturingProvider(SequencedProvider):
+    """Sequenced provider that captures the last prompt messages."""
+
+    def __init__(self, responses: List[ProviderResponse]):
+        super().__init__(responses)
+        self.last_messages: List[Dict[str, Any]] = []
+
+    async def complete(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_schemas: List[Dict[str, Any]],
+        iteration: int,
+        runtime_context: Dict[str, Any],
+    ) -> ProviderResponse:
+        self.last_messages = messages
+        return await super().complete(messages, tool_schemas, iteration, runtime_context)
 
 
 class TestAgentLoop(unittest.TestCase):
@@ -200,6 +219,59 @@ class TestAgentLoop(unittest.TestCase):
         self.assertGreaterEqual(len(queue), 1)
         self.assertTrue(any(isinstance(x, str) and len(x) > 0 for x in queue))
 
+    def test_pm_loop_appends_new_ideas_without_overwrite(self):
+        provider = SequencedProvider(
+            [ProviderResponse(content="Prioritize evidence-backed onboarding checklist.", done=True, confidence=0.9)]
+        )
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=2)
+        ideas_path = self.workspace / "new_ideas.md"
+        ideas_path.write_text("# Existing ideas\n\n- Keep this line\n", encoding="utf-8")
+
+        loop.run_pm_loop_sync(
+            idea="I am designing cursor for Product Managers, based on new structure what Iteration should I do",
+            loop_id="pm_loop_append_test",
+            max_cycles=1,
+            simulate_feedback=False,
+        )
+
+        updated = ideas_path.read_text(encoding="utf-8")
+        self.assertIn("Keep this line", updated)
+        self.assertIn("PM Loop Cycle 1", updated)
+
+    def test_pm_loop_includes_recent_cycle_summaries_in_prompt(self):
+        provider = CapturingProvider(
+            [
+                ProviderResponse(content="First recommendation", done=True, confidence=0.9),
+                ProviderResponse(content="Second recommendation", done=True, confidence=0.9),
+                ProviderResponse(content="Third recommendation", done=True, confidence=0.9),
+            ]
+        )
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=2)
+        loop.run_pm_loop_sync(
+            idea="Improve onboarding activation",
+            loop_id="pm_loop_summary_window",
+            max_cycles=1,
+            simulate_feedback=False,
+        )
+        loop.run_pm_loop_sync(
+            idea="Improve onboarding activation",
+            loop_id="pm_loop_summary_window",
+            max_cycles=1,
+            simulate_feedback=False,
+        )
+        loop.run_pm_loop_sync(
+            idea="Improve onboarding activation",
+            loop_id="pm_loop_summary_window",
+            max_cycles=1,
+            simulate_feedback=False,
+        )
+        prompt_text = "\n".join(str(m.get("content", "")) for m in provider.last_messages)
+        self.assertIn("Recent cycle summaries (N-2 and N-1)", prompt_text)
+
+        state_path = self.workspace / "data" / "state" / "workflows" / "pm_loop_summary_window.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertLessEqual(len(state.get("cycle_summaries", [])), 2)
+
 
 class TestHeartbeat(unittest.TestCase):
     """Heartbeat service tests (nanobot concept)."""
@@ -247,6 +319,25 @@ class TestHeartbeat(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 0)
+
+    def test_controller_heartbeat_routes_pm_loop_task_from_file(self):
+        provider = SequencedProvider([ProviderResponse(content="unused", done=True)])
+        ctrl = Controller(self.workspace, provider=provider)
+        (self.workspace / "HEARTBEAT.md").write_text(
+            "pm_loop: I am designing cursor for Product Managers, based on new structure what Iteration should I do",
+            encoding="utf-8",
+        )
+
+        captured: Dict[str, Any] = {}
+
+        async def fake_pm_loop(**kwargs: Any) -> Dict[str, Any]:
+            captured.update(kwargs)
+            return {"cycles_executed": 1, "state": {"problem_queue": []}}
+
+        ctrl.loop.run_pm_loop = fake_pm_loop  # type: ignore[assignment]
+        result = asyncio.run(ctrl._on_heartbeat("Process HEARTBEAT.md tasks"))
+        self.assertIn("PM_LOOP_OK", result)
+        self.assertIn("designing cursor for Product Managers", captured.get("idea", ""))
 
 
 class TestCron(unittest.TestCase):

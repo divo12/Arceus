@@ -29,6 +29,7 @@ class PMLoopConfig(Base):
     cooldown_seconds: int = 0
     simulate_feedback: bool = True
     deduplicate_problems: bool = True
+    recent_cycle_summaries: int = 2
     kill_switch: bool = False
 
 

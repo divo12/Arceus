@@ -1,48 +1,93 @@
+# New Ideas Log
+
+Started: 2026-02-23 19:05 UTC
 
 
-## 2026-02-23 (IST) — Next build: Provider Reliability Layer (PRL)
+## Update — 2026-02-23 19:05 UTC
 
-### 1) New ideas surfaced
-- **Provider Reliability Layer (PRL) as a first-class feature**: make Arceus resilient to Azure 400 tool/tool_calls mismatch, connection errors, and 429 rate limits.
-- **Safe Mode runs**: when provider/tools are unhealthy, output an “offline packet” (Problem→Evidence→Options→Decision→Plan) instead of crashing.
-- **Run Report artifact**: emit `run_report.json` every run (provider status, retries, tool-call integrity repairs, timings).
-- **Decision Packet export as default output**: `packet.md` + `sources.json` (optional PDF) so recommendations are shareable/auditable.
+### PM Loop Cycle 5
 
-### 2) Gaps in `workspace_skills` to add
-- **reliability-runbook**: interpret run_report, common failure modes, operator actions.
-- **incident-postmortem**: structured retro for failed runs/decisions; updates heuristics/guardrails.
-- **backlog-triage-and-dedup**: cluster backlog by outcome/JTBD, detect duplicates, propose merges/kill list.
-- **experiment-design-and-metrics**: convert hypotheses into experiments with success metrics + guardrails.
+**Problem:** One new problem to investigate next: validate whether “test connection” is a reliable predictor—users may pass the test but fail on first real workflow due to permission scope, webhook callbacks, or long-running job behavior; measure mismatch rates and root causes.
 
-### 3) Tools/capabilities to implement
-- **Message Integrity Gate**: `validate_and_repair_messages(messages)`
-  - Enforce: every `role:"tool"` message maps to a prior `assistant.tool_calls[].id`
-  - Drop/quarantine orphan/out-of-order tool messages before provider call
-  - Record repairs in run_report
-- **Provider preflight health check**: minimal ping before full run; fail fast with actionable diagnostics.
-- **Retry/backoff policy**: exponential backoff + jitter for 429/transient errors; respect `retry-after`; cap retries.
-- **Fallback routing (optional)**: if Azure unhealthy, route to alternate provider if configured.
-- **Safe mode toggle**: disable tools and output offline packet when provider unhealthy.
+#### Recommendation
+- Priority: 1
+- Confidence: 0.8
+- Rationale: ## evidence-brief
 
-### 4) Actionable TODOs
-- [ ] Implement `validate_and_repair_messages()` + unit tests (orphan tool msg, out-of-order tool msg, multiple tool calls)
-- [ ] Add provider `health_check()` preflight before each run
-- [ ] Add retry/backoff with `retry-after` support for 429 + transient errors
-- [ ] Emit `run_report.json` for every run (success/failure)
-- [ ] Add “safe mode” fallback output (offline packet) when provider/tools unavailable
-- [ ] Ensure tests don’t execute tool calls at import time (guard demo scripts)
+**Scope:** Validate whether “test connection” predicts first real workflow success; quantify mismatch rate and dominant root causes; define “break”; specify event taxonomy + qualitative capture.
 
-## Update — 2026-02-23 17:13 UTC
+### What we know (from problem + feedback)
+| Finding | Sources | Confidence |
+|---|---|---|
+| “Test connection” may be a false positive: users pass test but fail on first real workflow due to scopes/permissions, webhook callbacks, or long-running jobs. | Problem statement | Medium |
+| The right funnel milestones are: attempted setup → test connection → first successful completion → 
 
-I can’t run the requested loop (spawn subagents + web research + append to `new_ideas.md`) because tools are currently unavailable due to an **Azure connection error**. That blocks `spawn`, `web_search`, and `write_file`.
+#### Execution Plan Summary
+## evidence-brief
 
-What to build next (to unblock Arceus):
-- **Provider preflight + fallback:** minimal ping before runs; fail fast with actionable diagnostics; optional provider switch.
-- **Message invariant validator:** `validate_and_repair_messages()` to prevent the Azure 400 tool/tool_calls mismatch once connectivity returns.
-- **Test hygiene:** remove import-time execution from `test_skills_demo.py`.
+**Scope:** Validate whether “test connection” predicts first real workflow success; quantify mismatch rate and dominant root causes; define “break”; specify event taxonomy + qualitative capture.
 
-If you want me to proceed without tools, reply **offline append** and I’ll draft a timestamped `new_ideas.md` section you can paste manually.
+### What we know (from problem + feedback)
+| Finding | Sources | Confidence |
+|---|---|---|
+| “Test connection” may be a false positive: users pass test but fail on first real workflow due to scopes/permissions, webhook callbacks, or long-running jobs. | Problem statement | Medium |
+| The right funnel milestones are: attempted setup → test connection → first successful completion → first PM workflow completed. | Prior feedback | High |
+| Current plan is missing: explicit “break” definition, success metric to declare dominant failure mode, event taxonomy + required properties, an
 
-## Update — 2026-02-23 17:15 UTC
+#### Feedback Applied
+- Resonates: You’re correctly treating “test connection” as a *predictor* problem (not just a UX problem) and anchoring on a measurable mismatch rate between `test_passed` and first real workflow success.  
+- Resonates: The funnel milestones + segmentation callouts (provider/auth/region/client) are the right levers; the “drop-off ≠ failure” warning is important.  
+- Missing: A crisp definition of the *canonical “first real workflow”* per integration/provider (what action, what payload, what success criteria). Without this, mismatch rates won’t be comparable across providers.  
+- Missing: A concrete plan for correlation IDs across test → workflow run → webhook/job logs (and where those logs live). “Event taxonomy” alone won’t solve root-cause attribution if systems can’t be joined reliably.  
+- Missing: Thresholds/time windows feel arbitrary—pick T based on observed workflow/job durations per provider (or start with 24h/72h but explicitly validate that these windows don’t misclassify long-running async as failure).  
+- Missing: Ownership/triage loop: once you classify a dominant bucket, who debugs (product vs integrations eng vs provider ops), and what’s the SLA to turn findings into fixes?  
+- New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just “checking it out”) vs true technical failure—otherwise “silent drop-off” will swamp the signal and lead you to build the wrong remediation.
 
-Error: Error code: 429 - {'error': {'code': 'RateLimitReached', 'message': 'Your requests to gpt-5.2 for gpt-5.2 in South Central US have exceeded the token rate limit for your current AIServices S0 pricing tier. This request was for ChatCompletions_Create under Azure OpenAI API version 2025-04-01-preview. Please retry after 3 seconds. To increase your default rate limit, visit: https://aka.ms/oai/quotaincrease.'}}
+#### Packet Ref
+- `data/packets/pm_loop_default/v5`
+
+#### Decision Record Snapshot
+```markdown
+# Decision Record: Cycle 5 decision
+
+**ID:** DEC-20260223-001
+**Date:** 2026-02-23
+**Owner:** 
+**Status:** Proposed
+
+## Context
+
+One new problem to investigate next: validate whether “test connection” is a reliable predictor—users may pass the test but fail on first real workflow due to permission scope, webhook callbacks, or long-running job behavior; measure mismatch rates and root causes.
+
+## Decision
+
+## evidence-brief
+
+**Scope:** Validate whether “test connection” predicts first real workflow success; quantify mismatch rate and dominant root causes; define “break”; specify event taxonomy + qualitative capture.
+
+### What we know (from problem + feedback)
+| Finding | Sources | Confidence |
+|---|---|---|
+| “Test connection” may be a false positive: users pass test but fail on first real workflow due to scopes/permissions, webhook callbacks, or long-running jobs. | Problem statement | Medium |
+|
+
+## Alternatives considered
+
+| Option | Why not chosen |
+|--------|----------------|
+| Keep current approach | Baseline |
+
+## Rationale
+
+Derived from PM cycle synthesis.
+
+## Risks
+
+
+## Metrics
+
+- **Primary:** Outcome metric to be validated
+- **Guardrails:** No regressions
+
+## Revisit trigg...
+```
