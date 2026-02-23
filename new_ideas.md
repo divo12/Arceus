@@ -1,191 +1,200 @@
-# New Ideas — Arceus (Cursor for Product Managers)
 
-**Date:** 2026-02-23 (IST)
 
-Arceus is “Cursor for PMs”: a PM agent that recommends what to build next via **Problem → Evidence → Options → Decision → Plan**.
+## Update — 2026-02-23 05:50 IST (PoL: diff + propagation within-subject A/B)
 
-This sweep converges on a defensible wedge: **Decision Packets** — an audit-ready decision log + evidence + versioning + shareable packet (with manifest) that survives cross-functional handoffs.
+### 1) New ideas surfaced
 
----
+- Validate **trust + auditability** as a first-class outcome for diff/propagation.
+  - Even if time savings are modest, adoption may happen if Arceus produces an **explainable change graph** (why changed, source diff, downstream dependencies).
+  - Add metrics: **audit trail completeness** + **reviewer confidence**.
 
-## 1) New ideas surfaced (agent + subagents)
+### 2) PoL design (paired within-subject A/B)
 
-### A. Wedge: Decision Packets (Decision Intelligence layer)
+- Same participants do:
+  - **Control:** manual diff + manual propagation
+  - **Treatment:** diff engine + assisted propagation
+- Use comparable change sets; counterbalance order to reduce learning effects.
 
-1. **Decision Packets as the core product primitive**
-   - From messy inputs → **evidence-backed options** → **final decision** → **shareable packet**.
-   - Differentiation: not doc drafting; **defensibility** (citations, assumptions, confidence, “what would change this”).
+### 3) PoL template (reusable)
 
-2. **Audit-ready decision log (enterprise pull)**
-   - Treat decision logging like an **approval audit trail**: append-only, attributable, reconstructable.
-   - Capture: before/after state, justification, evidence pointers (hashes), approval chain.
+- **Artifacts:** baseline doc set + change request + gold-standard propagated set + reviewer checklist.
+- **Design:** within-subject crossover; timebox; independent review.
+- **Metrics:**
+  - time-to-verify
+  - missed-dependency rate
+  - rework cycles
+  - reviewer confidence score
+  - audit trail completeness
+- **Decision rule:** require speed gain + quality threshold (or quality non-inferiority + speed gain).
 
-3. **Packet manifest for verification (PDF + JSON)**
-   - Ship a **machine-readable manifest** (hashes of included artifacts, decision IDs, timestamps, signer identities).
-   - Differentiates from “export PDF” and enables verification.
+### 4) Actionable TODOs
 
-4. **ADR-style immutability + supersedes**
-   - Accepted decisions are versioned; updates create a new version that **supersedes** the prior one.
-   - Proves traceability without a full dependency graph.
+- [ ] Build a baseline artifact set (PRD + tickets + launch checklist) and a change request.
+- [ ] Create a gold-standard propagated set for scoring.
+- [ ] Run PoL with 5–8 participants; compute missed-dependency + confidence deltas.
 
-5. **Governance as a product wedge (view vs export plane)**
-   - “Shareable packet mode” anchored in a threat model: leak deterrence + traceability + least-privilege.
-   - Explicit **view plane vs export plane** (export disabled by default).
+## Update — 2026-02-22 21:35 UTC
 
-6. **Prioritization evidence layer (reduces churn)**
-   - Capture *why* an item scored the way it did (metrics, quotes, incidents) so prioritization is auditable.
+No action required. This feedback only confirms the append succeeded and doesn’t add any new angles or constraints to validate.
 
-7. **Validation angle: cross-functional handoff quality**
-   - PoL should test whether the packet survives PM → Eng → Security/Legal without rework.
+## Update — 2026-02-22 21:36 UTC
 
----
-
-## 2) Gaps in `workspace_skills` to add (top candidates)
-
-1. **decision-packet-template** — canonical schema + sections.
-2. **validation-planner** — next best learning step + evidence threshold.
-3. **prioritization-sensitivity** — rank stability under uncertainty.
-4. **wsjf-sequencing** — platform sequencing; RICE as cross-check.
-5. **roadmap-change-control** — decision log required for roadmap changes.
-6. **forecast-calibration-review** — predicted vs actual; update priors.
-7. **governance-first-packet-review** — least-privilege review + redaction + export acceptance checklist.
-
-Design principle: skills should be **templates + checklists + calculators** and emit a **Decision Log record** + **Assumption Register**.
+No further action required. This message only repeats the current `new_ideas.md` snapshot and doesn’t add new information to validate or append.
 
 ---
 
-## 3) Tools / capabilities to implement (repo-level)
+## Update — 2026-02-23 06:05 IST (Decision Packets MVP: tech risks + test plan)
 
-### A. Decision Log + Evidence Graph (MVP)
+### 1) New ideas surfaced (tech risks)
 
-Minimal primitives (avoid full knowledge graph):
-- `Decision` (versioned)
-- `DecisionAlternative` (counterfactuals)
-- `Evidence` (append-only, immutable)
-- `Edge` (typed links)
-- *(Optional)* `Claim` (decisionable evidence)
+- The MVP must define **verifiable integrity guarantees**:
+  - what bytes are hashed (canonicalization)
+  - when hashes are computed (on finalize)
+  - what is immutable (finalized packet) vs mutable (draft)
 
-Storage:
-- Prefer **SQLite** for indexing + versioning + edge lookups.
-- JSONL acceptable for ultra-fast iteration.
+- New MVP decision: **trust model for verification**
+  - Are hashes internal checksums, or do we need **cryptographic signatures** (org key / per-user key / KMS-backed) for third-party verification?
 
-Indexes (MVP):
-- `(run_id, iteration)`
-- `(decision_type, created_at)`
-- `(from_id, to_id)`
+### 2) Top technical risks + mitigations
 
-### B. Decision lifecycle + instrumentation
+1) **Canonicalization risk** (hashes meaningless if serialization differs)
+   - Mitigation: canonical JSON rules (sorted keys, normalized whitespace, stable ordering) or deterministic binary format.
 
-Canonical state machine:
-- `draft → in_review → proposed → finalized → communicated/implemented`
+2) **Immutability claim risk** (workflow vs storage mismatch)
+   - Mitigation: enforce finalize→lock in workflow + append-only/WORM-like storage semantics + integrity checks.
 
-Emit events:
-- `decision_created`
-- `decision_state_changed`
-- `evidence_attached`
-- `alternative_added`
-- `dissent_logged`
-- `decision_reopened`
-- `packet_generated`
-- `packet_viewed`
-- `packet_exported`
+3) **Audit log incompleteness/integrity**
+   - Mitigation: define security-relevant event taxonomy + append-only audit log + deletion/rewrites detection (hash-chain).
 
-Guardrail metric:
-- **Decision Quality Index (DQI)**
-  - `DQI = evidence_quality_score + stakeholder_diversity_score + dissent_captured_flag - reopen_penalty`
+4) **Export verification ambiguity**
+   - Mitigation: ship `manifest.json` with explicit hashing rules + verification script.
 
-### C. Shareable Packet Mode (security primitives)
+5) **Key management complexity** (if signatures added)
+   - Mitigation: start with org-level signing key; define rotation + compromise playbook; keep signatures optional in MVP.
 
-- Snapshot packet (recommended for MVP) with immutable content hash.
-- Controls:
-  - redaction overlay + redaction log
-  - watermarking (recipient + timestamp + packet ID)
-  - access scope + expiry
-  - view vs export policy flags
+### 3) Minimal test plan (single test file; contract-first)
 
-### D. Enterprise permissions model (minimal but plausible)
+**Principle:** test **auditability primitives** (append-only episode recording, stable schema, attribution fields) more than “AI correctness.”
 
-- **RBAC + scoped ABAC + sensitivity labels**
-- Roles (5): Viewer, Contributor, Approver, Admin, Auditor
-- Scopes: Tenant/Org → Workspace → Case/Matter → Record
-- Labels: Internal / Confidential / Restricted
-- Dual-control for irreversible actions: publish/export/redaction approval
-- Break-glass access: time-bound, logged, post-hoc review
+- Use one test module with grouped tests:
+  - `test_episode_schema_*`
+  - `test_memory_persistence_*`
+  - `test_reflection_logic_*`
 
-### E. Reliability
+- Prefer schema/contract assertions over brittle content:
+  - assert presence/types of keys (e.g., `decision.decision`, `reflection.confidence`)
+  - assert monotonic properties (episode count increases; timestamps parse)
 
-- Persist subagent outputs to `sessions/` or `data/state/subagents/` to avoid “started but no results”.
+**New angle:** treat Decision Packets as a **contract for exportability**
+- Add a test that a recorded episode can be deterministically transformed into a **packet manifest dict** (even before the full manifest feature ships). This stabilizes the episode schema early.
 
----
+### 4) Actionable TODOs
 
-## 4) Actionable TODO list (checkboxes)
+- [ ] Write canonicalization spec for `manifest.json` hashing.
+- [ ] Decide trust model: checksum-only vs signature.
+- [ ] Add hash-chain option for audit log integrity.
+- [ ] Add a single contract test file for episode→manifest determinism.
 
-### A. 2-week thin vertical slice (golden path demo)
+## Update — 2026-02-23 00:58 UTC
 
-- [ ] Create Decision Packet → attach 3 evidence snippets → generate 3 options → select decision → render packet → export.
-- [ ] Implement `DEC-####` IDs + decision versioning (`supersedes_decision_id`).
-- [ ] Implement evidence hashing + store minimal audit fields (actor/action/before-after hashes).
-- [ ] Implement packet snapshot renderer (HTML first) + `manifest.json` + verification script.
-- [ ] Seed a sample packet so demo works in a fresh repo.
+No action needed. This feedback only repeats that the schema and implementation-plan subagents have started; it doesn’t provide any new results to incorporate or append.
 
-### B. Governance-first PoL (handoff survival)
+## Update — 2026-02-23 00:58 UTC
 
-- [ ] Run 1 integrated handoff session: PM → Eng lead → Security/Legal on the same packet.
-- [ ] Include: restricted evidence + redaction request + external export attempt.
-- [ ] Track: time-to-first-useful output, # clarifications, grounding rate, actionability score, reopen rate, export accepted without rework.
-- [ ] Ask stop-condition: “What would make you refuse/escalate/block this?”
+No update required. This message only confirms `new_ideas.md` was written successfully and doesn’t introduce any new angles to validate.
 
-### C. 6-week wedge demo target
+## Update — 2026-02-23 01:14 UTC
 
-- [ ] Build a SOC2/vendor-security-review scenario and run 3 PoL sessions.
-- [ ] Goal: raw inputs → audit-ready decision log → immutable packet (PDF + manifest) in <10 minutes.
+No action needed. This feedback only confirms the current `new_ideas.md` content and doesn’t add any new evidence or constraints.
 
----
-
-## Evidence notes (web)
-
-- Approval audit trail best practices and required fields (Sirion, Jan 2026):
-  - https://www.sirion.ai/de/library/contract-insights/approval-audit-trail-explained/
+If you want me to append a new timestamped section, pick one focus:
+1) Decision Packets MVP  
+2) Diff/Propagation engine  
+3) Unify both
 
 
-## Update — 2026-02-23 04:20 IST (Doc hygiene: make new_ideas.md append-only WAL)
+## Update — 2026-02-23 06:10 IST (Unifying Decision Packets + Diff/Propagation → “DecisionOps”)
 
-### 1) Problem observed
+### 1) New ideas surfaced (unified narrative)
 
-- `new_ideas.md` behaves like a scratchpad with **no stable append-only contract** (no index, no boundary marker, no rotation rule), making it easy for agents/tools to overwrite and cause thrash.
+- Lead with one story: **Decision Packets are the unit of intent; Diff/Propagation is the unit of execution.**
+- Frame as a closed-loop system: **Decide → Apply → Verify → Learn**.
+- Reframe Diff/Propagation as a **compliance evidence generator**:
+  - The differentiator isn’t “we can apply changes,” it’s “we can prove the decision was implemented exactly as approved, and detect drift.”
 
-### 2) Proposed structure (guardrails)
+### 2) Tools/capabilities to implement (architecture unification)
 
-Treat `new_ideas.md` as a **Write-Ahead Log (WAL)** of “idea events”:
-- **Capture** is append-only and immutable.
-- **Curation** happens in a separate generated view (e.g., `ideas_current.md`).
+**Decision Ledger as event-sourced backbone**
+- Store immutable events; derive current state via projections:
+  - current approved decisions
+  - pending propagations
+  - compliance status
 
-Add explicit invariants inside the file:
-- Fixed header (rarely edited): purpose + rules + small index.
-- Hard boundary marker:
-  - `<!-- DO NOT EDIT ABOVE / APPEND BELOW -->`
-- Each entry is self-contained and timestamped.
+**Propagation writes are first-class ledger events**
+- `PropagationPlanned` (what will change, where, why)
+- `DiffComputed` (exact patch/plan + impact summary)
+- `PropagationApplied` (execution metadata)
+- `PropagationVerified` (post-check evidence)
+- `PropagationFailed` / `PropagationRolledBack`
 
-### 3) Rotation / archiving policy
+**Linking model (required references)**
+- `decision_id` (Decision Packet)
+- `target_id` (system/repo/service)
+- `artifact_hash` (diff/plan content-addressed)
+- `actor` (human/agent) + `policy_version`
 
-- Keep `new_ideas.md` as “current month WAL”.
-- Archive older months to `pm_ideas/archive/new_ideas_YYYY-MM.md`.
-- Keep diffs small by ensuring only the newest entry changes.
+### 3) MVP principle
 
-### 4) Minimal tooling changes to enforce
+- **Verifiable propagation > universal propagation.**
+- Start with 1–2 target types and make the audit trail airtight (e.g., Git repo + one SaaS config), then expand.
 
-- Add a tiny script (e.g., `scripts/append_idea_entry.py`) that:
-  - appends a new timestamped block at EOF,
-  - optionally updates only a bounded index region,
-  - and rotates/archives when month changes.
+### 4) Actionable TODOs
 
-### 5) Actionable TODOs
+- [ ] Extend Decision Ledger schema to include propagation event types above.
+- [ ] Add a projection: “decision compliance status” (planned/applied/verified/drift).
+- [ ] Pick 1 target for MVP propagation (recommend: repo markdown artifacts) and implement compute/apply/verify.
 
-- [ ] Add boundary marker + rules header to `new_ideas.md`.
-- [ ] Add `scripts/append_idea_entry.py` (append-only writer).
-- [ ] Add `scripts/build_ideas_current.py` to generate `ideas_current.md` from WAL.
-- [ ] Add monthly archive folder + rotation rule.
+## Update — 2026-02-23 04:14 UTC
 
-## Update — 2026-02-22 21:10 UTC
+No action needed. This message only confirms the append succeeded and doesn’t provide new information to validate or incorporate.
 
-No further work required. This feedback only confirms the append succeeded and doesn’t introduce any new angles or constraints to validate.
+## Update — 2026-02-23 04:59 UTC
+
+No further action required. This message only repeats the current `new_ideas.md` snapshot and doesn’t introduce any new angles to validate or incorporate.
+
+## Update — 2026-02-23 05:29 UTC
+
+## Update — 2026-02-23 (IST) (Unify Decision Packets + Diff/Propagation; next build slice)
+
+### 1) New ideas surfaced
+- **Unify both tracks:** make **Decision Packets** the *audit layer* for the **diff/propagation engine**. The propagation output should always emit:
+  - what changed (source diff),
+  - why it changed (linked decision + evidence),
+  - what was impacted (dependency list),
+  - what was updated (before/after),
+  - who approved (if required).
+- **Trust-first propagation:** adoption may come even without huge time savings if Arceus produces an **explainable change graph** + **audit trail completeness** + **reviewer confidence**.
+- **Integrity guarantees are the product:** define canonicalization + finalize→hash + immutable vs draft boundaries; otherwise “manifest” and “audit-ready” claims collapse.
+- **Exportability contract now:** treat “episode → packet manifest dict” as a stable contract even before full packet UI/renderer ships; reduces migration pain.
+
+### 2) Gaps in `workspace_skills` to add
+- **change-propagation-review** — checklist + rubric for reviewers (missed dependencies, correctness, confidence, required approvals).
+- **audit-trail-completeness-check** — validates required fields/events exist for a decision/propagation run.
+- **canonicalization-spec-writer** — produces canonical JSON rules + hashing rules for manifests (so teams don’t hand-wave integrity).
+
+### 3) Tools/capabilities to implement
+- **Canonical manifest + hashing spec** (single source of truth): canonical JSON rules, what fields are included, ordering rules, hash algorithm, when computed.
+- **Append-only event log** for both decisions and propagation runs (with optional hash-chain).
+- **Propagation run object** linked to a Decision Packet:
+  - inputs: baseline artifacts + change request
+  - outputs: updated artifacts + impact list + rationale links
+  - metrics: missed-dependency rate, reviewer confidence, audit completeness
+- **Contract test harness**: deterministic transform from recorded episode/propagation-run → manifest dict.
+
+### 4) Actionable TODO list
+- [ ] Write **canonicalization + hashing** spec for `manifest.json` (sorted keys, normalized whitespace, stable ordering rules).
+- [ ] Decide **trust model**: checksum-only vs signatures (org key) for MVP; document rotation/compromise stance.
+- [ ] Implement minimal **PropagationRun** record + link it to a Decision (`DEC-####`).
+- [ ] Add **within-subject A/B PoL** setup (baseline artifacts + change request + gold standard) and scoring rubric.
+- [ ] Add **contract-first tests** (single test file): episode/propagation-run → manifest determinism; append-only monotonicity; timestamps parse.
+- [ ] Track PoL metrics: time-to-verify, missed-dependency rate, rework cycles, reviewer confidence, audit trail completeness.
