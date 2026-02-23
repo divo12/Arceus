@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://arceus.dev/schemas/evidence_item_v1.json",
+  "title": "Evidence item",
+  "description": "Single evidence item in the evidence store (trust & audit oriented)",
+  "type": "object",
+  "required": ["id", "uri", "source_system", "source_id"],
+  "properties": {
+    "id": { "type": "string", "description": "Stable Arceus evidence ID" },
+    "uri": { "type": "string", "format": "uri", "description": "Canonical URI of the source" },
+    "title": { "type": "string", "description": "Human-readable title" },
+    "type": { "type": "string", "enum": ["evidence", "link", "document"], "default": "evidence" },
+    "source_system": { "type": "string", "description": "Origin system (e.g. web_fetch, support_query)" },
+    "source_id": { "type": "string", "description": "ID in source system" },
+    "source_version": { "type": "string", "description": "Version or hash for idempotency" },
+    "hash": { "type": "string", "description": "Content hash for dedup" },
+    "extracted_at": { "type": "string", "format": "date-time" },
+    "parser_version": { "type": "string", "description": "Avoid silent retrieval drift" },
+    "chunker_version": { "type": "string", "description": "Chunking version" },
+    "chunk_ids": { "type": "array", "items": { "type": "string" } },
+    "scope": { "type": "string", "enum": ["team", "org", "legal", "external"] },
+    "metadata": { "type": "object" }
+  }
+}

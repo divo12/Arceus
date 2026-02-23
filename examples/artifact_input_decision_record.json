@@ -1,0 +1,23 @@
+{
+  "title": "Ship onboarding checklist",
+  "context": "60% of trial users drop off in the first 24 hours due to lack of guidance. Support tickets show 'How do I get started?' is the #1 question.",
+  "decision": "We will add a 3-step guided onboarding checklist that appears on first login.",
+  "alternatives": [
+    {"option": "Video tutorial", "reason": "Higher effort to produce; lower completion rate for video content."},
+    {"option": "Do nothing", "reason": "Drop-off continues; churn OKR at risk."}
+  ],
+  "rationale": "Minimal friction, measurable (completion rate), and aligns with activation OKR.",
+  "risks": [
+    {"risk": "Users dismiss immediately", "mitigation": "Track dismissal rate; A/B test messaging."},
+    {"risk": "Checklist feels generic", "mitigation": "Start with primary persona; personalize later."}
+  ],
+  "metrics": {
+    "primary": "Activation rate — target 60% (from 40%) by Q2",
+    "guardrails": "Sign-up conversion rate must not drop"
+  },
+  "revisit_triggers": [
+    "If activation rate does not improve by 20% within 60 days",
+    "If dismissal rate exceeds 50%",
+    "If 3+ enterprise customers request SSO instead"
+  ]
+}

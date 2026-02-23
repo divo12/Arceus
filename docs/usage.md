@@ -74,6 +74,24 @@ export JIRA_API_TOKEN="..."
 uv run python scripts/publish_packet_jira.py --packet-id cursor-pm --issue-key PROJ-123
 ```
 
+## Artifact generator (Decision OS)
+
+Generate markdown artifacts from structured JSON:
+
+```bash
+uv run python scripts/arceus_artifacts.py --kind decision_record --input input.json --output docs/
+uv run python scripts/arceus_artifacts.py --kind evidence_brief --input input.json
+uv run python scripts/arceus_artifacts.py --kind options_set --input input.json
+```
+
+Supported kinds: `decision_record`, `evidence_brief`, `options_set`. See `examples/artifact_input_decision_record.json` for input format.
+
+## Evidence store + claims ledger
+
+- **Evidence store:** `data/state/evidence_store.json` — idempotent evidence items (source_system, source_id, source_version)
+- **Claims ledger:** `data/state/claims.json` — claims with evidence_chunk_ids and confidence
+- **Python API:** `evidence.store` — `upsert_evidence()`, `get_evidence()`, `list_evidence()`, `add_claim()`, `list_claims()`
+
 Run lightweight lint-style check (bytecode compile):
 
 ```bash
