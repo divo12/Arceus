@@ -26,6 +26,7 @@ class PMLoopConfig(Base):
 
     enabled: bool = True
     max_cycles_per_run: int = 1
+    single_run_infinite: bool = False
     cooldown_seconds: int = 0
     simulate_feedback: bool = True
     deduplicate_problems: bool = True

@@ -1,120 +1,6 @@
 {
   "episodes": [
     {
-      "run_id": "19841b80-5035-4314-a26a-3f66ff134beb",
-      "iteration": 8,
-      "timestamp": "2026-02-23T18:48:01.675422+00:00",
-      "problem": "Test",
-      "objectives": [
-        "Clarify problem, impact, and desired outcome"
-      ],
-      "skills_to_use": [
-        "web-search",
-        "problem-statement",
-        "problem-framing-canvas",
-        "discovery-process",
-        "web-search",
-        "jobs-to-be-done",
-        "company-research",
-        "pol-probe",
-        "prioritization-advisor",
-        "product-strategy-session",
-        "opportunity-solution-tree",
-        "prd-development",
-        "user-story",
-        "roadmap-planning"
-      ],
-      "decision": "Proceed with phased discovery-to-delivery plan",
-      "reflection": {
-        "confidence": 0.55,
-        "requires_web_evidence": true,
-        "web_evidence_count": 0,
-        "subagent_count": 0,
-        "unmet_phases": [],
-        "learning": "Need more evidence and capabilities before final commitment.",
-        "next_iteration_focus": "Acquire supporting evidence",
-        "action_result_summary": "",
-        "risk_count": 0,
-        "objective_count": 1
-      }
-    },
-    {
-      "run_id": "e350054d-a807-4500-9f71-f62692f32dd2",
-      "iteration": 1,
-      "timestamp": "2026-02-23T18:48:04.863858+00:00",
-      "problem": "**Problem:** This project is designing Cursor for product managers \u2014 a tool that tells what to build next.\n\n\n## Arceus: High-Level Overview (for agent context)\n\n**What Arceus is:** An iterative PM agent that, given a problem, thinks about what to build, gathers feedback (tools, web, subagents), and refines its plan. It is essentially \"Cursor for product managers\" \u2014 a tool that tells what to build next.\n\n**Core flow:** Problem \u2192 Evidence \u2192 Options \u2192 Decision \u2192 Plan\n\n**Architecture:**\n- **ReACT-style loop:** context \u2192 cognition \u2192 provider \u2192 tools \u2192 feedback \u2192 iterate\n- **PM cognition:** interpret \u2192 reason \u2192 plan \u2192 decide \u2192 reflect (with web evidence and subagent results)\n- **Three-tier skills:** Essential (survival), Workspace (PM), Open (tool-level)\n- **Subagents:** Main agent can spawn focused subagents via `spawn` tool (validation, research); feedback/learnings/new_angle are integrated each iteration\n- **Gateway:** Heartbeat (HEARTBEAT.md tasks) + Cron (.arceus/cron.json) for 24/7 operation\n\n**Key dirs:** agents/ (identity, context, skills, tools), cognition/ (plan/decide/reflect), execution/ (agent_loop, controller, subagent_manager), skills/ (essential, workspace_skills, open_skills), pm_ideas/ (ideas sweep \u2192 PM_IDEAS.md / new_ideas.md)\n\n\n**Your task:** Explore what to build next for Arceus. Spawn multiple subagents to validate ideas (JTBD, PoL, prioritization), research trends, and surface gaps. Integrate their feedback, learnings, and new angles into your thinking.\nSpawn at least 2 subagents for each run and incorporate their outputs before finalizing.\n\n**Your skills:**\n- **Spawn subagent:** Use spawn to delegate focused validation (e.g. jobs-to-be-done, prioritization-advisor) or research. Pass skill_names to constrain. Result returns directly for you to integrate.\n- **Web search:** web_search (Google Custom Search) and web_fetch (scraper). Use searx_search if web_search returns 422.\n- **Support agent:** query_support_agent for \"what's missing in workspace skills\" or \"what tools could help our PM\".\n\n**Search for:**\n- Product ideas for AI PM agents (Cursor-for-PMs angle)\n- What to build next for problem-to-build workflows\n- Features that would improve PM agent tooling\n\n**Output:** Update new_ideas.md with:\n1. New ideas surfaced (from you + subagents)\n2. Gaps in workspace_skills to add\n3. Tools/capabilities to implement\n4. Actionable todo list with checkboxes (- [ ])\n\nCRITICAL: Never delete or replace existing new_ideas.md content. Only append a new timestamped section at the end.\nFormat: markdown with header and date. Use write_file to append to new_ideas.md.\n",
-      "objectives": [
-        "Clarify problem, impact, and desired outcome"
-      ],
-      "skills_to_use": [
-        "web-search",
-        "problem-statement",
-        "problem-framing-canvas",
-        "discovery-process",
-        "web-search",
-        "jobs-to-be-done",
-        "company-research",
-        "pol-probe",
-        "prioritization-advisor",
-        "product-strategy-session",
-        "opportunity-solution-tree",
-        "prd-development",
-        "user-story",
-        "roadmap-planning"
-      ],
-      "decision": "Proceed with phased discovery-to-delivery plan",
-      "reflection": {
-        "confidence": 0.55,
-        "requires_web_evidence": true,
-        "web_evidence_count": 0,
-        "subagent_count": 0,
-        "unmet_phases": [],
-        "learning": "Need more evidence and capabilities before final commitment.",
-        "next_iteration_focus": "Acquire supporting evidence",
-        "action_result_summary": "",
-        "risk_count": 0,
-        "objective_count": 1
-      }
-    },
-    {
-      "run_id": "67703deb-abba-465a-9d52-226b734fa625",
-      "iteration": 7,
-      "timestamp": "2026-02-23T18:48:16.223305+00:00",
-      "problem": "**Problem:** This project is designing Cursor for product managers \u2014 a tool that tells what to build next.\n\n\n## Arceus: High-Level Overview (for agent context)\n\n**What Arceus is:** An iterative PM agent that, given a problem, thinks about what to build, gathers feedback (tools, web, subagents), and refines its plan. It is essentially \"Cursor for product managers\" \u2014 a tool that tells what to build next.\n\n**Core flow:** Problem \u2192 Evidence \u2192 Options \u2192 Decision \u2192 Plan\n\n**Architecture:**\n- **ReACT-style loop:** context \u2192 cognition \u2192 provider \u2192 tools \u2192 feedback \u2192 iterate\n- **PM cognition:** interpret \u2192 reason \u2192 plan \u2192 decide \u2192 reflect (with web evidence and subagent results)\n- **Three-tier skills:** Essential (survival), Workspace (PM), Open (tool-level)\n- **Subagents:** Main agent can spawn focused subagents via `spawn` tool (validation, research); feedback/learnings/new_angle are integrated each iteration\n- **Gateway:** Heartbeat (HEARTBEAT.md tasks) + Cron (.arceus/cron.json) for 24/7 operation\n\n**Key dirs:** agents/ (identity, context, skills, tools), cognition/ (plan/decide/reflect), execution/ (agent_loop, controller, subagent_manager), skills/ (essential, workspace_skills, open_skills), pm_ideas/ (ideas sweep \u2192 PM_IDEAS.md / new_ideas.md)\n\n\n**Your task:** Explore what to build next for Arceus. Spawn multiple subagents to validate ideas (JTBD, PoL, prioritization), research trends, and surface gaps. Integrate their feedback, learnings, and new angles into your thinking.\nSpawn at least 2 subagents for each run and incorporate their outputs before finalizing.\n\n**Your skills:**\n- **Spawn subagent:** Use spawn to delegate focused validation (e.g. jobs-to-be-done, prioritization-advisor) or research. Pass skill_names to constrain. Result returns directly for you to integrate.\n- **Web search:** web_search (Google Custom Search) and web_fetch (scraper). Use searx_search if web_search returns 422.\n- **Support agent:** query_support_agent for \"what's missing in workspace skills\" or \"what tools could help our PM\".\n\n**Search for:**\n- Product ideas for AI PM agents (Cursor-for-PMs angle)\n- What to build next for problem-to-build workflows\n- Features that would improve PM agent tooling\n\n**Output:** Update new_ideas.md with:\n1. New ideas surfaced (from you + subagents)\n2. Gaps in workspace_skills to add\n3. Tools/capabilities to implement\n4. Actionable todo list with checkboxes (- [ ])\n\nCRITICAL: Never delete or replace existing new_ideas.md content. Only append a new timestamped section at the end.\nFormat: markdown with header and date. Use write_file to append to new_ideas.md.\n",
-      "objectives": [
-        "Clarify problem, impact, and desired outcome"
-      ],
-      "skills_to_use": [
-        "web-search",
-        "problem-statement",
-        "problem-framing-canvas",
-        "discovery-process",
-        "web-search",
-        "jobs-to-be-done",
-        "company-research",
-        "pol-probe",
-        "prioritization-advisor",
-        "product-strategy-session",
-        "opportunity-solution-tree",
-        "prd-development",
-        "user-story",
-        "roadmap-planning"
-      ],
-      "decision": "Proceed with phased discovery-to-delivery plan",
-      "reflection": {
-        "confidence": 0.55,
-        "requires_web_evidence": true,
-        "web_evidence_count": 0,
-        "subagent_count": 0,
-        "unmet_phases": [],
-        "learning": "Need more evidence and capabilities before final commitment.",
-        "next_iteration_focus": "Acquire supporting evidence",
-        "action_result_summary": "",
-        "risk_count": 0,
-        "objective_count": 1
-      }
-    },
-    {
       "run_id": "67703deb-abba-465a-9d52-226b734fa625",
       "iteration": 8,
       "timestamp": "2026-02-23T18:48:20.508063+00:00",
@@ -7601,6 +7487,120 @@
         "action_result_summary": "Subagent (Research common integration 'test connection' false positive): Subagent [External patterns: test-connection false positives] started (id: 361e6bd7). I'll integrate results when ready.... Subagent (Propose an analysis plan to quantify mismatch rate: definiti): Subagent [Mismatch measurement + analysis plan] started (id: d1a4a4e0). I'll integrate results when ready....",
         "risk_count": 2,
         "objective_count": 2
+      }
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "iteration": 1,
+      "timestamp": "2026-02-23T19:23:52.316981+00:00",
+      "problem": "PM Agent mode: Given the problem below, decide what to build next.\nFollow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\nSpawn focused subagents for weak/unknown areas.\nOutput in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n\nProblem:\nNew problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n\nPrevious user feedback to incorporate:\n- Resonates: You\u2019re correctly treating \u201ctest connection\u201d as a *predictor* problem (not just a UX problem) and anchoring on a measurable mismatch rate between `test_passed` and first real workflow success.  \n- Resonates: The funnel milestones + segmentation callouts (provider/auth/region/client) are the right levers; the \u201cdrop-off \u2260 failure\u201d warning is important.  \n- Missing: A crisp definition of the *canonical \u201cfirst real workflow\u201d* per integration/provider (what action, what payload, what success criteria). Without this, mismatch rates won\u2019t be comparable across providers.  \n- Missing: A concrete plan for correlation IDs across test \u2192 workflow run \u2192 webhook/job logs (and where those logs live). \u201cEvent taxonomy\u201d alone won\u2019t solve root-cause attribution if systems can\u2019t be joined reliably.  \n- Missing: Thresholds/time windows feel arbitrary\u2014pick T based on observed workflow/job durations per provider (or start with 24h/72h but explicitly validate that these windows don\u2019t misclassify long-running async as failure).  \n- Missing: Ownership/triage loop: once you classify a dominant bucket, who debugs (product vs integrations eng vs provider ops), and what\u2019s the SLA to turn findings into fixes?  \n- New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n",
+      "objectives": [
+        "Improve user outcomes and experience"
+      ],
+      "skills_to_use": [
+        "web-search",
+        "problem-statement",
+        "problem-framing-canvas",
+        "discovery-process",
+        "web-search",
+        "jobs-to-be-done",
+        "company-research",
+        "pol-probe",
+        "prioritization-advisor",
+        "product-strategy-session",
+        "opportunity-solution-tree",
+        "prd-development",
+        "user-story",
+        "roadmap-planning"
+      ],
+      "decision": "Proceed with phased discovery-to-delivery plan",
+      "reflection": {
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "web_evidence_count": 0,
+        "subagent_count": 0,
+        "unmet_phases": [],
+        "learning": "Current context is sufficient for a provisional recommendation.",
+        "next_iteration_focus": "Refine plan details",
+        "action_result_summary": "",
+        "risk_count": 1,
+        "objective_count": 1
+      }
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "iteration": 2,
+      "timestamp": "2026-02-23T19:23:58.986900+00:00",
+      "problem": "PM Agent mode: Given the problem below, decide what to build next.\nFollow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\nSpawn focused subagents for weak/unknown areas.\nOutput in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n\nProblem:\nNew problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n\nPrevious user feedback to incorporate:\n- Resonates: You\u2019re correctly treating \u201ctest connection\u201d as a *predictor* problem (not just a UX problem) and anchoring on a measurable mismatch rate between `test_passed` and first real workflow success.  \n- Resonates: The funnel milestones + segmentation callouts (provider/auth/region/client) are the right levers; the \u201cdrop-off \u2260 failure\u201d warning is important.  \n- Missing: A crisp definition of the *canonical \u201cfirst real workflow\u201d* per integration/provider (what action, what payload, what success criteria). Without this, mismatch rates won\u2019t be comparable across providers.  \n- Missing: A concrete plan for correlation IDs across test \u2192 workflow run \u2192 webhook/job logs (and where those logs live). \u201cEvent taxonomy\u201d alone won\u2019t solve root-cause attribution if systems can\u2019t be joined reliably.  \n- Missing: Thresholds/time windows feel arbitrary\u2014pick T based on observed workflow/job durations per provider (or start with 24h/72h but explicitly validate that these windows don\u2019t misclassify long-running async as failure).  \n- Missing: Ownership/triage loop: once you classify a dominant bucket, who debugs (product vs integrations eng vs provider ops), and what\u2019s the SLA to turn findings into fixes?  \n- New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n",
+      "objectives": [
+        "Improve user outcomes and experience"
+      ],
+      "skills_to_use": [
+        "web-search",
+        "problem-statement",
+        "problem-framing-canvas",
+        "discovery-process",
+        "web-search",
+        "jobs-to-be-done",
+        "company-research",
+        "pol-probe",
+        "prioritization-advisor",
+        "product-strategy-session",
+        "opportunity-solution-tree",
+        "prd-development",
+        "user-story",
+        "roadmap-planning"
+      ],
+      "decision": "Proceed with phased discovery-to-delivery plan",
+      "reflection": {
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "web_evidence_count": 0,
+        "subagent_count": 3,
+        "unmet_phases": [],
+        "learning": "Current context is sufficient for a provisional recommendation.",
+        "next_iteration_focus": "Refine plan details",
+        "action_result_summary": "Subagent (Propose a crisp, provider-agnostic definition for \u201ccanonical): Subagent [Canonical first workflow definition] started (id: b167d8e8). I'll integrate results when ready.... Subagent (Design a correlation/trace strategy: correlation IDs from co): Subagent [Correlation ID + logging join plan] started (id: 78d59638). I'll integrate results when ready.... Subagent (Design an approach to separate intent/behavior drop-off vs t): Subagent [Intent vs failure quantification] started (id: 0f06b6fe). I'll integrate results when ready....",
+        "risk_count": 1,
+        "objective_count": 1
+      }
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "iteration": 3,
+      "timestamp": "2026-02-23T19:24:02.905752+00:00",
+      "problem": "PM Agent mode: Given the problem below, decide what to build next.\nFollow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\nSpawn focused subagents for weak/unknown areas.\nOutput in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n\nProblem:\nNew problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n\nPrevious user feedback to incorporate:\n- Resonates: You\u2019re correctly treating \u201ctest connection\u201d as a *predictor* problem (not just a UX problem) and anchoring on a measurable mismatch rate between `test_passed` and first real workflow success.  \n- Resonates: The funnel milestones + segmentation callouts (provider/auth/region/client) are the right levers; the \u201cdrop-off \u2260 failure\u201d warning is important.  \n- Missing: A crisp definition of the *canonical \u201cfirst real workflow\u201d* per integration/provider (what action, what payload, what success criteria). Without this, mismatch rates won\u2019t be comparable across providers.  \n- Missing: A concrete plan for correlation IDs across test \u2192 workflow run \u2192 webhook/job logs (and where those logs live). \u201cEvent taxonomy\u201d alone won\u2019t solve root-cause attribution if systems can\u2019t be joined reliably.  \n- Missing: Thresholds/time windows feel arbitrary\u2014pick T based on observed workflow/job durations per provider (or start with 24h/72h but explicitly validate that these windows don\u2019t misclassify long-running async as failure).  \n- Missing: Ownership/triage loop: once you classify a dominant bucket, who debugs (product vs integrations eng vs provider ops), and what\u2019s the SLA to turn findings into fixes?  \n- New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n",
+      "objectives": [
+        "Improve user outcomes and experience"
+      ],
+      "skills_to_use": [
+        "web-search",
+        "problem-statement",
+        "problem-framing-canvas",
+        "discovery-process",
+        "web-search",
+        "jobs-to-be-done",
+        "company-research",
+        "pol-probe",
+        "prioritization-advisor",
+        "product-strategy-session",
+        "opportunity-solution-tree",
+        "prd-development",
+        "user-story",
+        "roadmap-planning"
+      ],
+      "decision": "Proceed with phased discovery-to-delivery plan",
+      "reflection": {
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "web_evidence_count": 0,
+        "subagent_count": 2,
+        "unmet_phases": [],
+        "learning": "Current context is sufficient for a provisional recommendation.",
+        "next_iteration_focus": "Refine plan details",
+        "action_result_summary": "Subagent (Research best practices / patterns for distinguishing user i): Subagent [External best practices: intent vs failure] started (id: 114ad7b3). I'll integrate results when ready.... Subagent (Define an ownership + triage operating model for integration): Subagent [Triage loop operating model] started (id: 1db30b71). I'll integrate results when ready....",
+        "risk_count": 1,
+        "objective_count": 1
       }
     }
   ],
@@ -21165,6 +21165,187 @@
         "risk_count": 2,
         "objective_count": 2
       }
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "iteration": 1,
+      "timestamp": "2026-02-23T19:23:58.965999+00:00",
+      "response": {
+        "content": "",
+        "confidence": 0.6,
+        "done": false,
+        "rationale": "finish_reason=tool_calls"
+      },
+      "tool_results": [
+        {
+          "tool": "spawn",
+          "arguments": {
+            "task": "Propose a crisp, provider-agnostic definition for \u201ccanonical first real workflow\u201d and how to map it per provider; include success criteria and edge cases (async, webhook-based).",
+            "label": "Canonical first workflow definition",
+            "skill_names": [
+              "user-story-mapping",
+              "problem-framing-canvas"
+            ]
+          },
+          "result": "Subagent [Canonical first workflow definition] started (id: b167d8e8). I'll integrate results when ready."
+        },
+        {
+          "tool": "spawn",
+          "arguments": {
+            "task": "Design a correlation/trace strategy: correlation IDs from connect\u2192test\u2192workflow run\u2192job/webhook logs; where to emit/store; how to join across systems; minimal viable implementation.",
+            "label": "Correlation ID + logging join plan",
+            "skill_names": [
+              "decision-record"
+            ]
+          },
+          "result": "Subagent [Correlation ID + logging join plan] started (id: 78d59638). I'll integrate results when ready."
+        },
+        {
+          "tool": "spawn",
+          "arguments": {
+            "task": "Design an approach to separate intent/behavior drop-off vs technical failure: instrumentation, surveys/prompts, cohort analysis, and experiments; propose classification buckets and heuristics.",
+            "label": "Intent vs failure quantification",
+            "skill_names": [
+              "jobs-to-be-done",
+              "pol-probe"
+            ]
+          },
+          "result": "Subagent [Intent vs failure quantification] started (id: 0f06b6fe). I'll integrate results when ready."
+        }
+      ],
+      "decision": {
+        "priority": "high",
+        "next_actions": [
+          "understand: run web-search, problem-statement, problem-framing-canvas, discovery-process",
+          "validate: run web-search, jobs-to-be-done, company-research, pol-probe",
+          "decide: run prioritization-advisor, product-strategy-session, opportunity-solution-tree",
+          "plan: run prd-development, user-story, roadmap-planning"
+        ],
+        "decision": "Proceed with phased discovery-to-delivery plan",
+        "objective_focus": [
+          "Improve user outcomes and experience"
+        ],
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "has_context": false
+      },
+      "reflection": {
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "web_evidence_count": 0,
+        "subagent_count": 0,
+        "unmet_phases": [],
+        "learning": "Current context is sufficient for a provisional recommendation.",
+        "next_iteration_focus": "Refine plan details",
+        "action_result_summary": "",
+        "risk_count": 1,
+        "objective_count": 1
+      }
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "iteration": 2,
+      "timestamp": "2026-02-23T19:24:02.884054+00:00",
+      "response": {
+        "content": "",
+        "confidence": 0.6,
+        "done": false,
+        "rationale": "finish_reason=tool_calls"
+      },
+      "tool_results": [
+        {
+          "tool": "spawn",
+          "arguments": {
+            "task": "Research best practices / patterns for distinguishing user intent vs technical failure in activation funnels (e.g., 'intent signals', 'activation surveys', 'time-to-value' heuristics). Provide 5-7 concrete tactics with pros/cons.",
+            "label": "External best practices: intent vs failure",
+            "skill_names": [
+              "web-search",
+              "evidence-brief"
+            ]
+          },
+          "result": "Subagent [External best practices: intent vs failure] started (id: 114ad7b3). I'll integrate results when ready."
+        },
+        {
+          "tool": "spawn",
+          "arguments": {
+            "task": "Define an ownership + triage operating model for integration activation mismatches: roles, SLAs, dashboards, escalation, and how findings translate into fixes.",
+            "label": "Triage loop operating model",
+            "skill_names": [
+              "workshop-facilitation",
+              "decision-record"
+            ]
+          },
+          "result": "Subagent [Triage loop operating model] started (id: 1db30b71). I'll integrate results when ready."
+        }
+      ],
+      "decision": {
+        "priority": "high",
+        "next_actions": [
+          "understand: run web-search, problem-statement, problem-framing-canvas, discovery-process",
+          "validate: run web-search, jobs-to-be-done, company-research, pol-probe",
+          "decide: run prioritization-advisor, product-strategy-session, opportunity-solution-tree",
+          "plan: run prd-development, user-story, roadmap-planning"
+        ],
+        "decision": "Proceed with phased discovery-to-delivery plan",
+        "objective_focus": [
+          "Improve user outcomes and experience"
+        ],
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "has_context": false
+      },
+      "reflection": {
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "web_evidence_count": 0,
+        "subagent_count": 3,
+        "unmet_phases": [],
+        "learning": "Current context is sufficient for a provisional recommendation.",
+        "next_iteration_focus": "Refine plan details",
+        "action_result_summary": "Subagent (Propose a crisp, provider-agnostic definition for \u201ccanonical): Subagent [Canonical first workflow definition] started (id: b167d8e8). I'll integrate results when ready.... Subagent (Design a correlation/trace strategy: correlation IDs from co): Subagent [Correlation ID + logging join plan] started (id: 78d59638). I'll integrate results when ready.... Subagent (Design an approach to separate intent/behavior drop-off vs t): Subagent [Intent vs failure quantification] started (id: 0f06b6fe). I'll integrate results when ready....",
+        "risk_count": 1,
+        "objective_count": 1
+      }
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "iteration": 3,
+      "timestamp": "2026-02-23T19:25:01.037607+00:00",
+      "response": {
+        "content": "## Evidence brief (activation mismatch: intent vs technical failure)\n\n**Scope:** Decide what to build next to quantify how much `test_passed \u2192 no first real workflow success` is driven by *user intent/behavior* vs *true technical failure*, while addressing missing pieces: canonical \u201cfirst real workflow\u201d, correlation IDs, non-arbitrary windows, and an ownership loop.\n\n### What we know\n\n| Finding | Sources | Confidence |\n|---|---|---|\n| \u201cTest connection passed\u201d is a strong *predictor milestone* but not equivalent to \u201cintegration works end-to-end\u201d; mismatch rate between `test_passed` and first real workflow success is the right anchor metric. | Prior user feedback | High |\n| Drop-off after connect/test is not necessarily failure; \u201csilent drop-off\u201d can swamp signal and cause wrong remediation. | Prior user feedback | High |\n| To compare mismatch across providers, we need a canonical definition of \u201cfirst real workflow\u201d per provider (action + payload + success criteria). | Prior user feedback | High |\n| Event taxonomy alone is insufficient without reliable join keys across connect/test/workflow/job/webhook logs. | Prior user feedback | High |\n| Time windows (T) should be based on observed provider/job durations; start with 24h/72h only if explicitly validated against async/long-running behavior. | Prior user feedback | High |\n| We currently lack an explicit ownership/triage loop to turn dominant buckets into fixes with SLAs. | Prior user feedback | Medium |\n\n### Coverage\n- **Well-covered:** problem framing; why mismatch \u2260 failure; need for segmentation; need for canonical workflow + correlation IDs.\n- **Thin:** concrete implementation plan for (1) intent signals, (2) correlation IDs across systems, (3) canonical workflow mapping per provider, (4) validated time windows, (5) triage operating model.\n- **Missing:** actual baseline numbers (current mismatch rate by provider), distribution of time-to-first-success, and where logs live today.\n\n### Contradictions\n- None explicit yet; main risk is *misclassification* (async success after window looks like failure; or \u201cintent\u201d inferred incorrectly).\n\n### Open questions (would change the decision)\n- [ ] What % of `test_passed` connections ever attempt a workflow run event (any run attempt) within 7 days?\n- [ ] What is the p50/p90/p99 time-to-first-success per provider and per workflow type?\n- [ ] Can we reliably join connect/test/workflow/job/webhook today? If not, what\u2019s the minimal join path?\n- [ ] What are the top 3 \u201cI was just checking it out\u201d intent signals we can instrument quickly?\n\n**Recommendation:** Proceed with an instrumentation-first slice that (a) defines canonical first workflow per provider, (b) adds correlation IDs to join systems, and (c) adds explicit intent signals + a lightweight \u201cintent capture\u201d prompt\u2014*before* building remediation UX or reliability fixes.\n\n---\n\n## Options set (what to build next)\n\n### Option A \u2014 \u201cAttribution MVP\u201d (recommended): canonical workflow + correlation IDs + intent signals\n- **Summary:** Build the minimum instrumentation + definitions to classify mismatch into intent vs technical vs unknown with high joinability.\n- **Constraints:** Requires small cross-team changes (product analytics + integrations + backend logging).\n- **Tradeoffs:** Slower to ship user-facing fixes, but prevents building the wrong remediation and creates a durable diagnostic foundation.\n- **Second-order effects:** Enables provider scorecards, faster incident triage, and targeted onboarding experiments.\n\n### Option B \u2014 \u201cIntent-first\u201d only: add intent capture + behavioral heuristics without deep correlation\n- **Summary:** Add \u201cwhat are you trying to do?\u201d prompt + track run-attempt events; infer intent drop-off quickly.\n- **Constraints:** Works even if logs can\u2019t be joined well.\n- **Tradeoffs:** Faster, but technical failure attribution remains weak; you\u2019ll still argue about root cause and may mis-prioritize provider fixes.\n- **Second-order effects:** Risk of over-indexing on self-reported intent; may under-detect silent technical failures.\n\n### Option C \u2014 \u201cReliability-first\u201d only: treat mismatch as failure and build remediation + retries + better errors\n- **Summary:** Assume mismatch is mostly technical; invest in error surfacing, retries, and guided setup.\n- **Constraints:** Requires engineering time per provider; may be expensive.\n- **Tradeoffs:** Might improve real failures, but if intent drop-off dominates, ROI is low and metrics remain noisy.\n- **Second-order effects:** Could increase support load if you surface more errors without clear attribution.\n\n### Tradeoff matrix\n\n| Dimension | Option A | Option B | Option C |\n|---|---:|---:|---:|\n| Value (decision quality) | High | Medium | Low\u2013Medium |\n| Effort | Medium | Low | High |\n| Risk of wrong build | Low | Medium | High |\n| Time-to-learn | 2\u20134 weeks | 1\u20132 weeks | 4\u20138+ weeks |\n\n**Recommendation:** Option A, with a 2-week MVP slice that still produces an initial \u201cintent vs failure\u201d split.\n\n---\n\n## Decision record\n\n# Decision Record: Build an Attribution MVP to split intent drop-off vs technical failure\n\n**ID:** DEC-20260223-001  \n**Date:** 2026-02-23  \n**Owner:** Product (Integrations Activation)  \n**Status:** Proposed\n\n## Context\nWe see a mismatch between `test_passed` and first real workflow success. Without separating user intent/behavior drop-off from true technical failure, we risk building the wrong remediation and drowning in \u201csilent drop-off\u201d noise. Prior feedback highlights missing prerequisites: canonical \u201cfirst real workflow\u201d per provider, correlation IDs across systems, validated time windows, and a triage loop.\n\n## Decision\nWe will build an **Attribution MVP** that (1) defines and instruments a canonical \u201cfirst real workflow success\u201d per provider, (2) introduces correlation IDs to join connect/test/workflow/job/webhook logs, and (3) adds explicit + implicit intent signals to classify mismatch into **Intent / Technical Failure / Unknown**.\n\n## Alternatives considered\n| Option | Why not chosen |\n|---|---|\n| Intent-first only | Faster, but leaves technical attribution ambiguous; still can\u2019t drive provider fixes confidently. |\n| Reliability-first remediation | High cost and high risk of low ROI if intent drop-off dominates; metrics remain noisy. |\n\n## Rationale\nThis is the smallest build that materially improves decision quality and creates a durable diagnostic layer. It directly addresses the known missing pieces (canonical workflow, joinability, validated windows, ownership loop) and enables targeted remediation once dominant buckets are proven.\n\n## Risks\n- **Misclassification due to async/long-running workflows:** Mitigate by measuring time-to-success distributions and using provider-specific windows.\n- **Correlation ID adoption gaps across services:** Mitigate with a minimal join path first (single \u201cactivation_trace_id\u201d propagated through the critical path) and a rollout checklist per service.\n- **Intent prompt adds friction:** Mitigate with optional/one-time prompt and A/B test; use passive intent signals as fallback.\n\n## Metrics\n- **Primary:** % of `test_passed` connections classified within 7 days into {Intent, Technical Failure, Unknown} with join confidence \u2265 X.\n- **Guardrails:** connect completion rate, test connection completion rate, time-to-first-run attempt, support ticket volume.\n\n## Revisit triggers\n- [ ] If after 4 weeks, \u226540% of mismatches remain **Unknown** due to join failures, prioritize correlation/logging hardening over UX changes.\n- [ ] If **Intent** accounts for \u226560% of mismatches, prioritize onboarding/activation nudges and de-prioritize provider reliability work.\n- [ ] If **Technical Failure** accounts for \u226540% and clusters in 1\u20132 providers, spin up provider-specific reliability epics immediately.\n\n---\n\n## Ranked recommendations\n\n1) **Attribution MVP (build now):** canonical first workflow definition per provider + correlation IDs + intent signals + classification job.  \n2) **Validated time windows:** compute provider-specific p50/p90/p99 time-to-success and set classification windows accordingly (replace arbitrary T).  \n3) **Ownership + triage loop:** weekly \u201cActivation Mismatch Review\u201d with clear SLA and escalation; create a top-bucket backlog that converts findings into fixes.\n\n---\n\n## Execution plan (next 2\u20134 weeks)\n\n### Slice 1 (Week 1\u20132): Define + instrument the minimum joinable funnel\n- **Define canonical \u201cfirst real workflow\u201d per provider**\n  - For each provider: specify *trigger/action*, *minimum payload*, *success criteria* (e.g., job completed, webhook acked, downstream side-effect confirmed).\n  - Output: a provider mapping table used by analytics + backend.\n- **Add a single correlation key:** `activation_trace_id`\n  - Generated at connect start; persisted on connection record.\n  - Emitted on: `connect_started`, `connect_succeeded`, `test_started`, `test_passed/failed`, `workflow_run_requested`, `job_started`, `job_succeeded/failed`, `webhook_received/acked`.\n- **Create an \u201cattempt\u201d event**\n  - Distinguish \u201cno attempt\u201d vs \u201cattempted but failed\u201d (critical for intent split).\n\n### Slice 2 (Week 2\u20133): Intent capture + classification\n- **Intent signals**\n  - Passive: visited workflow builder, selected template, created workflow draft, clicked \u201cRun\u201d, configured trigger, added required credentials/scopes.\n  - Active (lightweight): one-time prompt after connect/test: \u201cWhat are you trying to do next?\u201d with 3\u20135 options + \u201cjust exploring\u201d.\n- **Classifier (daily batch + dashboard)**\n  - Buckets (initial):\n    - **Intent: Exploring** (self-report or no attempt + no builder activity)\n    - **Intent: Deferred** (no attempt but has builder activity; \u201clater\u201d)\n    - **Technical: Attempted\u2192Failed** (attempt exists; failure in job/webhook)\n    - **Technical: Attempted\u2192Timed out** (attempt exists; no success within provider window)\n    - **Unknown** (missing join / missing terminal events)\n\n### Slice 3 (Week 3\u20134): Triage loop + first fixes pipeline\n- **Operating cadence**\n  - Weekly review: top providers by Technical mismatch, top reasons, and Unknown causes.\n  - Ownership:\n    - Product: intent/onboarding experiments\n    - Integrations Eng: provider mapping + SDK/connect/test path\n    - Platform/Backend: logging + correlation propagation\n    - Provider Ops: external incidents/escalations\n- **SLA**\n  - Unknown join gaps: fix within 1 sprint\n  - Top technical bucket per provider: root-cause within 5 business days; fix plan within 2 weeks\n\n---\n\n## Metrics (instrumentation + success)\n\n### Core funnel + attribution\n- `test_passed \u2192 run_attempted_rate (7d)`\n- `test_passed \u2192 first_real_workflow_success_rate (7d)`\n- **Mismatch rate:** `test_passed AND no first_real_workflow_success (T_provider)`\n- **Attribution split:** % of mismatches in {Intent, Technical, Unknown}\n\n### Time windows validation\n- Time-to-first-attempt (p50/p90/p99) by provider\n- Time-to-first-success (p50/p90/p99) by provider\n- % successes occurring after default 24h/72h (to detect misclassification)\n\n### Join quality\n- % events with `activation_trace_id`\n- % of connections with a complete trace (connect\u2192test\u2192attempt\u2192terminal)\n- Unknown rate due to missing join keys vs missing terminal events\n\n### Guardrails\n- Connect completion rate\n- Test connection completion rate\n- Support tickets per 100 connects\n- Provider error rate (if surfaced)\n\nIf you share (a) current event/log locations and (b) top 5 providers by volume, I can turn this into a concrete provider-by-provider \u201ccanonical first workflow\u201d table and an implementation checklist per service.",
+        "confidence": 0.8,
+        "done": true,
+        "rationale": "finish_reason=stop"
+      },
+      "tool_results": [],
+      "decision": {
+        "priority": "high",
+        "next_actions": [
+          "understand: run web-search, problem-statement, problem-framing-canvas, discovery-process",
+          "validate: run web-search, jobs-to-be-done, company-research, pol-probe",
+          "decide: run prioritization-advisor, product-strategy-session, opportunity-solution-tree",
+          "plan: run prd-development, user-story, roadmap-planning"
+        ],
+        "decision": "Proceed with phased discovery-to-delivery plan",
+        "objective_focus": [
+          "Improve user outcomes and experience"
+        ],
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "has_context": false
+      },
+      "reflection": {
+        "confidence": 0.75,
+        "requires_web_evidence": false,
+        "web_evidence_count": 0,
+        "subagent_count": 2,
+        "unmet_phases": [],
+        "learning": "Current context is sufficient for a provisional recommendation.",
+        "next_iteration_focus": "Refine plan details",
+        "action_result_summary": "Subagent (Research best practices / patterns for distinguishing user i): Subagent [External best practices: intent vs failure] started (id: 114ad7b3). I'll integrate results when ready.... Subagent (Define an ownership + triage operating model for integration): Subagent [Triage loop operating model] started (id: 1db30b71). I'll integrate results when ready....",
+        "risk_count": 1,
+        "objective_count": 1
+      }
     }
   ],
   "runs": [
@@ -21687,6 +21868,19 @@
         "done": true
       },
       "timestamp": "2026-02-23T19:05:29.237266+00:00"
+    },
+    {
+      "run_id": "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7",
+      "problem": "PM Agent mode: Given the problem below, decide what to build next.\nFollow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\nSpawn focused subagents for weak/unknown areas.\nOutput in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n\nProblem:\nNew problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n\nPrevious user feedback to incorporate:\n- Resonates: You\u2019re correctly treating \u201ctest connection\u201d as a *predictor* problem (not just a UX problem) and anchoring on a measurable mismatch rate between `test_passed` and first real workflow success.  \n- Resonates: The funnel milestones + segmentation callouts (provider/auth/region/client) are the right levers; the \u201cdrop-off \u2260 failure\u201d warning is important.  \n- Missing: A crisp definition of the *canonical \u201cfirst real workflow\u201d* per integration/provider (what action, what payload, what success criteria). Without this, mismatch rates won\u2019t be comparable across providers.  \n- Missing: A concrete plan for correlation IDs across test \u2192 workflow run \u2192 webhook/job logs (and where those logs live). \u201cEvent taxonomy\u201d alone won\u2019t solve root-cause attribution if systems can\u2019t be joined reliably.  \n- Missing: Thresholds/time windows feel arbitrary\u2014pick T based on observed workflow/job durations per provider (or start with 24h/72h but explicitly validate that these windows don\u2019t misclassify long-running async as failure).  \n- Missing: Ownership/triage loop: once you classify a dominant bucket, who debugs (product vs integrations eng vs provider ops), and what\u2019s the SLA to turn findings into fixes?  \n- New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n",
+      "iterations": 3,
+      "web_evidence_count": 0,
+      "drafted_skills": [],
+      "final_response": {
+        "content": "## Evidence brief (activation mismatch: intent vs technical failure)\n\n**Scope:** Decide what to build next to quantify how much `test_passed \u2192 no first real workflow success` is driven by *user intent/behavior* vs *true technical failure*, while addressing missing pieces: canonical \u201cfirst real workflow\u201d, correlation IDs, non-arbitrary windows, and an ownership loop.\n\n### What we know\n\n| Finding | Sources | Confidence |\n|---|---|---|\n| \u201cTest connection passed\u201d is a strong *predictor milestone* but not equivalent to \u201cintegration works end-to-end\u201d; mismatch rate between `test_passed` and first real workflow success is the right anchor metric. | Prior user feedback | High |\n| Drop-off after connect/test is not necessarily failure; \u201csilent drop-off\u201d can swamp signal and cause wrong remediation. | Prior user feedback | High |\n| To compare mismatch across providers, we need a canonical definition of \u201cfirst real workflow\u201d per provider (action + payload + success criteria). | Prior user feedback | High |\n| Event taxonomy alone is insufficient without reliable join keys across connect/test/workflow/job/webhook logs. | Prior user feedback | High |\n| Time windows (T) should be based on observed provider/job durations; start with 24h/72h only if explicitly validated against async/long-running behavior. | Prior user feedback | High |\n| We currently lack an explicit ownership/triage loop to turn dominant buckets into fixes with SLAs. | Prior user feedback | Medium |\n\n### Coverage\n- **Well-covered:** problem framing; why mismatch \u2260 failure; need for segmentation; need for canonical workflow + correlation IDs.\n- **Thin:** concrete implementation plan for (1) intent signals, (2) correlation IDs across systems, (3) canonical workflow mapping per provider, (4) validated time windows, (5) triage operating model.\n- **Missing:** actual baseline numbers (current mismatch rate by provider), distribution of time-to-first-success, and where logs live today.\n\n### Contradictions\n- None explicit yet; main risk is *misclassification* (async success after window looks like failure; or \u201cintent\u201d inferred incorrectly).\n\n### Open questions (would change the decision)\n- [ ] What % of `test_passed` connections ever attempt a workflow run event (any run attempt) within 7 days?\n- [ ] What is the p50/p90/p99 time-to-first-success per provider and per workflow type?\n- [ ] Can we reliably join connect/test/workflow/job/webhook today? If not, what\u2019s the minimal join path?\n- [ ] What are the top 3 \u201cI was just checking it out\u201d intent signals we can instrument quickly?\n\n**Recommendation:** Proceed with an instrumentation-first slice that (a) defines canonical first workflow per provider, (b) adds correlation IDs to join systems, and (c) adds explicit intent signals + a lightweight \u201cintent capture\u201d prompt\u2014*before* building remediation UX or reliability fixes.\n\n---\n\n## Options set (what to build next)\n\n### Option A \u2014 \u201cAttribution MVP\u201d (recommended): canonical workflow + correlation IDs + intent signals\n- **Summary:** Build the minimum instrumentation + definitions to classify mismatch into intent vs technical vs unknown with high joinability.\n- **Constraints:** Requires small cross-team changes (product analytics + integrations + backend logging).\n- **Tradeoffs:** Slower to ship user-facing fixes, but prevents building the wrong remediation and creates a durable diagnostic foundation.\n- **Second-order effects:** Enables provider scorecards, faster incident triage, and targeted onboarding experiments.\n\n### Option B \u2014 \u201cIntent-first\u201d only: add intent capture + behavioral heuristics without deep correlation\n- **Summary:** Add \u201cwhat are you trying to do?\u201d prompt + track run-attempt events; infer intent drop-off quickly.\n- **Constraints:** Works even if logs can\u2019t be joined well.\n- **Tradeoffs:** Faster, but technical failure attribution remains weak; you\u2019ll still argue about root cause and may mis-prioritize provider fixes.\n- **Second-order effects:** Risk of over-indexing on self-reported intent; may under-detect silent technical failures.\n\n### Option C \u2014 \u201cReliability-first\u201d only: treat mismatch as failure and build remediation + retries + better errors\n- **Summary:** Assume mismatch is mostly technical; invest in error surfacing, retries, and guided setup.\n- **Constraints:** Requires engineering time per provider; may be expensive.\n- **Tradeoffs:** Might improve real failures, but if intent drop-off dominates, ROI is low and metrics remain noisy.\n- **Second-order effects:** Could increase support load if you surface more errors without clear attribution.\n\n### Tradeoff matrix\n\n| Dimension | Option A | Option B | Option C |\n|---|---:|---:|---:|\n| Value (decision quality) | High | Medium | Low\u2013Medium |\n| Effort | Medium | Low | High |\n| Risk of wrong build | Low | Medium | High |\n| Time-to-learn | 2\u20134 weeks | 1\u20132 weeks | 4\u20138+ weeks |\n\n**Recommendation:** Option A, with a 2-week MVP slice that still produces an initial \u201cintent vs failure\u201d split.\n\n---\n\n## Decision record\n\n# Decision Record: Build an Attribution MVP to split intent drop-off vs technical failure\n\n**ID:** DEC-20260223-001  \n**Date:** 2026-02-23  \n**Owner:** Product (Integrations Activation)  \n**Status:** Proposed\n\n## Context\nWe see a mismatch between `test_passed` and first real workflow success. Without separating user intent/behavior drop-off from true technical failure, we risk building the wrong remediation and drowning in \u201csilent drop-off\u201d noise. Prior feedback highlights missing prerequisites: canonical \u201cfirst real workflow\u201d per provider, correlation IDs across systems, validated time windows, and a triage loop.\n\n## Decision\nWe will build an **Attribution MVP** that (1) defines and instruments a canonical \u201cfirst real workflow success\u201d per provider, (2) introduces correlation IDs to join connect/test/workflow/job/webhook logs, and (3) adds explicit + implicit intent signals to classify mismatch into **Intent / Technical Failure / Unknown**.\n\n## Alternatives considered\n| Option | Why not chosen |\n|---|---|\n| Intent-first only | Faster, but leaves technical attribution ambiguous; still can\u2019t drive provider fixes confidently. |\n| Reliability-first remediation | High cost and high risk of low ROI if intent drop-off dominates; metrics remain noisy. |\n\n## Rationale\nThis is the smallest build that materially improves decision quality and creates a durable diagnostic layer. It directly addresses the known missing pieces (canonical workflow, joinability, validated windows, ownership loop) and enables targeted remediation once dominant buckets are proven.\n\n## Risks\n- **Misclassification due to async/long-running workflows:** Mitigate by measuring time-to-success distributions and using provider-specific windows.\n- **Correlation ID adoption gaps across services:** Mitigate with a minimal join path first (single \u201cactivation_trace_id\u201d propagated through the critical path) and a rollout checklist per service.\n- **Intent prompt adds friction:** Mitigate with optional/one-time prompt and A/B test; use passive intent signals as fallback.\n\n## Metrics\n- **Primary:** % of `test_passed` connections classified within 7 days into {Intent, Technical Failure, Unknown} with join confidence \u2265 X.\n- **Guardrails:** connect completion rate, test connection completion rate, time-to-first-run attempt, support ticket volume.\n\n## Revisit triggers\n- [ ] If after 4 weeks, \u226540% of mismatches remain **Unknown** due to join failures, prioritize correlation/logging hardening over UX changes.\n- [ ] If **Intent** accounts for \u226560% of mismatches, prioritize onboarding/activation nudges and de-prioritize provider reliability work.\n- [ ] If **Technical Failure** accounts for \u226540% and clusters in 1\u20132 providers, spin up provider-specific reliability epics immediately.\n\n---\n\n## Ranked recommendations\n\n1) **Attribution MVP (build now):** canonical first workflow definition per provider + correlation IDs + intent signals + classification job.  \n2) **Validated time windows:** compute provider-specific p50/p90/p99 time-to-success and set classification windows accordingly (replace arbitrary T).  \n3) **Ownership + triage loop:** weekly \u201cActivation Mismatch Review\u201d with clear SLA and escalation; create a top-bucket backlog that converts findings into fixes.\n\n---\n\n## Execution plan (next 2\u20134 weeks)\n\n### Slice 1 (Week 1\u20132): Define + instrument the minimum joinable funnel\n- **Define canonical \u201cfirst real workflow\u201d per provider**\n  - For each provider: specify *trigger/action*, *minimum payload*, *success criteria* (e.g., job completed, webhook acked, downstream side-effect confirmed).\n  - Output: a provider mapping table used by analytics + backend.\n- **Add a single correlation key:** `activation_trace_id`\n  - Generated at connect start; persisted on connection record.\n  - Emitted on: `connect_started`, `connect_succeeded`, `test_started`, `test_passed/failed`, `workflow_run_requested`, `job_started`, `job_succeeded/failed`, `webhook_received/acked`.\n- **Create an \u201cattempt\u201d event**\n  - Distinguish \u201cno attempt\u201d vs \u201cattempted but failed\u201d (critical for intent split).\n\n### Slice 2 (Week 2\u20133): Intent capture + classification\n- **Intent signals**\n  - Passive: visited workflow builder, selected template, created workflow draft, clicked \u201cRun\u201d, configured trigger, added required credentials/scopes.\n  - Active (lightweight): one-time prompt after connect/test: \u201cWhat are you trying to do next?\u201d with 3\u20135 options + \u201cjust exploring\u201d.\n- **Classifier (daily batch + dashboard)**\n  - Buckets (initial):\n    - **Intent: Exploring** (self-report or no attempt + no builder activity)\n    - **Intent: Deferred** (no attempt but has builder activity; \u201clater\u201d)\n    - **Technical: Attempted\u2192Failed** (attempt exists; failure in job/webhook)\n    - **Technical: Attempted\u2192Timed out** (attempt exists; no success within provider window)\n    - **Unknown** (missing join / missing terminal events)\n\n### Slice 3 (Week 3\u20134): Triage loop + first fixes pipeline\n- **Operating cadence**\n  - Weekly review: top providers by Technical mismatch, top reasons, and Unknown causes.\n  - Ownership:\n    - Product: intent/onboarding experiments\n    - Integrations Eng: provider mapping + SDK/connect/test path\n    - Platform/Backend: logging + correlation propagation\n    - Provider Ops: external incidents/escalations\n- **SLA**\n  - Unknown join gaps: fix within 1 sprint\n  - Top technical bucket per provider: root-cause within 5 business days; fix plan within 2 weeks\n\n---\n\n## Metrics (instrumentation + success)\n\n### Core funnel + attribution\n- `test_passed \u2192 run_attempted_rate (7d)`\n- `test_passed \u2192 first_real_workflow_success_rate (7d)`\n- **Mismatch rate:** `test_passed AND no first_real_workflow_success (T_provider)`\n- **Attribution split:** % of mismatches in {Intent, Technical, Unknown}\n\n### Time windows validation\n- Time-to-first-attempt (p50/p90/p99) by provider\n- Time-to-first-success (p50/p90/p99) by provider\n- % successes occurring after default 24h/72h (to detect misclassification)\n\n### Join quality\n- % events with `activation_trace_id`\n- % of connections with a complete trace (connect\u2192test\u2192attempt\u2192terminal)\n- Unknown rate due to missing join keys vs missing terminal events\n\n### Guardrails\n- Connect completion rate\n- Test connection completion rate\n- Support tickets per 100 connects\n- Provider error rate (if surfaced)\n\nIf you share (a) current event/log locations and (b) top 5 providers by volume, I can turn this into a concrete provider-by-provider \u201ccanonical first workflow\u201d table and an implementation checklist per service.",
+        "confidence": 0.8,
+        "done": true
+      },
+      "timestamp": "2026-02-23T19:25:01.061855+00:00"
     }
   ]
 }

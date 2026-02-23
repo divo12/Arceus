@@ -51,6 +51,7 @@ class Controller:
         idea: str,
         loop_id: str = "pm_loop_default",
         max_cycles: int = 1,
+        run_forever: bool = False,
         simulate_feedback: bool = True,
         cooldown_seconds: int = 0,
         session_key: Optional[str] = None,
@@ -59,6 +60,7 @@ class Controller:
             idea=idea,
             loop_id=loop_id,
             max_cycles=max_cycles,
+            run_forever=run_forever,
             simulate_feedback=simulate_feedback,
             cooldown_seconds=cooldown_seconds,
             session_key=session_key,
@@ -129,6 +131,7 @@ class Controller:
                 idea=prompt,
                 loop_id="pm_loop_default",
                 max_cycles=1,
+                run_forever=self.loop.config.agents.pm_loop.single_run_infinite,
                 simulate_feedback=True,
             )
             content = json.dumps(

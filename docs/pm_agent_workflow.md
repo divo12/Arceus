@@ -46,6 +46,7 @@ Configured in `config/schema.py` under `agents.pm_loop`:
 
 - `enabled`
 - `max_cycles_per_run`
+- `single_run_infinite` (when true, one cron-triggered PM loop run continues indefinitely)
 - `cooldown_seconds`
 - `simulate_feedback`
 - `deduplicate_problems`

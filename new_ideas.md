@@ -91,3 +91,90 @@ Derived from PM cycle synthesis.
 
 ## Revisit trigg...
 ```
+
+## Update — 2026-02-23 19:25 UTC
+
+### PM Loop Cycle 6
+
+**Problem:** New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just “checking it out”) vs true technical failure—otherwise “silent drop-off” will swamp the signal and lead you to build the wrong remediation.
+
+#### Recommendation
+- Priority: 1
+- Confidence: 0.8
+- Rationale: ## Evidence brief (activation mismatch: intent vs technical failure)
+
+**Scope:** Decide what to build next to quantify how much `test_passed → no first real workflow success` is driven by *user intent/behavior* vs *true technical failure*, while addressing missing pieces: canonical “first real workflow”, correlation IDs, non-arbitrary windows, and an ownership loop.
+
+### What we know
+
+| Finding | Sources | Confidence |
+|---|---|---|
+| “Test connection passed” is a strong *predictor milestone* but not equivalent to “integration works end-to-end”; mismatch rate between `test_passed` and first re
+
+#### Execution Plan Summary
+## Evidence brief (activation mismatch: intent vs technical failure)
+
+**Scope:** Decide what to build next to quantify how much `test_passed → no first real workflow success` is driven by *user intent/behavior* vs *true technical failure*, while addressing missing pieces: canonical “first real workflow”, correlation IDs, non-arbitrary windows, and an ownership loop.
+
+### What we know
+
+| Finding | Sources | Confidence |
+|---|---|---|
+| “Test connection passed” is a strong *predictor milestone* but not equivalent to “integration works end-to-end”; mismatch rate between `test_passed` and first real workflow success is the right anchor metric. | Prior user feedback | High |
+| Drop-off after connect/test is not necessarily failure; “silent drop-off” can swamp signal and cause wrong remediation.
+
+#### Feedback Applied
+- Resonates: anchoring on `test_passed → no first real workflow success` as the right “activation mismatch” metric, and explicitly calling out that silent drop-off can swamp signal.  
+- Resonates: Option A (Attribution MVP) is the right sequencing; you’re prioritizing decision quality before remediation spend, and the “attempt vs no attempt” split is the key first cut.  
+- Resonates: insisting on canonical “first real workflow” per provider + correlation IDs; without joinability you’ll just create a prettier dashboard of ambiguity.  
+- Missing: a crisp definition of “attempt” (UI click? API call? job enqueued?) and how you’ll handle retries/multiple attempts per connection—this will materially change attribution counts.  
+- Missing: a concrete “minimal join path” proposal (which systems are source-of-truth, what’s the fallback if `activation_trace_id` is missing, and what % coverage is acceptable for MVP).  
+- Missing: how you’ll avoid intent-prompt bias/friction (sampling, timing, and what you’ll do if self-report conflicts with behavior).  
+- New problem to investigate next: quantify “false mismatch” caused by *measurement gaps* (missing terminal success events, delayed webhooks, cross-device/session breaks) vs real technical failure—otherwise “Unknown” will be your largest bucket and you still won’t know what to fix.
+
+#### Packet Ref
+- `data/packets/pm_loop_default/v6`
+
+#### Decision Record Snapshot
+```markdown
+# Decision Record: Cycle 6 decision
+
+**ID:** DEC-20260223-001
+**Date:** 2026-02-23
+**Owner:** 
+**Status:** Proposed
+
+## Context
+
+New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just “checking it out”) vs true technical failure—otherwise “silent drop-off” will swamp the signal and lead you to build the wrong remediation.
+
+## Decision
+
+## Evidence brief (activation mismatch: intent vs technical failure)
+
+**Scope:** Decide what to build next to quantify how much `test_passed → no first real workflow success` is driven by *user intent/behavior* vs *true technical failure*, while addressing missing pieces: canonical “first real workflow”, correlation IDs, non-arbitrary windows, and an ownership loop.
+
+### What we know
+
+| Finding | Sources | Confidence |
+|---|---|---|
+| “Test connection passed” is a strong *predictor milestone* bu
+
+## Alternatives considered
+
+| Option | Why not chosen |
+|--------|----------------|
+| Keep current approach | Baseline |
+
+## Rationale
+
+Derived from PM cycle synthesis.
+
+## Risks
+
+
+## Metrics
+
+- **Primary:** Outcome metric to be validated
+- **Guardr...
+```

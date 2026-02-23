@@ -2,13 +2,13 @@
   "loop_id": "pm_loop_default",
   "cycles_executed": 1,
   "remaining_queue": [
-    "New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation."
+    "New problem to investigate next: quantify \u201cfalse mismatch\u201d caused by *measurement gaps* (missing terminal success events, delayed webhooks, cross-device/session breaks) vs real technical failure\u2014otherwise \u201cUnknown\u201d will be your largest bucket and you still won\u2019t know what to fix."
   ],
   "last_decision": {
     "title": "Primary recommendation",
-    "rationale": "## evidence-brief\n\n**Scope:** Validate whether \u201ctest connection\u201d predicts first real workflow success; quantify mismatch rate and dominant root causes; define \u201cbreak\u201d; specify event taxonomy + qualitative capture.\n\n### What we know (from problem + feedback)\n| Finding | Sources | Confidence |\n|---|---|---|\n| \u201cTest connection\u201d may be a false positive: users pass test but fail on first real workflow due to scopes/permissions, webhook callbacks, or long-running jobs. | Problem statement | Medium |\n| The right funnel milestones are: attempted setup \u2192 test connection \u2192 first successful completion \u2192 ",
+    "rationale": "## Evidence brief (activation mismatch: intent vs technical failure)\n\n**Scope:** Decide what to build next to quantify how much `test_passed \u2192 no first real workflow success` is driven by *user intent/behavior* vs *true technical failure*, while addressing missing pieces: canonical \u201cfirst real workflow\u201d, correlation IDs, non-arbitrary windows, and an ownership loop.\n\n### What we know\n\n| Finding | Sources | Confidence |\n|---|---|---|\n| \u201cTest connection passed\u201d is a strong *predictor milestone* but not equivalent to \u201cintegration works end-to-end\u201d; mismatch rate between `test_passed` and first re",
     "confidence": 0.8,
     "priority": 1
   },
-  "updated_at": "2026-02-23T19:05:37.970396+00:00"
+  "updated_at": "2026-02-23T19:25:08.416639+00:00"
 }

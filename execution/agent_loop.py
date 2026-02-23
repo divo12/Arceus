@@ -623,6 +623,7 @@ class AgentLoop:
         idea: str,
         loop_id: str = "pm_loop_default",
         max_cycles: int = 1,
+        run_forever: bool = False,
         simulate_feedback: bool = True,
         cooldown_seconds: int = 0,
         session_key: Optional[str] = None,
@@ -642,6 +643,7 @@ class AgentLoop:
                 "report_path": "",
             }
 
+        run_forever = bool(run_forever or pm_cfg.single_run_infinite)
         max_cycles = max(1, min(max_cycles, max(1, int(pm_cfg.max_cycles_per_run))))
         simulate_feedback = bool(simulate_feedback and pm_cfg.simulate_feedback)
         cooldown_seconds = max(cooldown_seconds, int(pm_cfg.cooldown_seconds))
@@ -658,7 +660,21 @@ class AgentLoop:
         cycle_outputs: List[Dict[str, Any]] = []
 
         cycles_done = 0
-        while cycles_done < max_cycles and state.get("problem_queue"):
+        while run_forever or (cycles_done < max_cycles):
+            if not state.get("problem_queue"):
+                if not run_forever:
+                    break
+                # Keep loop alive when queue empties in infinite mode.
+                follow_up = ""
+                last_feedback = str(state.get("last_feedback", "")).strip()
+                if last_feedback:
+                    follow_up = f"Investigate follow-up from feedback: {last_feedback[:200]}"
+                elif state.get("processed_problems"):
+                    follow_up = str(state["processed_problems"][-1])
+                else:
+                    follow_up = idea
+                state["problem_queue"] = [follow_up]
+
             cycle_problem = state["problem_queue"].pop(0)
             run_prompt = self._build_pm_cycle_prompt(
                 problem=cycle_problem,
@@ -754,7 +770,7 @@ class AgentLoop:
                 properties={"loop_id": loop_id, "cycle": state["current_cycle"]},
             )
             cycles_done += 1
-            if cooldown_seconds > 0 and cycles_done < max_cycles:
+            if cooldown_seconds > 0 and (run_forever or cycles_done < max_cycles):
                 await asyncio.sleep(cooldown_seconds)
 
         report_path = self.workspace / "data" / "state" / "workflows" / f"{loop_id}_report.json"
@@ -966,6 +982,7 @@ class AgentLoop:
         idea: str,
         loop_id: str = "pm_loop_default",
         max_cycles: int = 1,
+        run_forever: bool = False,
         simulate_feedback: bool = True,
         cooldown_seconds: int = 0,
         session_key: Optional[str] = None,
@@ -975,6 +992,7 @@ class AgentLoop:
                 idea=idea,
                 loop_id=loop_id,
                 max_cycles=max_cycles,
+                run_forever=run_forever,
                 simulate_feedback=simulate_feedback,
                 cooldown_seconds=cooldown_seconds,
                 session_key=session_key,

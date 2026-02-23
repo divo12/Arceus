@@ -444,6 +444,7 @@ class TestCron(unittest.TestCase):
 
         provider = SequencedProvider([ProviderResponse(content="pm loop recommendation", done=True, confidence=0.8)])
         ctrl = Controller(self.workspace, provider=provider)
+        ctrl.loop.config.agents.pm_loop.single_run_infinite = False
         store_path = self.workspace / ".arceus" / "cron.json"
         svc = CronService(store_path=store_path, on_job=ctrl._on_cron_job)
         job = svc.add_job(
@@ -456,6 +457,34 @@ class TestCron(unittest.TestCase):
         out = asyncio.run(ctrl._on_cron_job(job))
         self.assertIsNotNone(out)
         self.assertIn("cycles_executed", out)
+
+    def test_controller_cron_pm_loop_respects_single_run_infinite_flag(self):
+        from cron.types import CronJob, CronPayload, CronSchedule, CronJobState
+
+        provider = SequencedProvider([ProviderResponse(content="ok", done=True)])
+        ctrl = Controller(self.workspace, provider=provider)
+        ctrl.loop.config.agents.pm_loop.single_run_infinite = True
+
+        captured: Dict[str, Any] = {}
+
+        async def fake_pm_loop(**kwargs: Any) -> Dict[str, Any]:
+            captured.update(kwargs)
+            return {"loop_id": "pm_loop_default", "cycles_executed": 1, "state": {"problem_queue": []}}
+
+        ctrl.loop.run_pm_loop = fake_pm_loop  # type: ignore[assignment]
+        job = CronJob(
+            id="jobtest01",
+            name="PM loop",
+            enabled=True,
+            schedule=CronSchedule(kind="every", every_ms=60_000),
+            payload=CronPayload(kind="pm_loop", message="test idea"),
+            state=CronJobState(next_run_at_ms=0),
+            created_at_ms=0,
+            updated_at_ms=0,
+        )
+        out = asyncio.run(ctrl._on_cron_job(job))
+        self.assertIsNotNone(out)
+        self.assertTrue(captured.get("run_forever"))
 
 
 class TestSession(unittest.TestCase):

@@ -2396,6 +2396,15 @@
       ],
       "created_at": "2026-02-23T19:04:37.318036+00:00",
       "updated_at": "2026-02-23T19:04:37.318040+00:00"
+    },
+    "debf853ac2a3629f": {
+      "initial": "PM Agent mode: Given the problem below, decide what to build next.\nFollow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\nSpawn focused subagents for weak/unknown areas.\nOutput in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n\nProblem:\nNew problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n\nPrevious user feedback to incorporate:\n- Resonates: You\u2019re correctly treating \u201ctest connection\u201d as a *predictor* problem (not just a UX problem) and anchoring on a measurable mismatch rate between `test_passed` and first real workflow success.  \n- Resonates: The funnel milestones + segmentation callouts (provider/auth/region/client) are the right levers; the \u201cdrop-off \u2260 failure\u201d warning is important.  \n- Missing: A crisp definition of the *canonical \u201cfirst real workflow\u201d* per integration/provider (what action, what payload, what success criteria). Without this, mismatch rates won\u2019t be comparable across providers.  \n- Missing: A concrete plan for correlation IDs across test \u2192 workflow run \u2192 webhook/job logs (and where those logs live). \u201cEvent taxonomy\u201d alone won\u2019t solve root-cause attribution if systems can\u2019t be joined reliably.  \n- Missing: Thresholds/time windows feel arbitrary\u2014pick T based on observed workflow/job durations per provider (or start with 24h/72h but explicitly validate that these windows don\u2019t misclassify long-running async as failure).  \n- Missing: Ownership/triage loop: once you classify a dominant bucket, who debugs (product vs integrations eng vs provider ops), and what\u2019s the SLA to turn findings into fixes?  \n- New problem to investigate next: quantify how much mismatch is caused by *user intent/behavior* (they never intended to run a workflow after connecting, or were just \u201cchecking it out\u201d) vs true technical failure\u2014otherwise \u201csilent drop-off\u201d will swamp the signal and lead you to build the wrong remediation.\n",
+      "improvements": [],
+      "run_ids": [
+        "7b9287bf-fa77-4a00-8505-0bb51ebc4fb7"
+      ],
+      "created_at": "2026-02-23T19:23:52.315047+00:00",
+      "updated_at": "2026-02-23T19:23:52.315059+00:00"
     }
   }
 }
