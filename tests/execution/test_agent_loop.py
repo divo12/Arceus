@@ -170,6 +170,36 @@ class TestAgentLoop(unittest.TestCase):
         finally:
             shutil.rmtree(empty_workspace, ignore_errors=True)
 
+    def test_pm_loop_single_cycle_output_contract(self):
+        provider = SequencedProvider([ProviderResponse(content="Build onboarding checklist first.", done=True, confidence=0.9)])
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=2)
+        result = loop.run_pm_loop_sync(
+            idea="Improve onboarding activation",
+            loop_id="pm_loop_test_single",
+            max_cycles=1,
+            simulate_feedback=False,
+        )
+        self.assertEqual(result["cycles_executed"], 1)
+        self.assertGreaterEqual(len(result["outputs"]), 1)
+        output = result["outputs"][0]
+        self.assertIn("ranked_recommendations", output)
+        self.assertIn("decision_record", output)
+        self.assertIn("execution_plan", output)
+        self.assertIn("packet_ref", output)
+
+    def test_pm_loop_derives_next_problem_from_feedback(self):
+        provider = SequencedProvider([ProviderResponse(content="Need retention follow-up after onboarding changes.", done=True, confidence=0.8)])
+        loop = AgentLoop(self.workspace, provider=provider, max_iterations=2)
+        result = loop.run_pm_loop_sync(
+            idea="Improve onboarding activation",
+            loop_id="pm_loop_test_feedback",
+            max_cycles=1,
+            simulate_feedback=True,
+        )
+        queue = result["state"].get("problem_queue", [])
+        self.assertGreaterEqual(len(queue), 1)
+        self.assertTrue(any(isinstance(x, str) and len(x) > 0 for x in queue))
+
 
 class TestHeartbeat(unittest.TestCase):
     """Heartbeat service tests (nanobot concept)."""
@@ -316,6 +346,25 @@ class TestCron(unittest.TestCase):
         loop = AgentLoop(self.workspace, provider=provider, config=config, max_iterations=2)
         result = loop.run_sync("Test problem")
         self.assertEqual(result["final"]["done"], True)
+
+    def test_controller_cron_pm_loop_kind_runs(self):
+        from cron.service import CronService
+        from cron.types import CronSchedule
+
+        provider = SequencedProvider([ProviderResponse(content="pm loop recommendation", done=True, confidence=0.8)])
+        ctrl = Controller(self.workspace, provider=provider)
+        store_path = self.workspace / ".arceus" / "cron.json"
+        svc = CronService(store_path=store_path, on_job=ctrl._on_cron_job)
+        job = svc.add_job(
+            name="PM loop test",
+            schedule=CronSchedule(kind="every", every_ms=60_000),
+            message="PM loop idea test",
+            payload_kind="pm_loop",
+        )
+
+        out = asyncio.run(ctrl._on_cron_job(job))
+        self.assertIsNotNone(out)
+        self.assertIn("cycles_executed", out)
 
 
 class TestSession(unittest.TestCase):

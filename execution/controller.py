@@ -66,6 +66,18 @@ class Controller:
 
     async def _on_heartbeat(self, prompt: str) -> str:
         """Callback for heartbeat: run agent with extra iterations for relentless task execution."""
+        if prompt.strip().lower().startswith("pm_loop:"):
+            idea = prompt.split(":", 1)[1].strip() or "PM loop heartbeat task"
+            loop_result = await self.loop.run_pm_loop(
+                idea=idea,
+                loop_id="pm_loop_heartbeat",
+                max_cycles=1,
+                simulate_feedback=True,
+            )
+            return (
+                f"PM_LOOP_OK cycles={loop_result.get('cycles_executed')} "
+                f"remaining={len(loop_result.get('state', {}).get('problem_queue', []))}"
+            )
         result = await self.loop.run(
             problem_description=prompt,
             max_iterations=12,

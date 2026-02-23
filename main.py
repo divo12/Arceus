@@ -11,6 +11,7 @@ Usage:
   uv run python main.py onboard                  # Create .arceus/config.json, sessions/, skills/
   uv run python main.py --no-cron               # Run gateway without cron
   uv run python main.py "your problem"          # Run single problem
+  uv run python main.py pm-next "your idea"     # Run PM continuous loop mode
 """
 
 import argparse
@@ -133,6 +134,16 @@ def run_chat(
             print("Bye.")
             break
 
+        # PM loop chat command: pm-next <idea>
+        if user_input.lower().startswith("pm-next "):
+            idea = user_input[len("pm-next ") :].strip()
+            result = ctrl.run_pm_problem(idea=idea, loop_id="pm_loop_chat", max_cycles=1)
+            print(
+                f"\nArceus:\nPM loop cycles={result.get('cycles_executed')} "
+                f"remaining_queue={len(result.get('state', {}).get('problem_queue', []))}\n"
+            )
+            continue
+
         stream_callback = None
         if stream:
             if use_markdown:
@@ -186,6 +197,7 @@ def main() -> None:
     parser.add_argument("--session", default="console:default", help="Session key for chat (default: console:default)")
     parser.add_argument("--no-markdown", action="store_true", help="Plain text output in chat (no Markdown rendering)")
     parser.add_argument("--no-stream", action="store_true", help="Disable token streaming in chat (wait for full response)")
+    parser.add_argument("--pm-cycles", type=int, default=1, help="PM loop cycles for pm-next mode")
     args = parser.parse_args()
 
     if args.problem and args.problem[0].lower() == "chat":
@@ -200,6 +212,25 @@ def main() -> None:
         return
     if args.problem and args.problem[0].lower() == "onboard":
         run_onboard()
+        return
+    if args.problem and args.problem[0].lower() == "pm-next":
+        from execution.controller import Controller
+
+        ctrl = Controller(ROOT)
+        idea = " ".join(args.problem[1:]).strip()
+        if not idea:
+            print("Error: provide an idea, e.g. `uv run python main.py pm-next \"Improve onboarding\"`")
+            return
+        result = ctrl.run_pm_problem(
+            idea=idea,
+            loop_id="pm_loop_main",
+            max_cycles=max(1, args.pm_cycles),
+            simulate_feedback=True,
+        )
+        print(
+            f"PM loop complete. cycles={result.get('cycles_executed')} "
+            f"remaining_queue={len(result.get('state', {}).get('problem_queue', []))}"
+        )
         return
 
     from execution.controller import Controller

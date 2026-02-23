@@ -21,10 +21,22 @@ class AgentDefaults(Base):
     max_tokens: int = 8192
 
 
+class PMLoopConfig(Base):
+    """Continuous PM loop governance settings."""
+
+    enabled: bool = True
+    max_cycles_per_run: int = 1
+    cooldown_seconds: int = 0
+    simulate_feedback: bool = True
+    deduplicate_problems: bool = True
+    kill_switch: bool = False
+
+
 class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    pm_loop: PMLoopConfig = Field(default_factory=PMLoopConfig)
 
 
 class AzureProviderConfig(Base):

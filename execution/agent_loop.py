@@ -546,6 +546,20 @@ class AgentLoop:
 
         Runs one or more PM cycles and persists resumable state under data/state/workflows.
         """
+        pm_cfg = self.config.agents.pm_loop
+        if pm_cfg.kill_switch or not pm_cfg.enabled:
+            return {
+                "loop_id": loop_id,
+                "cycles_executed": 0,
+                "state": {"disabled": True, "reason": "pm_loop disabled or kill_switch set"},
+                "outputs": [],
+                "report_path": "",
+            }
+
+        max_cycles = max(1, min(max_cycles, max(1, int(pm_cfg.max_cycles_per_run))))
+        simulate_feedback = bool(simulate_feedback and pm_cfg.simulate_feedback)
+        cooldown_seconds = max(cooldown_seconds, int(pm_cfg.cooldown_seconds))
+
         state = self._load_pm_state(loop_id)
         if not state.get("problem_queue"):
             state["problem_queue"] = [idea]
@@ -594,7 +608,7 @@ class AgentLoop:
                 processed=list(state.get("processed_problems", [])),
             )
             for p in next_problems:
-                if p not in state["problem_queue"]:
+                if not pm_cfg.deduplicate_problems or p not in state["problem_queue"]:
                     state["problem_queue"].append(p)
                     track_event(
                         workspace=self.workspace,

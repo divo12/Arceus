@@ -38,6 +38,15 @@ Implementation of agent-surfaced ideas from `pm_ideas/new_ideas.md` and `new_ide
 - Claims link to `evidence_chunk_ids` and `decision_id`
 - Packet export (`packets/`) cites decisions and sources; `sources.json` manifest
 
+### 6. PM continuous loop mode
+
+- **Core runtime:** `execution/agent_loop.py` (`run_pm_loop`, `run_pm_loop_sync`)
+- **Controller integration:** `execution/controller.py` (`run_pm_problem`, cron dispatch kind `pm_loop`)
+- **Cron support:** `cron/types.py` + `scripts/run_gateway.py --pm-loop`
+- **Feedback loop:** synthetic feedback generation + next-problem derivation
+- **State persistence:** `data/state/workflows/<loop_id>.json`
+- **Report:** `data/state/workflows/<loop_id>_report.json`
+
 ## Not yet implemented
 
 - Change propagation engine (impacted artifacts + diffs)

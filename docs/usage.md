@@ -12,6 +12,7 @@
 | `main.py status` | Config path, provider, cron, sessions |
 | `main.py onboard` | Create .arceus/config.json, sessions/, skills/ |
 | `main.py "problem"` | Run single problem |
+| `main.py pm-next "idea"` | Run PM loop mode |
 
 ## Prerequisites
 
@@ -85,6 +86,26 @@ uv run python scripts/arceus_artifacts.py --kind options_set --input input.json
 ```
 
 Supported kinds: `decision_record`, `evidence_brief`, `options_set`. See `examples/artifact_input_decision_record.json` for input format.
+
+## PM loop (continuous PM agent)
+
+Run one PM cycle from CLI:
+
+```bash
+uv run python main.py pm-next "Improve onboarding activation"
+```
+
+Run PM loop via gateway CLI:
+
+```bash
+uv run python scripts/run_gateway.py pm_loop --idea "Improve onboarding activation" --max-cycles 2
+```
+
+Schedule PM loop in cron:
+
+```bash
+uv run python scripts/run_gateway.py add --pm-loop --every 900
+```
 
 ## Evidence store + claims ledger
 
