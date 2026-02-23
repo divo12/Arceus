@@ -984,10 +984,30 @@
         "dc4c2d44-4fea-4b2b-82b3-646ab7e23eae",
         "48c64c49-3f28-4cb8-ba69-e71ea8231d28",
         "4d444c08-920d-4369-81de-b3102ca924fe",
-        "8d7898dc-d681-4a31-a1d3-c55eabfa3060"
+        "8d7898dc-d681-4a31-a1d3-c55eabfa3060",
+        "50b98c81-78c7-4333-ba01-6a2020bbf670",
+        "5483829b-b680-4e82-836a-dab8aa5e568b",
+        "7636d4a8-1347-42e0-8886-077b6598612f",
+        "fcebefa5-ab9a-4027-997c-a4983c26021a",
+        "263d4ddf-f120-421d-8421-63bad5a314d6",
+        "f6159508-4de9-4681-bb4a-850d14f64d10",
+        "bd3cd552-9234-491b-9e2c-4ed524682344",
+        "82099899-bcb9-48d4-91f6-2c2b20422fc4",
+        "cc1f10e9-db47-4d1c-8b64-0680e19d8b6f",
+        "39002edb-9afa-4b07-83b9-fb7773765a7e",
+        "b37c1663-4978-4690-ac60-66d1ce6f5381",
+        "1c2969c7-972f-479c-8924-54a8defd9d3f",
+        "58742106-9e68-4f5a-8b95-4edbc31855d0",
+        "187ef1f1-18c8-452f-a992-cecd25d82968",
+        "ce53e3d7-9e9e-405b-b3ee-2686cb95f692",
+        "cc6c70d0-0447-4225-a5a7-1d3c2636c806",
+        "f4f52acf-a57c-4686-a807-4207631f1740",
+        "38c39de1-d20f-4dd2-866b-9a057d33f774",
+        "06735a08-84c0-4747-a65e-a918885e6850",
+        "761e9cd1-4ac4-4921-8f11-a5857d42f3bb"
       ],
       "created_at": "2026-02-22T19:25:43.340457+00:00",
-      "updated_at": "2026-02-23T17:00:06.708074+00:00"
+      "updated_at": "2026-02-23T17:15:58.727896+00:00"
     },
     "635ac8df17c17429": {
       "initial": "**Problem:** This project is designing Cursor for product managers \u2014 a tool that tells what to build next.\n\n\n## Arceus: High-Level Overview (for agent context)\n\n**What Arceus is:** An iterative PM agent that, given a problem, thinks about what to build, gathers feedback (tools, web, subagents), and refines its plan. It is essentially \"Cursor for product managers\" \u2014 a tool that tells what to build next.\n\n**Core flow:** Problem \u2192 Evidence \u2192 Options \u2192 Decision \u2192 Plan\n\n**Architecture:**\n- **ReACT-style loop:** context \u2192 cognition \u2192 provider \u2192 tools \u2192 feedback \u2192 iterate\n- **PM cognition:** interpret \u2192 reason \u2192 plan \u2192 decide \u2192 reflect (with web evidence and subagent results)\n- **Three-tier skills:** Essential (survival), Workspace (PM), Open (tool-level)\n- **Subagents:** Main agent can spawn focused subagents via `spawn` tool (validation, research); feedback/learnings/new_angle are integrated each iteration\n- **Gateway:** Heartbeat (HEARTBEAT.md tasks) + Cron (.arceus/cron.json) for 24/7 operation\n\n**Key dirs:** agents/ (identity, context, skills, tools), cognition/ (plan/decide/reflect), execution/ (agent_loop, controller, subagent_manager), skills/ (essential, workspace_skills, open_skills), pm_ideas/ (ideas sweep \u2192 PM_IDEAS.md / new_ideas.md)\n\n\n**Your task:** Explore what to build next for Arceus. Spawn multiple subagents to validate ideas (JTBD, PoL, prioritization), research trends, and surface gaps. Integrate their feedback, learnings, and new angles into your thinking.\n\n**Your skills:**\n- **Spawn subagent:** Use spawn to delegate focused validation (e.g. jobs-to-be-done, prioritization-advisor) or research. Pass skill_names to constrain. Result returns directly for you to integrate.\n- **Web search:** web_search (Google Custom Search) and web_fetch (scraper). Use searx_search if web_search returns 422.\n- **Support agent:** query_support_agent for \"what's missing in workspace skills\" or \"what tools could help our PM\".\n\n**Search for:**\n- Product ideas for AI PM agents (Cursor-for-PMs angle)\n- What to build next for problem-to-build workflows\n- Features that would improve PM agent tooling\n\n**Output:** Create new_ideas.md with:\n1. New ideas surfaced (from you + subagents)\n2. Gaps in workspace_skills to add\n3. Tools/capabilities to implement\n4. Actionable todo list with checkboxes (- [ ])\n\nFormat: markdown with header and date. Use write_file to save new_ideas.md.\n",
@@ -1413,10 +1433,13 @@
         "59604fdd-95a8-4b4e-b9d4-1e60dfb4dc92",
         "92a8b993-baad-4c30-82f0-259d7a361e30",
         "5112ea39-9d50-4404-9aee-9f8f3d643298",
-        "849e7ae8-0870-4a10-b46a-56dcf1df458b"
+        "849e7ae8-0870-4a10-b46a-56dcf1df458b",
+        "5f9b3211-a767-43e5-b87d-4c97740c0808",
+        "e448f815-ca29-40d4-b4cb-111e60cdb8a2",
+        "b87d7802-ad56-41f6-a076-f64bc90c721a"
       ],
       "created_at": "2026-02-22T19:29:13.704056+00:00",
-      "updated_at": "2026-02-23T16:57:52.363460+00:00"
+      "updated_at": "2026-02-23T17:12:53.344779+00:00"
     },
     "d77c6342500a9492": {
       "initial": "**Problem:** This project is designing Cursor for product managers \u2014 a tool that tells what to build next.\n\n\n## Arceus: High-Level Overview (for agent context)\n\n**What Arceus is:** An iterative PM agent that, given a problem, thinks about what to build, gathers feedback (tools, web, subagents), and refines its plan. It is essentially \"Cursor for product managers\" \u2014 a tool that tells what to build next.\n\n**Core flow:** Problem \u2192 Evidence \u2192 Options \u2192 Decision \u2192 Plan\n\n**Architecture:**\n- **ReACT-style loop:** context \u2192 cognition \u2192 provider \u2192 tools \u2192 feedback \u2192 iterate\n- **PM cognition:** interpret \u2192 reason \u2192 plan \u2192 decide \u2192 reflect (with web evidence and subagent results)\n- **Three-tier skills:** Essential (survival), Workspace (PM), Open (tool-level)\n- **Subagents:** Main agent can spawn focused subagents via `spawn` tool (validation, research); feedback/learnings/new_angle are integrated each iteration\n- **Gateway:** Heartbeat (HEARTBEAT.md tasks) + Cron (.arceus/cron.json) for 24/7 operation\n\n**Key dirs:** agents/ (identity, context, skills, tools), cognition/ (plan/decide/reflect), execution/ (agent_loop, controller, subagent_manager), skills/ (essential, workspace_skills, open_skills), pm_ideas/ (ideas sweep \u2192 PM_IDEAS.md / new_ideas.md)\n\n\n**Your task:** Explore what to build next for Arceus. Spawn multiple subagents to validate ideas (JTBD, PoL, prioritization), research trends, and surface gaps. Integrate their feedback, learnings, and new angles into your thinking.\nSpawn at least 2 subagents for each run and incorporate their outputs before finalizing.\n\n**Your skills:**\n- **Spawn subagent:** Use spawn to delegate focused validation (e.g. jobs-to-be-done, prioritization-advisor) or research. Pass skill_names to constrain. Result returns directly for you to integrate.\n- **Web search:** web_search (Google Custom Search) and web_fetch (scraper). Use searx_search if web_search returns 422.\n- **Support agent:** query_support_agent for \"what's missing in workspace skills\" or \"what tools could help our PM\".\n\n**Search for:**\n- Product ideas for AI PM agents (Cursor-for-PMs angle)\n- What to build next for problem-to-build workflows\n- Features that would improve PM agent tooling\n\n**Output:** Update new_ideas.md with:\n1. New ideas surfaced (from you + subagents)\n2. Gaps in workspace_skills to add\n3. Tools/capabilities to implement\n4. Actionable todo list with checkboxes (- [ ])\n\nCRITICAL: Never delete or replace existing new_ideas.md content. Only append a new timestamped section at the end.\nFormat: markdown with header and date. Use write_file to append to new_ideas.md.\n",
@@ -1947,10 +1970,18 @@
         "a516d501-b3fb-4c2e-bc79-fc67b212c731",
         "25a77ed9-21fa-4514-b8b1-8c77ef1dc830",
         "694608b5-cfbb-4bf0-9ad9-39d07d37dc17",
-        "b7611c45-b77a-4382-8087-c25a639ba6d8"
+        "b7611c45-b77a-4382-8087-c25a639ba6d8",
+        "8c0218e6-cc53-4aa1-9825-113694e2d5f3",
+        "e6ee1f1d-390b-423b-abd5-30659add9521",
+        "b75b948a-b36d-4c38-b993-63827544b02e",
+        "f1eb236e-a5a2-4b40-8d30-6dde9b6c645e",
+        "69ff5a77-f688-4e41-a3b5-0cd10d7f7f1b",
+        "f9ce36a7-a531-4b5c-8b18-f1b0ee20972d",
+        "2bfa2d75-d7dd-42d1-831c-1a5a907f85c8",
+        "83c486a4-b44c-4848-945c-469dc2b8be33"
       ],
       "created_at": "2026-02-22T19:48:49.016162+00:00",
-      "updated_at": "2026-02-23T17:00:09.030734+00:00"
+      "updated_at": "2026-02-23T17:15:39.827570+00:00"
     },
     "8d5fe4d4caad985e": {
       "initial": "PM Ideas Sweep: Search the web for product ideas, trends, and what-to-build-next.\n\nThis project: Given a Problem, the agent uses PM knowledge and skills to solve it and tell what to build next.\n\n**Your skills:**\n- **Spawn subagent**: Use spawn to delegate focused validation (e.g. JTBD framework, PoL) or research. Pass skill_names to constrain (e.g. [\"jobs-to-be-done\"]). Result returns directly for you to integrate.\n- **Web search**: Use web_search (Google Custom Search) and web_fetch (scraper). If web_search returns 422 or \"not configured\", use searx_search instead.\n- **Support agent**: Call query_support_agent when you need \"where to learn more\" or \"what's missing in our workspace skills\" or \"what tools could help our PM\". The support agent has workspace PM skills context and will point you to relevant skills and gaps.\n\n**Search for:**\n- Product ideas for AI PM agents\n- Trends in product management tools\n- What to build next (product discovery, prioritization, roadmapping)\n- Features that would improve problem-to-build workflows\n\n**Then create PM_IDEAS.md** with:\n1. Gaps: What's not in our workspace_skills that we should add\n2. Tools: What tools we could implement to help the PM agent\n3. Learning: Where to learn more (from support agent)\n4. Todo list: Actionable items with checkboxes (- [ ])\n\nFormat: markdown with header and date. Use write_file to save PM_IDEAS.md.\n",

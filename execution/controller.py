@@ -1,6 +1,7 @@
 """Controller entrypoint for running the PM agent loop."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -45,6 +46,24 @@ class Controller:
             stream_callback=stream_callback,
         )
 
+    def run_pm_problem(
+        self,
+        idea: str,
+        loop_id: str = "pm_loop_default",
+        max_cycles: int = 1,
+        simulate_feedback: bool = True,
+        cooldown_seconds: int = 0,
+        session_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.loop.run_pm_loop_sync(
+            idea=idea,
+            loop_id=loop_id,
+            max_cycles=max_cycles,
+            simulate_feedback=simulate_feedback,
+            cooldown_seconds=cooldown_seconds,
+            session_key=session_key,
+        )
+
     async def _on_heartbeat(self, prompt: str) -> str:
         """Callback for heartbeat: run agent with extra iterations for relentless task execution."""
         result = await self.loop.run(
@@ -71,6 +90,22 @@ class Controller:
 
             content = await run_new_ideas_sweep_with_loop_async(self.workspace, self.loop)
             _raise_if_error(content)
+            return content
+        if kind == "pm_loop":
+            prompt = job.payload.message or "PM loop: decide what to build next"
+            loop_result = await self.loop.run_pm_loop(
+                idea=prompt,
+                loop_id="pm_loop_default",
+                max_cycles=1,
+                simulate_feedback=True,
+            )
+            content = json.dumps(
+                {
+                    "loop_id": loop_result.get("loop_id"),
+                    "cycles_executed": loop_result.get("cycles_executed"),
+                    "remaining_queue": len(loop_result.get("state", {}).get("problem_queue", [])),
+                }
+            )
             return content
         prompt = job.payload.message or job.name
         result = await self.loop.run(problem_description=prompt)

@@ -21,6 +21,14 @@ from cognition.cognitive_loop import CognitiveLoop
 from cognition.memory.memory_manager import MemoryManager
 from cognition.memory.problem_memory import ProblemMemory
 from config import Config, load_config
+from artifacts.renderer import (
+    render_decision_record,
+    render_evidence_brief,
+    render_options_set,
+)
+from observability.events import track_event
+from packets.service import write_packet_bundle
+from packets.types import DecisionItem, SourceItem
 from providers.adapter import ProviderAdapter, ProviderResponse, ToolCall
 from providers.azure_openai_provider import AzureOpenAIProvider
 from session.manager import SessionManager
@@ -154,6 +162,7 @@ class AgentLoop:
         max_iterations: Optional[int] = None,
         session_key: Optional[str] = None,
         stream_callback: Optional[Any] = None,
+        skill_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         run_id = str(uuid4())
         context = context or {}
@@ -176,7 +185,7 @@ class AgentLoop:
             messages = self.context_builder.build_messages(
                 history=history,
                 current_message=problem_description,
-                skill_names=None,
+                skill_names=skill_names,
             )
 
             self.problem_memory.record_initial(problem_description, run_id=run_id)
@@ -328,6 +337,306 @@ class AgentLoop:
                 "final": run_summary["final_response"],
                 "memory_snapshot": self.memory.get_memory_snapshot(),
             }
+
+    def _pm_state_path(self, loop_id: str) -> Path:
+        state_dir = self.workspace / "data" / "state" / "workflows"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return state_dir / f"{loop_id}.json"
+
+    def _load_pm_state(self, loop_id: str) -> Dict[str, Any]:
+        path = self._pm_state_path(loop_id)
+        if not path.exists():
+            return {
+                "loop_id": loop_id,
+                "current_cycle": 0,
+                "problem_queue": [],
+                "processed_problems": [],
+                "last_feedback": {},
+                "last_decision": {},
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {
+                "loop_id": loop_id,
+                "current_cycle": 0,
+                "problem_queue": [],
+                "processed_problems": [],
+                "last_feedback": {},
+                "last_decision": {},
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+    def _save_pm_state(self, state: Dict[str, Any]) -> None:
+        loop_id = str(state.get("loop_id", "pm_loop_default"))
+        path = self._pm_state_path(loop_id)
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+    async def _simulate_feedback(
+        self,
+        *,
+        cycle_problem: str,
+        final_content: str,
+        run_id: str,
+    ) -> str:
+        """Generate synthetic user feedback using one extra LLM call."""
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a critical but constructive PM stakeholder. "
+                    "Given an idea and a recommendation, provide concise user feedback "
+                    "that includes: what resonates, what is missing, and one new problem "
+                    "to investigate next."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Idea/problem:\n{cycle_problem}\n\n"
+                    f"Recommendation output:\n{final_content}\n\n"
+                    "Return plain text feedback in 4-8 bullet points."
+                ),
+            },
+        ]
+        resp = await self.provider.complete(
+            messages=messages,
+            tool_schemas=[],
+            iteration=1,
+            runtime_context={"mode": "pm_feedback_simulation", "run_id": run_id},
+        )
+        feedback = (resp.content or "").strip()
+        if not feedback:
+            feedback = (
+                "- Recommendation is directionally useful.\n"
+                "- Need stronger confidence and metric guardrails.\n"
+                "- Missing edge-case handling details.\n"
+                "- New problem to investigate: post-onboarding retention drop."
+            )
+        track_event(
+            workspace=self.workspace,
+            name="pm_feedback_generated",
+            properties={"run_id": run_id},
+        )
+        return feedback
+
+    def _derive_next_problems(
+        self,
+        *,
+        current_problem: str,
+        feedback: str,
+        processed: List[str],
+        max_new: int = 2,
+    ) -> List[str]:
+        """Derive next-problem candidates from feedback with simple dedup."""
+        candidates: List[str] = []
+        for line in (feedback or "").splitlines():
+            text = line.strip(" -\t")
+            if not text:
+                continue
+            if "new problem" in text.lower() or "investigate" in text.lower():
+                candidates.append(text)
+        if not candidates and feedback.strip():
+            candidates.append(f"Investigate follow-up from feedback: {feedback[:160]}")
+        deduped: List[str] = []
+        seen = set(x.strip().lower() for x in processed + [current_problem])
+        for c in candidates:
+            key = c.strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(c)
+            if len(deduped) >= max_new:
+                break
+        return deduped
+
+    def _build_pm_cycle_prompt(
+        self,
+        *,
+        problem: str,
+        previous_feedback: str = "",
+    ) -> str:
+        feedback_block = (
+            f"\n\nPrevious user feedback to incorporate:\n{previous_feedback}\n"
+            if previous_feedback.strip()
+            else ""
+        )
+        return (
+            "PM Agent mode: Given the problem below, decide what to build next.\n"
+            "Follow this sequence explicitly: evidence-brief -> options-set-generator -> decision-record.\n"
+            "Spawn focused subagents for weak/unknown areas.\n"
+            "Output in sections: Ranked recommendations, Decision record summary, Execution plan, Metrics.\n"
+            f"\nProblem:\n{problem}{feedback_block}"
+        )
+
+    def _build_pm_output(
+        self,
+        *,
+        problem: str,
+        run_result: Dict[str, Any],
+        feedback: str,
+        loop_id: str,
+        cycle: int,
+    ) -> Dict[str, Any]:
+        final_content = run_result.get("final", {}).get("content", "")
+        confidence = float(run_result.get("final", {}).get("confidence", 0.5) or 0.5)
+        rec = {
+            "title": "Primary recommendation",
+            "rationale": final_content[:600] if final_content else "No rationale generated.",
+            "confidence": confidence,
+            "priority": 1,
+        }
+        decision_payload = {
+            "title": f"Cycle {cycle} decision",
+            "context": problem,
+            "decision": final_content[:500] if final_content else "No decision content.",
+            "alternatives": [{"option": "Keep current approach", "reason": "Baseline"}],
+            "rationale": "Derived from PM cycle synthesis.",
+            "metrics": {"primary": "Outcome metric to be validated", "guardrails": "No regressions"},
+            "revisit_triggers": ["If outcome metric does not improve within target window"],
+        }
+        decision_record = render_decision_record(decision_payload)
+        evidence_brief = render_evidence_brief({"topic": problem, "recommendation": final_content})
+        options_set = render_options_set({"title": f"Options for {problem}", "recommendation": "Use ranked #1"})
+        decision_id = f"DEC-{cycle:03d}"
+        packet_dir = write_packet_bundle(
+            workspace=self.workspace,
+            packet_id=f"{loop_id}",
+            decisions=[
+                DecisionItem(
+                    id=decision_id,
+                    title=f"Cycle {cycle} recommendation",
+                    decidedAt=datetime.now(timezone.utc).isoformat(),
+                    owner="pm-agent",
+                    evidenceIds=[],
+                )
+            ],
+            sources=[SourceItem(id=f"SRC-{cycle:03d}", type="link", uri="https://arceus.local/pm-loop")],
+            exported_by="pm-agent",
+            export_scope="team",
+            export_reason="pm_loop_cycle",
+        )
+        packet_ref = str(packet_dir.relative_to(self.workspace))
+        return {
+            "ranked_recommendations": [rec],
+            "decision_record": decision_record,
+            "execution_plan": {
+                "summary": final_content[:800],
+                "evidence_brief": evidence_brief,
+                "options_set": options_set,
+            },
+            "feedback": feedback,
+            "packet_ref": packet_ref,
+        }
+
+    async def run_pm_loop(
+        self,
+        *,
+        idea: str,
+        loop_id: str = "pm_loop_default",
+        max_cycles: int = 1,
+        simulate_feedback: bool = True,
+        cooldown_seconds: int = 0,
+        session_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        PM continuous loop mode.
+
+        Runs one or more PM cycles and persists resumable state under data/state/workflows.
+        """
+        state = self._load_pm_state(loop_id)
+        if not state.get("problem_queue"):
+            state["problem_queue"] = [idea]
+        track_event(
+            workspace=self.workspace,
+            name="pm_workflow_started",
+            properties={"loop_id": loop_id, "max_cycles": max_cycles},
+        )
+        cycle_outputs: List[Dict[str, Any]] = []
+
+        cycles_done = 0
+        while cycles_done < max_cycles and state.get("problem_queue"):
+            cycle_problem = state["problem_queue"].pop(0)
+            run_prompt = self._build_pm_cycle_prompt(
+                problem=cycle_problem,
+                previous_feedback=str(state.get("last_feedback", "")),
+            )
+            run_result = await self.run(
+                problem_description=run_prompt,
+                session_key=session_key,
+                skill_names=["evidence-brief", "options-set-generator", "decision-record"],
+            )
+            run_id = str(run_result.get("run_id", ""))
+            final_content = str(run_result.get("final", {}).get("content", ""))
+            if simulate_feedback:
+                feedback = await self._simulate_feedback(
+                    cycle_problem=cycle_problem,
+                    final_content=final_content,
+                    run_id=run_id,
+                )
+            else:
+                feedback = ""
+
+            output = self._build_pm_output(
+                problem=cycle_problem,
+                run_result=run_result,
+                feedback=feedback,
+                loop_id=loop_id,
+                cycle=int(state.get("current_cycle", 0)) + 1,
+            )
+            cycle_outputs.append(output)
+
+            next_problems = self._derive_next_problems(
+                current_problem=cycle_problem,
+                feedback=feedback,
+                processed=list(state.get("processed_problems", [])),
+            )
+            for p in next_problems:
+                if p not in state["problem_queue"]:
+                    state["problem_queue"].append(p)
+                    track_event(
+                        workspace=self.workspace,
+                        name="pm_next_problem_derived",
+                        properties={"loop_id": loop_id, "problem": p[:200]},
+                    )
+
+            state["current_cycle"] = int(state.get("current_cycle", 0)) + 1
+            state.setdefault("processed_problems", []).append(cycle_problem)
+            state["last_feedback"] = feedback
+            state["last_decision"] = output.get("ranked_recommendations", [{}])[0]
+            self._save_pm_state(state)
+            track_event(
+                workspace=self.workspace,
+                name="pm_cycle_completed",
+                properties={"loop_id": loop_id, "cycle": state["current_cycle"]},
+            )
+            cycles_done += 1
+            if cooldown_seconds > 0 and cycles_done < max_cycles:
+                await asyncio.sleep(cooldown_seconds)
+
+        report_path = self.workspace / "data" / "state" / "workflows" / f"{loop_id}_report.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "loop_id": loop_id,
+                    "cycles_executed": cycles_done,
+                    "remaining_queue": state.get("problem_queue", []),
+                    "last_decision": state.get("last_decision", {}),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "loop_id": loop_id,
+            "cycles_executed": cycles_done,
+            "state": state,
+            "outputs": cycle_outputs,
+            "report_path": str(report_path),
+        }
 
     def _merge_subagent_results(
         self,
@@ -496,6 +805,7 @@ class AgentLoop:
         max_iterations: Optional[int] = None,
         session_key: Optional[str] = None,
         stream_callback: Optional[Any] = None,
+        skill_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Synchronous wrapper used by scripts/tests."""
         return asyncio.run(
@@ -505,5 +815,27 @@ class AgentLoop:
                 max_iterations,
                 session_key,
                 stream_callback,
+                skill_names,
+            )
+        )
+
+    def run_pm_loop_sync(
+        self,
+        *,
+        idea: str,
+        loop_id: str = "pm_loop_default",
+        max_cycles: int = 1,
+        simulate_feedback: bool = True,
+        cooldown_seconds: int = 0,
+        session_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return asyncio.run(
+            self.run_pm_loop(
+                idea=idea,
+                loop_id=loop_id,
+                max_cycles=max_cycles,
+                simulate_feedback=simulate_feedback,
+                cooldown_seconds=cooldown_seconds,
+                session_key=session_key,
             )
         )

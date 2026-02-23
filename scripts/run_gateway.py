@@ -6,10 +6,12 @@ Usage:
   uv run python scripts/run_gateway.py add --message "Break time!" --every 1200
   uv run python scripts/run_gateway.py add --new-ideas --cron "0 9 * * *"   # Cursor for PMs → new_ideas.md
   uv run python scripts/run_gateway.py add --ideas --cron "0 9 * * *"       # PM ideas → PM_IDEAS.md
+  uv run python scripts/run_gateway.py add --pm-loop --every 900            # PM loop continuous cycle
   uv run python scripts/run_gateway.py list
   uv run python scripts/run_gateway.py remove <job_id>
   uv run python scripts/run_gateway.py new_ideas   # Run new ideas sweep once
   uv run python scripts/run_gateway.py ideas       # Run PM ideas sweep once
+  uv run python scripts/run_gateway.py pm_loop     # Run PM loop once
   uv run python scripts/run_gateway.py run [--heartbeat-interval 1800] [--no-heartbeat] [--no-cron]
 """
 
@@ -45,8 +47,8 @@ def _add(args):
         print("Error: specify --every, --cron, or --at")
         sys.exit(1)
 
-    if not args.ideas and not args.new_ideas and not args.message:
-        print("Error: specify --message, --ideas, or --new-ideas")
+    if not args.ideas and not args.new_ideas and not args.pm_loop and not args.message:
+        print("Error: specify --message, --ideas, --new-ideas, or --pm-loop")
         sys.exit(1)
 
     payload_kind = "agent_turn"
@@ -60,6 +62,10 @@ def _add(args):
         payload_kind = "new_ideas"
         name = "New ideas (Cursor for PMs)"
         message = "New ideas sweep: Cursor for product managers — what to build next"
+    elif args.pm_loop:
+        payload_kind = "pm_loop"
+        name = "PM loop (continuous)"
+        message = "PM loop: iterate problem->evidence->options->decision->plan->feedback"
 
     job = svc.add_job(
         name=name,
@@ -116,6 +122,25 @@ def _new_ideas(args):
     print("Done. Check new_ideas.md")
 
 
+def _pm_loop(args):
+    """Run PM loop once with one or more cycles."""
+    from execution.controller import Controller
+
+    ctrl = Controller(ROOT)
+    result = ctrl.run_pm_problem(
+        idea=args.idea,
+        loop_id=args.loop_id,
+        max_cycles=args.max_cycles,
+        simulate_feedback=not args.no_sim_feedback,
+        cooldown_seconds=args.cooldown_seconds,
+    )
+    print(
+        f"PM loop done. loop_id={result.get('loop_id')} "
+        f"cycles={result.get('cycles_executed')} "
+        f"remaining_queue={len(result.get('state', {}).get('problem_queue', []))}"
+    )
+
+
 def _run(args):
     from execution.controller import Controller
 
@@ -144,6 +169,7 @@ def main():
     add_p.add_argument("--at", help="One-time ISO datetime (e.g. 2026-02-21T10:00:00)")
     add_p.add_argument("--ideas", action="store_true", help="PM ideas sweep → PM_IDEAS.md")
     add_p.add_argument("--new-ideas", action="store_true", help="New ideas sweep (Cursor for PMs) → new_ideas.md")
+    add_p.add_argument("--pm-loop", action="store_true", help="PM loop cycle job")
     add_p.set_defaults(func=_add)
 
     list_p = sub.add_parser("list", help="List cron jobs")
@@ -161,6 +187,14 @@ def main():
     new_ideas_p = sub.add_parser("new_ideas", help="Run new ideas sweep once (new_ideas.md, Cursor for PMs)")
     new_ideas_p.add_argument("--max-iterations", type=int, default=12)
     new_ideas_p.set_defaults(func=_new_ideas)
+
+    pm_loop_p = sub.add_parser("pm_loop", help="Run PM loop once (continuous PM cycle engine)")
+    pm_loop_p.add_argument("--idea", required=True, help="Initial idea/problem for PM loop")
+    pm_loop_p.add_argument("--loop-id", default="pm_loop_default", help="Persistent PM loop id")
+    pm_loop_p.add_argument("--max-cycles", type=int, default=1, help="Number of cycles to run this invocation")
+    pm_loop_p.add_argument("--cooldown-seconds", type=int, default=0, help="Sleep between cycles")
+    pm_loop_p.add_argument("--no-sim-feedback", action="store_true", help="Disable synthetic feedback generation")
+    pm_loop_p.set_defaults(func=_pm_loop)
 
     run_p = sub.add_parser("run", help="Run gateway (heartbeat + cron)")
     run_p.add_argument("--heartbeat-interval", type=int, default=30 * 60, help="Heartbeat interval (seconds)")
