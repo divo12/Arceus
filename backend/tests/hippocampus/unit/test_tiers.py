@@ -5,7 +5,7 @@ import pytest
 
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
-from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
@@ -33,7 +33,7 @@ async def test_working_memory_load_append_get_and_clear() -> None:
 @pytest.mark.asyncio
 async def test_static_memory_add_and_search() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     memory = StaticMemory(
         agent_id="agent-1",
         vector_store=vector_store,
@@ -58,7 +58,7 @@ async def test_static_memory_add_and_search() -> None:
 @pytest.mark.asyncio
 async def test_dynamic_memory_filters_decayed_memories() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     memory = DynamicMemory(
         agent_id="agent-1",
         vector_store=vector_store,

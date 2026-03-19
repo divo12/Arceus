@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import replace
+from dataclasses import fields, replace
 
 from arceus.core.hippocampus.types import GraphEntity, GraphRelationship, RelationType
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
@@ -9,6 +9,8 @@ from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 class InMemoryGraphStoreBackend:
     """In-process graph backend used for tests and local MVP development."""
+
+    _VALID_NODE_FIELDS = {field.name for field in fields(GraphEntity)}
 
     def __init__(self) -> None:
         self._nodes: dict[str, GraphEntity] = {}
@@ -25,6 +27,9 @@ class InMemoryGraphStoreBackend:
         existing = self._nodes.get(node_id)
         if existing is None:
             return
+        invalid = set(updates) - self._VALID_NODE_FIELDS
+        if invalid:
+            raise ValueError(f"Invalid GraphEntity fields: {invalid}")
         self._nodes[node_id] = replace(existing, **updates)
 
     async def create_edge(self, rel: GraphRelationship) -> str:

@@ -71,7 +71,7 @@ class MemoryExtractor:
                 case MemoryAction.UPDATE:
                     await self._update_memory(action[1], fact, agent_id, container)
                 case MemoryAction.DELETE:
-                    await self._soft_delete(action[1], reason=action[2] or fact.text)
+                    await self._hippocampus.soft_delete(action[1], reason=action[2] or fact.text)
                 case MemoryAction.NONE:
                     pass
 
@@ -141,14 +141,8 @@ class MemoryExtractor:
         if fact.is_permanent or fact.memory_type is MemoryType.STATIC:
             return await self._hippocampus.static_memory.update(target_id, fact.text)
 
-        await self._soft_delete(target_id, reason=f"updated: {fact.text}")
+        await self._hippocampus.soft_delete(target_id, reason=f"updated: {fact.text}")
         return await self._add_to_tier(fact, agent_id=agent_id, container=container)
-
-    async def _soft_delete(self, memory_id: str, reason: str) -> None:
-        vector_store = getattr(self._hippocampus, "_vector_store", None)
-        if vector_store is None:
-            return
-        await vector_store.soft_delete(memory_id, reason=reason)
 
     async def _update_graph(self, fact: ExtractedFact, container: str) -> None:
         for entity_name in fact.entities:

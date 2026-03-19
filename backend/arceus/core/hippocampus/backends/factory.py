@@ -6,7 +6,7 @@ from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, GraphSto
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
-from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.config import HippocampusConfig
 
@@ -43,7 +43,7 @@ def create_embedding_engine(
     dimensions: int,
 ) -> EmbeddingEngine:
     if backend == "simple":
-        return SimpleEmbeddingEngine(dimensions=dimensions)
+        return MockEmbeddingEngine(dimensions=dimensions)
     if backend == "all-MiniLM-L6-v2":
         return SentenceTransformerEmbeddingEngine(model_name=backend)
     raise ValueError(f"Unsupported embedding backend: {backend}")

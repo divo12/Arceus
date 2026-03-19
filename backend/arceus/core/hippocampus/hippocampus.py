@@ -111,6 +111,9 @@ class Hippocampus:
     async def close(self) -> None:
         await self._relational_store.close()
 
+    async def soft_delete(self, memory_id: str, reason: str = "") -> None:
+        await self._vector_store.soft_delete(memory_id, reason=reason)
+
     async def remember(
         self,
         content: str,

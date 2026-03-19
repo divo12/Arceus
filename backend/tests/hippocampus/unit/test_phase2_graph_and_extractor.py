@@ -6,7 +6,7 @@ import pytest
 
 from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
-from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.engines.extractor import MemoryExtractor
 from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
@@ -80,7 +80,7 @@ class FakeHippocampus:
         dynamic_memory: DynamicMemory,
         graph_store: GraphStore,
         vector_store: InMemoryVectorStore,
-        embedding_engine: SimpleEmbeddingEngine,
+        embedding_engine: MockEmbeddingEngine,
         procedural_memory: RecordingProceduralMemory | None = None,
     ) -> None:
         self.static_memory = static_memory
@@ -106,6 +106,9 @@ class FakeHippocampus:
             top_k=top_k,
         )
 
+    async def soft_delete(self, memory_id: str, reason: str = "") -> None:
+        await self._vector_store.soft_delete(memory_id, reason=reason)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -121,7 +124,7 @@ async def test_memory_extractor_uses_correct_prompt_by_mode(
     expected_fragment: str,
 ) -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_store = GraphStore(InMemoryGraphStoreBackend(), embedding)
     hippocampus = FakeHippocampus(
         static_memory=StaticMemory("agent-1", vector_store, embedding, graph_store),
@@ -148,7 +151,7 @@ async def test_memory_extractor_uses_correct_prompt_by_mode(
 @pytest.mark.asyncio
 async def test_graph_store_creates_edges_by_name_and_tracks_version_history() -> None:
     backend = InMemoryGraphStoreBackend()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_store = GraphStore(backend, embedding)
     container = "startup:1:emp:e1"
 
@@ -198,7 +201,7 @@ async def test_graph_store_creates_edges_by_name_and_tracks_version_history() ->
 @pytest.mark.asyncio
 async def test_static_memory_update_creates_new_version_and_updates_edge() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_backend = InMemoryGraphStoreBackend()
     graph_store = GraphStore(graph_backend, embedding)
     memory = StaticMemory("agent-1", vector_store, embedding, graph_store)
@@ -225,7 +228,7 @@ async def test_static_memory_update_creates_new_version_and_updates_edge() -> No
 @pytest.mark.asyncio
 async def test_memory_extractor_adds_memory_and_graph_relationships() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_backend = InMemoryGraphStoreBackend()
     graph_store = GraphStore(graph_backend, embedding)
     hippocampus = FakeHippocampus(
@@ -269,7 +272,7 @@ async def test_memory_extractor_adds_memory_and_graph_relationships() -> None:
 @pytest.mark.asyncio
 async def test_memory_extractor_versions_existing_static_memory_on_update() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_backend = InMemoryGraphStoreBackend()
     graph_store = GraphStore(graph_backend, embedding)
     static_memory = StaticMemory("agent-1", vector_store, embedding, graph_store)
@@ -330,7 +333,7 @@ async def test_memory_extractor_versions_existing_static_memory_on_update() -> N
 @pytest.mark.asyncio
 async def test_memory_extractor_invalid_action_defaults_to_none() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_store = GraphStore(InMemoryGraphStoreBackend(), embedding)
     static_memory = StaticMemory("agent-1", vector_store, embedding, graph_store)
     await static_memory.add(
@@ -379,7 +382,7 @@ async def test_memory_extractor_invalid_action_defaults_to_none() -> None:
 @pytest.mark.asyncio
 async def test_memory_extractor_falls_back_when_procedural_memory_is_unavailable() -> None:
     vector_store = InMemoryVectorStore()
-    embedding = SimpleEmbeddingEngine(dimensions=32)
+    embedding = MockEmbeddingEngine(dimensions=32)
     graph_store = GraphStore(InMemoryGraphStoreBackend(), embedding)
     hippocampus = FakeHippocampus(
         static_memory=StaticMemory("agent-1", vector_store, embedding, graph_store),

@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 
+logger = logging.getLogger(__name__)
 
-class SimpleEmbeddingEngine:
-    """Deterministic local embedding fallback for implementable Phase 0/1 work."""
+
+class MockEmbeddingEngine:
+    """Hash-based deterministic embedding for tests only.
+
+    NOT suitable for production — produces non-semantic vectors.
+    """
 
     def __init__(self, dimensions: int = 384) -> None:
+        logger.warning("MockEmbeddingEngine is not suitable for production use")
         self._dimensions = dimensions
 
     async def embed(self, text: str) -> list[float]:

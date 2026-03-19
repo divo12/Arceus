@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
-from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class SentenceTransformerEmbeddingEngine:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
         self._model_name = model_name
         self._model: Any | None = None
-        self._fallback = SimpleEmbeddingEngine(dimensions=384)
+        self._fallback = MockEmbeddingEngine(dimensions=384)
         self._lock = asyncio.Lock()
 
     async def embed(self, text: str) -> list[float]:

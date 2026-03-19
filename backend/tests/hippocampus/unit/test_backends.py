@@ -5,14 +5,15 @@ import pytest
 
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
 from arceus.core.hippocampus.backends.factory import create_embedding_engine, create_graph_store
+from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
-from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.config import HippocampusConfig
-from arceus.core.hippocampus.types import Habit, HabitFormation, MemoryType, MemoryUnit
+from arceus.core.hippocampus.types import GraphEntity, Habit, HabitFormation, MemoryType, MemoryUnit
 
 
 @pytest.mark.asyncio
@@ -155,7 +156,7 @@ def test_embedding_factory_distinguishes_simple_and_sentence_transformer_backend
     simple = create_embedding_engine("simple", dimensions=32)
     sentence_model = create_embedding_engine("all-MiniLM-L6-v2", dimensions=384)
 
-    assert isinstance(simple, SimpleEmbeddingEngine)
+    assert isinstance(simple, MockEmbeddingEngine)
     assert isinstance(sentence_model, SentenceTransformerEmbeddingEngine)
 
 
@@ -196,7 +197,7 @@ async def test_sentence_transformer_embedding_engine_logs_warning_and_falls_back
             raise RuntimeError(f"cannot load {model_name}")
 
     engine = SentenceTransformerEmbeddingEngine(model_name="all-MiniLM-L6-v2")
-    fallback = SimpleEmbeddingEngine(dimensions=384)
+    fallback = MockEmbeddingEngine(dimensions=384)
 
     class FakeSentenceTransformersModule:
         SentenceTransformer = BrokenSentenceTransformer
@@ -215,3 +216,21 @@ def test_graph_store_factory_requires_explicit_in_memory_backend_for_now() -> No
 
     with pytest.raises(ValueError, match="Neo4j backend not yet implemented"):
         create_graph_store("neo4j", config)
+
+
+def test_mock_embedding_engine_logs_production_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        engine = MockEmbeddingEngine(dimensions=32)
+
+    assert engine is not None
+    assert "not suitable for production use" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_in_memory_graph_backend_rejects_unknown_update_fields() -> None:
+    backend = InMemoryGraphStoreBackend()
+    node = GraphEntity(name="JWT", entity_type="technology", embedding=[1.0], container="scope")
+    await backend.create_node(node)
+
+    with pytest.raises(ValueError, match="Invalid GraphEntity fields"):
+        await backend.update_node(node.id, {"unknown_field": 123})

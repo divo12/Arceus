@@ -7,15 +7,15 @@ from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
-from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 
 __all__ = [
     "DictCacheStore",
     "InMemoryGraphStoreBackend",
     "InMemoryVectorStore",
+    "MockEmbeddingEngine",
     "NoopLLMEngine",
     "SentenceTransformerEmbeddingEngine",
-    "SimpleEmbeddingEngine",
     "SQLiteRelationalStore",
 ]

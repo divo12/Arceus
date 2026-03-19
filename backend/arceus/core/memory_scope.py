@@ -3,6 +3,12 @@ from __future__ import annotations
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import MemoryType, MemoryUnit
 
+_MEMORY_PRIORITY = {
+    MemoryType.STATIC: 3,
+    MemoryType.DYNAMIC: 2,
+    MemoryType.WORKING: 1,
+}
+
 
 class ArceusMemoryScope:
     """Arceus adapter for canonical Hippocampus container naming and retrieval."""
@@ -50,19 +56,16 @@ class ArceusMemoryScope:
 
     def _deduplicate_by_priority(self, results: list[MemoryUnit]) -> list[MemoryUnit]:
         seen: dict[str, MemoryUnit] = {}
-        priority = {
-            MemoryType.STATIC: 3,
-            MemoryType.DYNAMIC: 2,
-            MemoryType.WORKING: 1,
-        }
 
         for memory in results:
-            key = memory.content[:120]
-            existing = seen.get(key)
+            existing = seen.get(memory.id)
             if existing is None:
-                seen[key] = memory
+                seen[memory.id] = memory
                 continue
-            if priority.get(memory.memory_type, 0) > priority.get(existing.memory_type, 0):
-                seen[key] = memory
+            if _MEMORY_PRIORITY.get(memory.memory_type, 0) > _MEMORY_PRIORITY.get(
+                existing.memory_type,
+                0,
+            ):
+                seen[memory.id] = memory
 
         return list(seen.values())
