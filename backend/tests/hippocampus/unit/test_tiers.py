@@ -1,0 +1,110 @@
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
+from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
+from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
+from arceus.core.hippocampus.tiers.static import StaticMemory
+from arceus.core.hippocampus.tiers.working import WorkingMemory
+from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit
+
+
+@pytest.mark.asyncio
+async def test_working_memory_load_append_get_and_clear() -> None:
+    store = DictCacheStore()
+    memory = WorkingMemory(agent_id="agent-1", backend=store)
+
+    await memory.load_task_context("task-1", {"goal": "build auth"})
+    await memory.append_conversation("task-1", {"role": "assistant", "content": "Working on it"})
+
+    context = await memory.get_current_context("task-1")
+    assert context["task"] == {"goal": "build auth"}
+    assert context["conversation"] == [{"role": "assistant", "content": "Working on it"}]
+    assert context["scratchpad"] is None
+
+    await memory.clear_task("task-1")
+    cleared = await memory.get_current_context("task-1")
+    assert cleared == {"task": None, "conversation": None, "scratchpad": None}
+
+
+@pytest.mark.asyncio
+async def test_static_memory_add_and_search() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = SimpleEmbeddingEngine(dimensions=32)
+    memory = StaticMemory(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        embedding_engine=embedding,
+    )
+
+    await memory.add(
+        ExtractedFact(
+            text="We use JWT for authentication",
+            memory_type=MemoryType.STATIC,
+            confidence=0.95,
+            is_permanent=True,
+        ),
+        container="startup:1:emp:e1",
+    )
+
+    results = await memory.search("JWT authentication", "startup:1:emp:e1", top_k=3)
+    assert len(results) == 1
+    assert results[0].memory_type is MemoryType.STATIC
+
+
+@pytest.mark.asyncio
+async def test_dynamic_memory_filters_decayed_memories() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = SimpleEmbeddingEngine(dimensions=32)
+    memory = DynamicMemory(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        embedding_engine=embedding,
+        half_life_days=30.0,
+        decay_threshold=0.1,
+    )
+
+    fresh = await memory.add(
+        ExtractedFact(
+            text="Auth bug is happening in staging",
+            memory_type=MemoryType.DYNAMIC,
+            confidence=0.8,
+        ),
+        container="startup:1:emp:e1",
+    )
+
+    stale_embedding = await embedding.embed("Old auth issue that no longer matters")
+    stale = MemoryUnit(
+        agent_id="agent-1",
+        startup_id="startup-1",
+        content="Old auth issue that no longer matters",
+        embedding=stale_embedding,
+        memory_type=MemoryType.DYNAMIC,
+        confidence=0.7,
+        relevance_score=1.0,
+        container="startup:1:emp:e1",
+        created_at=datetime.now(UTC) - timedelta(days=200),
+        updated_at=datetime.now(UTC) - timedelta(days=200),
+    )
+    await vector_store.upsert(stale)
+
+    results = await memory.search("auth issue", "startup:1:emp:e1", top_k=5)
+    assert [item.id for item in results] == [fresh.id]
+
+    recent = await memory.get_recent("startup:1:emp:e1", days=7)
+    assert [item.id for item in recent] == [fresh.id]
+    assert fresh.created_at.tzinfo is not None
+
+    decayed = await memory.find_decayed()
+    assert [item.id for item in decayed] == [stale.id]
+
+    expired_candidate = replace(
+        fresh,
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    await vector_store.upsert(expired_candidate)
+    expired = await memory.find_expired()
+    assert [item.id for item in expired] == [fresh.id]
