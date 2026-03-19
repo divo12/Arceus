@@ -16,6 +16,11 @@ class GraphStore:
         self._backend = backend
         self._embedding = embedding_engine
 
+    async def close(self) -> None:
+        close = getattr(self._backend, "close", None)
+        if close is not None:
+            await close()
+
     async def find_similar_node(
         self,
         embedding: list[float],
@@ -124,6 +129,12 @@ class GraphStore:
 
     async def get_version_history(self, memory_id: str) -> list[GraphEntity]:
         return await self._backend.cypher_query(
-            "MATCH (n)-[:UPDATES*]->(root) WHERE n.id = $id RETURN root ORDER BY root.created_at",
+            """
+            MATCH path = (n)-[:UPDATES*0..]->(root)
+            WHERE n.id = $id
+            UNWIND nodes(path) AS version
+            RETURN DISTINCT version
+            ORDER BY version.created_at
+            """,
             {"id": memory_id},
         )

@@ -9,6 +9,10 @@ class HippocampusConfig:
     cache_backend: str = "dict"
     relational_backend: str = "sqlite"
     sqlite_path: str = "hippocampus.db"
+    neo4j_uri: str = ""
+    neo4j_username: str = ""
+    neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
 
     # Memory tuning
     dynamic_memory_half_life_days: float = 30.0
@@ -38,7 +42,7 @@ class HippocampusConfig:
 
     # Extraction
     extraction_frequency: str = "per_task_and_meeting"
-    extraction_model: str = "gpt-4o"
+    extraction_model: str = "gpt-4.1"
 
     # Embeddings
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -48,9 +52,9 @@ class HippocampusConfig:
     # Azure OpenAI
     azure_openai_endpoint: str = ""
     azure_openai_api_version: str = "2024-12-01-preview"
-    azure_openai_deployment_reasoning: str = "gpt-4o"
-    azure_openai_deployment_lightweight: str = "gpt-4o-mini"
+    azure_openai_deployment_reasoning: str = "gpt-4.1"
+    azure_openai_deployment_lightweight: str = "gpt-4.1-mini"
 
     # LLM
-    reasoning_model: str = "gpt-4o"
-    lightweight_model: str = "gpt-4o-mini"
+    reasoning_model: str = "gpt-4.1"
+    lightweight_model: str = "gpt-4.1-mini"

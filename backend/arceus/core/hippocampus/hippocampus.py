@@ -67,8 +67,8 @@ class Hippocampus:
             config.embedding_model,
             config.embedding_dimensions,
         )
-        llm_engine = create_llm_engine(config.extraction_model)
-        llm_light = create_llm_engine(config.lightweight_model)
+        llm_engine = create_llm_engine(config.extraction_model, config)
+        llm_light = create_llm_engine(config.lightweight_model, config)
 
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
         graph_store = GraphStore(graph_backend, embedding_engine)
@@ -109,6 +109,7 @@ class Hippocampus:
         return instance
 
     async def close(self) -> None:
+        await self.graph_store.close()
         await self._relational_store.close()
 
     async def soft_delete(self, memory_id: str, reason: str = "") -> None:

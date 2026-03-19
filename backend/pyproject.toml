@@ -20,6 +20,7 @@ dependencies = [
     "sse-starlette>=2.2",
     "python-multipart>=0.0.18",
     "openai>=2.29.0",
+    "neo4j>=5.28.2",
     "python-dotenv>=1.2.2",
 ]
 

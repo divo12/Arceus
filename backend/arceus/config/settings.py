@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     azure_openai_api_key: str = ""
     azure_openai_api_version: str = "2025-03-01-preview"
 
+    # Neo4j
+    neo4j_uri: str = ""
+    neo4j_username: str = ""
+    neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
+
     # Model deployments
     model_ceo: str = "gpt-5"
     model_employee: str = "gpt-4.1-mini"

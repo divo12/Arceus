@@ -76,10 +76,10 @@ def test_phase0_config_contains_spec_fields_with_expected_defaults() -> None:
     assert config.embedding_device == "cpu"
     assert config.azure_openai_endpoint == ""
     assert config.azure_openai_api_version == "2024-12-01-preview"
-    assert config.azure_openai_deployment_reasoning == "gpt-4o"
-    assert config.azure_openai_deployment_lightweight == "gpt-4o-mini"
-    assert config.reasoning_model == "gpt-4o"
-    assert config.lightweight_model == "gpt-4o-mini"
+    assert config.azure_openai_deployment_reasoning == "gpt-4.1"
+    assert config.azure_openai_deployment_lightweight == "gpt-4.1-mini"
+    assert config.reasoning_model == "gpt-4.1"
+    assert config.lightweight_model == "gpt-4.1-mini"
 
 
 def test_phase0_dataclasses_exist_with_expected_fields() -> None:

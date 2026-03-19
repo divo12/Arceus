@@ -1,19 +1,180 @@
 import sys
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
+from arceus.core.hippocampus.backends import azure_openai_llm, neo4j_graph
+from arceus.core.hippocampus.backends.azure_openai_llm import AzureOpenAILLMEngine
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
-from arceus.core.hippocampus.backends.factory import create_embedding_engine, create_graph_store
+from arceus.core.hippocampus.backends.factory import (
+    create_embedding_engine,
+    create_graph_store,
+    create_llm_engine,
+)
 from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
+from arceus.core.hippocampus.backends.neo4j_graph import Neo4jGraphStoreBackend
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
 from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.config import HippocampusConfig
-from arceus.core.hippocampus.types import GraphEntity, Habit, HabitFormation, MemoryType, MemoryUnit
+from arceus.core.hippocampus.types import (
+    ExtractedFact,
+    GraphEntity,
+    GraphRelationship,
+    Habit,
+    HabitFormation,
+    MemoryType,
+    MemoryUnit,
+    RelationType,
+)
+
+
+class FakeNeo4jResult:
+    def __init__(self, records: list[dict]) -> None:
+        self._records = records
+        self._index = 0
+
+    def __aiter__(self) -> "FakeNeo4jResult":
+        self._index = 0
+        return self
+
+    async def __anext__(self) -> dict:
+        if self._index >= len(self._records):
+            raise StopAsyncIteration
+        record = self._records[self._index]
+        self._index += 1
+        return record
+
+
+class FakeNeo4jSession:
+    def __init__(self, state: dict[str, object], database: str | None) -> None:
+        self._state = state
+        self._database = database
+
+    async def __aenter__(self) -> "FakeNeo4jSession":
+        self._state["databases"].append(self._database)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        del exc_type, exc, tb
+
+    async def run(self, query: str, **params):  # noqa: ANN003
+        state = self._state
+        nodes: dict[str, dict] = state["nodes"]  # type: ignore[assignment]
+        edges: list[dict] = state["edges"]  # type: ignore[assignment]
+        call_params = self._state["last_params"] = params
+        state["queries"].append(query)
+
+        if "CREATE CONSTRAINT" in query:
+            return FakeNeo4jResult([])
+
+        if "CREATE (n:GraphEntity)" in query and "SET n = $payload" in query:
+            payload = dict(call_params["payload"])
+            nodes[payload["id"]] = payload
+            return FakeNeo4jResult([{"id": payload["id"]}])
+
+        if "MATCH (n:GraphEntity {id: $node_id})" in query and "LIMIT 1" in query:
+            node = nodes.get(call_params["node_id"])
+            return FakeNeo4jResult([{"n": node}] if node is not None else [])
+
+        if "MATCH (n:GraphEntity {id: $node_id})" in query and "SET " in query:
+            node = nodes.get(call_params["node_id"])
+            if node is None:
+                return FakeNeo4jResult([])
+            for key, value in call_params.items():
+                if key != "node_id":
+                    node[key] = value
+            return FakeNeo4jResult([{"n": node}])
+
+        if "CREATE (source)-[r:" in query and "SET r = $payload" in query:
+            rel_type = query.split("CREATE (source)-[r:", maxsplit=1)[1].split(
+                "]",
+                maxsplit=1,
+            )[0]
+            payload = dict(call_params["payload"])
+            payload["type"] = rel_type.lower()
+            edges.append(payload)
+            return FakeNeo4jResult([{"id": payload["id"]}])
+
+        if "MATCH (n:GraphEntity)" in query and "RETURN n" in query:
+            container = call_params["container"]
+            records = [
+                {"n": node}
+                for node in nodes.values()
+                if container == "" or node["container"] == container
+            ]
+            return FakeNeo4jResult(records)
+
+        if "MATCH path =" in query and "RETURN DISTINCT neighbor" in query:
+            node_id = call_params["node_id"]
+            allowed = call_params.get("relation_types")
+            max_hops = int(query.split("[*1..", maxsplit=1)[1].split("]", maxsplit=1)[0])
+            neighbors: list[dict] = []
+            seen = {node_id}
+            frontier = [(node_id, 0)]
+            while frontier:
+                current_id, depth = frontier.pop(0)
+                if depth >= max_hops:
+                    continue
+                for edge in edges:
+                    if allowed and edge["type"] not in allowed:
+                        continue
+                    next_id = ""
+                    if edge["source_id"] == current_id:
+                        next_id = edge["target_id"]
+                    elif edge["target_id"] == current_id:
+                        next_id = edge["source_id"]
+                    if not next_id or next_id in seen:
+                        continue
+                    seen.add(next_id)
+                    frontier.append((next_id, depth + 1))
+                    if next_id in nodes:
+                        neighbors.append(nodes[next_id])
+            return FakeNeo4jResult([{"neighbor": node} for node in neighbors])
+
+        if "[:UPDATES*]" in query:
+            current_id = call_params["id"]
+            history: list[dict] = []
+            seen: set[str] = set()
+            while current_id and current_id not in seen:
+                seen.add(current_id)
+                node = nodes.get(current_id)
+                if node is not None:
+                    history.append(node)
+                next_edge = next(
+                    (
+                        edge
+                        for edge in edges
+                        if edge["source_id"] == current_id and edge["type"] == "updates"
+                    ),
+                    None,
+                )
+                current_id = next_edge["target_id"] if next_edge else ""
+            return FakeNeo4jResult([{"root": node} for node in reversed(history)])
+
+        raise AssertionError(f"Unexpected Neo4j query: {query}")
+
+
+class FakeNeo4jDriver:
+    def __init__(self) -> None:
+        self.state: dict[str, object] = {
+            "nodes": {},
+            "edges": [],
+            "queries": [],
+            "databases": [],
+            "last_params": {},
+        }
+        self.closed = False
+
+    def session(self, *, database: str | None = None) -> FakeNeo4jSession:
+        return FakeNeo4jSession(self.state, database)
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -211,11 +372,225 @@ async def test_sentence_transformer_embedding_engine_logs_warning_and_falls_back
     assert "Falling back to simple embeddings" in caplog.text
 
 
-def test_graph_store_factory_requires_explicit_in_memory_backend_for_now() -> None:
-    config = HippocampusConfig()
+def test_graph_store_factory_builds_neo4j_backend() -> None:
+    config = HippocampusConfig(
+        neo4j_uri="neo4j+s://example.databases.neo4j.io",
+        neo4j_username="neo4j",
+        neo4j_password="secret",
+        neo4j_database="neo4j",
+    )
 
-    with pytest.raises(ValueError, match="Neo4j backend not yet implemented"):
-        create_graph_store("neo4j", config)
+    backend = create_graph_store("neo4j", config)
+
+    assert isinstance(backend, Neo4jGraphStoreBackend)
+
+
+def test_neo4j_graph_backend_prefers_repo_dotenv_over_shell_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEO4J_URI", "neo4j+s://shell.databases.neo4j.io")
+    monkeypatch.setenv("NEO4J_USERNAME", "shell-user")
+    monkeypatch.setenv("NEO4J_PASSWORD", "shell-password")
+    monkeypatch.setenv("NEO4J_DATABASE", "shell-db")
+    monkeypatch.setattr(
+        neo4j_graph,
+        "_DOTENV_VALUES",
+        {
+            "NEO4J_URI": "neo4j+s://repo.databases.neo4j.io",
+            "NEO4J_USERNAME": "repo-user",
+            "NEO4J_PASSWORD": "repo-password",
+            "NEO4J_DATABASE": "repo-db",
+        },
+    )
+
+    backend = Neo4jGraphStoreBackend()
+
+    assert backend._uri == "neo4j+s://repo.databases.neo4j.io"
+    assert backend._username == "repo-user"
+    assert backend._password == "repo-password"
+    assert backend._database == "repo-db"
+
+
+@pytest.mark.asyncio
+async def test_neo4j_graph_backend_crud_search_neighbors_and_close() -> None:
+    driver = FakeNeo4jDriver()
+    backend = Neo4jGraphStoreBackend(
+        uri="neo4j+s://example.databases.neo4j.io",
+        username="neo4j",
+        password="secret",
+        database="hippocampus",
+        driver=driver,
+    )
+
+    jwt = GraphEntity(
+        id="jwt-node",
+        name="JWT",
+        entity_type="technology",
+        embedding=[1.0, 0.0],
+        container="scope-1",
+    )
+    auth = GraphEntity(
+        id="auth-node",
+        name="AuthService",
+        entity_type="service",
+        embedding=[0.9, 0.1],
+        container="scope-1",
+    )
+    old_version = GraphEntity(
+        id="memory-v1",
+        name="Old auth memory",
+        entity_type="memory_version",
+        embedding=[0.2, 0.8],
+        container="scope-1",
+    )
+    new_version = GraphEntity(
+        id="memory-v2",
+        name="New auth memory",
+        entity_type="memory_version",
+        embedding=[0.3, 0.7],
+        container="scope-1",
+    )
+
+    await backend.create_node(jwt)
+    await backend.create_node(auth)
+    await backend.create_node(old_version)
+    await backend.create_node(new_version)
+    await backend.update_node("jwt-node", {"mention_count": 4})
+
+    uses_edge = GraphRelationship(
+        id="edge-uses",
+        source_id="auth-node",
+        target_id="jwt-node",
+        relation_type=RelationType.USES,
+    )
+    updates_edge = GraphRelationship(
+        id="edge-updates",
+        source_id="memory-v2",
+        target_id="memory-v1",
+        relation_type=RelationType.UPDATES,
+    )
+    await backend.create_edge(uses_edge)
+    await backend.create_edge(updates_edge)
+
+    loaded = await backend.get_node("jwt-node")
+    search_results = await backend.vector_search([1.0, 0.0], "scope-1", top_k=2)
+    neighbors = await backend.get_neighbors("auth-node", max_hops=1, relation_types=["uses"])
+    history = await backend.cypher_query(
+        "MATCH (n)-[:UPDATES*]->(root) WHERE n.id = $id RETURN root ORDER BY root.created_at",
+        {"id": "memory-v2"},
+    )
+    await backend.close()
+
+    assert loaded is not None
+    assert loaded.mention_count == 4
+    assert [node.id for node in search_results] == ["jwt-node", "auth-node"]
+    assert [node.id for node in neighbors] == ["jwt-node"]
+    assert [node.id for node in history] == ["memory-v1", "memory-v2"]
+    assert driver.state["databases"]
+    assert all(item == "hippocampus" for item in driver.state["databases"])
+    assert driver.closed is True
+
+
+def test_llm_factory_uses_azure_backend_when_credentials_are_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+
+    engine = create_llm_engine("gpt-4.1", HippocampusConfig())
+
+    assert isinstance(engine, AzureOpenAILLMEngine)
+
+
+def test_azure_llm_reads_unprefixed_dotenv_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        azure_openai_llm,
+        "_DOTENV_VALUES",
+        {
+            "AZURE_OPENAI_ENDPOINT": "https://dotenv.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "dotenv-key",
+            "AZURE_OPENAI_API_VERSION": "2025-03-01-preview",
+        },
+    )
+
+    engine = AzureOpenAILLMEngine(model_name="gpt-4.1")
+
+    assert engine._azure_endpoint == "https://dotenv.openai.azure.com/"
+    assert engine._api_key == "dotenv-key"
+    assert engine._api_version == "2025-03-01-preview"
+
+
+def test_azure_llm_prefers_repo_dotenv_over_shell_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://shell.openai.azure.com/")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "shell-key")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2099-01-01-preview")
+    monkeypatch.setattr(
+        azure_openai_llm,
+        "_DOTENV_VALUES",
+        {
+            "AZURE_OPENAI_ENDPOINT": "https://repo.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "repo-key",
+            "AZURE_OPENAI_API_VERSION": "2025-03-01-preview",
+        },
+    )
+
+    engine = AzureOpenAILLMEngine(model_name="gpt-4.1")
+
+    assert engine._azure_endpoint == "https://repo.openai.azure.com/"
+    assert engine._api_key == "repo-key"
+    assert engine._api_version == "2025-03-01-preview"
+
+
+@pytest.mark.asyncio
+async def test_azure_openai_llm_extracts_and_decides_with_json_payloads() -> None:
+    class FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.choices = [SimpleNamespace(message=SimpleNamespace(content=content))]
+
+    class FakeCompletions:
+        def __init__(self) -> None:
+            self.requests: list[dict] = []
+
+        async def create(self, **kwargs):  # noqa: ANN003
+            self.requests.append(kwargs)
+            user_payload = kwargs["messages"][-1]["content"]
+            if "existing_memories" in user_payload:
+                return FakeResponse('{"action":"UPDATE","target_id":"mem-1","reason":"refine"}')
+            return FakeResponse(
+                '[{"text":"Auth uses JWT","type":"static","confidence":0.9,'
+                '"entities":["AuthService","JWT"],'
+                '"relationships":[["AuthService","uses","JWT"]]}]'
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    engine = AzureOpenAILLMEngine(
+        model_name="gpt-4.1",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_key="test-key",
+        api_version="2025-03-01-preview",
+        client=fake_client,
+    )
+
+    extracted = await engine.extract_structured(
+        prompt="extract facts",
+        messages=[{"role": "assistant", "content": "Auth uses JWT"}],
+        output_schema=list[ExtractedFact],
+    )
+    decision = await engine.decide(
+        prompt="decide memory action",
+        fact="Auth uses JWT",
+        existing_memories=[{"id": "mem-1", "content": "Auth uses JWT", "type": "static"}],
+    )
+
+    assert extracted[0].memory_type is MemoryType.STATIC
+    assert extracted[0].entities == ("AuthService", "JWT")
+    assert extracted[0].relationships == (("AuthService", "uses", "JWT"),)
+    assert decision == {"action": "UPDATE", "target_id": "mem-1", "reason": "refine"}
+    json_request = fake_client.chat.completions.requests[0]
+    assert json_request["response_format"] == {"type": "json_object"}
+    assert "json" in json_request["messages"][0]["content"].lower()
 
 
 def test_mock_embedding_engine_logs_production_warning(caplog: pytest.LogCaptureFixture) -> None:
