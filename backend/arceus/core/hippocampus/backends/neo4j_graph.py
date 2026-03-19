@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, fields
-from pathlib import Path
 from typing import Any
 
-from dotenv import dotenv_values
-
 from arceus.config.settings import settings
+from arceus.core.hippocampus.backends.env import resolve_env
 from arceus.core.hippocampus.types import GraphEntity, GraphRelationship
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
-
-_DOTENV_VALUES = dotenv_values(Path(__file__).resolve().parents[4] / ".env")
 _VALID_NODE_FIELDS = {field.name for field in fields(GraphEntity)}
 
 
@@ -28,10 +23,10 @@ class Neo4jGraphStoreBackend:
         database: str = "",
         driver: Any | None = None,
     ) -> None:
-        self._uri = uri or _resolve_env("NEO4J_URI", settings.neo4j_uri)
-        self._username = username or _resolve_env("NEO4J_USERNAME", settings.neo4j_username)
-        self._password = password or _resolve_env("NEO4J_PASSWORD", settings.neo4j_password)
-        self._database = database or _resolve_env("NEO4J_DATABASE", settings.neo4j_database)
+        self._uri = uri or resolve_env("NEO4J_URI", settings.neo4j_uri)
+        self._username = username or resolve_env("NEO4J_USERNAME", settings.neo4j_username)
+        self._password = password or resolve_env("NEO4J_PASSWORD", settings.neo4j_password)
+        self._database = database or resolve_env("NEO4J_DATABASE", settings.neo4j_database)
         self._driver = driver
         self._schema_ready = False
 
@@ -211,13 +206,16 @@ class Neo4jGraphStoreBackend:
         self._schema_ready = True
 
 
-def _resolve_env(name: str, default: str) -> str:
-    return (
-        str(_DOTENV_VALUES.get(name) or "")
-        or str(_DOTENV_VALUES.get(f"ARCEUS_{name}") or "")
-        or os.getenv(name)
-        or os.getenv(f"ARCEUS_{name}")
-        or default
+def has_neo4j_credentials(
+    *,
+    uri: str = "",
+    username: str = "",
+    password: str = "",
+) -> bool:
+    return bool(
+        (uri or resolve_env("NEO4J_URI", settings.neo4j_uri))
+        and (username or resolve_env("NEO4J_USERNAME", settings.neo4j_username))
+        and (password or resolve_env("NEO4J_PASSWORD", settings.neo4j_password))
     )
 
 

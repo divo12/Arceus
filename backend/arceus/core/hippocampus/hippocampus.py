@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from arceus.core.hippocampus.backends.factory import (
     create_cache,
     create_embedding_engine,
@@ -8,6 +10,7 @@ from arceus.core.hippocampus.backends.factory import (
     create_relational,
     create_vector_store,
 )
+from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, LLMEngine, VectorStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.extractor import MemoryExtractor
 from arceus.core.hippocampus.engines.graph_store import GraphStore
@@ -25,6 +28,17 @@ from arceus.core.hippocampus.types import (
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 
+@dataclass(frozen=True)
+class HippocampusBackends:
+    """Groups low-level backend instances to keep the Hippocampus constructor lean."""
+
+    embedding: EmbeddingEngine
+    llm: LLMEngine
+    llm_light: LLMEngine
+    vector_store: VectorStore
+    relational_store: object  # RelationalStore protocol
+
+
 class Hippocampus:
     """Phase 2 Hippocampus container with extraction and graph wiring."""
 
@@ -37,11 +51,7 @@ class Hippocampus:
         dynamic_memory: DynamicMemory,
         graph_store: GraphStore,
         memory_extractor: MemoryExtractor | None,
-        embedding_engine,
-        llm_engine,
-        llm_light,
-        vector_store,
-        relational_store,
+        backends: HippocampusBackends,
     ) -> None:
         self._agent_id = agent_id
         self._config = config
@@ -50,11 +60,11 @@ class Hippocampus:
         self.dynamic_memory = dynamic_memory
         self.graph_store = graph_store
         self.memory_extractor = memory_extractor
-        self._embedding = embedding_engine
-        self._llm = llm_engine
-        self._llm_light = llm_light
-        self._vector_store = vector_store
-        self._relational_store = relational_store
+        self._backends = backends
+        # Convenience aliases used by recall/search/close
+        self._embedding = backends.embedding
+        self._vector_store = backends.vector_store
+        self._relational_store = backends.relational_store
 
     @classmethod
     async def create(cls, agent_id: str, config: HippocampusConfig) -> Hippocampus:
@@ -69,6 +79,14 @@ class Hippocampus:
         )
         llm_engine = create_llm_engine(config.extraction_model, config)
         llm_light = create_llm_engine(config.lightweight_model, config)
+
+        backends = HippocampusBackends(
+            embedding=embedding_engine,
+            llm=llm_engine,
+            llm_light=llm_light,
+            vector_store=vector_store,
+            relational_store=relational_store,
+        )
 
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
         graph_store = GraphStore(graph_backend, embedding_engine)
@@ -94,11 +112,7 @@ class Hippocampus:
             dynamic_memory=dynamic_memory,
             graph_store=graph_store,
             memory_extractor=None,
-            embedding_engine=embedding_engine,
-            llm_engine=llm_engine,
-            llm_light=llm_light,
-            vector_store=vector_store,
-            relational_store=relational_store,
+            backends=backends,
         )
         instance.memory_extractor = MemoryExtractor(
             llm=llm_engine,

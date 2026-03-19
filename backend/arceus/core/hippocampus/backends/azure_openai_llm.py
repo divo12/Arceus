@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
-from pathlib import Path
 from typing import Any, get_args, get_origin
 
-from dotenv import dotenv_values
-
 from arceus.config.settings import settings
+from arceus.core.hippocampus.backends.env import resolve_env
 from arceus.core.hippocampus.types import ExtractedFact, MemoryType
-
-_DOTENV_VALUES = dotenv_values(Path(__file__).resolve().parents[4] / ".env")
 
 
 class AzureOpenAILLMEngine:
@@ -27,15 +22,15 @@ class AzureOpenAILLMEngine:
         client: Any | None = None,
     ) -> None:
         self._model_name = model_name
-        self._azure_endpoint = azure_endpoint or _resolve_env(
+        self._azure_endpoint = azure_endpoint or resolve_env(
             "AZURE_OPENAI_ENDPOINT",
             settings.azure_openai_endpoint,
         )
-        self._api_key = api_key or _resolve_env(
+        self._api_key = api_key or resolve_env(
             "AZURE_OPENAI_API_KEY",
             settings.azure_openai_api_key,
         )
-        self._api_version = api_version or _resolve_env(
+        self._api_version = api_version or resolve_env(
             "AZURE_OPENAI_API_VERSION",
             settings.azure_openai_api_version,
         )
@@ -200,20 +195,14 @@ class AzureOpenAILLMEngine:
         return ""
 
 
-def has_azure_openai_credentials() -> bool:
+def has_azure_openai_credentials(
+    *,
+    azure_endpoint: str = "",
+    api_key: str = "",
+) -> bool:
     return bool(
-        _resolve_env("AZURE_OPENAI_ENDPOINT", settings.azure_openai_endpoint)
-        and _resolve_env("AZURE_OPENAI_API_KEY", settings.azure_openai_api_key)
-    )
-
-
-def _resolve_env(name: str, default: str) -> str:
-    return (
-        str(_DOTENV_VALUES.get(name) or "")
-        or str(_DOTENV_VALUES.get(f"ARCEUS_{name}") or "")
-        or os.getenv(name)
-        or os.getenv(f"ARCEUS_{name}")
-        or default
+        (azure_endpoint or resolve_env("AZURE_OPENAI_ENDPOINT", settings.azure_openai_endpoint))
+        and (api_key or resolve_env("AZURE_OPENAI_API_KEY", settings.azure_openai_api_key))
     )
 
 

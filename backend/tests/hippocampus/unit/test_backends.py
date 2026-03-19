@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from arceus.core.hippocampus.backends import azure_openai_llm, neo4j_graph
+from arceus.core.hippocampus.backends import azure_openai_llm, env as backends_env, neo4j_graph
 from arceus.core.hippocampus.backends.azure_openai_llm import AzureOpenAILLMEngine
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
 from arceus.core.hippocampus.backends.factory import (
@@ -15,6 +15,7 @@ from arceus.core.hippocampus.backends.factory import (
 from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.neo4j_graph import Neo4jGraphStoreBackend
+from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
@@ -385,6 +386,45 @@ def test_graph_store_factory_builds_neo4j_backend() -> None:
     assert isinstance(backend, Neo4jGraphStoreBackend)
 
 
+def test_graph_store_factory_uses_repo_dotenv_database_when_config_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends_env,
+        "_DOTENV_VALUES",
+        {
+            "NEO4J_URI": "neo4j+s://repo.databases.neo4j.io",
+            "NEO4J_USERNAME": "repo-user",
+            "NEO4J_PASSWORD": "repo-password",
+            "NEO4J_DATABASE": "repo-db",
+        },
+    )
+
+    config = HippocampusConfig(
+        graph_store_backend="neo4j",
+        neo4j_uri="",
+        neo4j_username="",
+        neo4j_password="",
+        neo4j_database="",
+    )
+    backend = create_graph_store("neo4j", config)
+
+    assert isinstance(backend, Neo4jGraphStoreBackend)
+    assert backend._database == "repo-db"
+
+
+def test_graph_store_factory_requires_credentials_for_neo4j(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backends_env, "_DOTENV_VALUES", {})
+    monkeypatch.delenv("NEO4J_URI", raising=False)
+    monkeypatch.delenv("NEO4J_USERNAME", raising=False)
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
+
+    with pytest.raises(ValueError, match="Neo4j backend requires credentials"):
+        create_graph_store("neo4j", HippocampusConfig())
+
+
 def test_neo4j_graph_backend_prefers_repo_dotenv_over_shell_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -393,7 +433,7 @@ def test_neo4j_graph_backend_prefers_repo_dotenv_over_shell_env(
     monkeypatch.setenv("NEO4J_PASSWORD", "shell-password")
     monkeypatch.setenv("NEO4J_DATABASE", "shell-db")
     monkeypatch.setattr(
-        neo4j_graph,
+        backends_env,
         "_DOTENV_VALUES",
         {
             "NEO4J_URI": "neo4j+s://repo.databases.neo4j.io",
@@ -502,11 +542,48 @@ def test_llm_factory_uses_azure_backend_when_credentials_are_available(
     assert isinstance(engine, AzureOpenAILLMEngine)
 
 
+def test_llm_factory_uses_repo_dotenv_api_version_when_config_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends_env,
+        "_DOTENV_VALUES",
+        {
+            "AZURE_OPENAI_ENDPOINT": "https://repo.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "repo-key",
+            "AZURE_OPENAI_API_VERSION": "2025-03-01-preview",
+        },
+    )
+
+    config = HippocampusConfig(azure_openai_endpoint="", azure_openai_api_version="")
+    engine = create_llm_engine("gpt-4.1", config)
+
+    assert isinstance(engine, AzureOpenAILLMEngine)
+    assert engine._api_version == "2025-03-01-preview"
+
+
+def test_llm_factory_requires_credentials_for_real_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backends_env, "_DOTENV_VALUES", {})
+    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="requires Azure OpenAI credentials"):
+        create_llm_engine("gpt-4.1", HippocampusConfig())
+
+
+def test_llm_factory_supports_explicit_noop_model() -> None:
+    engine = create_llm_engine("noop", HippocampusConfig())
+
+    assert isinstance(engine, NoopLLMEngine)
+
+
 def test_azure_llm_reads_unprefixed_dotenv_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
     monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(
-        azure_openai_llm,
+        backends_env,
         "_DOTENV_VALUES",
         {
             "AZURE_OPENAI_ENDPOINT": "https://dotenv.openai.azure.com/",
@@ -527,7 +604,7 @@ def test_azure_llm_prefers_repo_dotenv_over_shell_env(monkeypatch: pytest.Monkey
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "shell-key")
     monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2099-01-01-preview")
     monkeypatch.setattr(
-        azure_openai_llm,
+        backends_env,
         "_DOTENV_VALUES",
         {
             "AZURE_OPENAI_ENDPOINT": "https://repo.openai.azure.com/",

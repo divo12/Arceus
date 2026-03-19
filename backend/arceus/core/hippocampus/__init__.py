@@ -2,7 +2,7 @@
 
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.graph_store import GraphStore
-from arceus.core.hippocampus.hippocampus import Hippocampus
+from arceus.core.hippocampus.hippocampus import Hippocampus, HippocampusBackends
 from arceus.core.hippocampus.types import (
     ConsolidationResult,
     DistilledMemory,
@@ -44,6 +44,7 @@ __all__ = [
     "Habit",
     "HabitFormation",
     "Hippocampus",
+    "HippocampusBackends",
     "HippocampusConfig",
     "MemoryAction",
     "MemoryPromotionEvent",
