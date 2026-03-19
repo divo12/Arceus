@@ -2,6 +2,7 @@
 
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.graph_store import GraphStore
+from arceus.core.hippocampus.engines.promotion_engine import PromotionEngine
 from arceus.core.hippocampus.hippocampus import Hippocampus, HippocampusBackends
 from arceus.core.hippocampus.types import (
     ConsolidationResult,
@@ -54,6 +55,7 @@ __all__ = [
     "MemoryVisibility",
     "Pattern",
     "PatternStatus",
+    "PromotionEngine",
     "RelationType",
     "RetrievalResult",
     "Trajectory",

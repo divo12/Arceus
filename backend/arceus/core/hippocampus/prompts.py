@@ -68,3 +68,38 @@ Relationship described as: {relation_text}
 
 Return ONLY the relationship type (one of the above).
 """.strip()
+
+CONTRADICTION_CHECK_PROMPT = """
+You are a contradiction detector. Given two memory statements, determine if they
+SEMANTICALLY CONTRADICT each other.
+
+Two statements contradict if they make incompatible claims about the same subject.
+Similar statements that ADD detail or REFINE each other are NOT contradictions.
+
+Memory A: {memory_a}
+Memory B: {memory_b}
+
+Examples of CONTRADICTIONS:
+- "We use REST for APIs" vs "All APIs must use GraphQL"
+- "Deploy on Friday" vs "Never deploy on Fridays"
+
+Examples of NOT contradictions:
+- "We use Stripe" vs "We use Stripe webhooks for payment notifications"
+- "Auth uses JWT" vs "Auth uses JWT with 24h expiry"
+
+Answer ONLY "CONTRADICTION" or "NO_CONTRADICTION".
+""".strip()
+
+PROMOTION_REASON_PROMPT = """
+A memory has been automatically promoted from dynamic (temporary) to static (permanent).
+Generate a clear, human-readable reason for the dashboard.
+
+Memory content: {content}
+Times accessed: {access_count}
+Confidence score: {confidence}
+Age: {age_days} days
+Original source: {source_type}
+
+Explain in one sentence why this memory deserves permanent status.
+Do not use numbers — describe in natural language.
+""".strip()

@@ -14,6 +14,7 @@ from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, LLMEngin
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.extractor import MemoryExtractor
 from arceus.core.hippocampus.engines.graph_store import GraphStore
+from arceus.core.hippocampus.engines.promotion_engine import PromotionEngine
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
@@ -22,6 +23,8 @@ from arceus.core.hippocampus.types import (
     ExtractionMode,
     ExtractionResult,
     GraphEntity,
+    MemoryPromotionEvent,
+    MemorySummaryProjection,
     MemoryType,
     MemoryUnit,
 )
@@ -52,6 +55,7 @@ class Hippocampus:
         graph_store: GraphStore,
         memory_extractor: MemoryExtractor | None,
         backends: HippocampusBackends,
+        promotion_engine: PromotionEngine | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._config = config
@@ -60,6 +64,7 @@ class Hippocampus:
         self.dynamic_memory = dynamic_memory
         self.graph_store = graph_store
         self.memory_extractor = memory_extractor
+        self.promotion_engine = promotion_engine
         self._backends = backends
         # Convenience aliases used by recall/search/close
         self._embedding = backends.embedding
@@ -90,6 +95,12 @@ class Hippocampus:
 
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
         graph_store = GraphStore(graph_backend, embedding_engine)
+        promotion_engine = PromotionEngine(
+            vector_store=vector_store,
+            graph_store=graph_store,
+            embedding_engine=embedding_engine,
+            llm_light=llm_light,
+        )
         static_memory = StaticMemory(
             agent_id=agent_id,
             vector_store=vector_store,
@@ -113,6 +124,7 @@ class Hippocampus:
             graph_store=graph_store,
             memory_extractor=None,
             backends=backends,
+            promotion_engine=promotion_engine,
         )
         instance.memory_extractor = MemoryExtractor(
             llm=llm_engine,
@@ -248,6 +260,32 @@ class Hippocampus:
             agent_id=self._agent_id,
             container=container,
             mode=mode,
+        )
+
+    async def run_promotions(self) -> list[MemoryPromotionEvent]:
+        if self.promotion_engine is None:
+            return []
+        return await self.promotion_engine.run_promotions(self._agent_id)
+
+    async def demote_memory(self, memory_id: str, reason: str) -> MemoryUnit | None:
+        if self.promotion_engine is None:
+            return None
+        return await self.promotion_engine.demote(memory_id, reason)
+
+    async def get_summary(self) -> MemorySummaryProjection:
+        """Generate memory summary projection for dashboard."""
+        static_results = await self._vector_store.list_by_type(
+            agent_id=self._agent_id,
+            memory_type=MemoryType.STATIC,
+        )
+        dynamic_results = await self._vector_store.list_by_type(
+            agent_id=self._agent_id,
+            memory_type=MemoryType.DYNAMIC,
+        )
+        return MemorySummaryProjection(
+            agent_id=self._agent_id,
+            static_fact_count=len(static_results),
+            dynamic_fact_count=len(dynamic_results),
         )
 
     def _tier_boost(self, memory_type: MemoryType) -> float:

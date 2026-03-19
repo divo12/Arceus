@@ -63,6 +63,9 @@ class GraphStore:
         )
         return await self._backend.create_edge(relationship)
 
+    async def add_relationship(self, relationship: GraphRelationship) -> str:
+        return await self._backend.create_edge(relationship)
+
     async def create_edge_by_name(
         self,
         source_name: str,
@@ -107,6 +110,14 @@ class GraphStore:
             reverse=True,
         )
         return ranked[:top_k]
+
+    async def get_neighbors(
+        self,
+        node_id: str,
+        max_hops: int = 2,
+    ) -> list[GraphEntity]:
+        """Public facade for graph neighbor traversal."""
+        return await self._backend.get_neighbors(node_id, max_hops=max_hops)
 
     async def version_memory(
         self,

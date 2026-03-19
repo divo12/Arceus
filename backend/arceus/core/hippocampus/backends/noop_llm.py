@@ -26,29 +26,8 @@ class NoopLLMEngine:
 
     async def generate(self, prompt: str, **kwargs) -> str:
         del prompt, kwargs
-        return ""
+        return "NoopLLMEngine placeholder response."
 
     async def classify(self, prompt: str, options: list[str], **kwargs) -> str:
-        del kwargs
-        prompt_lower = prompt.lower()
-        for option in options:
-            if option in prompt_lower:
-                return option
-
-        keyword_map = {
-            "depends_on": ("depends on", "relies on", "requires"),
-            "part_of": ("part of", "component of"),
-            "updates": ("updates", "replaces", "supersedes"),
-            "extends": ("extends", "adds to"),
-            "derives": ("derived from", "inferred from"),
-            "uses": ("uses", "built with", "implemented with", "via"),
-            "owns": ("owns", "responsible for"),
-            "decided_in": ("decided in", "agreed in"),
-        }
-        for option, keywords in keyword_map.items():
-            if option not in options:
-                continue
-            if any(keyword in prompt_lower for keyword in keywords):
-                return option
-
-        return "related_to" if "related_to" in options else options[0]
+        del prompt, kwargs
+        return options[0]

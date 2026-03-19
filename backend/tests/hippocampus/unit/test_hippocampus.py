@@ -92,3 +92,33 @@ async def test_hippocampus_recall_can_return_graph_results_when_enabled(tmp_path
     assert len(recalled) == 1
     assert getattr(recalled[0], "name", "") == "JWT"
     await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_hippocampus_get_summary_counts_static_and_dynamic(tmp_path) -> None:
+    config = HippocampusConfig(
+        sqlite_path=str(tmp_path / "hippocampus.db"),
+        embedding_model="simple",
+        embedding_dimensions=32,
+        graph_store_backend="in_memory",
+    )
+    hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
+    container = "startup:startup-1:emp:agent-1"
+
+    await hippocampus.remember(
+        "We use JWT for authentication",
+        container=container,
+        memory_type=MemoryType.STATIC,
+    )
+    await hippocampus.remember(
+        "JWT tokens currently expire every 24 hours",
+        container=container,
+        memory_type=MemoryType.DYNAMIC,
+    )
+
+    summary = await hippocampus.get_summary()
+
+    assert summary.agent_id == "agent-1"
+    assert summary.static_fact_count == 1
+    assert summary.dynamic_fact_count == 1
+    await hippocampus.close()

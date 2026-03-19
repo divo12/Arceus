@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
+
 from arceus.core.hippocampus.backends.protocols import WorkingMemoryBackend
-from arceus.core.hippocampus.utils.serialization import deserialize, serialize
 
 
 class WorkingMemory:
@@ -14,23 +15,23 @@ class WorkingMemory:
 
     async def load_task_context(self, task_id: str, context: dict) -> None:
         key = f"{self._prefix}:task:{task_id}"
-        await self._backend.set(key, serialize(context), ttl_seconds=7200)
+        await self._backend.set(key, json.dumps(context, default=str), ttl_seconds=7200)
 
     async def append_conversation(self, task_id: str, message: dict) -> None:
         key = f"{self._prefix}:conv:{task_id}"
         existing = await self._backend.get(key) or "[]"
-        messages = deserialize(existing)
+        messages = json.loads(existing)
         messages.append(message)
-        await self._backend.set(key, serialize(messages), ttl_seconds=7200)
+        await self._backend.set(key, json.dumps(messages, default=str), ttl_seconds=7200)
 
     async def get_current_context(self, task_id: str) -> dict:
         task = await self._backend.get(f"{self._prefix}:task:{task_id}")
         conversation = await self._backend.get(f"{self._prefix}:conv:{task_id}")
         scratchpad = await self._backend.get(f"{self._prefix}:scratch:{task_id}")
         return {
-            "task": None if task is None else deserialize(task),
-            "conversation": None if conversation is None else deserialize(conversation),
-            "scratchpad": None if scratchpad is None else deserialize(scratchpad),
+            "task": None if task is None else json.loads(task),
+            "conversation": None if conversation is None else json.loads(conversation),
+            "scratchpad": None if scratchpad is None else json.loads(scratchpad),
         }
 
     async def clear_task(self, task_id: str) -> None:

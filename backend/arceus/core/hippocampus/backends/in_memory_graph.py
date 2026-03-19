@@ -16,6 +16,9 @@ class InMemoryGraphStoreBackend:
         self._nodes: dict[str, GraphEntity] = {}
         self._edges: dict[str, GraphRelationship] = {}
 
+    async def close(self) -> None:
+        return None
+
     async def create_node(self, entity: GraphEntity) -> str:
         self._nodes[entity.id] = entity
         return entity.id
