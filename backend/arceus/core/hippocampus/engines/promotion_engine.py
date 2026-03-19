@@ -39,19 +39,21 @@ class PromotionEngine:
 
     def __init__(
         self,
+        agent_id: str,
         vector_store: VectorStore,
         graph_store: GraphStore,
         embedding_engine: EmbeddingEngine,
         llm_light: LLMEngine,
     ) -> None:
+        self._agent_id = agent_id
         self._vector_store = vector_store
         self._graph_store = graph_store
         self._embedding = embedding_engine
         self._llm = llm_light
 
-    async def run_promotions(self, agent_id: str) -> list[MemoryPromotionEvent]:
+    async def run_promotions(self) -> list[MemoryPromotionEvent]:
         dynamic_memories = await self._vector_store.list_by_type(
-            agent_id=agent_id,
+            agent_id=self._agent_id,
             memory_type=MemoryType.DYNAMIC,
         )
         events: list[MemoryPromotionEvent] = []
@@ -59,10 +61,10 @@ class PromotionEngine:
             if len(events) >= self.MAX_PROMOTIONS_PER_CYCLE:
                 break
             if self._qualifies_for_static(mem):
-                has_contradiction = await self._check_contradiction(mem, agent_id)
+                has_contradiction = await self._check_contradiction(mem)
                 if has_contradiction:
                     continue
-                event = await self._promote_to_static(mem, agent_id)
+                event = await self._promote_to_static(mem)
                 if event:
                     events.append(event)
         return events
@@ -77,10 +79,10 @@ class PromotionEngine:
             and mem.promotion_status is None
         )
 
-    async def _check_contradiction(self, mem: MemoryUnit, agent_id: str) -> bool:
+    async def _check_contradiction(self, mem: MemoryUnit) -> bool:
         """Two-step: cosine pre-filter >0.80, then LLM verify."""
         static_memories = await self._vector_store.list_by_type(
-            agent_id=agent_id,
+            agent_id=self._agent_id,
             memory_type=MemoryType.STATIC,
         )
         for static_mem in static_memories:
@@ -101,7 +103,6 @@ class PromotionEngine:
     async def _promote_to_static(
         self,
         mem: MemoryUnit,
-        agent_id: str,
     ) -> MemoryPromotionEvent | None:
         reason = await self._generate_promotion_reason(mem)
         probation_until = (utc_now() + timedelta(days=self.PROBATION_DAYS)).isoformat()
@@ -137,7 +138,7 @@ class PromotionEngine:
         await self._graph_store.add_relationship(edge)
 
         return MemoryPromotionEvent(
-            agent_id=agent_id,
+            agent_id=self._agent_id,
             memory_id=promoted.id,
             from_type="dynamic",
             to_type="static",
@@ -179,9 +180,9 @@ class PromotionEngine:
         await self._vector_store.soft_delete(mem.id, reason=f"demoted: {reason}")
         return demoted
 
-    async def check_probation_demotions(self, agent_id: str) -> list[MemoryUnit]:
+    async def check_probation_demotions(self) -> list[MemoryUnit]:
         static_memories = await self._vector_store.list_by_type(
-            agent_id=agent_id,
+            agent_id=self._agent_id,
             memory_type=MemoryType.STATIC,
         )
         demoted: list[MemoryUnit] = []
@@ -199,9 +200,9 @@ class PromotionEngine:
                         demoted.append(result)
         return demoted
 
-    async def check_unused_static_demotions(self, agent_id: str) -> list[MemoryUnit]:
+    async def check_unused_static_demotions(self) -> list[MemoryUnit]:
         static_memories = await self._vector_store.list_by_type(
-            agent_id=agent_id,
+            agent_id=self._agent_id,
             memory_type=MemoryType.STATIC,
         )
         demoted: list[MemoryUnit] = []

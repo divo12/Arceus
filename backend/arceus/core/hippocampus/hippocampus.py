@@ -10,19 +10,39 @@ from arceus.core.hippocampus.backends.factory import (
     create_relational,
     create_vector_store,
 )
-from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, LLMEngine, VectorStore
+from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternStore
+from arceus.core.hippocampus.backends.protocols import (
+    EmbeddingEngine,
+    LLMEngine,
+    RelationalStore,
+    VectorStore,
+)
+from arceus.core.hippocampus.backends.sqlite_pattern import SQLitePatternStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.extractor import MemoryExtractor
+from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
 from arceus.core.hippocampus.engines.graph_store import GraphStore
+from arceus.core.hippocampus.engines.pattern_learner import (
+    PatternLearner,
+    PatternLearnerConfig,
+)
 from arceus.core.hippocampus.engines.promotion_engine import PromotionEngine
+from arceus.core.hippocampus.engines.reasoning_bank import (
+    ReasoningBank,
+    ReasoningBankConfig,
+)
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
+from arceus.core.hippocampus.tiers.priming import PrimingMemory
+from arceus.core.hippocampus.tiers.procedural import ProceduralMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
 from arceus.core.hippocampus.types import (
     ExtractedFact,
     ExtractionMode,
     ExtractionResult,
+    GCResult,
     GraphEntity,
+    Habit,
     MemoryPromotionEvent,
     MemorySummaryProjection,
     MemoryType,
@@ -39,7 +59,7 @@ class HippocampusBackends:
     llm: LLMEngine
     llm_light: LLMEngine
     vector_store: VectorStore
-    relational_store: object  # RelationalStore protocol
+    relational_store: RelationalStore
 
 
 class Hippocampus:
@@ -56,6 +76,11 @@ class Hippocampus:
         memory_extractor: MemoryExtractor | None,
         backends: HippocampusBackends,
         promotion_engine: PromotionEngine | None = None,
+        procedural_memory: ProceduralMemory | None = None,
+        priming_memory: PrimingMemory | None = None,
+        reasoning_bank: ReasoningBank | None = None,
+        pattern_learner: PatternLearner | None = None,
+        gc: MemoryGarbageCollector | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._config = config
@@ -65,6 +90,11 @@ class Hippocampus:
         self.graph_store = graph_store
         self.memory_extractor = memory_extractor
         self.promotion_engine = promotion_engine
+        self.procedural_memory = procedural_memory
+        self.priming_memory = priming_memory
+        self.reasoning_bank = reasoning_bank
+        self.pattern_learner = pattern_learner
+        self._gc = gc
         self._backends = backends
         # Convenience aliases used by recall/search/close
         self._embedding = backends.embedding
@@ -96,10 +126,41 @@ class Hippocampus:
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
         graph_store = GraphStore(graph_backend, embedding_engine)
         promotion_engine = PromotionEngine(
+            agent_id=agent_id,
             vector_store=vector_store,
             graph_store=graph_store,
             embedding_engine=embedding_engine,
             llm_light=llm_light,
+        )
+        if config.relational_backend == "sqlite":
+            pattern_store = SQLitePatternStore(relational_store, agent_id)
+        else:
+            pattern_store = InMemoryPatternStore(agent_id)
+        procedural_memory = ProceduralMemory(agent_id, relational_store, llm_light)
+        priming_memory = PrimingMemory(agent_id, relational_store, llm_light)
+        reasoning_bank = ReasoningBank(
+            agent_id=agent_id,
+            vector_store=vector_store,
+            pattern_store=pattern_store,
+            llm=llm_engine,
+            llm_light=llm_light,
+            embedding_engine=embedding_engine,
+            config=ReasoningBankConfig(
+                retrieval_k=config.retrieval_k,
+                mmr_lambda=config.mmr_lambda,
+                distillation_threshold=config.distillation_threshold,
+            ),
+        )
+        pattern_learner = PatternLearner(
+            agent_id=agent_id,
+            pattern_store=pattern_store,
+            embedding_engine=embedding_engine,
+            llm_light=llm_light,
+            config=PatternLearnerConfig(
+                learning_rate=config.pattern_learning_rate,
+                habit_usage_threshold=config.habit_usage_threshold,
+                habit_success_threshold=config.habit_success_threshold,
+            ),
         )
         static_memory = StaticMemory(
             agent_id=agent_id,
@@ -125,6 +186,10 @@ class Hippocampus:
             memory_extractor=None,
             backends=backends,
             promotion_engine=promotion_engine,
+            procedural_memory=procedural_memory,
+            priming_memory=priming_memory,
+            reasoning_bank=reasoning_bank,
+            pattern_learner=pattern_learner,
         )
         instance.memory_extractor = MemoryExtractor(
             llm=llm_engine,
@@ -132,6 +197,7 @@ class Hippocampus:
             embedding_engine=embedding_engine,
             hippocampus=instance,
         )
+        instance._gc = MemoryGarbageCollector(instance, promotion_engine)
         return instance
 
     async def close(self) -> None:
@@ -265,12 +331,27 @@ class Hippocampus:
     async def run_promotions(self) -> list[MemoryPromotionEvent]:
         if self.promotion_engine is None:
             return []
-        return await self.promotion_engine.run_promotions(self._agent_id)
+        return await self.promotion_engine.run_promotions()
 
     async def demote_memory(self, memory_id: str, reason: str) -> MemoryUnit | None:
         if self.promotion_engine is None:
             return None
         return await self.promotion_engine.demote(memory_id, reason)
+
+    async def run_gc(self) -> GCResult:
+        if self._gc is None:
+            return GCResult()
+        return await self._gc.run()
+
+    async def get_matching_habits(self, context: str) -> list[Habit]:
+        if self.procedural_memory is None:
+            return []
+        return await self.procedural_memory.get_matching_habits(context)
+
+    async def get_priming_prompt(self) -> str:
+        if self.priming_memory is None:
+            return ""
+        return await self.priming_memory.generate_priming_prompt()
 
     async def get_summary(self) -> MemorySummaryProjection:
         """Generate memory summary projection for dashboard."""
@@ -282,10 +363,22 @@ class Hippocampus:
             agent_id=self._agent_id,
             memory_type=MemoryType.DYNAMIC,
         )
+        active_habits = []
+        if self.procedural_memory is not None:
+            habits = await self.procedural_memory.get_active()
+            active_habits = [
+                {"trigger": habit.trigger_condition, "action": habit.action}
+                for habit in habits
+            ]
+        current_state = {}
+        if self.priming_memory is not None:
+            current_state = await self.priming_memory.get_current_state()
         return MemorySummaryProjection(
             agent_id=self._agent_id,
             static_fact_count=len(static_results),
             dynamic_fact_count=len(dynamic_results),
+            active_habits=active_habits,
+            current_state=current_state,
         )
 
     def _tier_boost(self, memory_type: MemoryType) -> float:

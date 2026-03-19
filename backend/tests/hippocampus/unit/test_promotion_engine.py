@@ -75,6 +75,7 @@ def promotion_engine_fixture() -> PromotionFixture:
     embedding = MockEmbeddingEngine(dimensions=32)
     graph_store = GraphStore(graph_backend, embedding)
     engine = PromotionEngine(
+        agent_id="agent-1",
         vector_store=vector_store,
         graph_store=graph_store,
         embedding_engine=embedding,
@@ -139,7 +140,7 @@ async def test_run_promotions_happy_path(
     engine, vector_store, graph_backend = promotion_engine_fixture
     await vector_store.upsert(_memory(memory_id="dyn-1", memory_type=MemoryType.DYNAMIC))
 
-    events = await engine.run_promotions("agent-1")
+    events = await engine.run_promotions()
 
     static_memories = await vector_store.list_by_type("agent-1", memory_type=MemoryType.STATIC)
     assert len(events) == 1
@@ -162,6 +163,7 @@ async def test_run_promotions_contradiction_blocks(
     embedding = MockEmbeddingEngine(dimensions=32)
     graph_store = GraphStore(graph_backend, embedding)
     engine = PromotionEngine(
+        agent_id="agent-1",
         vector_store=vector_store,
         graph_store=graph_store,
         embedding_engine=embedding,
@@ -176,7 +178,7 @@ async def test_run_promotions_contradiction_blocks(
         )
     )
 
-    events = await engine.run_promotions("agent-1")
+    events = await engine.run_promotions()
 
     assert events == []
     assert await vector_store.get("dyn-1") is not None
@@ -197,7 +199,7 @@ async def test_run_promotions_rate_limit(
             )
         )
 
-    events = await engine.run_promotions("agent-1")
+    events = await engine.run_promotions()
     static_memories = await vector_store.list_by_type("agent-1", memory_type=MemoryType.STATIC)
 
     assert len(events) == 5
@@ -242,7 +244,7 @@ async def test_probation_demotion(
     )
     await vector_store.upsert(static_memory)
 
-    demoted = await engine.check_probation_demotions("agent-1")
+    demoted = await engine.check_probation_demotions()
 
     assert len(demoted) == 1
     assert demoted[0].memory_type is MemoryType.DYNAMIC
@@ -260,7 +262,7 @@ async def test_unused_static_demotion_60d(
     )
     await vector_store.upsert(static_memory)
 
-    demoted = await engine.check_unused_static_demotions("agent-1")
+    demoted = await engine.check_unused_static_demotions()
 
     assert len(demoted) == 1
     assert demoted[0].memory_type is MemoryType.DYNAMIC
@@ -273,7 +275,7 @@ async def test_graph_edge_created_on_promotion(
     engine, vector_store, graph_backend = promotion_engine_fixture
     await vector_store.upsert(_memory(memory_id="dyn-graph", memory_type=MemoryType.DYNAMIC))
 
-    await engine.run_promotions("agent-1")
+    await engine.run_promotions()
 
     promoted_edges = [
         edge

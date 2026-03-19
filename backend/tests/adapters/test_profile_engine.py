@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from arceus.core.hippocampus.types import MemoryType
+from arceus.core.hippocampus.types import Habit, MemoryType
 from arceus.core.memory_scope import ArceusMemoryScope
 from arceus.core.profile_engine import ArceusProfileEngine
 
@@ -37,7 +37,12 @@ async def test_generate_profile_with_facts(hippocampus_factory) -> None:
         assert profile.core_knowledge == ["We use JWT for authentication"]
         assert profile.current_context == ["Current auth rollout needs refresh-token metrics"]
         assert profile.habits == []
-        assert profile.state == {}
+        assert profile.state == {
+            "confidence": 0.5,
+            "caution": 0.3,
+            "morale": 0.5,
+            "recent_events": [],
+        }
     finally:
         await hippocampus.close()
 
@@ -59,6 +64,47 @@ async def test_generate_profile_empty(hippocampus_factory) -> None:
         assert profile.core_knowledge == []
         assert profile.current_context == []
         assert profile.habits == []
-        assert profile.state == {}
+        assert profile.state == {
+            "confidence": 0.5,
+            "caution": 0.3,
+            "morale": 0.5,
+            "recent_events": [],
+        }
+    finally:
+        await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_profile_with_habits_and_state(hippocampus_factory) -> None:
+    scope = ArceusMemoryScope()
+    engine = ArceusProfileEngine(scope)
+    hippocampus = await hippocampus_factory("emp-2")
+
+    try:
+        assert hippocampus.procedural_memory is not None
+        assert hippocampus.priming_memory is not None
+
+        await hippocampus.procedural_memory.add_habit(
+            Habit(
+                agent_id="emp-2",
+                trigger_condition="when reviewing auth changes",
+                action="check token expiry assumptions",
+                confidence=0.9,
+                usage_count=5,
+                formed_from_id="pattern-1",
+            )
+        )
+        await hippocampus.priming_memory.update_state("success", 1.0, "test")
+
+        profile = await engine.generate_profile(
+            hippocampus=hippocampus,
+            agent_id="emp-2",
+            startup_id="startup-1",
+            role="Engineer",
+        )
+
+        assert len(profile.habits) == 1
+        assert profile.habits[0]["trigger"] == "when reviewing auth changes"
+        assert {"confidence", "morale", "caution"} <= set(profile.state)
     finally:
         await hippocampus.close()

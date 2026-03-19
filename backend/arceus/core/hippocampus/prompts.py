@@ -103,3 +103,77 @@ Original source: {source_type}
 Explain in one sentence why this memory deserves permanent status.
 Do not use numbers — describe in natural language.
 """.strip()
+
+TRIGGER_EVALUATION_PROMPT = """
+You are evaluating which behavioral habits are relevant to the current context.
+
+Current context:
+{context}
+
+Active habits:
+{triggers}
+
+For each habit (by index), decide if its trigger condition is relevant to the current context.
+Return a JSON array of objects: [{{"index": 0, "relevant": true/false}}, ...]
+
+ONLY mark a habit as relevant if the context clearly matches the trigger condition.
+""".strip()
+
+PRIMING_GENERATION_PROMPT = """
+You are generating a disposition prompt for an AI agent based on its current emotional state.
+
+Current state metrics:
+- Confidence: {confidence} (0=uncertain, 1=confident)
+- Caution: {caution} (0=reckless, 1=very cautious)
+- Morale: {morale} (0=demoralized, 1=energized)
+
+Recent events:
+{recent_events}
+
+Generate a 2-3 sentence disposition that:
+1. References specific recent events where relevant
+2. Adjusts tone based on the metrics (high caution = more careful, low morale = more encouraging)
+3. Does NOT mention the numeric values — describe the disposition naturally
+
+The disposition will be injected into the agent's system prompt.
+""".strip()
+
+HABIT_NAMING_PROMPT = """
+A behavioral pattern has been used frequently with high success and should become a habit.
+
+Domain: {domain}
+Strategy: {strategy}
+Usage count: {usage_count}
+Success rate: {success_rate}
+
+Generate a trigger condition and action for this habit.
+Return JSON: {{"trigger": "when X happens...", "action": "always do Y..."}}
+
+The trigger should be specific enough to avoid false positives but general enough to fire
+when the pattern is relevant.
+""".strip()
+
+PATTERN_MERGE_PROMPT = """
+Two similar patterns in the same domain should be merged into one.
+
+Pattern A:
+- Description: {description_a}
+- Strategy: {strategy_a}
+
+Pattern B:
+- Description: {description_b}
+- Strategy: {strategy_b}
+
+Synthesize a merged description and strategy that captures the best of both.
+Return JSON: {{"description": "...", "strategy": "..."}}
+""".strip()
+
+MEMORY_MERGE_PROMPT = """
+Two similar memories should be merged into one comprehensive statement.
+
+Memory A: {memory_a}
+Memory B: {memory_b}
+
+Write a single merged statement that captures all information from both memories
+without being redundant. Keep it concise — one or two sentences.
+""".strip()

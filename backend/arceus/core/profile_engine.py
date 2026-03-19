@@ -48,11 +48,25 @@ class ArceusProfileEngine:
             container=container,
             top_k=20,
         )
+        habits = []
+        if hippocampus.procedural_memory is not None:
+            active_habits = await hippocampus.procedural_memory.get_active()
+            habits = [
+                {
+                    "trigger": habit.trigger_condition,
+                    "action": habit.action,
+                    "confidence": habit.confidence,
+                }
+                for habit in active_habits
+            ]
+        state = {}
+        if hippocampus.priming_memory is not None:
+            state = await hippocampus.priming_memory.get_current_state()
 
         return EmployeeProfile(
             role=role,
             core_knowledge=[m.content for m in static_facts],
             current_context=[m.content for m in dynamic_facts],
-            habits=[],
-            state={},
+            habits=habits,
+            state=state,
         )
