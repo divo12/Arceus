@@ -1,6 +1,7 @@
-"""Hippocampus Phase 0/1 kernel exports."""
+"""Hippocampus kernel exports."""
 
 from arceus.core.hippocampus.config import HippocampusConfig
+from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import (
     ConsolidationResult,
@@ -39,6 +40,7 @@ __all__ = [
     "GraphEntity",
     "GraphMemoryView",
     "GraphRelationship",
+    "GraphStore",
     "Habit",
     "HabitFormation",
     "Hippocampus",

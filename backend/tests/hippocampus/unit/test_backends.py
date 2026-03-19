@@ -1,15 +1,17 @@
+import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
-from arceus.core.hippocampus.backends.factory import create_embedding_engine
+from arceus.core.hippocampus.backends.factory import create_embedding_engine, create_graph_store
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
 from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
 from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
+from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.types import Habit, HabitFormation, MemoryType, MemoryUnit
 
 
@@ -182,3 +184,34 @@ async def test_sentence_transformer_embedding_engine_uses_loaded_model(monkeypat
 
     assert await engine.embed("hello world") == [0.6, 0.8]
     assert await engine.embed_batch(["a", "b"]) == [[1.0, 0.0], [0.0, 1.0]]
+
+
+@pytest.mark.asyncio
+async def test_sentence_transformer_embedding_engine_logs_warning_and_falls_back(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class BrokenSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            raise RuntimeError(f"cannot load {model_name}")
+
+    engine = SentenceTransformerEmbeddingEngine(model_name="all-MiniLM-L6-v2")
+    fallback = SimpleEmbeddingEngine(dimensions=384)
+
+    class FakeSentenceTransformersModule:
+        SentenceTransformer = BrokenSentenceTransformer
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", FakeSentenceTransformersModule())
+
+    with caplog.at_level("WARNING"):
+        vector = await engine.embed("hello world")
+
+    assert vector == await fallback.embed("hello world")
+    assert "Falling back to simple embeddings" in caplog.text
+
+
+def test_graph_store_factory_requires_explicit_in_memory_backend_for_now() -> None:
+    config = HippocampusConfig()
+
+    with pytest.raises(ValueError, match="Neo4j backend not yet implemented"):
+        create_graph_store("neo4j", config)

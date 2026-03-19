@@ -2,7 +2,7 @@ import pytest
 
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.hippocampus import Hippocampus
-from arceus.core.hippocampus.types import MemoryType
+from arceus.core.hippocampus.types import GraphEntity, MemoryType
 
 
 @pytest.mark.asyncio
@@ -11,6 +11,7 @@ async def test_hippocampus_create_remember_and_recall_prioritizes_static(tmp_pat
         sqlite_path=str(tmp_path / "hippocampus.db"),
         embedding_model="simple",
         embedding_dimensions=32,
+        graph_store_backend="in_memory",
     )
     hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
 
@@ -41,6 +42,7 @@ async def test_hippocampus_recall_does_not_cross_scope(tmp_path) -> None:
         sqlite_path=str(tmp_path / "hippocampus.db"),
         embedding_model="simple",
         embedding_dimensions=32,
+        graph_store_backend="in_memory",
     )
     hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
 
@@ -62,4 +64,31 @@ async def test_hippocampus_recall_does_not_cross_scope(tmp_path) -> None:
 
     assert len(recalled) == 1
     assert recalled[0].container == own_container
+    await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_hippocampus_recall_can_return_graph_results_when_enabled(tmp_path) -> None:
+    config = HippocampusConfig(
+        sqlite_path=str(tmp_path / "hippocampus.db"),
+        embedding_model="simple",
+        embedding_dimensions=32,
+        graph_store_backend="in_memory",
+    )
+    hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
+    container = "startup:startup-1:emp:agent-1"
+
+    await hippocampus.graph_store.create_node(
+        GraphEntity(
+            name="JWT",
+            entity_type="technology",
+            embedding=await hippocampus._embedding.embed("JWT"),
+            container=container,
+        )
+    )
+
+    recalled = await hippocampus.recall("JWT", container=container, top_k=1, include_graph=True)
+
+    assert len(recalled) == 1
+    assert getattr(recalled[0], "name", "") == "JWT"
     await hippocampus.close()

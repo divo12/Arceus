@@ -3,19 +3,30 @@ from __future__ import annotations
 from arceus.core.hippocampus.backends.factory import (
     create_cache,
     create_embedding_engine,
+    create_graph_store,
+    create_llm_engine,
     create_relational,
     create_vector_store,
 )
 from arceus.core.hippocampus.config import HippocampusConfig
+from arceus.core.hippocampus.engines.extractor import MemoryExtractor
+from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
-from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit
+from arceus.core.hippocampus.types import (
+    ExtractedFact,
+    ExtractionMode,
+    ExtractionResult,
+    GraphEntity,
+    MemoryType,
+    MemoryUnit,
+)
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 
 class Hippocampus:
-    """Phase 0/1 Hippocampus container with exact-scope retrieval."""
+    """Phase 2 Hippocampus container with extraction and graph wiring."""
 
     def __init__(
         self,
@@ -24,7 +35,11 @@ class Hippocampus:
         working_memory: WorkingMemory,
         static_memory: StaticMemory,
         dynamic_memory: DynamicMemory,
+        graph_store: GraphStore,
+        memory_extractor: MemoryExtractor | None,
         embedding_engine,
+        llm_engine,
+        llm_light,
         vector_store,
         relational_store,
     ) -> None:
@@ -33,13 +48,18 @@ class Hippocampus:
         self.working_memory = working_memory
         self.static_memory = static_memory
         self.dynamic_memory = dynamic_memory
+        self.graph_store = graph_store
+        self.memory_extractor = memory_extractor
         self._embedding = embedding_engine
+        self._llm = llm_engine
+        self._llm_light = llm_light
         self._vector_store = vector_store
         self._relational_store = relational_store
 
     @classmethod
     async def create(cls, agent_id: str, config: HippocampusConfig) -> Hippocampus:
         vector_store = create_vector_store(config.vector_store_backend, config)
+        graph_backend = create_graph_store(config.graph_store_backend, config)
         cache_backend = create_cache(config.cache_backend, config)
         relational_store = create_relational(config.relational_backend, config)
         await relational_store.initialize()
@@ -47,12 +67,16 @@ class Hippocampus:
             config.embedding_model,
             config.embedding_dimensions,
         )
+        llm_engine = create_llm_engine(config.extraction_model)
+        llm_light = create_llm_engine(config.lightweight_model)
 
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
+        graph_store = GraphStore(graph_backend, embedding_engine)
         static_memory = StaticMemory(
             agent_id=agent_id,
             vector_store=vector_store,
             embedding_engine=embedding_engine,
+            graph_store=graph_store,
         )
         dynamic_memory = DynamicMemory(
             agent_id=agent_id,
@@ -62,16 +86,27 @@ class Hippocampus:
             decay_threshold=config.decay_threshold,
         )
 
-        return cls(
+        instance = cls(
             agent_id=agent_id,
             config=config,
             working_memory=working_memory,
             static_memory=static_memory,
             dynamic_memory=dynamic_memory,
+            graph_store=graph_store,
+            memory_extractor=None,
             embedding_engine=embedding_engine,
+            llm_engine=llm_engine,
+            llm_light=llm_light,
             vector_store=vector_store,
             relational_store=relational_store,
         )
+        instance.memory_extractor = MemoryExtractor(
+            llm=llm_engine,
+            llm_light=llm_light,
+            embedding_engine=embedding_engine,
+            hippocampus=instance,
+        )
+        return instance
 
     async def close(self) -> None:
         await self._relational_store.close()
@@ -97,7 +132,7 @@ class Hippocampus:
                 confidence=1.0,
             )
             return await self.dynamic_memory.add(fact, container)
-        raise ValueError(f"Phase 0/1 remember() does not support {memory_type.value}")
+        raise ValueError(f"remember() does not support {memory_type.value}")
 
     async def recall(
         self,
@@ -105,9 +140,7 @@ class Hippocampus:
         container: str,
         top_k: int = 10,
         include_graph: bool = True,
-    ) -> list[MemoryUnit]:
-        del include_graph  # Graph-backed retrieval begins in Phase 2.
-
+    ) -> list[MemoryUnit | GraphEntity]:
         query_embedding = await self._embedding.embed(query)
         static_results = await self.static_memory.search(
             query,
@@ -121,7 +154,10 @@ class Hippocampus:
         )
 
         candidates = static_results + dynamic_results
-        if not candidates:
+        graph_results: list[GraphEntity] = []
+        if include_graph:
+            graph_results = await self.graph_store.search(query, container, top_k=top_k)
+        if not candidates and not graph_results:
             return []
 
         selected: list[MemoryUnit] = []
@@ -154,7 +190,47 @@ class Hippocampus:
 
             selected.append(remaining.pop(best_index))
 
-        return selected
+        final_results: list[MemoryUnit | GraphEntity] = list(selected)
+        seen_ids = {item.id for item in selected}
+        for node in graph_results:
+            if node.id in seen_ids:
+                continue
+            final_results.append(node)
+            seen_ids.add(node.id)
+            if len(final_results) >= top_k:
+                break
+
+        return final_results
+
+    async def search(
+        self,
+        query: str,
+        agent_id: str,
+        container: str,
+        top_k: int = 5,
+    ) -> list[MemoryUnit]:
+        del agent_id
+        embedding = await self._embedding.embed(query)
+        return await self._vector_store.search(
+            embedding=embedding,
+            container=container,
+            top_k=top_k,
+        )
+
+    async def extract_from_conversation(
+        self,
+        messages: list[dict],
+        container: str,
+        mode: ExtractionMode = ExtractionMode.AGENT,
+    ) -> ExtractionResult:
+        if self.memory_extractor is None:
+            return ExtractionResult()
+        return await self.memory_extractor.extract(
+            messages=messages,
+            agent_id=self._agent_id,
+            container=container,
+            mode=mode,
+        )
 
     def _tier_boost(self, memory_type: MemoryType) -> float:
         if memory_type is MemoryType.STATIC:

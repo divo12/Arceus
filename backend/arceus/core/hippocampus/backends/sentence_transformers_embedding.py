@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
+
+from arceus.core.hippocampus.backends.simple_embedding import SimpleEmbeddingEngine
+
+logger = logging.getLogger(__name__)
 
 
 class SentenceTransformerEmbeddingEngine:
@@ -10,10 +15,13 @@ class SentenceTransformerEmbeddingEngine:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
         self._model_name = model_name
         self._model: Any | None = None
+        self._fallback = SimpleEmbeddingEngine(dimensions=384)
         self._lock = asyncio.Lock()
 
     async def embed(self, text: str) -> list[float]:
         model = await self._get_model()
+        if model is None:
+            return await self._fallback.embed(text)
         vector = await asyncio.to_thread(
             model.encode,
             text,
@@ -23,6 +31,8 @@ class SentenceTransformerEmbeddingEngine:
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         model = await self._get_model()
+        if model is None:
+            return await self._fallback.embed_batch(texts)
         vectors = await asyncio.to_thread(
             model.encode,
             texts,
@@ -46,8 +56,17 @@ class SentenceTransformerEmbeddingEngine:
             if self._model is None:
                 from sentence_transformers import SentenceTransformer
 
-                self._model = await asyncio.to_thread(
-                    SentenceTransformer,
-                    self._model_name,
-                )
+                try:
+                    self._model = await asyncio.to_thread(
+                        SentenceTransformer,
+                        self._model_name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Falling back to simple embeddings because sentence-transformers "
+                        "model %s could not be loaded: %s",
+                        self._model_name,
+                        exc,
+                    )
+                    self._model = None
         return self._model

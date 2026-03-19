@@ -19,6 +19,8 @@ dependencies = [
     "httpx>=0.28",
     "sse-starlette>=2.2",
     "python-multipart>=0.0.18",
+    "openai>=2.29.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]

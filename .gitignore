@@ -57,6 +57,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Hippocampus test harness
+backend/Hippocampus_app/
+
 # Misc
 *.pem
 *.tsbuildinfo

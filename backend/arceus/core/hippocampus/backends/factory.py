@@ -1,6 +1,8 @@
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
+from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
-from arceus.core.hippocampus.backends.protocols import EmbeddingEngine
+from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
+from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, GraphStoreBackend, LLMEngine
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
@@ -27,6 +29,15 @@ def create_relational(backend: str, config: HippocampusConfig) -> SQLiteRelation
     raise ValueError(f"Unsupported relational backend: {backend}")
 
 
+def create_graph_store(backend: str, config: HippocampusConfig) -> GraphStoreBackend:
+    del config
+    if backend == "in_memory":
+        return InMemoryGraphStoreBackend()
+    if backend == "neo4j":
+        raise ValueError("Neo4j backend not yet implemented, use 'in_memory'")
+    raise ValueError(f"Unsupported graph backend: {backend}")
+
+
 def create_embedding_engine(
     backend: str,
     dimensions: int,
@@ -36,3 +47,7 @@ def create_embedding_engine(
     if backend == "all-MiniLM-L6-v2":
         return SentenceTransformerEmbeddingEngine(model_name=backend)
     raise ValueError(f"Unsupported embedding backend: {backend}")
+
+
+def create_llm_engine(model_name: str) -> LLMEngine:
+    return NoopLLMEngine(model_name=model_name)

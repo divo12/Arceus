@@ -25,7 +25,10 @@ async def test_memory_scope_retrieves_shared_private_and_task_memories_without_l
     scope = ArceusMemoryScope()
     hippocampus = await Hippocampus.create(
         agent_id="emp-1",
-        config=HippocampusConfig(sqlite_path=str(tmp_path / "hippocampus.db")),
+        config=HippocampusConfig(
+            sqlite_path=str(tmp_path / "hippocampus.db"),
+            graph_store_backend="in_memory",
+        ),
     )
 
     startup_id = "startup-1"
