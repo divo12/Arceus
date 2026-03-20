@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hippocampus Architecture — How Memory Works in Arceus</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ===========================================
+   VIEWPORT FITTING: MANDATORY BASE STYLES
+   =========================================== */
+html, body {
+    height: 100%;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+    font-family: 'Manrope', sans-serif;
+    background: #0a0a0a;
+    color: #f0f0f0;
+}
+
+html {
+    scroll-snap-type: y mandatory;
+    scroll-behavior: smooth;
+}
+
+.slide {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.slide-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-height: 100%;
+    overflow: hidden;
+    padding: var(--slide-padding);
+}
+
+:root {
+    --title-size: clamp(1.5rem, 5vw, 4rem);
+    --h2-size: clamp(1.25rem, 3.5vw, 2.5rem);
+    --h3-size: clamp(1rem, 2.5vw, 1.75rem);
+    --body-size: clamp(0.75rem, 1.5vw, 1.125rem);
+    --small-size: clamp(0.65rem, 1vw, 0.875rem);
+    --slide-padding: clamp(1rem, 4vw, 4rem);
+    --content-gap: clamp(0.5rem, 2vw, 2rem);
+    --element-gap: clamp(0.25rem, 1vw, 1rem);
+    --accent: #2563eb;
+    --accent-glow: rgba(37, 99, 235, 0.3);
+    --surface: #141414;
+    --surface-light: #1e1e1e;
+    --border: #2a2a2a;
+    --muted: #888;
+    --white: #f0f0f0;
+    --cyan: #06b6d4;
+    --emerald: #10b981;
+    --amber: #f59e0b;
+    --rose: #f43f5e;
+    --violet: #8b5cf6;
+}
+
+/* ===========================================
+   TYPOGRAPHY
+   =========================================== */
+h1 { font-size: var(--title-size); font-weight: 800; line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: var(--h2-size); font-weight: 700; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
+h3 { font-size: var(--h3-size); font-weight: 600; line-height: 1.3; margin: 0; }
+p, li { font-size: var(--body-size); line-height: 1.5; margin: 0; }
+.label { font-size: var(--small-size); font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
+.muted { color: var(--muted); }
+.accent { color: var(--accent); }
+
+/* ===========================================
+   SLIDE LAYOUTS
+   =========================================== */
+
+/* Title slide */
+.slide--title {
+    background: #0a0a0a;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+.slide--title .slide-content {
+    align-items: center;
+    gap: clamp(0.75rem, 2vw, 1.5rem);
+    max-width: 900px;
+    margin: 0 auto;
+}
+.slide--title h1 {
+    font-size: clamp(2rem, 6vw, 5rem);
+    background: linear-gradient(135deg, var(--white), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.slide--title .tagline {
+    font-size: clamp(1rem, 2vw, 1.5rem);
+    color: var(--muted);
+    font-weight: 300;
+    max-width: 600px;
+}
+
+/* Section divider */
+.slide--section {
+    background: var(--accent);
+    color: white;
+}
+.slide--section .slide-content {
+    gap: clamp(0.5rem, 1.5vw, 1rem);
+}
+.slide--section .section-number {
+    font-size: clamp(3rem, 10vw, 8rem);
+    font-weight: 800;
+    opacity: 0.2;
+    line-height: 1;
+}
+.slide--section h2 {
+    font-size: clamp(1.5rem, 4vw, 3rem);
+}
+
+/* Content slide */
+.slide--content {
+    background: #0a0a0a;
+}
+.slide--content .slide-content {
+    gap: var(--content-gap);
+}
+
+/* Diagram slide */
+.slide--diagram {
+    background: #0a0a0a;
+}
+.slide--diagram .slide-content {
+    gap: clamp(0.5rem, 1.5vw, 1.25rem);
+}
+
+/* ===========================================
+   COMPONENTS
+   =========================================== */
+
+/* Architecture diagram boxes */
+.arch-container {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.4rem, 1vh, 0.75rem);
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.arch-row {
+    display: flex;
+    gap: clamp(0.3rem, 0.8vw, 0.5rem);
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: nowrap;
+}
+
+.arch-box {
+    border-radius: clamp(4px, 0.5vw, 8px);
+    padding: clamp(0.4rem, 1vw, 0.75rem) clamp(0.5rem, 1.2vw, 1rem);
+    text-align: center;
+    font-size: var(--small-size);
+    font-weight: 600;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(0.1rem, 0.3vw, 0.25rem);
+    min-height: clamp(2rem, 5vh, 3.5rem);
+    position: relative;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.arch-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.arch-box--blue { background: rgba(37, 99, 235, 0.15); border: 1px solid rgba(37, 99, 235, 0.4); color: #93c5fd; }
+.arch-box--cyan { background: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35); color: #67e8f9; }
+.arch-box--emerald { background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); color: #6ee7b7; }
+.arch-box--amber { background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); color: #fcd34d; }
+.arch-box--rose { background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.35); color: #fda4af; }
+.arch-box--violet { background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.35); color: #c4b5fd; }
+.arch-box--surface { background: var(--surface-light); border: 1px solid var(--border); color: var(--muted); }
+.arch-box--white { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); color: var(--white); }
+.arch-box--accent-solid { background: var(--accent); border: 1px solid var(--accent); color: white; }
+
+.arch-box .box-sub {
+    font-size: clamp(0.5rem, 0.8vw, 0.7rem);
+    font-weight: 400;
+    opacity: 0.7;
+}
+
+/* Arrow connector */
+.arch-arrow {
+    text-align: center;
+    color: var(--muted);
+    font-size: clamp(0.75rem, 1.5vw, 1.25rem);
+    line-height: 1;
+    padding: clamp(0.1rem, 0.3vh, 0.25rem) 0;
+}
+
+/* Grid cards */
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: clamp(0.4rem, 1vw, 0.75rem);
+    width: 100%;
+    max-width: 1100px;
+}
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: clamp(6px, 0.5vw, 10px);
+    padding: clamp(0.6rem, 1.2vw, 1rem);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.2rem, 0.5vw, 0.4rem);
+    transition: border-color 0.3s ease;
+}
+.card:hover { border-color: var(--accent); }
+.card h3 { font-size: clamp(0.8rem, 1.3vw, 1.1rem); }
+.card p { font-size: var(--small-size); color: var(--muted); }
+.card .card-icon {
+    font-size: clamp(1rem, 2vw, 1.5rem);
+    margin-bottom: clamp(0.1rem, 0.3vw, 0.25rem);
+}
+
+/* Tier strip */
+.tier-strip {
+    display: flex;
+    gap: clamp(0.3rem, 0.6vw, 0.5rem);
+    width: 100%;
+    max-width: 1100px;
+}
+.tier-item {
+    flex: 1;
+    border-radius: clamp(4px, 0.5vw, 8px);
+    padding: clamp(0.5rem, 1vw, 0.8rem);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: clamp(0.15rem, 0.4vw, 0.3rem);
+}
+.tier-item h3 {
+    font-size: clamp(0.7rem, 1.1vw, 0.95rem);
+    font-weight: 700;
+}
+.tier-item p {
+    font-size: clamp(0.55rem, 0.85vw, 0.75rem);
+    color: inherit;
+    opacity: 0.75;
+}
+
+/* Flow steps */
+.flow-steps {
+    display: flex;
+    align-items: center;
+    gap: clamp(0.2rem, 0.5vw, 0.4rem);
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 1100px;
+}
+.flow-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: clamp(4px, 0.5vw, 8px);
+    padding: clamp(0.4rem, 0.8vw, 0.6rem) clamp(0.5rem, 1vw, 0.8rem);
+    font-size: var(--small-size);
+    font-weight: 500;
+    text-align: center;
+    white-space: nowrap;
+}
+.flow-arrow {
+    color: var(--accent);
+    font-size: clamp(0.75rem, 1.2vw, 1rem);
+    font-weight: 700;
+}
+
+/* Two-column layout */
+.two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(1rem, 2vw, 2rem);
+    width: 100%;
+    max-width: 1100px;
+}
+
+/* Analogy bar */
+.analogy-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: clamp(0.3rem, 0.8vw, 0.75rem);
+    align-items: center;
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+}
+.analogy-row .vs { color: var(--muted); font-weight: 700; font-size: var(--small-size); }
+
+/* Progress bar */
+.progress-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 3px;
+    background: var(--accent);
+    z-index: 100;
+    transition: width 0.3s ease;
+}
+
+/* Nav dots */
+.nav-dots {
+    position: fixed;
+    right: clamp(0.5rem, 1.5vw, 1.5rem);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100;
+}
+.nav-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: none;
+    padding: 0;
+}
+.nav-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+    transform: scale(1.3);
+}
+
+/* Slide counter */
+.slide-counter {
+    position: fixed;
+    bottom: clamp(0.5rem, 1.5vw, 1.5rem);
+    right: clamp(0.5rem, 1.5vw, 1.5rem);
+    font-size: var(--small-size);
+    color: var(--muted);
+    z-index: 100;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Reveal animations */
+.reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+}
+.reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+.reveal-delay-1 { transition-delay: 0.1s; }
+.reveal-delay-2 { transition-delay: 0.2s; }
+.reveal-delay-3 { transition-delay: 0.3s; }
+.reveal-delay-4 { transition-delay: 0.4s; }
+
+/* Pulse dot */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+.pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--emerald);
+    display: inline-block;
+    animation: pulse 2s infinite;
+}
+
+/* Responsive */
+@media (max-height: 700px) {
+    :root {
+        --slide-padding: clamp(0.75rem, 3vw, 2rem);
+        --content-gap: clamp(0.4rem, 1.5vw, 1rem);
+        --title-size: clamp(1.25rem, 4.5vw, 2.5rem);
+        --h2-size: clamp(1rem, 3vw, 1.75rem);
+    }
+}
+@media (max-height: 600px) {
+    :root {
+        --slide-padding: clamp(0.5rem, 2.5vw, 1.5rem);
+        --content-gap: clamp(0.3rem, 1vw, 0.75rem);
+        --title-size: clamp(1.1rem, 4vw, 2rem);
+        --body-size: clamp(0.7rem, 1.2vw, 0.95rem);
+    }
+    .nav-dots, .decorative { display: none; }
+}
+@media (max-height: 500px) {
+    :root {
+        --slide-padding: clamp(0.4rem, 2vw, 1rem);
+        --title-size: clamp(1rem, 3.5vw, 1.5rem);
+        --h2-size: clamp(0.9rem, 2.5vw, 1.25rem);
+        --body-size: clamp(0.65rem, 1vw, 0.85rem);
+    }
+}
+@media (max-width: 600px) {
+    :root { --title-size: clamp(1.25rem, 7vw, 2.5rem); }
+    .two-col { grid-template-columns: 1fr; }
+    .tier-strip { flex-wrap: wrap; }
+    .tier-item { min-width: 45%; }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+    }
+    html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<!-- Progress bar -->
+<div class="progress-bar" id="progress"></div>
+
+<!-- Nav dots -->
+<nav class="nav-dots" id="navDots" aria-label="Slide navigation"></nav>
+
+<!-- Slide counter -->
+<div class="slide-counter" id="counter"></div>
+
+<!-- ============================================
+     SLIDE 1: TITLE
+     ============================================ -->
+<section class="slide slide--title" data-slide="0">
+    <div class="slide-content">
+        <p class="label reveal">Arceus Layer 4</p>
+        <h1 class="reveal reveal-delay-1">Hippocampus</h1>
+        <p class="tagline reveal reveal-delay-2">How AI agents remember, learn, and grow &mdash; the memory system that makes every Arceus employee intelligent</p>
+        <p class="muted reveal reveal-delay-3" style="font-size: var(--small-size); margin-top: clamp(0.5rem, 1vw, 1rem);">v6.0 Architecture &middot; 2026</p>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 2: THE HUMAN ANALOGY
+     ============================================ -->
+<section class="slide slide--content" data-slide="1">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Why "Hippocampus"?</p>
+        <h2 class="reveal reveal-delay-1">Named after the brain region<br>that forms and organizes memories</h2>
+        <div style="margin-top: var(--content-gap); width: 100%; max-width: 900px;">
+            <div class="analogy-row reveal reveal-delay-2">
+                <div class="card" style="text-align:center;">
+                    <div class="card-icon">&#129504;</div>
+                    <h3>Human Brain</h3>
+                    <p>Short-term memory, long-term facts, muscle memory, emotional state, pattern recognition</p>
+                </div>
+                <div class="vs">=</div>
+                <div class="card" style="text-align:center;">
+                    <div class="card-icon">&#9889;</div>
+                    <h3>Hippocampus System</h3>
+                    <p>Working memory, static memory, dynamic memory, procedural habits, priming state</p>
+                </div>
+            </div>
+        </div>
+        <p class="muted reveal reveal-delay-3" style="margin-top: var(--element-gap); text-align: center; max-width: 700px;">Every AI employee in Arceus gets their own Hippocampus &mdash; their personal brain that remembers everything they've learned, done, and felt.</p>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 3: WHERE HIPPOCAMPUS LIVES
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="2">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">System Position</p>
+        <h2 class="reveal reveal-delay-1">Where Hippocampus lives in Arceus</h2>
+        <div class="arch-container reveal reveal-delay-2">
+            <!-- Board -->
+            <div class="arch-row">
+                <div class="arch-box arch-box--white" style="max-width: 400px;">
+                    &#128100; Board Dashboard
+                    <span class="box-sub">User = Board of Directors</span>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <!-- Orchestrator -->
+            <div class="arch-row">
+                <div class="arch-box arch-box--blue" style="max-width: 700px;">
+                    Arceus Orchestrator
+                    <span class="box-sub">Pipeline &middot; Budget &middot; Meeting &middot; Routing &middot; A2A Protocol</span>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <!-- Employees -->
+            <div class="arch-row">
+                <div class="arch-box arch-box--cyan">
+                    &#128188; CEO
+                    <span class="box-sub" style="color: var(--amber);">&#9679; Hippocampus</span>
+                </div>
+                <div class="arch-box arch-box--cyan">
+                    &#128187; CTO
+                    <span class="box-sub" style="color: var(--amber);">&#9679; Hippocampus</span>
+                </div>
+                <div class="arch-box arch-box--cyan">
+                    &#128203; PM
+                    <span class="box-sub" style="color: var(--amber);">&#9679; Hippocampus</span>
+                </div>
+                <div class="arch-box arch-box--cyan">
+                    &#128296; Engineer
+                    <span class="box-sub" style="color: var(--amber);">&#9679; Hippocampus</span>
+                </div>
+                <div class="arch-box arch-box--cyan">
+                    &#127912; Designer
+                    <span class="box-sub" style="color: var(--amber);">&#9679; Hippocampus</span>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <!-- Sub-agents -->
+            <div class="arch-row">
+                <div class="arch-box arch-box--surface" style="max-width: 700px;">
+                    Sub-Agent Pool
+                    <span class="box-sub">Generic &middot; Specialized (Code, Test, Web) &middot; Exploratory</span>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <!-- Shared Fabric -->
+            <div class="arch-row">
+                <div class="arch-box arch-box--amber" style="max-width: 700px;">
+                    Shared Memory Fabric
+                    <span class="box-sub">Vector Store &middot; Graph Store (Neo4j) &middot; Profile Engine &middot; Audit</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 4: THE 5 MEMORY TIERS
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="3">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Core Concept</p>
+        <h2 class="reveal reveal-delay-1">5 Memory Tiers &mdash; Like a Human Brain</h2>
+        <div class="tier-strip reveal reveal-delay-2">
+            <div class="tier-item arch-box--rose">
+                <h3>Working</h3>
+                <p>Active task context. Held in cache. Cleared when task ends. 2hr TTL.</p>
+            </div>
+            <div class="tier-item arch-box--blue">
+                <h3>Static</h3>
+                <p>Permanent facts. "React uses JSX." Never expires. Highest priority.</p>
+            </div>
+            <div class="tier-item arch-box--emerald">
+                <h3>Dynamic</h3>
+                <p>Episodic knowledge. Time-decays. Can be promoted to Static.</p>
+            </div>
+            <div class="tier-item arch-box--violet">
+                <h3>Procedural</h3>
+                <p>Habits &amp; rules. "When deploying, always run tests first."</p>
+            </div>
+            <div class="tier-item arch-box--amber">
+                <h3>Priming</h3>
+                <p>Emotional state. Confidence, caution, morale. Shapes behavior.</p>
+            </div>
+        </div>
+        <p class="muted reveal reveal-delay-3" style="margin-top: var(--element-gap); text-align: center; max-width: 800px;">Memories flow upward: Dynamic knowledge that proves reliable gets <strong style="color:var(--emerald)">promoted</strong> to Static &mdash; just like how humans turn repeated experiences into long-term knowledge.</p>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 5: THE 6 ENGINES
+     ============================================ -->
+<section class="slide slide--content" data-slide="4">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Intelligence Layer</p>
+        <h2 class="reveal reveal-delay-1">6 Engines That Power Memory</h2>
+        <div class="card-grid reveal reveal-delay-2">
+            <div class="card">
+                <div class="card-icon" style="color: var(--accent);">&#128269;</div>
+                <h3>Memory Extractor</h3>
+                <p>LLM reads conversations and extracts structured facts, entities, and relationships.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="color: var(--cyan);">&#9878;</div>
+                <h3>Reasoning Bank</h3>
+                <p>Retrieves relevant memories, judges trajectories, distills learnings, consolidates duplicates.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="color: var(--emerald);">&#128200;</div>
+                <h3>Pattern Learner</h3>
+                <p>Detects repeated success patterns. When strong enough, they become habits.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="color: var(--amber);">&#11014;</div>
+                <h3>Promotion Engine</h3>
+                <p>Automatically promotes dynamic memories to permanent static when proven reliable.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="color: var(--violet);">&#128465;</div>
+                <h3>Garbage Collector</h3>
+                <p>Expires old facts, decays unused memories, deduplicates, resolves contradictions.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="color: var(--rose);">&#128752;</div>
+                <h3>Graph Store</h3>
+                <p>Neo4j knowledge graph. Tracks entity relationships, version chains, promotions.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 6: SECTION — FLOWS
+     ============================================ -->
+<section class="slide slide--section" data-slide="5">
+    <div class="slide-content">
+        <div class="section-number reveal">02</div>
+        <h2 class="reveal reveal-delay-1">How Memory Flows</h2>
+        <p class="reveal reveal-delay-2" style="opacity: 0.8; max-width: 500px;">Five core flows connect Hippocampus to every part of Arceus</p>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 7: FLOW A — TASK EXECUTION
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="6">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Flow A</p>
+        <h2 class="reveal reveal-delay-1">Task Execution Memory Loop</h2>
+        <p class="muted reveal reveal-delay-1" style="text-align: center; max-width: 700px;">Every time an agent works on a task, memory is both <em>consumed</em> and <em>produced</em></p>
+        <div class="arch-container reveal reveal-delay-2" style="max-width: 1000px;">
+            <div class="arch-row">
+                <div class="arch-box arch-box--white" style="flex: 2;">&#128196; Agent receives task</div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <div class="arch-row">
+                <div class="arch-box arch-box--blue">&#128269; Retrieve<br><span class="box-sub">relevant memories</span></div>
+                <div class="arch-box arch-box--violet">&#9889; Load habits<br><span class="box-sub">inject into prompt</span></div>
+                <div class="arch-box arch-box--amber">&#127912; Prime state<br><span class="box-sub">set disposition</span></div>
+            </div>
+            <div class="arch-arrow">&#8595; Agent executes with full context</div>
+            <div class="arch-row">
+                <div class="arch-box arch-box--accent-solid" style="flex: 2;">&#9997; Task completes &rarr; Trajectory captured</div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <div class="arch-row">
+                <div class="arch-box arch-box--cyan">Extract facts<br><span class="box-sub">LLM extraction</span></div>
+                <div class="arch-box arch-box--emerald">Route to tiers<br><span class="box-sub">static / dynamic / procedural</span></div>
+                <div class="arch-box arch-box--rose">Update graph<br><span class="box-sub">entities &amp; edges</span></div>
+                <div class="arch-box arch-box--violet">Check patterns<br><span class="box-sub">habit formation</span></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 8: FLOW B — DELEGATION
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="7">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Flow B</p>
+        <h2 class="reveal reveal-delay-1">Delegation Memory Loop</h2>
+        <p class="muted reveal reveal-delay-1" style="text-align: center; max-width: 700px;">When one employee delegates to another, relevant memories are <strong style="color: var(--accent);">copied</strong> &mdash; never shared by reference</p>
+        <div class="arch-container reveal reveal-delay-2" style="max-width: 900px;">
+            <div class="arch-row">
+                <div class="arch-box arch-box--cyan" style="flex: 1;">&#128188; CEO<br><span class="box-sub">"Build auth system"</span></div>
+                <div style="display:flex; align-items:center; padding: 0 clamp(0.3rem,0.8vw,0.5rem); color: var(--accent); font-weight: 700;">&#10132;</div>
+                <div class="arch-box arch-box--cyan" style="flex: 1;">&#128187; CTO<br><span class="box-sub">receives delegation</span></div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <div class="arch-row">
+                <div class="arch-box arch-box--blue" style="flex:1;">
+                    1. Query CEO's memory for "auth"
+                </div>
+                <div class="arch-box arch-box--emerald" style="flex:1;">
+                    2. Copy relevant memories to task scope
+                </div>
+                <div class="arch-box arch-box--violet" style="flex:1;">
+                    3. CTO executes with injected context
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <div class="arch-row">
+                <div class="arch-box arch-box--amber" style="flex: 2;">
+                    4. On completion: CEO auto-internalizes CTO's verified learnings
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 9: FLOW C & D — MEETINGS & DASHBOARD
+     ============================================ -->
+<section class="slide slide--content" data-slide="8">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Flows C &amp; D</p>
+        <h2 class="reveal reveal-delay-1">Meetings &amp; Board Visibility</h2>
+        <div class="two-col reveal reveal-delay-2" style="margin-top: var(--content-gap);">
+            <div class="card">
+                <div class="card-icon" style="color: var(--cyan);">&#128483;</div>
+                <h3>Meeting Memory (Flow C)</h3>
+                <p style="color: var(--white); opacity: 0.9;">When a standup or review ends, the LLM extracts decisions, blockers, commitments, and morale signals from the transcript.</p>
+                <div style="margin-top: var(--element-gap); display: flex; flex-direction: column; gap: 0.3rem;">
+                    <span style="font-size: var(--small-size); color: var(--emerald);">&#10003; Decisions &rarr; Startup-shared static memory</span>
+                    <span style="font-size: var(--small-size); color: var(--amber);">&#10003; Learnings &rarr; Employee private dynamic memory</span>
+                    <span style="font-size: var(--small-size); color: var(--rose);">&#10003; Blockers &rarr; Task-scoped memory</span>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="color: var(--amber);">&#128200;</div>
+                <h3>Board Dashboard (Flow D)</h3>
+                <p style="color: var(--white); opacity: 0.9;">Raw memories are never exposed. A projection layer creates safe, structured views for the board.</p>
+                <div style="margin-top: var(--element-gap); display: flex; flex-direction: column; gap: 0.3rem;">
+                    <span style="font-size: var(--small-size); color: var(--muted);">&#8226; Memory Summary per agent</span>
+                    <span style="font-size: var(--small-size); color: var(--muted);">&#8226; Knowledge Graph visualization</span>
+                    <span style="font-size: var(--small-size); color: var(--muted);">&#8226; Version history chains</span>
+                    <span style="font-size: var(--small-size); color: var(--muted);">&#8226; Promotion event stream</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 10: FLOW E — GC CYCLE
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="9">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Flow E</p>
+        <h2 class="reveal reveal-delay-1">GC &amp; Consolidation Cycle <span class="muted" style="font-weight: 400; font-size: var(--h3-size);">(every 6 hours)</span></h2>
+        <div class="flow-steps reveal reveal-delay-2" style="margin-top: var(--content-gap);">
+            <div class="flow-step" style="border-color: var(--rose);">&#128337; Expire<br><span style="font-size:clamp(0.5rem,0.7vw,0.65rem); opacity:0.6;">temporal facts</span></div>
+            <div class="flow-arrow">&#10132;</div>
+            <div class="flow-step" style="border-color: var(--amber);">&#128200; Decay<br><span style="font-size:clamp(0.5rem,0.7vw,0.65rem); opacity:0.6;">score dynamics</span></div>
+            <div class="flow-arrow">&#10132;</div>
+            <div class="flow-step" style="border-color: var(--cyan);">&#128279; Dedup<br><span style="font-size:clamp(0.5rem,0.7vw,0.65rem); opacity:0.6;">&gt;95% similar</span></div>
+            <div class="flow-arrow">&#10132;</div>
+            <div class="flow-step" style="border-color: var(--violet);">&#9878; Contradictions<br><span style="font-size:clamp(0.5rem,0.7vw,0.65rem); opacity:0.6;">LLM verifies</span></div>
+            <div class="flow-arrow">&#10132;</div>
+            <div class="flow-step" style="border-color: var(--emerald);">&#128257; Merge<br><span style="font-size:clamp(0.5rem,0.7vw,0.65rem); opacity:0.6;">same-domain</span></div>
+            <div class="flow-arrow">&#10132;</div>
+            <div class="flow-step" style="border-color: var(--accent);">&#11014; Promote<br><span style="font-size:clamp(0.5rem,0.7vw,0.65rem); opacity:0.6;">dynamic &rarr; static</span></div>
+        </div>
+        <div class="two-col reveal reveal-delay-3" style="margin-top: var(--content-gap); max-width: 800px;">
+            <div class="card" style="text-align: center;">
+                <h3 style="color: var(--emerald);">Promotion Rule</h3>
+                <p>10+ uses &middot; 80%+ confidence &middot; 14+ days old &rarr; auto-promoted to permanent static memory</p>
+            </div>
+            <div class="card" style="text-align: center;">
+                <h3 style="color: var(--rose);">Prune Rule</h3>
+                <p>30+ days &middot; &lt;5 uses &middot; &lt;30% confidence &rarr; soft-deleted (unless promotion candidate)</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 11: SECTION — INSIDE
+     ============================================ -->
+<section class="slide slide--section" data-slide="10">
+    <div class="slide-content">
+        <div class="section-number reveal">03</div>
+        <h2 class="reveal reveal-delay-1">Inside Hippocampus</h2>
+        <p class="reveal reveal-delay-2" style="opacity: 0.8; max-width: 500px;">The kernel/adapter architecture that makes it extractable</p>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 12: KERNEL + ADAPTER ARCHITECTURE
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="11">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Architecture</p>
+        <h2 class="reveal reveal-delay-1">Kernel + Adapter Split</h2>
+        <div class="arch-container reveal reveal-delay-2" style="max-width: 950px;">
+            <!-- Adapter layer -->
+            <div style="border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: clamp(0.4rem, 0.8vw, 0.6rem);">
+                <p style="font-size: var(--small-size); color: var(--amber); font-weight: 600; margin-bottom: clamp(0.2rem, 0.5vw, 0.3rem);">ARCEUS ADAPTER LAYER (Arceus-specific)</p>
+                <div class="arch-row">
+                    <div class="arch-box arch-box--amber">memory_scope.py<br><span class="box-sub">container naming</span></div>
+                    <div class="arch-box arch-box--amber">delegation_memory.py<br><span class="box-sub">copy on delegate</span></div>
+                    <div class="arch-box arch-box--amber">profile_engine.py<br><span class="box-sub">agent profiles</span></div>
+                    <div class="arch-box arch-box--amber">memory_projections.py<br><span class="box-sub">dashboard views</span></div>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <!-- Kernel -->
+            <div style="border: 1px solid rgba(37, 99, 235, 0.4); border-radius: 8px; padding: clamp(0.4rem, 0.8vw, 0.6rem);">
+                <p style="font-size: var(--small-size); color: var(--accent); font-weight: 600; margin-bottom: clamp(0.2rem, 0.5vw, 0.3rem);">HIPPOCAMPUS KERNEL (domain-agnostic, extractable)</p>
+                <div class="arch-row">
+                    <div class="arch-box arch-box--blue">tiers/<br><span class="box-sub">working &middot; static &middot; dynamic &middot; procedural &middot; priming</span></div>
+                    <div class="arch-box arch-box--cyan">engines/<br><span class="box-sub">extractor &middot; reasoning &middot; patterns &middot; promotion &middot; GC &middot; graph</span></div>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <!-- Backend protocols -->
+            <div style="border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: clamp(0.4rem, 0.8vw, 0.6rem);">
+                <p style="font-size: var(--small-size); color: var(--violet); font-weight: 600; margin-bottom: clamp(0.2rem, 0.5vw, 0.3rem);">BACKEND PROTOCOLS (swappable implementations)</p>
+                <div class="arch-row">
+                    <div class="arch-box arch-box--violet">VectorStore<br><span class="box-sub">in-memory &rarr; pgvector</span></div>
+                    <div class="arch-box arch-box--violet">RelationalStore<br><span class="box-sub">SQLite &rarr; Postgres</span></div>
+                    <div class="arch-box arch-box--violet">GraphStore<br><span class="box-sub">in-memory &rarr; Neo4j</span></div>
+                    <div class="arch-box arch-box--violet">CacheStore<br><span class="box-sub">dict &rarr; Redis</span></div>
+                    <div class="arch-box arch-box--violet">LLMEngine<br><span class="box-sub">noop &rarr; Azure OpenAI</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 13: CONTAINER SCOPING
+     ============================================ -->
+<section class="slide slide--content" data-slide="12">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Data Isolation</p>
+        <h2 class="reveal reveal-delay-1">Container-Based Memory Scoping</h2>
+        <p class="muted reveal reveal-delay-1" style="text-align: center; max-width: 700px;">Every memory is tagged with a container that controls who can see it</p>
+        <div class="card-grid reveal reveal-delay-2" style="grid-template-columns: repeat(3, 1fr); margin-top: var(--content-gap);">
+            <div class="card" style="border-left: 3px solid var(--accent);">
+                <h3>Startup Shared</h3>
+                <p style="font-family: monospace; font-size: clamp(0.6rem, 0.9vw, 0.8rem); color: var(--accent);">startup:{id}</p>
+                <p>Decisions visible to all employees in the startup. "We use React."</p>
+            </div>
+            <div class="card" style="border-left: 3px solid var(--emerald);">
+                <h3>Employee Private</h3>
+                <p style="font-family: monospace; font-size: clamp(0.6rem, 0.9vw, 0.8rem); color: var(--emerald);">startup:{id}:emp:{agent}</p>
+                <p>Personal learnings only this agent can access. "I prefer TypeScript."</p>
+            </div>
+            <div class="card" style="border-left: 3px solid var(--amber);">
+                <h3>Task Scoped</h3>
+                <p style="font-family: monospace; font-size: clamp(0.6rem, 0.9vw, 0.8rem); color: var(--amber);">startup:{id}:task:{task}</p>
+                <p>Temporary context for a specific task. Cleaned up on completion.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 14: LLM COST DISCIPLINE
+     ============================================ -->
+<section class="slide slide--content" data-slide="13">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">Cost Discipline</p>
+        <h2 class="reveal reveal-delay-1">10 LLM Call Sites &mdash; Cheapest Model That Works</h2>
+        <div class="two-col reveal reveal-delay-2" style="margin-top: var(--content-gap);">
+            <div class="card" style="border-top: 3px solid var(--accent);">
+                <h3 style="color: var(--accent);">GPT-4o (Heavy)</h3>
+                <p style="color: var(--white); opacity: 0.85;">Used only when nuanced understanding is required</p>
+                <div style="margin-top: var(--element-gap); display: flex; flex-direction: column; gap: 0.2rem;">
+                    <span style="font-size: var(--small-size);">&#8226; Fact extraction from conversations</span>
+                    <span style="font-size: var(--small-size);">&#8226; ADD/UPDATE/DELETE decisions</span>
+                    <span style="font-size: var(--small-size);">&#8226; Trajectory quality analysis</span>
+                </div>
+            </div>
+            <div class="card" style="border-top: 3px solid var(--emerald);">
+                <h3 style="color: var(--emerald);">GPT-4o-mini (Light)</h3>
+                <p style="color: var(--white); opacity: 0.85;">Binary classification, short generation, naming</p>
+                <div style="margin-top: var(--element-gap); display: flex; flex-direction: column; gap: 0.2rem;">
+                    <span style="font-size: var(--small-size);">&#8226; Contradiction verification (yes/no)</span>
+                    <span style="font-size: var(--small-size);">&#8226; Memory merge synthesis</span>
+                    <span style="font-size: var(--small-size);">&#8226; Habit naming, promotion reasons</span>
+                    <span style="font-size: var(--small-size);">&#8226; Priming prompt, relationship classification</span>
+                    <span style="font-size: var(--small-size);">&#8226; Trigger evaluation</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 15: THE BIG PICTURE
+     ============================================ -->
+<section class="slide slide--diagram" data-slide="14">
+    <div class="slide-content" style="align-items: center;">
+        <p class="label reveal">The Big Picture</p>
+        <h2 class="reveal reveal-delay-1">Memory Makes Agents Intelligent</h2>
+        <div class="arch-container reveal reveal-delay-2" style="max-width: 950px;">
+            <div class="arch-row" style="justify-content: space-around;">
+                <div class="arch-box arch-box--white" style="flex: 0 1 auto; padding: clamp(0.6rem,1.2vw,1rem) clamp(1rem,2vw,1.5rem);">
+                    <span style="font-size: clamp(1rem, 1.5vw, 1.3rem);">&#128100;</span>
+                    Board gives problem + budget
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595;</div>
+            <div class="arch-row">
+                <div class="arch-box arch-box--cyan" style="flex: 0 1 auto; padding: clamp(0.6rem,1.2vw,1rem) clamp(1rem,2vw,1.5rem);">
+                    <span style="font-size: clamp(1rem, 1.5vw, 1.3rem);">&#128188;</span>
+                    Employees work, delegate, meet
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595; every interaction generates memory</div>
+            <div style="border: 2px solid var(--accent); border-radius: 12px; padding: clamp(0.6rem, 1.2vw, 1rem); background: rgba(37, 99, 235, 0.05);">
+                <div class="arch-row" style="margin-bottom: clamp(0.3rem, 0.6vw, 0.5rem);">
+                    <div class="arch-box arch-box--rose" style="flex:1;">Working</div>
+                    <div class="arch-box arch-box--blue" style="flex:1;">Static</div>
+                    <div class="arch-box arch-box--emerald" style="flex:1;">Dynamic</div>
+                    <div class="arch-box arch-box--violet" style="flex:1;">Procedural</div>
+                    <div class="arch-box arch-box--amber" style="flex:1;">Priming</div>
+                </div>
+                <div class="arch-row">
+                    <div class="arch-box arch-box--surface" style="flex: 1;">
+                        <span style="color: var(--accent);">&#9889;</span> Hippocampus: extract &rarr; store &rarr; retrieve &rarr; consolidate &rarr; promote &rarr; forget
+                    </div>
+                </div>
+            </div>
+            <div class="arch-arrow">&#8595; agents get smarter over time</div>
+            <div class="arch-row" style="justify-content: center;">
+                <div class="arch-box arch-box--emerald" style="flex: 0 1 auto; padding: clamp(0.6rem,1.2vw,1rem) clamp(1.5rem,3vw,2.5rem);">
+                    <span class="pulse-dot"></span>&ensp;Startup evolves, learns, and builds autonomously
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     SLIDE 16: CLOSING
+     ============================================ -->
+<section class="slide slide--title" data-slide="15">
+    <div class="slide-content">
+        <p class="label reveal">Arceus Layer 4</p>
+        <h1 class="reveal reveal-delay-1" style="font-size: clamp(1.8rem, 5vw, 4rem);">Every agent remembers.<br>Every agent learns.<br>Every agent grows.</h1>
+        <p class="tagline reveal reveal-delay-2">Hippocampus &mdash; the memory system that turns AI agents into intelligent employees</p>
+        <p class="muted reveal reveal-delay-3" style="font-size: var(--small-size); margin-top: clamp(1rem, 2vw, 2rem);">5 tiers &middot; 6 engines &middot; 5 flows &middot; 10 LLM call sites &middot; Protocol-based backends</p>
+    </div>
+</section>
+
+<!-- ============================================
+     JAVASCRIPT: NAVIGATION + ANIMATIONS
+     ============================================ -->
+<script>
+(function() {
+    'use strict';
+
+    const slides = document.querySelectorAll('.slide');
+    const totalSlides = slides.length;
+    const progress = document.getElementById('progress');
+    const counter = document.getElementById('counter');
+    const navDotsContainer = document.getElementById('navDots');
+    let currentSlide = 0;
+    let isScrolling = false;
+
+    // Create nav dots
+    slides.forEach((_, i) => {
+        const dot = document.createElement('button');
+        dot.className = 'nav-dot' + (i === 0 ? ' active' : '');
+        dot.setAttribute('aria-label', `Go to slide ${i + 1}`);
+        dot.addEventListener('click', () => goToSlide(i));
+        navDotsContainer.appendChild(dot);
+    });
+
+    function updateUI(index) {
+        currentSlide = index;
+        // Progress bar
+        const pct = ((index + 1) / totalSlides) * 100;
+        progress.style.width = pct + '%';
+        // Counter
+        counter.textContent = (index + 1) + ' / ' + totalSlides;
+        // Nav dots
+        navDotsContainer.querySelectorAll('.nav-dot').forEach((dot, i) => {
+            dot.classList.toggle('active', i === index);
+        });
+    }
+
+    function goToSlide(index) {
+        if (index < 0 || index >= totalSlides) return;
+        slides[index].scrollIntoView({ behavior: 'smooth' });
+        updateUI(index);
+    }
+
+    // Intersection Observer for reveal animations and slide tracking
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const slideIndex = parseInt(entry.target.dataset.slide);
+                updateUI(slideIndex);
+                // Trigger reveal animations
+                entry.target.querySelectorAll('.reveal').forEach(el => {
+                    el.classList.add('visible');
+                });
+            }
+        });
+    }, { threshold: 0.5 });
+
+    slides.forEach(slide => observer.observe(slide));
+
+    // Keyboard navigation
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+            e.preventDefault();
+            goToSlide(currentSlide + 1);
+        } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') {
+            e.preventDefault();
+            goToSlide(currentSlide - 1);
+        } else if (e.key === 'Home') {
+            e.preventDefault();
+            goToSlide(0);
+        } else if (e.key === 'End') {
+            e.preventDefault();
+            goToSlide(totalSlides - 1);
+        }
+    });
+
+    // Touch navigation
+    let touchStartY = 0;
+    document.addEventListener('touchstart', (e) => {
+        touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    document.addEventListener('touchend', (e) => {
+        const diff = touchStartY - e.changedTouches[0].clientY;
+        if (Math.abs(diff) > 50) {
+            goToSlide(currentSlide + (diff > 0 ? 1 : -1));
+        }
+    }, { passive: true });
+
+    // Mouse wheel navigation (debounced)
+    document.addEventListener('wheel', (e) => {
+        if (isScrolling) return;
+        isScrolling = true;
+        if (Math.abs(e.deltaY) > 30) {
+            goToSlide(currentSlide + (e.deltaY > 0 ? 1 : -1));
+        }
+        setTimeout(() => { isScrolling = false; }, 800);
+    }, { passive: true });
+
+    // Initialize
+    updateUI(0);
+    // Trigger initial reveals
+    slides[0].querySelectorAll('.reveal').forEach(el => el.classList.add('visible'));
+})();
+</script>
+
+</body>
+</html>

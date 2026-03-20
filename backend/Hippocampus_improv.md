@@ -144,7 +144,7 @@ Issues not tied to any specific review finding but would improve code quality.
 | S3 | `_soft_delete` in extractor uses `getattr` | `extractor.py:148` accesses `self._hippocampus._vector_store` via `getattr`. Fragile. | MEDIUM | **Resolved** — original `_vector_store` getattr fixed as part of C5; remaining `getattr` for `procedural_memory` is legitimate defensive check |
 | S6 | Test coverage gaps (general) | No tests for: SQLite habit/pattern CRUD, `DynamicMemory.find_decayed()` math, MMR lambda sensitivity, `find_expired()`, graph `get_neighbors` BFS. | MEDIUM | **Resolved** — comprehensive test quality pass completed via Codex |
 | S8 | Mixed datetime imports | Some files import `datetime` from stdlib, others use `utils/time.py`. Inconsistent timezone handling risk. | LOW | **Resolved** — all `from datetime import datetime` usages are for type annotations only; all "now" calls use `utc_now()` consistently |
-| S11 | O(E) edge scan in `InMemoryGraphStoreBackend` | `get_edges()` does linear scan over all edges. Fine for tests but won't scale. | LOW | Skipped — `InMemoryGraphStoreBackend` is test scaffolding only; production uses Neo4j with native graph indices |
+| S11 | O(E) edge scan in `InMemoryGraphStoreBackend` | `get_edges()` does linear scan over all edges. Fine for tests but won't scale. | LOW | Deferred — `InMemoryGraphStoreBackend` is test scaffolding only; production uses Neo4j with native graph indices. Optimize if in-memory backend ever becomes user-facing. |
 
 ---
 
@@ -152,8 +152,8 @@ Issues not tied to any specific review finding but would improve code quality.
 
 | # | Issue | Description | Status |
 |---|-------|-------------|--------|
-| L2.1 | `ExtractionMode.CONVERSATION` maps to `AGENT_EXTRACTION_PROMPT` | Uses same prompt as AGENT mode. Spec implies distinct extraction behavior. | Open |
-| L2.2 | No integration test for `extract_from_conversation` on real `Hippocampus` | All extraction tests use `FakeHippocampus`. | Open |
+| L2.1 | `ExtractionMode.CONVERSATION` maps to `AGENT_EXTRACTION_PROMPT` | Uses same prompt as AGENT mode. Spec implies distinct extraction behavior. | Deferred → E1 (Phase 5+ extraction modes) |
+| L2.2 | No integration test for `extract_from_conversation` on real `Hippocampus` | All extraction tests use `FakeHippocampus`. | Deferred → E1 (Phase 5+ extraction modes) |
 
 ---
 
@@ -166,11 +166,11 @@ Issues not tied to any specific review finding but would improve code quality.
 | Medium | 13 | 0 | 2 (M11→G5, M13→D1) | 11 (M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M12) |
 | Low | 14 | 0 | 1 (L12→D1) | 13 (L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L13, L14) |
 | Test Quality | 13 | 0 | 0 | 13 (T1-T13) |
-| Standalone | 5 | 0 | 0 | 5 (S1, S3, S6, S8, S11) |
-| Phase 2 Carry | 2 | 2 | 0 | 0 |
-| **Total** | **77** | **2** | **9** | **66** |
+| Standalone | 5 | 0 | 1 (S11) | 4 (S1, S3, S6, S8) |
+| Phase 2 Carry | 2 | 0 | 2 (L2.1→E1, L2.2→E1) | 0 |
+| **Total** | **77** | **0** | **12** | **65** |
 
-**Remaining open:** L2.1 (extraction mode prompt reuse) and L2.2 (no integration test for conversation extraction) — both Phase 2 carry-forward items, low priority.
+**All items resolved or deferred.** 12 items deferred to Phase 5+ (graph, extraction modes, design reconciliation). Zero open items remain.
 
 ---
 
