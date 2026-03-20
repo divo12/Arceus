@@ -6,6 +6,8 @@ import math
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b:
         return 0.0
+    if len(a) != len(b):
+        raise ValueError("Embedding dimensions must match")
 
     dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))

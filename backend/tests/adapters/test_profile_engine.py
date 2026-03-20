@@ -108,3 +108,44 @@ async def test_generate_profile_with_habits_and_state(hippocampus_factory) -> No
         assert {"confidence", "morale", "caution"} <= set(profile.state)
     finally:
         await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_profile_returns_all_memories_without_search_truncation(
+    hippocampus_factory,
+) -> None:
+    scope = ArceusMemoryScope()
+    engine = ArceusProfileEngine(scope)
+    hippocampus = await hippocampus_factory("emp-3")
+    container = scope.employee_container("startup-1", "emp-3")
+
+    static_facts = [f"Static fact {index}" for index in range(60)]
+    dynamic_facts = [f"Dynamic fact {index}" for index in range(25)]
+
+    try:
+        for fact in static_facts:
+            await hippocampus.remember(
+                fact,
+                container=container,
+                memory_type=MemoryType.STATIC,
+            )
+        for fact in dynamic_facts:
+            await hippocampus.remember(
+                fact,
+                container=container,
+                memory_type=MemoryType.DYNAMIC,
+            )
+
+        profile = await engine.generate_profile(
+            hippocampus=hippocampus,
+            agent_id="emp-3",
+            startup_id="startup-1",
+            role="PM",
+        )
+
+        assert len(profile.core_knowledge) == len(static_facts)
+        assert len(profile.current_context) == len(dynamic_facts)
+        assert set(profile.core_knowledge) == set(static_facts)
+        assert set(profile.current_context) == set(dynamic_facts)
+    finally:
+        await hippocampus.close()

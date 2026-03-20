@@ -18,7 +18,7 @@
 | M2 | No Procedural tier | Phase 4 | Phase 4 | `ProceduralMemory` class with LLM trigger evaluation, EMA confidence update, habit CRUD |
 | M3 | No Priming tier | Phase 4 | Phase 4 | `PrimingMemory` class with EMA state update, LLM disposition generation |
 | L3 | `Pattern.formed_from` plain tuple | Phase 4 | Phase 4 | `PatternLearner` now links patterns to trajectory IDs with full metadata |
-| M5 | `profile_engine.py` uses empty-string search | Phase 4 | **Open — see H4** | Tracked below as H4; still uses `search(query="")` |
+| M5 | `profile_engine.py` uses empty-string search | Phase 4 | Phase 4 review | `ArceusProfileEngine` now uses `Hippocampus.list_memories()` / `VectorStore.list_by_type()` for truthful full-profile reads |
 
 ---
 
@@ -48,7 +48,7 @@ Items tagged `[C]` = Claude, `[CR]` = CodeRabbit, `[BOTH]` = found by both.
 | H1 | `hippocampus.py` | **Missing `process_trajectory()` orchestration method** — Spec section 7.12 defines `process_trajectory(trajectory)` chaining: `judge -> distill -> extract_pattern -> check_habit_formation -> update_state`. Without this, callers manually orchestrate 5 engine calls. This is the main orchestration method for Flow A steps 6-11. | [C] | Open |
 | H2 | `hippocampus.py:get_summary()` | **Three fields always empty** — `top_patterns`, `recent_learnings`, `recent_promotions` never populated. Spec fills them from `PatternLearner.get_top_patterns()`, last 5 dynamic memories, and `PromotionEngine.get_recent_promotions()`. | [C] | Open |
 | H3 | `reasoning_bank.py:consolidate()` | **Prune step can delete promotion candidates** — Prune deletes memories >30 days, <5 uses, <0.3 confidence without checking promotion eligibility. Spec guards: `if not self._is_promotion_candidate(mem)`. Fix: Add `qualifies_for_static()` guard before pruning. | [C] | **Resolved** — `ReasoningBankConfig` now carries promotion thresholds, `ReasoningBank` checks `_is_promotion_candidate()` before `stale_prune`, and `Hippocampus.create()` wires the thresholds from `HippocampusConfig` |
-| H4 | `profile_engine.py:41-50` | **Uses `search(query="")` to list memories** — Embeds empty string for arbitrary cosine ranking, returns only top-k (misses memories), and triggers `_touch()` which mutates usage stats on a read path. Fix: Use `list_by_type()` or a non-mutating list/get-all method. | [BOTH] | Open |
+| H4 | `profile_engine.py:41-50` | **Uses `search(query="")` to list memories** — Embeds empty string for arbitrary cosine ranking, returns only top-k (misses memories), and triggers `_touch()` which mutates usage stats on a read path. Fix: Use `list_by_type()` or a non-mutating list/get-all method. | [BOTH] | **Resolved** — added `Hippocampus.list_memories()` and switched `ArceusProfileEngine` to list-based reads |
 | H5 | `graph_store.py:search()` | **Replaced spec's BM25 re-ranking with cosine** — Spec calls for `bm25_rerank(query, nodes)` after cosine retrieval. BM25 handles keyword/term frequency that cosine on embeddings misses. Document deviation or implement. | [C] | Open |
 
 ### HIGH — Correctness (12)
@@ -240,3 +240,17 @@ Architectural improvements that require broader API changes. Not bugs — the cu
 4. Add one cross-engine lifecycle test suite that verifies prune, promote, and demote decisions together
 
 **When:** Post-MVP, once lifecycle decisions become more complex than simple threshold checks or when additional tiers/promotion paths are added
+
+### F4: Add profile compaction as a separate prompt-context projection
+
+**Current state:** `ArceusProfileEngine` now returns the full truthful static and dynamic profile by listing stored memories directly. This fixes correctness because profile generation no longer depends on empty-query vector ranking or arbitrary `top_k` caps.
+
+**Why not fixed now:** Context-budget optimization is a separate concern from profile correctness. Re-introducing ranking or truncation inside `ProfileEngine` would hide real state again and make the employee profile depend on retrieval heuristics.
+
+**How to improve later:**
+1. Keep `ProfileEngine` as the source of truth for full employee memory state
+2. Add a separate compact-profile or prompt-context projection for model injection
+3. Select only the most relevant static facts, recent dynamic context, active habits, and priming state for a given task
+4. Summarize or compress oversized profiles before sending them to an LLM when token pressure matters
+
+**When:** Post-MVP, once full profiles become large enough to create prompt-budget pressure in production flows

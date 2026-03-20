@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any, get_args, get_origin
 
 from arceus.config.settings import settings
-from arceus.core.hippocampus.backends.env import resolve_env
 from arceus.core.hippocampus.types import ExtractedFact, MemoryType
 
 
@@ -22,18 +21,9 @@ class AzureOpenAILLMEngine:
         client: Any | None = None,
     ) -> None:
         self._model_name = model_name
-        self._azure_endpoint = azure_endpoint or resolve_env(
-            "AZURE_OPENAI_ENDPOINT",
-            settings.azure_openai_endpoint,
-        )
-        self._api_key = api_key or resolve_env(
-            "AZURE_OPENAI_API_KEY",
-            settings.azure_openai_api_key,
-        )
-        self._api_version = api_version or resolve_env(
-            "AZURE_OPENAI_API_VERSION",
-            settings.azure_openai_api_version,
-        )
+        self._azure_endpoint = azure_endpoint or settings.azure_openai_endpoint
+        self._api_key = api_key or settings.azure_openai_api_key
+        self._api_version = api_version or settings.azure_openai_api_version
         self._client = client
 
     async def extract_structured(
@@ -201,8 +191,8 @@ def has_azure_openai_credentials(
     api_key: str = "",
 ) -> bool:
     return bool(
-        (azure_endpoint or resolve_env("AZURE_OPENAI_ENDPOINT", settings.azure_openai_endpoint))
-        and (api_key or resolve_env("AZURE_OPENAI_API_KEY", settings.azure_openai_api_key))
+        (azure_endpoint or settings.azure_openai_endpoint)
+        and (api_key or settings.azure_openai_api_key)
     )
 
 

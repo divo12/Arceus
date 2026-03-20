@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from arceus.core.hippocampus.backends.factory import (
     create_cache,
@@ -318,6 +319,22 @@ class Hippocampus:
             embedding=embedding,
             container=container,
             top_k=top_k,
+        )
+
+    async def list_memories(
+        self,
+        agent_id: str,
+        memory_type: MemoryType | None = None,
+        memory_types: list[MemoryType] | None = None,
+        container: str | None = None,
+        created_after: datetime | None = None,
+    ) -> list[MemoryUnit]:
+        return await self._vector_store.list_by_type(
+            agent_id=agent_id,
+            memory_type=memory_type,
+            memory_types=memory_types,
+            container=container,
+            created_after=created_after,
         )
 
     async def extract_from_conversation(

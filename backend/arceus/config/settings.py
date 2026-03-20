@@ -1,8 +1,10 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(_ENV_FILE, override=True)
 
 
 class Settings(BaseSettings):

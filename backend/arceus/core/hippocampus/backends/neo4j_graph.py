@@ -5,9 +5,9 @@ from dataclasses import asdict, fields
 from typing import Any
 
 from arceus.config.settings import settings
-from arceus.core.hippocampus.backends.env import resolve_env
 from arceus.core.hippocampus.types import GraphEntity, GraphRelationship
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
+
 _VALID_NODE_FIELDS = {field.name for field in fields(GraphEntity)}
 
 
@@ -23,10 +23,10 @@ class Neo4jGraphStoreBackend:
         database: str = "",
         driver: Any | None = None,
     ) -> None:
-        self._uri = uri or resolve_env("NEO4J_URI", settings.neo4j_uri)
-        self._username = username or resolve_env("NEO4J_USERNAME", settings.neo4j_username)
-        self._password = password or resolve_env("NEO4J_PASSWORD", settings.neo4j_password)
-        self._database = database or resolve_env("NEO4J_DATABASE", settings.neo4j_database)
+        self._uri = uri or settings.neo4j_uri
+        self._username = username or settings.neo4j_username
+        self._password = password or settings.neo4j_password
+        self._database = database or settings.neo4j_database
         self._driver = driver
         self._schema_ready = False
 
@@ -213,9 +213,9 @@ def has_neo4j_credentials(
     password: str = "",
 ) -> bool:
     return bool(
-        (uri or resolve_env("NEO4J_URI", settings.neo4j_uri))
-        and (username or resolve_env("NEO4J_USERNAME", settings.neo4j_username))
-        and (password or resolve_env("NEO4J_PASSWORD", settings.neo4j_password))
+        (uri or settings.neo4j_uri)
+        and (username or settings.neo4j_username)
+        and (password or settings.neo4j_password)
     )
 
 

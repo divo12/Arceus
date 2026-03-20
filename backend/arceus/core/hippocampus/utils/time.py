@@ -10,4 +10,4 @@ def parse_utc_iso(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
-    return dt
+    return dt.astimezone(UTC)

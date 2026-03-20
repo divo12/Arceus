@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from arceus.core.hippocampus.hippocampus import Hippocampus
+from arceus.core.hippocampus.types import MemoryType
 from arceus.core.memory_scope import ArceusMemoryScope
 
 
@@ -38,15 +39,15 @@ class ArceusProfileEngine:
     ) -> EmployeeProfile:
         container = self._scope.employee_container(startup_id, agent_id)
 
-        static_facts = await hippocampus.static_memory.search(
-            query="",
+        static_facts = await hippocampus.list_memories(
+            agent_id=agent_id,
             container=container,
-            top_k=50,
+            memory_type=MemoryType.STATIC,
         )
-        dynamic_facts = await hippocampus.dynamic_memory.search(
-            query="",
+        dynamic_facts = await hippocampus.list_memories(
+            agent_id=agent_id,
             container=container,
-            top_k=20,
+            memory_type=MemoryType.DYNAMIC,
         )
         habits = []
         if hippocampus.procedural_memory is not None:
