@@ -99,7 +99,14 @@ class MemoryExtractor:
                 for memory in existing
             ],
         )
-        return self._normalize_action(decision)
+        action, target_id, reason = self._normalize_action(decision)
+        valid_ids = {memory.id for memory in existing}
+        if (
+            action in {MemoryAction.UPDATE, MemoryAction.DELETE}
+            and target_id not in valid_ids
+        ):
+            return (MemoryAction.NONE, "", "invalid_target_id")
+        return (action, target_id, reason)
 
     async def _add_to_tier(
         self,

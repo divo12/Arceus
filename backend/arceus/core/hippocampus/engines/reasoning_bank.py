@@ -36,6 +36,9 @@ class ReasoningBankConfig:
     retrieval_k: int = 3
     mmr_lambda: float = 0.7
     distillation_threshold: float = 0.6
+    promotion_access_threshold: int = 10
+    promotion_confidence_threshold: float = 0.8
+    promotion_age_days: int = 14
 
 
 class ReasoningBank:
@@ -268,6 +271,8 @@ class ReasoningBank:
         for memory in memories:
             if memory.id in deleted_ids:
                 continue
+            if self._is_promotion_candidate(memory):
+                continue
             usage_count = int(memory.metadata.get("usage_count", 0))
             if (
                 memory.created_at < cutoff
@@ -333,3 +338,14 @@ class ReasoningBank:
     def _memory_domain(self, memory: MemoryUnit) -> str:
         domain = str(memory.metadata.get("domain", "")).strip()
         return domain.lower()
+
+    def _is_promotion_candidate(self, memory: MemoryUnit) -> bool:
+        usage_count = int(memory.metadata.get("usage_count", 0))
+        age_days = (utc_now() - memory.created_at).total_seconds() / 86400
+        return (
+            memory.memory_type is MemoryType.DYNAMIC
+            and usage_count >= self._config.promotion_access_threshold
+            and memory.confidence >= self._config.promotion_confidence_threshold
+            and age_days >= self._config.promotion_age_days
+            and memory.promotion_status is None
+        )

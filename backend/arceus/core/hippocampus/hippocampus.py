@@ -151,6 +151,9 @@ class Hippocampus:
                 retrieval_k=config.retrieval_k,
                 mmr_lambda=config.mmr_lambda,
                 distillation_threshold=config.distillation_threshold,
+                promotion_access_threshold=config.promotion_access_threshold,
+                promotion_confidence_threshold=config.promotion_confidence_threshold,
+                promotion_age_days=config.promotion_age_days,
             ),
         )
         pattern_learner = PatternLearner(

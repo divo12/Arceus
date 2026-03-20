@@ -108,3 +108,24 @@ async def test_dynamic_memory_filters_decayed_memories() -> None:
     await vector_store.upsert(expired_candidate)
     expired = await memory.find_expired()
     assert [item.id for item in expired] == [fresh.id]
+
+
+def test_dynamic_memory_rejects_non_positive_half_life() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = MockEmbeddingEngine(dimensions=32)
+
+    with pytest.raises(ValueError, match="half_life_days must be greater than 0"):
+        DynamicMemory(
+            agent_id="agent-1",
+            vector_store=vector_store,
+            embedding_engine=embedding,
+            half_life_days=0,
+        )
+
+    with pytest.raises(ValueError, match="half_life_days must be greater than 0"):
+        DynamicMemory(
+            agent_id="agent-1",
+            vector_store=vector_store,
+            embedding_engine=embedding,
+            half_life_days=-1,
+        )

@@ -8,7 +8,10 @@ from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternSt
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
 from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
-from arceus.core.hippocampus.engines.reasoning_bank import ReasoningBank
+from arceus.core.hippocampus.engines.reasoning_bank import (
+    ReasoningBank,
+    ReasoningBankConfig,
+)
 from arceus.core.hippocampus.types import (
     DistilledMemory,
     MemoryType,
@@ -21,7 +24,9 @@ from arceus.core.hippocampus.types import (
 from arceus.core.hippocampus.utils.time import utc_now
 
 
-def _create_reasoning_bank() -> tuple[ReasoningBank, InMemoryVectorStore, MockEmbeddingEngine]:
+def _create_reasoning_bank(
+    config: ReasoningBankConfig | None = None,
+) -> tuple[ReasoningBank, InMemoryVectorStore, MockEmbeddingEngine]:
     vector_store = InMemoryVectorStore()
     pattern_store = InMemoryPatternStore(agent_id="agent-1")
     embedding = MockEmbeddingEngine(dimensions=32)
@@ -32,6 +37,7 @@ def _create_reasoning_bank() -> tuple[ReasoningBank, InMemoryVectorStore, MockEm
         llm=NoopLLMEngine(model_name="noop"),
         llm_light=NoopLLMEngine(model_name="noop"),
         embedding_engine=embedding,
+        config=config,
     )
     return bank, vector_store, embedding
 
@@ -259,6 +265,33 @@ async def test_consolidate_prune_stale() -> None:
 
     assert result.pruned >= 1
     assert await vector_store.get("stale") is None
+
+
+@pytest.mark.asyncio
+async def test_consolidate_skips_promotion_candidates() -> None:
+    bank, vector_store, embedding = _create_reasoning_bank(
+        ReasoningBankConfig(
+            promotion_access_threshold=1,
+            promotion_confidence_threshold=0.1,
+            promotion_age_days=14,
+        )
+    )
+    old_time = utc_now() - timedelta(days=60)
+    candidate = await _memory(
+        embedding,
+        memory_id="candidate",
+        content="Old but promotable note",
+        confidence=0.1,
+        metadata={"usage_count": 1},
+        created_at=old_time,
+        updated_at=old_time,
+    )
+    await vector_store.upsert(candidate)
+
+    result = await bank.consolidate()
+
+    assert result.pruned == 0
+    assert await vector_store.get("candidate") is not None
 
 
 def test_compute_slope() -> None:

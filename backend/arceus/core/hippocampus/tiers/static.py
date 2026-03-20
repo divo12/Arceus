@@ -77,6 +77,7 @@ class StaticMemory:
             promotion_status=existing.promotion_status,
         )
         await self._vector_store.upsert(updated)
+        await self._vector_store.soft_delete(existing.id, reason="superseded_by_update")
         if self._graph_store is not None:
             await self._graph_store.create_edge(updated.id, existing.id, RelationType.UPDATES)
         return updated

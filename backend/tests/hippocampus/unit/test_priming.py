@@ -95,3 +95,23 @@ async def test_generate_priming_prompt_noop(relational_store: SQLiteRelationalSt
 
     assert isinstance(prompt, str)
     assert prompt != ""
+
+
+@pytest.mark.asyncio
+async def test_update_state_clamps_signal(relational_store: SQLiteRelationalStore) -> None:
+    memory = PrimingMemory(
+        agent_id="agent-1",
+        relational_store=relational_store,
+        llm_light=NoopLLMEngine(model_name="noop"),
+    )
+
+    state = await memory.update_state("huge success", signal=3.0, source="test")
+    assert state["recent_events"][-1]["signal"] == 1.0
+    assert state["confidence"] == pytest.approx(0.575)
+    assert state["morale"] == pytest.approx(0.575)
+
+    state = await memory.update_state("huge failure", signal=-4.0, source="test")
+    assert state["recent_events"][-1]["signal"] == -1.0
+    assert 0.0 <= state["confidence"] <= 1.0
+    assert 0.0 <= state["caution"] <= 1.0
+    assert 0.0 <= state["morale"] <= 1.0

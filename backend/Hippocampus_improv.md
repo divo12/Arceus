@@ -47,7 +47,7 @@ Items tagged `[C]` = Claude, `[CR]` = CodeRabbit, `[BOTH]` = found by both.
 |---|------|-------|--------|--------|
 | H1 | `hippocampus.py` | **Missing `process_trajectory()` orchestration method** — Spec section 7.12 defines `process_trajectory(trajectory)` chaining: `judge -> distill -> extract_pattern -> check_habit_formation -> update_state`. Without this, callers manually orchestrate 5 engine calls. This is the main orchestration method for Flow A steps 6-11. | [C] | Open |
 | H2 | `hippocampus.py:get_summary()` | **Three fields always empty** — `top_patterns`, `recent_learnings`, `recent_promotions` never populated. Spec fills them from `PatternLearner.get_top_patterns()`, last 5 dynamic memories, and `PromotionEngine.get_recent_promotions()`. | [C] | Open |
-| H3 | `reasoning_bank.py:consolidate()` | **Prune step can delete promotion candidates** — Prune deletes memories >30 days, <5 uses, <0.3 confidence without checking promotion eligibility. Spec guards: `if not self._is_promotion_candidate(mem)`. Fix: Add `qualifies_for_static()` guard before pruning. | [C] | Open |
+| H3 | `reasoning_bank.py:consolidate()` | **Prune step can delete promotion candidates** — Prune deletes memories >30 days, <5 uses, <0.3 confidence without checking promotion eligibility. Spec guards: `if not self._is_promotion_candidate(mem)`. Fix: Add `qualifies_for_static()` guard before pruning. | [C] | **Resolved** — `ReasoningBankConfig` now carries promotion thresholds, `ReasoningBank` checks `_is_promotion_candidate()` before `stale_prune`, and `Hippocampus.create()` wires the thresholds from `HippocampusConfig` |
 | H4 | `profile_engine.py:41-50` | **Uses `search(query="")` to list memories** — Embeds empty string for arbitrary cosine ranking, returns only top-k (misses memories), and triggers `_touch()` which mutates usage stats on a read path. Fix: Use `list_by_type()` or a non-mutating list/get-all method. | [BOTH] | Open |
 | H5 | `graph_store.py:search()` | **Replaced spec's BM25 re-ranking with cosine** — Spec calls for `bm25_rerank(query, nodes)` after cosine retrieval. BM25 handles keyword/term frequency that cosine on embeddings misses. Document deviation or implement. | [C] | Open |
 
@@ -59,7 +59,7 @@ Items tagged `[C]` = Claude, `[CR]` = CodeRabbit, `[BOTH]` = found by both.
 | H7 | `settings.py:31-34` | **`neo4j_password` stored as plain `str`** — Credentials as plain `str` increase leakage risk via logs/debug dumps. Fix: Use `pydantic.SecretStr`, unwrap with `.get_secret_value()` only at the Neo4j driver boundary. | [CR] | Open |
 | H8 | `time.py:9-13` | **`parse_utc_iso()` doesn't normalize aware timestamps to UTC** — Returns timezone-aware values without converting to UTC. Function contract says "ensure UTC" but a `+05:30` timestamp passes through unchanged. Fix: `return dt.astimezone(UTC)` for aware datetimes. | [CR] | Open |
 | H9 | `similarity.py:6-15` | **Silently compares mismatched embedding dimensions** — `cosine_similarity()` uses `zip()` which only compares the shared prefix. Mixed-dimension embeddings produce arbitrary rankings in retrieval, dedup, and contradiction checks. Fix: `if len(a) != len(b): raise ValueError`. | [CR] | Open |
-| H10 | `static.py:53-82` | **Superseded static version not hidden from retrieval** — `update()` writes a new `MemoryUnit` but leaves the old version live. `search()` and `list_by_type()` return both old and new content after an update. Fix: Soft-delete the prior version or add a latest-version flag. Previously tracked as M2.1. | [CR] | Open |
+| H10 | `static.py:53-82` | **Superseded static version not hidden from retrieval** — `update()` writes a new `MemoryUnit` but leaves the old version live. `search()` and `list_by_type()` return both old and new content after an update. Fix: Soft-delete the prior version or add a latest-version flag. Previously tracked as M2.1. | [CR] | **Resolved** — `StaticMemory.update()` now soft-deletes the superseded version so only the latest version remains live for retrieval |
 | H11 | `static.py:80-81` | **UPDATES edge has no corresponding GraphEntity nodes** — Creates an `UPDATES` edge between `MemoryUnit` ids, but `get_version_history()` walks `GraphEntity` nodes and `cypher_query()` returns `[]` when the start id isn't in `_nodes`. Version history is broken. Fix: Create corresponding `GraphEntity` nodes or use consistent id mapping. | [CR] | Open |
 | H12 | `extractor.py:94-102` | **Accepts hallucinated UPDATE/DELETE target_ids from LLM** — LLM can return any `target_id`. A hallucinated or stale id can delete unrelated memory. Fix: Only honor UPDATE/DELETE when `target_id` is in the `existing` candidate set. | [CR] | Open |
 | H13 | `sqlite_pattern.py:41-46` | **`update_status()` ignores agent scoping** — Updates by `pattern_id` without checking `self._agent_id`. Can cross tenant boundaries. Fix: Add agent ownership check before delegating. | [CR] | Open |
@@ -212,3 +212,31 @@ Architectural improvements that require broader API changes. Not bugs — the cu
 4. This also benefits `internalize_delegation_result()` which currently loses source tracking too
 
 **When:** Phase 5+ when building the startup-shared write path (same API gap applies there)
+
+### F2: Soft-delete compaction and historical version retention
+
+**Current state:** `StaticMemory.update()` now soft-deletes superseded versions so only the latest fact stays live for retrieval. This fixes correctness, but historical versions still remain in storage.
+
+**Why not fixed now:** Hiding outdated facts from retrieval is the immediate bug fix. Storage optimization is a separate retention-policy problem and would add more moving parts than we want in the MVP path.
+
+**How to optimize later:**
+1. Keep soft-delete on the write path so live retrieval remains correct
+2. Add a compaction job that archives or purges soft-deleted records older than a retention window
+3. Optionally keep only the latest `K` versions per version chain in hot storage
+4. Move older versions to cold storage when audit/provenance still matters
+
+**When:** Post-MVP, once memory history volume starts affecting storage cost or scan performance
+
+### F3: Centralize promotion and pruning policy into a shared lifecycle module
+
+**Current state:** `ReasoningBank` now mirrors promotion thresholds from `HippocampusConfig` so prune decisions do not conflict with promotion eligibility. This is robust enough for the MVP because both systems stay aligned through config.
+
+**Why not fixed now:** Extracting a dedicated lifecycle-policy abstraction would touch `ReasoningBank`, `PromotionEngine`, `GC`, config, and tests. The config-driven alignment solves the correctness issue with minimal surface area today.
+
+**How to improve later:**
+1. Introduce a shared `MemoryLifecyclePolicy` module
+2. Move promotion-candidate evaluation into that single policy
+3. Have both `ReasoningBank` and `PromotionEngine` call the same policy instead of carrying parallel logic
+4. Add one cross-engine lifecycle test suite that verifies prune, promote, and demote decisions together
+
+**When:** Post-MVP, once lifecycle decisions become more complex than simple threshold checks or when additional tiers/promotion paths are added

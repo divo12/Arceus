@@ -19,15 +19,16 @@ class PrimingMemory:
     async def update_state(self, stimulus: str, signal: float, source: str) -> dict:
         current = await self.get_current_state()
         lr = 0.15
+        bounded_signal = max(-1.0, min(signal, 1.0))
         new_state = {
-            "confidence": current["confidence"] * (1 - lr) + max(signal, 0) * lr,
-            "caution": current["caution"] * (1 - lr) + max(-signal, 0) * lr,
-            "morale": current["morale"] * (1 - lr) + (signal * 0.5 + 0.5) * lr,
+            "confidence": current["confidence"] * (1 - lr) + max(bounded_signal, 0) * lr,
+            "caution": current["caution"] * (1 - lr) + max(-bounded_signal, 0) * lr,
+            "morale": current["morale"] * (1 - lr) + (bounded_signal * 0.5 + 0.5) * lr,
             "recent_events": [
                 *current["recent_events"][-9:],
                 {
                     "stimulus": stimulus,
-                    "signal": signal,
+                    "signal": bounded_signal,
                     "source": source,
                     "timestamp": utc_now().isoformat(),
                 },

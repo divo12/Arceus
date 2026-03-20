@@ -221,7 +221,9 @@ async def test_static_memory_update_creates_new_version_and_updates_edge() -> No
 
     assert updated.version == 2
     assert updated.previous_version_id == original.id
-    assert len(all_static) == 2
+    assert len(all_static) == 1
+    assert all_static[0].id == updated.id
+    assert await vector_store.get(original.id) is None
     assert any(edge.relation_type is RelationType.UPDATES for edge in graph_backend.list_edges())
 
 
@@ -325,8 +327,9 @@ async def test_memory_extractor_versions_existing_static_memory_on_update() -> N
     stored = await static_memory.get_all("startup:1:emp:e1")
 
     assert result.actions[0][0] is MemoryAction.UPDATE
-    assert len(stored) == 2
-    assert any(memory.previous_version_id == original.id for memory in stored)
+    assert len(stored) == 1
+    assert stored[0].previous_version_id == original.id
+    assert await vector_store.get(original.id) is None
     assert any(edge.relation_type is RelationType.UPDATES for edge in graph_backend.list_edges())
 
 
@@ -377,6 +380,60 @@ async def test_memory_extractor_invalid_action_defaults_to_none() -> None:
     )
 
     assert result.actions == ((MemoryAction.NONE, "ignored", "bad llm output"),)
+
+
+@pytest.mark.asyncio
+async def test_memory_extractor_rejects_hallucinated_target_id() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = MockEmbeddingEngine(dimensions=32)
+    graph_store = GraphStore(InMemoryGraphStoreBackend(), embedding)
+    static_memory = StaticMemory("agent-1", vector_store, embedding, graph_store)
+    existing = await static_memory.add(
+        ExtractedFact(
+            text="We use JWT for authentication",
+            memory_type=MemoryType.STATIC,
+            confidence=0.9,
+            is_permanent=True,
+        ),
+        container="startup:1:emp:e1",
+    )
+    hippocampus = FakeHippocampus(
+        static_memory=static_memory,
+        dynamic_memory=DynamicMemory("agent-1", vector_store, embedding),
+        graph_store=graph_store,
+        vector_store=vector_store,
+        embedding_engine=embedding,
+    )
+
+    extractor = MemoryExtractor(
+        FakeLLM(
+            extracted_facts=[
+                ExtractedFact(
+                    text="We use JWT for authentication",
+                    memory_type=MemoryType.STATIC,
+                    confidence=0.9,
+                    is_permanent=True,
+                ),
+            ],
+            decision={
+                "action": "DELETE",
+                "target_id": "hallucinated-id",
+                "reason": "bad llm output",
+            },
+        ),
+        FakeLLM(classification="related_to"),
+        embedding,
+        hippocampus,
+    )
+
+    result = await extractor.extract(
+        messages=[{"role": "assistant", "content": "JWT auth"}],
+        agent_id="agent-1",
+        container="startup:1:emp:e1",
+    )
+
+    assert result.actions == ((MemoryAction.NONE, "", "invalid_target_id"),)
+    assert await vector_store.get(existing.id) is not None
 
 
 @pytest.mark.asyncio

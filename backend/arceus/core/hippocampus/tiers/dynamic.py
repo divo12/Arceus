@@ -18,6 +18,8 @@ class DynamicMemory:
         half_life_days: float = 30.0,
         decay_threshold: float = 0.1,
     ) -> None:
+        if half_life_days <= 0:
+            raise ValueError("half_life_days must be greater than 0")
         self._agent_id = agent_id
         self._vector_store = vector_store
         self._embedding = embedding_engine
