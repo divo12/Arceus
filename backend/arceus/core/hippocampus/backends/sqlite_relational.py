@@ -140,6 +140,57 @@ class SQLiteRelationalStore:
     async def update_habit(self, habit: Habit) -> None:
         await self.insert_habit(habit)
 
+    async def record_habit_usage(
+        self, habit_id: str, lr: float, signal: float
+    ) -> Habit:
+        await self.initialize()
+        async with self._lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                "SELECT * FROM habits WHERE id = ?", (habit_id,)
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise KeyError(habit_id)
+            habit = self._habit_from_row(row)
+
+            new_count = habit.usage_count + 1
+            new_confidence = habit.confidence * (1 - lr) + signal * lr
+            updated = Habit(
+                id=habit.id,
+                agent_id=habit.agent_id,
+                trigger_condition=habit.trigger_condition,
+                action=habit.action,
+                confidence=new_confidence,
+                usage_count=new_count,
+                formed_from_id=habit.formed_from_id,
+                formation_mode=habit.formation_mode,
+                is_active=new_confidence > 0.2,
+                created_at=habit.created_at,
+            )
+            await connection.execute(
+                """
+                INSERT OR REPLACE INTO habits (
+                    id, agent_id, trigger_condition, action, confidence, usage_count,
+                    formed_from_id, formation_mode, is_active, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    updated.id,
+                    updated.agent_id,
+                    updated.trigger_condition,
+                    updated.action,
+                    updated.confidence,
+                    updated.usage_count,
+                    updated.formed_from_id,
+                    updated.formation_mode.value,
+                    1 if updated.is_active else 0,
+                    updated.created_at.isoformat(),
+                ),
+            )
+            await connection.commit()
+        return updated
+
     async def set_priming_state(self, agent_id: str, state: dict) -> None:
         await self.initialize()
         async with self._lock:

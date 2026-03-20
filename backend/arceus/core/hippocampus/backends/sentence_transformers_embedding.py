@@ -15,6 +15,7 @@ class SentenceTransformerEmbeddingEngine:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
         self._model_name = model_name
         self._model: Any | None = None
+        self._load_failed = False
         self._fallback = MockEmbeddingEngine(dimensions=384)
         self._lock = asyncio.Lock()
 
@@ -51,22 +52,28 @@ class SentenceTransformerEmbeddingEngine:
     async def _get_model(self) -> Any:
         if self._model is not None:
             return self._model
+        if self._load_failed:
+            return None
 
         async with self._lock:
-            if self._model is None:
+            if self._model is not None:
+                return self._model
+            if self._load_failed:
+                return None
+            try:
                 from sentence_transformers import SentenceTransformer
 
-                try:
-                    self._model = await asyncio.to_thread(
-                        SentenceTransformer,
-                        self._model_name,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Falling back to simple embeddings because sentence-transformers "
-                        "model %s could not be loaded: %s",
-                        self._model_name,
-                        exc,
-                    )
-                    self._model = None
+                self._model = await asyncio.to_thread(
+                    SentenceTransformer,
+                    self._model_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Falling back to simple embeddings because sentence-transformers "
+                    "model %s could not be loaded: %s",
+                    self._model_name,
+                    exc,
+                )
+                self._model = None
+                self._load_failed = True
         return self._model

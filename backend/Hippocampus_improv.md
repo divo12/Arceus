@@ -37,9 +37,9 @@ Items tagged `[C]` = Claude, `[CR]` = CodeRabbit, `[BOTH]` = found by both.
 | C4 | `memory_projections.py:get_promotion_stream` | **Side-effecting read on dashboard path** — Calls `hippocampus.run_promotions()` which fires new promotions (creates static memories, deletes dynamic ones, creates graph edges). Dashboard GET should never mutate state. Fix: Add promotion event persistence to `PromotionEngine`, add `get_recent_promotions()`, call that instead. | [BOTH] | **Resolved** — `get_promotion_stream()` now calls `hippocampus.get_recent_promotions()` (read-only), event log stored in PromotionEngine |
 | C5 | `delegation_memory.py:49-67` | **Copies private memories + breaks encapsulation** — (1) Copies every recalled `MemoryUnit` regardless of `visibility` — private memories become readable by another agent. (2) Calls `to_hippocampus._vector_store.upsert()` directly, bypassing tier logic (no embedding, no graph wiring). Fix: Filter on shareable visibility before copying, use `to_hippocampus.remember()` or a public `ingest()` method. | [BOTH] | **Resolved** — delegation copies now hardcode `visibility=TASK_SCOPED` (Option B: delegation is the visibility upgrade); `_vector_store.upsert` kept to preserve delegation metadata; test added |
 | C6 | `in_memory_vector.py:_touch()` | **Mutates frozen dataclass metadata on every search** — `_touch()` directly mutates the `metadata` dict of a `MemoryUnit` on every search hit (incrementing `usage_count`, setting `last_accessed`). While `frozen=True` prevents field reassignment, the dict is mutable. Reads have side effects, and `profile_engine.py` triggers this by calling `search()`. Fix: Create a new `MemoryUnit` with updated metadata, or move access tracking to a separate store. | [C] | **Resolved** — extracted `UsageTracker` class into `utils/usage_tracker.py`; removed `_touch()` from `InMemoryVectorStore`; `search()` is now pure read; usage tracking only called from `Hippocampus.recall()` |
-| C7 | `neo4j_graph.py:87-103` | **`create_edge` ignores missing nodes, returns success** — If either source or target `GraphEntity` doesn't exist, Neo4j `MATCH` returns zero records and creates no relationship — but `create_edge()` always returns `rel.id`. Silently drops graph provenance edges. The test fake also masks this. Fix: Check records, raise `KeyError` if empty. | [CR] | Open |
-| C8 | `sentence_transformers_embedding.py:55-72` | **Import outside try + infinite retry loop** — `from sentence_transformers import SentenceTransformer` is outside the try block, so `ImportError` escapes and fallback is never used. When loading fails, `_model` stays `None`, causing retry on every `embed()` call — repeated expensive failures and log spam. Fix: Move import inside try, add `_model_load_failed` flag. | [CR] | Open |
-| C9 | `procedural.py:53-71` | **`record_usage()` not atomic** — Does `get_habit()` then `update_habit()` as two separate store calls. In `sqlite_relational.py`, each acquires the lock independently, so concurrent calls both read same `usage_count` and write back `n + 1`. Drops updates, can flip `is_active` incorrectly. Fix: Wrap in a single transaction. | [CR] | Open |
+| ~~C7~~ H22 | `neo4j_graph.py:87-103` | **`create_edge` ignores missing nodes, returns success** — If either source or target `GraphEntity` doesn't exist, Neo4j `MATCH` returns zero records and creates no relationship — but `create_edge()` always returns `rel.id`. Silently drops graph provenance edges. The test fake also masks this. Fix: Check records, raise `KeyError` if empty. **Downgraded:** Graph is observability scaffolding — no agent logic depends on it. Fix when graph becomes load-bearing (Phase 5+). | [CR] | Deferred |
+| C8 | `sentence_transformers_embedding.py:55-72` | **Import outside try + infinite retry loop** — `from sentence_transformers import SentenceTransformer` is outside the try block, so `ImportError` escapes and fallback is never used. When loading fails, `_model` stays `None`, causing retry on every `embed()` call — repeated expensive failures and log spam. Fix: Move import inside try, add `_model_load_failed` flag. | [CR] | **Resolved** — moved import inside try block, added `_load_failed` flag to prevent retry after first failure |
+| C9 | `procedural.py:53-71` | **`record_usage()` not atomic** — Does `get_habit()` then `update_habit()` as two separate store calls. In `sqlite_relational.py`, each acquires the lock independently, so concurrent calls both read same `usage_count` and write back `n + 1`. Drops updates, can flip `is_active` incorrectly. Fix: Wrap in a single transaction. | [CR] | **Resolved** — added `record_habit_usage()` on RelationalStore protocol; SQLite impl holds lock across read+compute+write; ProceduralMemory delegates. Postgres migration: replace lock with `BEGIN` + `SELECT FOR UPDATE` + `COMMIT` |
 
 ### HIGH — Spec Gaps (5)
 
@@ -160,14 +160,14 @@ Issues not tied to any specific review finding but would improve code quality.
 
 | Severity | Count | Open | Resolved |
 |----------|-------|------|----------|
-| Critical | 9 | 3 | 6 (C1, C3, C4, C5, C6, M5) |
-| High | 21 | 20 | 1 (H17) |
+| Critical | 8 | 0 | 8 (C1, C3, C4, C5, C6, C8, C9, M5) |
+| High | 22 | 21 | 1 (H17) |
 | Medium | 13 | 11 | 2 (M3, M5) |
 | Low | 14 | 14 | 0 |
 | Test Quality | 12 | 12 | 0 |
 | Standalone | 5 | 5 | 0 |
 | Phase 2 Carry | 2 | 2 | 0 |
-| **Total** | **76** | **67** | **9** |
+| **Total** | **76** | **65** | **11** |
 
 **Recommended fix order:**
 1. C1-C3 (crashes + tenant bleed + inverted logic)

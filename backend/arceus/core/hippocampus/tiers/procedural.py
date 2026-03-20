@@ -51,22 +51,6 @@ class ProceduralMemory:
         return await self._store.list_habits(agent_id=self._agent_id, is_active=True)
 
     async def record_usage(self, habit_id: str, was_useful: bool) -> Habit:
-        habit = await self._store.get_habit(habit_id)
-        new_count = habit.usage_count + 1
         lr = 0.1
         signal = 1.0 if was_useful else 0.0
-        new_confidence = habit.confidence * (1 - lr) + signal * lr
-        updated = Habit(
-            id=habit.id,
-            agent_id=habit.agent_id,
-            trigger_condition=habit.trigger_condition,
-            action=habit.action,
-            confidence=new_confidence,
-            usage_count=new_count,
-            formed_from_id=habit.formed_from_id,
-            formation_mode=habit.formation_mode,
-            is_active=new_confidence > 0.2,
-            created_at=habit.created_at,
-        )
-        await self._store.update_habit(updated)
-        return updated
+        return await self._store.record_habit_usage(habit_id, lr, signal)
