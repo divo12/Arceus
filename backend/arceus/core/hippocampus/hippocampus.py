@@ -49,6 +49,7 @@ from arceus.core.hippocampus.types import (
     MemoryUnit,
 )
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
+from arceus.core.hippocampus.utils.usage_tracker import UsageTracker
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ class HippocampusBackends:
 
 
 class Hippocampus:
-    """Phase 2 Hippocampus container with extraction and graph wiring."""
+    """Hippocampus v6 container — 5-tier memory with adaptive intelligence."""
 
     def __init__(
         self,
@@ -100,6 +101,7 @@ class Hippocampus:
         self._embedding = backends.embedding
         self._vector_store = backends.vector_store
         self._relational_store = backends.relational_store
+        self._usage_tracker = UsageTracker(backends.vector_store)
 
     @classmethod
     async def create(cls, agent_id: str, config: HippocampusConfig) -> Hippocampus:
@@ -286,6 +288,8 @@ class Hippocampus:
 
             selected.append(remaining.pop(best_index))
 
+        selected = await self._usage_tracker.record_access(selected)
+
         final_results: list[MemoryUnit | GraphEntity] = list(selected)
         seen_ids = {item.id for item in selected}
         for node in graph_results:
@@ -333,6 +337,11 @@ class Hippocampus:
             return []
         return await self.promotion_engine.run_promotions()
 
+    async def get_recent_promotions(self, limit: int = 20) -> list[MemoryPromotionEvent]:
+        if self.promotion_engine is None:
+            return []
+        return await self.promotion_engine.get_recent_promotions(limit)
+
     async def demote_memory(self, memory_id: str, reason: str) -> MemoryUnit | None:
         if self.promotion_engine is None:
             return None
@@ -367,7 +376,11 @@ class Hippocampus:
         if self.procedural_memory is not None:
             habits = await self.procedural_memory.get_active()
             active_habits = [
-                {"trigger": habit.trigger_condition, "action": habit.action}
+                {
+                    "trigger": habit.trigger_condition,
+                    "action": habit.action,
+                    "confidence": habit.confidence,
+                }
                 for habit in habits
             ]
         current_state = {}

@@ -12,6 +12,7 @@ from arceus.core.hippocampus.backends.protocols import (
 from arceus.core.hippocampus.prompts import (
     CONTRADICTION_CHECK_PROMPT,
     MEMORY_MERGE_PROMPT,
+    TRAJECTORY_ANALYSIS_PROMPT,
 )
 from arceus.core.hippocampus.types import (
     ConsolidationResult,
@@ -108,8 +109,12 @@ class ReasoningBank:
             + 0.2 * max(slope, 0.0)
             + 0.1 * (1.0 if trajectory.outcome == "success" else 0.0)
         )
+        steps_text = " → ".join(step.action for step in trajectory.steps)
         analysis = await self._llm.analyze(
-            prompt="Analyze this trajectory...",
+            prompt=TRAJECTORY_ANALYSIS_PROMPT.format(
+                outcome=trajectory.outcome,
+                steps=steps_text,
+            ),
             trajectory=trajectory,
         )
         if not isinstance(analysis, dict):
@@ -121,9 +126,9 @@ class ReasoningBank:
             is_successful=(
                 quality >= self._config.distillation_threshold and positive_ratio > 0.6
             ),
-            strengths=list(analysis.get("strengths", [])),
-            weaknesses=list(analysis.get("weaknesses", [])),
-            suggestions=list(analysis.get("suggestions", [])),
+            strengths=tuple(analysis.get("strengths", ())),
+            weaknesses=tuple(analysis.get("weaknesses", ())),
+            suggestions=tuple(analysis.get("suggestions", ())),
             confidence=min(avg_reward + 0.3, 1.0),
         )
 
@@ -137,13 +142,15 @@ class ReasoningBank:
 
         strategy = " → ".join(step.action for step in trajectory.steps)
         embedding = self._reward_weighted_embedding(trajectory.steps)
+        if not embedding:
+            return None
         distilled = DistilledMemory(
             agent_id=trajectory.agent_id,
             trajectory_id=trajectory.id,
             strategy=strategy,
             embedding=embedding,
             quality=verdict.quality,
-            learnings=[*verdict.strengths, *verdict.suggestions],
+            learnings=(*verdict.strengths, *verdict.suggestions),
         )
         await self._vector_store.upsert(distilled.to_memory_unit())
         return distilled
@@ -219,7 +226,7 @@ class ReasoningBank:
                 if not left_domain or left_domain != right_domain:
                     continue
 
-                merged_text = await self._llm.generate(
+                merged_text = await self._llm_light.generate(
                     prompt=MEMORY_MERGE_PROMPT.format(
                         memory_a=left.content,
                         memory_b=right.content,

@@ -168,6 +168,21 @@ Synthesize a merged description and strategy that captures the best of both.
 Return JSON: {{"description": "...", "strategy": "..."}}
 """.strip()
 
+TRAJECTORY_ANALYSIS_PROMPT = """
+You are analyzing an agent's task execution trajectory to extract learnings.
+
+Outcome: {outcome}
+Steps taken: {steps}
+
+Identify:
+1. strengths — what actions or decisions worked well
+2. weaknesses — what could have been done better
+3. suggestions — actionable improvements for future similar tasks
+
+Return JSON: {{"strengths": [...], "weaknesses": [...], "suggestions": [...]}}
+Each array should contain short string descriptions.
+""".strip()
+
 MEMORY_MERGE_PROMPT = """
 Two similar memories should be merged into one comprehensive statement.
 

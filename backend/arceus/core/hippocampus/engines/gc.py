@@ -22,7 +22,7 @@ class MemoryGarbageCollector:
         decayed_removed = 0
         decayed_memories = await self._hippocampus.dynamic_memory.find_decayed()
         for memory in decayed_memories:
-            if self._promotion_engine._qualifies_for_static(memory):
+            if self._promotion_engine.qualifies_for_static(memory):
                 continue
             await self._hippocampus.soft_delete(memory.id, reason="relevance_decay")
             decayed_removed += 1

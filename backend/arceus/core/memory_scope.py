@@ -41,15 +41,27 @@ class ArceusMemoryScope:
         results: list[MemoryUnit] = []
 
         if include_shared:
-            results.extend(await hippocampus.recall(query, self.startup_container(startup_id)))
+            results.extend(
+                await hippocampus.recall(
+                    query, self.startup_container(startup_id), include_graph=False
+                )
+            )
 
         results.extend(
-            await hippocampus.recall(query, self.employee_container(startup_id, employee_id))
+            await hippocampus.recall(
+                query,
+                self.employee_container(startup_id, employee_id),
+                include_graph=False,
+            )
         )
 
         if task_id:
             results.extend(
-                await hippocampus.recall(query, self.task_container(startup_id, task_id))
+                await hippocampus.recall(
+                    query,
+                    self.task_container(startup_id, task_id),
+                    include_graph=False,
+                )
             )
 
         return self._deduplicate_by_priority(results)

@@ -90,7 +90,7 @@ def test_qualifies_for_static(
     engine, _, _ = promotion_engine_fixture
     memory = _memory(memory_id="dyn-1", memory_type=MemoryType.DYNAMIC)
 
-    assert engine._qualifies_for_static(memory) is True
+    assert engine.qualifies_for_static(memory) is True
 
 
 def test_does_not_qualify_low_usage(
@@ -99,7 +99,7 @@ def test_does_not_qualify_low_usage(
     engine, _, _ = promotion_engine_fixture
     memory = _memory(memory_id="dyn-1", memory_type=MemoryType.DYNAMIC, usage_count=9)
 
-    assert engine._qualifies_for_static(memory) is False
+    assert engine.qualifies_for_static(memory) is False
 
 
 def test_does_not_qualify_low_confidence(
@@ -108,7 +108,7 @@ def test_does_not_qualify_low_confidence(
     engine, _, _ = promotion_engine_fixture
     memory = _memory(memory_id="dyn-1", memory_type=MemoryType.DYNAMIC, confidence=0.79)
 
-    assert engine._qualifies_for_static(memory) is False
+    assert engine.qualifies_for_static(memory) is False
 
 
 def test_does_not_qualify_young(
@@ -117,7 +117,7 @@ def test_does_not_qualify_young(
     engine, _, _ = promotion_engine_fixture
     memory = _memory(memory_id="dyn-1", memory_type=MemoryType.DYNAMIC, age_days=13)
 
-    assert engine._qualifies_for_static(memory) is False
+    assert engine.qualifies_for_static(memory) is False
 
 
 def test_does_not_qualify_already_promoted(
@@ -130,7 +130,7 @@ def test_does_not_qualify_already_promoted(
         promotion_status="promoted",
     )
 
-    assert engine._qualifies_for_static(memory) is False
+    assert engine.qualifies_for_static(memory) is False
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,10 @@ async def test_probation_demotion(
     static_memory = _memory(
         memory_id="stat-1",
         memory_type=MemoryType.STATIC,
-        metadata={"probation_until": (utc_now() + timedelta(days=2)).isoformat(), "usage_count": 0},
+        metadata={
+            "probation_until": (utc_now() - timedelta(days=2)).isoformat(),
+            "probation_usage_count": 0,
+        },
     )
     await vector_store.upsert(static_memory)
 

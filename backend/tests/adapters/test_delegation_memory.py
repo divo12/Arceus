@@ -4,7 +4,7 @@ import pytest
 
 from arceus.core.delegation_memory import DelegationMemoryManager
 from arceus.core.hippocampus.hippocampus import Hippocampus
-from arceus.core.hippocampus.types import MemoryType
+from arceus.core.hippocampus.types import MemoryType, MemoryVisibility
 from arceus.core.memory_scope import ArceusMemoryScope
 
 
@@ -142,6 +142,38 @@ async def test_delegation_sets_source_type(hippocampus_factory) -> None:
         assert len(persisted) == 1
         assert persisted[0].source_type == "delegation"
         assert persisted[0].metadata["delegated_from"] == "emp-1"
+    finally:
+        await from_hippocampus.close()
+        await to_hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_delegation_copies_are_task_scoped(hippocampus_factory) -> None:
+    """Private source memories must become TASK_SCOPED in the delegation copy."""
+    scope = ArceusMemoryScope()
+    manager = DelegationMemoryManager(scope)
+    from_hippocampus = await hippocampus_factory("emp-1")
+    to_hippocampus = await hippocampus_factory("emp-2")
+
+    try:
+        await from_hippocampus.remember(
+            "CEO considering replacing head of marketing",
+            container=scope.employee_container("startup-1", "emp-1"),
+            memory_type=MemoryType.STATIC,
+        )
+
+        copied = await manager.prepare_delegation_context(
+            from_hippocampus=from_hippocampus,
+            to_hippocampus=to_hippocampus,
+            from_agent_id="emp-1",
+            to_agent_id="emp-2",
+            startup_id="startup-1",
+            task_id="task-1",
+            task_description="marketing strategy Q2",
+        )
+
+        assert len(copied) == 1
+        assert copied[0].visibility is MemoryVisibility.TASK_SCOPED
     finally:
         await from_hippocampus.close()
         await to_hippocampus.close()

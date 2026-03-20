@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime
 
 from arceus.core.hippocampus.types import MemoryType, MemoryUnit
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
-from arceus.core.hippocampus.utils.time import utc_now
 
 
 class InMemoryVectorStore:
@@ -43,8 +41,7 @@ class InMemoryVectorStore:
             results.append((score, memory))
 
         results.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
-        selected = [self._touch(memory) for _, memory in results[:top_k]]
-        return selected
+        return [memory for _, memory in results[:top_k]]
 
     async def list_by_type(
         self,
@@ -94,15 +91,3 @@ class InMemoryVectorStore:
         results.sort(key=lambda memory: memory.expires_at or before)
         return results
 
-    def _touch(self, memory: MemoryUnit) -> MemoryUnit:
-        usage_count = int(memory.metadata.get("usage_count", 0)) + 1
-        updated = replace(
-            memory,
-            metadata={
-                **memory.metadata,
-                "usage_count": usage_count,
-                "last_accessed": utc_now().isoformat(),
-            },
-        )
-        self._items[memory.id] = updated
-        return updated

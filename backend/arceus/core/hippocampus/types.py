@@ -193,9 +193,9 @@ class TrajectoryVerdict:
     trajectory_id: str = ""
     quality: float = 0.0
     is_successful: bool = False
-    strengths: list = field(default_factory=list)
-    weaknesses: list = field(default_factory=list)
-    suggestions: list = field(default_factory=list)
+    strengths: tuple[str, ...] = ()
+    weaknesses: tuple[str, ...] = ()
+    suggestions: tuple[str, ...] = ()
     confidence: float = 0.0
 
 
@@ -204,9 +204,9 @@ class DistilledMemory:
     agent_id: str = ""
     trajectory_id: str = ""
     strategy: str = ""
-    embedding: list = field(default_factory=list)
+    embedding: list[float] = field(default_factory=list)
     quality: float = 0.0
-    learnings: list = field(default_factory=list)
+    learnings: tuple[str, ...] = ()
 
     def to_memory_unit(self) -> MemoryUnit:
         return MemoryUnit(

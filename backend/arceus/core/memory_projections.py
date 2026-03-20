@@ -67,4 +67,4 @@ class ArceusMemoryProjections:
         self,
         hippocampus: Hippocampus,
     ) -> list[MemoryPromotionEvent]:
-        return await hippocampus.run_promotions()
+        return await hippocampus.get_recent_promotions()

@@ -50,6 +50,7 @@ class PromotionEngine:
         self._graph_store = graph_store
         self._embedding = embedding_engine
         self._llm = llm_light
+        self._event_log: list[MemoryPromotionEvent] = []
 
     async def run_promotions(self) -> list[MemoryPromotionEvent]:
         dynamic_memories = await self._vector_store.list_by_type(
@@ -60,16 +61,20 @@ class PromotionEngine:
         for mem in dynamic_memories:
             if len(events) >= self.MAX_PROMOTIONS_PER_CYCLE:
                 break
-            if self._qualifies_for_static(mem):
+            if self.qualifies_for_static(mem):
                 has_contradiction = await self._check_contradiction(mem)
                 if has_contradiction:
                     continue
                 event = await self._promote_to_static(mem)
                 if event:
                     events.append(event)
+        self._event_log.extend(events)
         return events
 
-    def _qualifies_for_static(self, mem: MemoryUnit) -> bool:
+    async def get_recent_promotions(self, limit: int = 20) -> list[MemoryPromotionEvent]:
+        return self._event_log[-limit:]
+
+    def qualifies_for_static(self, mem: MemoryUnit) -> bool:
         uses = mem.metadata.get("usage_count", 0)
         age_days = self._age_days(mem)
         return (
@@ -121,6 +126,7 @@ class PromotionEngine:
                 **mem.metadata,
                 "promoted_from": mem.id,
                 "probation_until": probation_until,
+                "probation_usage_count": 0,
             },
             source_type=mem.source_type,
             source_id=mem.source_id,
@@ -192,8 +198,8 @@ class PromotionEngine:
             if not probation_until:
                 continue
             probation_end = parse_utc_iso(probation_until)
-            if now < probation_end:
-                uses_since = mem.metadata.get("usage_count", 0)
+            if now >= probation_end:
+                uses_since = mem.metadata.get("probation_usage_count", 0)
                 if uses_since == 0:
                     result = await self.demote(mem.id, "unused_during_probation")
                     if result:

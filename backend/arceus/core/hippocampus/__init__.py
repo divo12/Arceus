@@ -5,9 +5,15 @@ from arceus.core.hippocampus.backends.sqlite_pattern import SQLitePatternStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
 from arceus.core.hippocampus.engines.graph_store import GraphStore
-from arceus.core.hippocampus.engines.pattern_learner import PatternLearner
+from arceus.core.hippocampus.engines.pattern_learner import (
+    PatternLearner,
+    PatternLearnerConfig,
+)
 from arceus.core.hippocampus.engines.promotion_engine import PromotionEngine
-from arceus.core.hippocampus.engines.reasoning_bank import ReasoningBank
+from arceus.core.hippocampus.engines.reasoning_bank import (
+    ReasoningBank,
+    ReasoningBankConfig,
+)
 from arceus.core.hippocampus.hippocampus import Hippocampus, HippocampusBackends
 from arceus.core.hippocampus.tiers.priming import PrimingMemory
 from arceus.core.hippocampus.tiers.procedural import ProceduralMemory
@@ -63,6 +69,7 @@ __all__ = [
     "MemoryUnit",
     "MemoryVisibility",
     "PatternLearner",
+    "PatternLearnerConfig",
     "Pattern",
     "PatternStatus",
     "PrimingMemory",
@@ -71,6 +78,7 @@ __all__ = [
     "RelationType",
     "RetrievalResult",
     "ReasoningBank",
+    "ReasoningBankConfig",
     "SQLitePatternStore",
     "Trajectory",
     "TrajectoryStep",

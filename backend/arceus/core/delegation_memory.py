@@ -7,7 +7,7 @@ Key principle: memories are COPIED, never referenced.
 from __future__ import annotations
 
 from arceus.core.hippocampus.hippocampus import Hippocampus
-from arceus.core.hippocampus.types import MemoryType, MemoryUnit
+from arceus.core.hippocampus.types import MemoryType, MemoryUnit, MemoryVisibility
 from arceus.core.memory_scope import ArceusMemoryScope
 
 
@@ -57,7 +57,7 @@ class DelegationMemoryManager:
                 memory_type=MemoryType.DYNAMIC,
                 confidence=mem.confidence,
                 container=task_container,
-                visibility=mem.visibility,
+                visibility=MemoryVisibility.TASK_SCOPED,
                 source_type="delegation",
                 source_id=from_agent_id,
                 provenance=f"Delegated from {from_agent_id}",
