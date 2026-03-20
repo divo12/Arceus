@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
+from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.types import (
     GraphEntity,
     MemoryType,
+    MemoryUnit,
     RelationType,
 )
+from arceus.core.hippocampus.utils.time import utc_now
 from arceus.core.memory_projections import ArceusMemoryProjections
 from arceus.core.memory_scope import ArceusMemoryScope
 
@@ -45,18 +50,19 @@ async def test_get_graph_view(hippocampus_factory) -> None:
     scope = ArceusMemoryScope()
     hippocampus = await hippocampus_factory("emp-1")
     container = scope.employee_container("startup-1", "emp-1")
+    embedding = MockEmbeddingEngine(dimensions=32)
 
     try:
         jwt = GraphEntity(
             name="JWT",
             entity_type="technology",
-            embedding=await hippocampus._embedding.embed("JWT"),
+            embedding=await embedding.embed("JWT"),
             container=container,
         )
         auth_service = GraphEntity(
             name="AuthService",
             entity_type="service",
-            embedding=await hippocampus._embedding.embed("AuthService"),
+            embedding=await embedding.embed("AuthService"),
             container=container,
         )
         await hippocampus.graph_store.create_node(jwt)
@@ -85,6 +91,40 @@ async def test_get_graph_view(hippocampus_factory) -> None:
                 "weight": 1.0,
             }
         ]
+    finally:
+        await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_get_promotion_stream_returns_stored_events(hippocampus_factory) -> None:
+    projections = ArceusMemoryProjections()
+    scope = ArceusMemoryScope()
+    hippocampus = await hippocampus_factory("emp-1")
+    container = scope.employee_container("startup-1", "emp-1")
+    embedding = MockEmbeddingEngine(dimensions=32)
+
+    try:
+        promotable = MemoryUnit(
+            id="promotable",
+            agent_id="emp-1",
+            content="JWT expiry policy is a durable rule",
+            embedding=await embedding.embed("JWT expiry policy is a durable rule"),
+            memory_type=MemoryType.DYNAMIC,
+            confidence=0.95,
+            container=container,
+            metadata={"usage_count": 12},
+            created_at=utc_now() - timedelta(days=20),
+            updated_at=utc_now() - timedelta(days=20),
+        )
+        await hippocampus._vector_store.upsert(promotable)
+
+        await hippocampus.run_promotions()
+        stream = await projections.get_promotion_stream(hippocampus)
+
+        assert len(stream) == 1
+        assert stream[0].memory_id != "promotable"
+        assert stream[0].from_type == "dynamic"
+        assert stream[0].to_type == "static"
     finally:
         await hippocampus.close()
 

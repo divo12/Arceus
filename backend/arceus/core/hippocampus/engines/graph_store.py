@@ -92,7 +92,7 @@ class GraphStore:
         seed_nodes = await self._backend.vector_search(
             query_embedding,
             container,
-            top_k=max(top_k * 3, top_k),
+            top_k=top_k * 3,
         )
 
         expanded: dict[str, GraphEntity] = {}

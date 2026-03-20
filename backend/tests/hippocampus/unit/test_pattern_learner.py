@@ -131,6 +131,46 @@ async def test_check_habit_formation_too_few_uses() -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_habit_formation_at_threshold_qualifies() -> None:
+    learner, _, embedding = _create_pattern_learner()
+    pattern = Pattern(
+        id="pattern-threshold",
+        agent_id="agent-1",
+        description="auth strategy",
+        strategy="always inspect auth config",
+        embedding=await embedding.embed("auth strategy"),
+        usage_count=10,
+        success_rate=0.8,
+        formed_from=("traj-1",),
+        domain="auth",
+    )
+
+    habit = await learner.check_habit_formation(pattern)
+
+    assert habit is not None
+    assert habit.formed_from_id == "pattern-threshold"
+
+
+@pytest.mark.asyncio
+async def test_check_habit_formation_below_success_threshold_skipped() -> None:
+    learner, _, embedding = _create_pattern_learner()
+    pattern = Pattern(
+        agent_id="agent-1",
+        description="auth strategy",
+        strategy="always inspect auth config",
+        embedding=await embedding.embed("auth strategy"),
+        usage_count=10,
+        success_rate=0.79,
+        formed_from=("traj-1",),
+        domain="auth",
+    )
+
+    habit = await learner.check_habit_formation(pattern)
+
+    assert habit is None
+
+
+@pytest.mark.asyncio
 async def test_consolidate_merge() -> None:
     learner, store, embedding = _create_pattern_learner()
     shared_embedding = await embedding.embed("auth strategy")

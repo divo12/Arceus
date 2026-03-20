@@ -180,10 +180,12 @@ class ReasoningBank:
                 if similarity <= 0.95:
                     continue
 
-                victim, _ = self._ordered_pair(left, right)
+                victim, _ = self._pick_victim(left, right)
                 await self._vector_store.soft_delete(victim.id, reason="dedup")
                 deleted_ids.add(victim.id)
                 deduped += 1
+
+        memories = [m for m in memories if m.id not in deleted_ids]
 
         for left_index, left in enumerate(memories):
             if left.id in deleted_ids:
@@ -205,7 +207,7 @@ class ReasoningBank:
                 if verdict.strip() != "CONTRADICTION":
                     continue
 
-                victim, keeper = self._ordered_pair(left, right)
+                victim, keeper = self._pick_victim(left, right)
                 await self._vector_store.soft_delete(
                     victim.id,
                     reason=f"contradiction_with_{keeper.id}",
@@ -213,6 +215,8 @@ class ReasoningBank:
                 deleted_ids.add(victim.id)
                 contradictions_found += 1
                 contradictions_resolved += 1
+
+        memories = [m for m in memories if m.id not in deleted_ids]
 
         for left_index, left in enumerate(memories):
             if left.id in deleted_ids:
@@ -235,7 +239,7 @@ class ReasoningBank:
                         memory_b=right.content,
                     )
                 )
-                primary, secondary = self._ordered_pair(left, right, keep_higher=True)
+                primary, secondary = self._pick_primary(left, right)
                 merged_embedding = await self._embedding.embed(merged_text)
                 merged_memory = MemoryUnit(
                     agent_id=primary.agent_id,
@@ -321,19 +325,25 @@ class ReasoningBank:
                 embedding[index] += value * weight
         return embedding
 
-    def _ordered_pair(
+    def _pick_victim(
         self,
         left: MemoryUnit,
         right: MemoryUnit,
-        keep_higher: bool = False,
     ) -> tuple[MemoryUnit, MemoryUnit]:
-        if keep_higher:
-            if left.confidence >= right.confidence:
-                return left, right
-            return right, left
+        """Return (victim, keeper) — victim has lower confidence."""
         if left.confidence >= right.confidence:
             return right, left
         return left, right
+
+    def _pick_primary(
+        self,
+        left: MemoryUnit,
+        right: MemoryUnit,
+    ) -> tuple[MemoryUnit, MemoryUnit]:
+        """Return (primary, secondary) — primary has higher confidence."""
+        if left.confidence >= right.confidence:
+            return left, right
+        return right, left
 
     def _memory_domain(self, memory: MemoryUnit) -> str:
         domain = str(memory.metadata.get("domain", "")).strip()

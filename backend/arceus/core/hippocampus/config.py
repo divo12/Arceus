@@ -46,7 +46,7 @@ class HippocampusConfig:
 
     # Embeddings
     embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_dimensions: int = 384
+    embedding_dimensions: int = 384  # must match embedding_model output size
     embedding_device: str = "cpu"
 
     # Azure OpenAI

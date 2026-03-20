@@ -3,13 +3,33 @@ from __future__ import annotations
 import pytest
 
 from arceus.core.delegation_memory import DelegationMemoryManager
-from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import MemoryType, MemoryVisibility
 from arceus.core.memory_scope import ArceusMemoryScope
 
 
+class _RecordingRecallHippocampus:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def recall(self, **kwargs):
+        self.calls.append(kwargs)
+        return []
+
+
+class _UnusedVectorStore:
+    async def upsert(self, unit) -> None:  # noqa: ANN001
+        del unit
+
+
+class _NoopTargetHippocampus:
+    def __init__(self) -> None:
+        self._vector_store = _UnusedVectorStore()
+
+
 @pytest.mark.asyncio
-async def test_prepare_delegation_context_copies_memories_into_task_scope(hippocampus_factory) -> None:
+async def test_prepare_delegation_context_copies_memories_into_task_scope(
+    hippocampus_factory,
+) -> None:
     scope = ArceusMemoryScope()
     manager = DelegationMemoryManager(scope)
     from_hippocampus = await hippocampus_factory("emp-1")
@@ -238,6 +258,33 @@ async def test_internalize_medium_quality(hippocampus_factory) -> None:
         assert results[0].memory_type is MemoryType.DYNAMIC
     finally:
         await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_prepare_delegation_context_disables_graph_lookup() -> None:
+    manager = DelegationMemoryManager(ArceusMemoryScope())
+    from_hippocampus = _RecordingRecallHippocampus()
+    to_hippocampus = _NoopTargetHippocampus()
+
+    copied = await manager.prepare_delegation_context(
+        from_hippocampus=from_hippocampus,
+        to_hippocampus=to_hippocampus,
+        from_agent_id="emp-1",
+        to_agent_id="emp-2",
+        startup_id="startup-1",
+        task_id="task-1",
+        task_description="payment notifications",
+    )
+
+    assert copied == []
+    assert from_hippocampus.calls == [
+        {
+            "query": "payment notifications",
+            "container": "startup:startup-1:emp:emp-1",
+            "top_k": 10,
+            "include_graph": False,
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -128,6 +128,12 @@ class MemoryExtractor:
                 )
                 return await self._hippocampus.dynamic_memory.add(fact, container)
             trigger, action = self._split_procedural_text(fact.text)
+            if not trigger:
+                logger.warning(
+                    "Procedural fact is missing a trigger; "
+                    "storing it as dynamic memory instead"
+                )
+                return await self._hippocampus.dynamic_memory.add(fact, container)
             habit = Habit(
                 agent_id=agent_id,
                 trigger_condition=trigger,

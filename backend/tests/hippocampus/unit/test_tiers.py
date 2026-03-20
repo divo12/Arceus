@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -10,6 +11,16 @@ from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
 from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit
+
+
+class SlowDictCacheStore(DictCacheStore):
+    async def get(self, key: str) -> str | None:
+        await asyncio.sleep(0)
+        return await super().get(key)
+
+    async def set(self, key: str, value: str, ttl_seconds: int = 3600) -> None:
+        await asyncio.sleep(0)
+        await super().set(key, value, ttl_seconds=ttl_seconds)
 
 
 @pytest.mark.asyncio
@@ -28,6 +39,28 @@ async def test_working_memory_load_append_get_and_clear() -> None:
     await memory.clear_task("task-1")
     cleared = await memory.get_current_context("task-1")
     assert cleared == {"task": None, "conversation": None, "scratchpad": None}
+
+
+@pytest.mark.asyncio
+async def test_working_memory_append_conversation_is_safe_under_concurrency() -> None:
+    store = SlowDictCacheStore()
+    memory = WorkingMemory(agent_id="agent-1", backend=store)
+
+    messages = [
+        {"role": "assistant", "content": f"message-{index}"}
+        for index in range(20)
+    ]
+
+    await asyncio.gather(
+        *(memory.append_conversation("task-1", message) for message in messages)
+    )
+
+    context = await memory.get_current_context("task-1")
+    assert context["conversation"] is not None
+    assert len(context["conversation"]) == len(messages)
+    assert {item["content"] for item in context["conversation"]} == {
+        message["content"] for message in messages
+    }
 
 
 @pytest.mark.asyncio
@@ -144,7 +177,7 @@ async def test_dynamic_memory_filters_decayed_memories() -> None:
     )
     await vector_store.upsert(expired_candidate)
     expired = await memory.find_expired()
-    assert [item.id for item in expired] == [fresh.id]
+    assert [item.id for item in expired] == [expired_candidate.id]
 
 
 def test_dynamic_memory_rejects_non_positive_half_life() -> None:

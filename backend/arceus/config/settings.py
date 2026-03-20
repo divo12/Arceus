@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -26,13 +27,13 @@ class Settings(BaseSettings):
 
     # Azure OpenAI
     azure_openai_endpoint: str = ""
-    azure_openai_api_key: str = ""
+    azure_openai_api_key: SecretStr = SecretStr("")
     azure_openai_api_version: str = "2025-03-01-preview"
 
     # Neo4j
     neo4j_uri: str = ""
     neo4j_username: str = ""
-    neo4j_password: str = ""
+    neo4j_password: SecretStr = SecretStr("")
     neo4j_database: str = "neo4j"
 
     # Model deployments
@@ -45,7 +46,7 @@ class Settings(BaseSettings):
     mem0_url: str = "http://localhost:8080"
 
     # E2B
-    e2b_api_key: str = ""
+    e2b_api_key: SecretStr = SecretStr("")
 
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://localhost:3004", "http://localhost:3005"]

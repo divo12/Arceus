@@ -24,8 +24,31 @@ from arceus.core.hippocampus.types import (
 from arceus.core.hippocampus.utils.time import utc_now
 
 
+class ReasoningLLMDouble(NoopLLMEngine):
+    def __init__(
+        self,
+        *,
+        classify_result: str = "NO_CONTRADICTION",
+        generated_text: str = "Merged reasoning memory",
+    ) -> None:
+        super().__init__(model_name="noop")
+        self.classify_result = classify_result
+        self.generated_text = generated_text
+
+    async def classify(self, prompt: str, options: list[str], **kwargs) -> str:
+        del prompt, kwargs
+        assert self.classify_result in options
+        return self.classify_result
+
+    async def generate(self, prompt: str, **kwargs) -> str:
+        del prompt, kwargs
+        return self.generated_text
+
+
 def _create_reasoning_bank(
     config: ReasoningBankConfig | None = None,
+    *,
+    llm_light: NoopLLMEngine | None = None,
 ) -> tuple[ReasoningBank, InMemoryVectorStore, MockEmbeddingEngine]:
     vector_store = InMemoryVectorStore()
     pattern_store = InMemoryPatternStore(agent_id="agent-1")
@@ -35,7 +58,7 @@ def _create_reasoning_bank(
         vector_store=vector_store,
         pattern_store=pattern_store,
         llm=NoopLLMEngine(model_name="noop"),
-        llm_light=NoopLLMEngine(model_name="noop"),
+        llm_light=llm_light or NoopLLMEngine(model_name="noop"),
         embedding_engine=embedding,
         config=config,
     )
@@ -292,6 +315,48 @@ async def test_consolidate_skips_promotion_candidates() -> None:
 
     assert result.pruned == 0
     assert await vector_store.get("candidate") is not None
+
+
+@pytest.mark.asyncio
+async def test_consolidate_merge_same_domain_creates_merged_memory() -> None:
+    bank, vector_store, embedding = _create_reasoning_bank(
+        llm_light=ReasoningLLMDouble(
+            classify_result="NO_CONTRADICTION",
+            generated_text="Merged auth rollout rule",
+        )
+    )
+    shared_domain = {"domain": "auth"}
+    await vector_store.upsert(
+        await _memory(
+            embedding,
+            memory_id="mem-a",
+            content="Auth rollout note A",
+            confidence=0.9,
+            metadata=shared_domain,
+            embedding_override=[1.0, 0.0],
+        )
+    )
+    await vector_store.upsert(
+        await _memory(
+            embedding,
+            memory_id="mem-b",
+            content="Auth rollout note B",
+            confidence=0.85,
+            metadata=shared_domain,
+            embedding_override=[0.92, 0.3919183588453085],
+        )
+    )
+
+    result = await bank.consolidate()
+    memories = await vector_store.list_by_type(
+        agent_id="agent-1",
+        memory_types=[MemoryType.STATIC, MemoryType.DYNAMIC],
+    )
+
+    assert result.merged == 1
+    assert await vector_store.get("mem-a") is None
+    assert await vector_store.get("mem-b") is None
+    assert any(memory.content == "Merged auth rollout rule" for memory in memories)
 
 
 def test_compute_slope() -> None:

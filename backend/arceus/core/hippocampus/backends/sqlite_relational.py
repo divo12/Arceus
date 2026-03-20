@@ -23,12 +23,16 @@ class SQLiteRelationalStore:
         if self._initialized and self._connection is not None:
             return
 
-        if self._path != ":memory:":
-            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+        async with self._lock:
+            if self._initialized and self._connection is not None:
+                return
 
-        self._connection = await aiosqlite.connect(self._path)
-        await self._connection.execute("PRAGMA journal_mode=WAL;")
-        await self._connection.execute(
+            if self._path != ":memory:":
+                Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+
+            self._connection = await aiosqlite.connect(self._path)
+            await self._connection.execute("PRAGMA journal_mode=WAL;")
+            await self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS habits (
                     id TEXT PRIMARY KEY,
@@ -44,7 +48,7 @@ class SQLiteRelationalStore:
                 )
                 """
             )
-        await self._connection.execute(
+            await self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS priming_state (
                     agent_id TEXT PRIMARY KEY,
@@ -52,7 +56,7 @@ class SQLiteRelationalStore:
                 )
                 """
             )
-        await self._connection.execute(
+            await self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS patterns (
                     id TEXT PRIMARY KEY,
@@ -71,7 +75,7 @@ class SQLiteRelationalStore:
                 )
                 """
             )
-        await self._connection.execute(
+            await self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory_metadata (
                     key TEXT PRIMARY KEY,
@@ -79,9 +83,8 @@ class SQLiteRelationalStore:
                 )
                 """
             )
-        await self._connection.commit()
-
-        self._initialized = True
+            await self._connection.commit()
+            self._initialized = True
 
     async def close(self) -> None:
         async with self._lock:

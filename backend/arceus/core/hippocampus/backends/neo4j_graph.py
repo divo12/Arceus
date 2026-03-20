@@ -25,7 +25,7 @@ class Neo4jGraphStoreBackend:
     ) -> None:
         self._uri = uri or settings.neo4j_uri
         self._username = username or settings.neo4j_username
-        self._password = password or settings.neo4j_password
+        self._password = password or settings.neo4j_password.get_secret_value()
         self._database = database or settings.neo4j_database
         self._driver = driver
         self._schema_ready = False
@@ -215,7 +215,7 @@ def has_neo4j_credentials(
     return bool(
         (uri or settings.neo4j_uri)
         and (username or settings.neo4j_username)
-        and (password or settings.neo4j_password)
+        and (password or settings.neo4j_password.get_secret_value())
     )
 
 

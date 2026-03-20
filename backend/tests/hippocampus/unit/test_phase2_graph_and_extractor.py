@@ -86,8 +86,7 @@ class FakeHippocampus:
         self.static_memory = static_memory
         self.dynamic_memory = dynamic_memory
         self.graph_store = graph_store
-        if procedural_memory is not None:
-            self.procedural_memory = procedural_memory
+        self.procedural_memory = procedural_memory
         self._vector_store = vector_store
         self._embedding = embedding_engine
 
@@ -529,3 +528,46 @@ async def test_memory_extractor_falls_back_when_procedural_memory_is_unavailable
         memory_type=MemoryType.DYNAMIC,
     )
     assert [memory.content for memory in dynamic] == ["before deploy -> run tests first"]
+
+
+@pytest.mark.asyncio
+async def test_memory_extractor_does_not_create_empty_trigger_habit() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = MockEmbeddingEngine(dimensions=32)
+    graph_store = GraphStore(InMemoryGraphStoreBackend(), embedding)
+    procedural_memory = RecordingProceduralMemory()
+    hippocampus = FakeHippocampus(
+        static_memory=StaticMemory("agent-1", vector_store, embedding, graph_store),
+        dynamic_memory=DynamicMemory("agent-1", vector_store, embedding),
+        graph_store=graph_store,
+        vector_store=vector_store,
+        embedding_engine=embedding,
+        procedural_memory=procedural_memory,
+    )
+    fact = ExtractedFact(
+        text="Always run tests before deploy",
+        memory_type=MemoryType.PROCEDURAL,
+        confidence=0.92,
+        is_procedural=True,
+    )
+    extractor = MemoryExtractor(
+        FakeLLM(extracted_facts=[fact]),
+        FakeLLM(classification="related_to"),
+        embedding,
+        hippocampus,
+    )
+
+    await extractor.extract(
+        messages=[{"role": "assistant", "content": "Always run tests before deploy"}],
+        agent_id="agent-1",
+        container="startup:1:emp:e1",
+    )
+
+    dynamic = await vector_store.list_by_type(
+        agent_id="agent-1",
+        container="startup:1:emp:e1",
+        memory_type=MemoryType.DYNAMIC,
+    )
+
+    assert procedural_memory.habits == []
+    assert [memory.content for memory in dynamic] == ["Always run tests before deploy"]

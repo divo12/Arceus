@@ -21,7 +21,7 @@ def _get_azure_client():
 
         _azure_client = AsyncAzureOpenAI(
             azure_endpoint=settings.azure_openai_endpoint,
-            api_key=settings.azure_openai_api_key,
+            api_key=settings.azure_openai_api_key.get_secret_value(),
             api_version=settings.azure_openai_api_version,
         )
     return _azure_client
@@ -38,7 +38,7 @@ def build_model(deployment: str | None = None) -> OpenAIModel:
     """
     model_name = deployment or settings.model_ceo
 
-    if settings.azure_openai_endpoint and settings.azure_openai_api_key:
+    if settings.azure_openai_endpoint and settings.azure_openai_api_key.get_secret_value():
         client = _get_azure_client()
         provider = OpenAIProvider(openai_client=client)
         return OpenAIModel(model_name, provider=provider)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from arceus.core.hippocampus.backends.protocols import (
     EmbeddingEngine,
@@ -76,19 +76,10 @@ class PatternLearner:
     async def evolve_pattern(self, pattern: Pattern, quality: float) -> Pattern:
         lr = self._config.learning_rate
         new_rate = pattern.success_rate * (1 - lr) + quality * lr
-        updated = Pattern(
-            id=pattern.id,
-            agent_id=pattern.agent_id,
-            description=pattern.description,
-            strategy=pattern.strategy,
-            embedding=pattern.embedding,
+        updated = replace(
+            pattern,
             usage_count=pattern.usage_count + 1,
             success_rate=new_rate,
-            formed_from=pattern.formed_from,
-            cluster_id=pattern.cluster_id,
-            status=pattern.status,
-            domain=pattern.domain,
-            created_at=pattern.created_at,
             updated_at=utc_now(),
         )
         await self._store.update(updated)
@@ -181,9 +172,8 @@ class PatternLearner:
         total_usage = pa.usage_count + pb.usage_count
         merged_description = merged_data.get("description", pa.description)
         merged_strategy = merged_data.get("strategy", pa.strategy)
-        merged_pattern = Pattern(
-            id=pa.id,
-            agent_id=pa.agent_id,
+        merged_pattern = replace(
+            pa,
             description=merged_description,
             strategy=merged_strategy,
             embedding=await self._embedding.embed(merged_description),
@@ -200,8 +190,6 @@ class PatternLearner:
             formed_from=tuple(dict.fromkeys((*pa.formed_from, *pb.formed_from))),
             cluster_id=pa.cluster_id or pb.cluster_id,
             status=PatternStatus.ACTIVE,
-            domain=pa.domain,
-            created_at=pa.created_at,
             updated_at=utc_now(),
         )
         await self._store.update(merged_pattern)

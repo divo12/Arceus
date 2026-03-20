@@ -43,6 +43,7 @@ class DelegationMemoryManager:
             query=task_description,
             container=from_container,
             top_k=top_k,
+            include_graph=False,
         )
 
         copied: list[MemoryUnit] = []

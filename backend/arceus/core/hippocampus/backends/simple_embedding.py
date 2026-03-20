@@ -15,6 +15,8 @@ class MockEmbeddingEngine:
     """
 
     def __init__(self, dimensions: int = 384) -> None:
+        if dimensions <= 0:
+            raise ValueError(f"dimensions must be positive, got {dimensions}")
         logger.warning("MockEmbeddingEngine is not suitable for production use")
         self._dimensions = dimensions
 

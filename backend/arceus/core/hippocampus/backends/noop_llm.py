@@ -30,4 +30,6 @@ class NoopLLMEngine:
 
     async def classify(self, prompt: str, options: list[str], **kwargs) -> str:
         del prompt, kwargs
+        if not options:
+            raise ValueError("classify() requires at least one option")
         return options[0]

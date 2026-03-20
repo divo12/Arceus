@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, get_args, get_origin
 
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 from arceus.config.settings import settings
 from arceus.core.hippocampus.types import ExtractedFact, MemoryType
+
+logger = logging.getLogger(__name__)
+
+
+def _get_retryable_exceptions() -> tuple[type[BaseException], ...]:
+    from openai import APIConnectionError, APITimeoutError, RateLimitError
+
+    return (RateLimitError, APITimeoutError, APIConnectionError)
 
 
 class AzureOpenAILLMEngine:
@@ -22,7 +38,7 @@ class AzureOpenAILLMEngine:
     ) -> None:
         self._model_name = model_name
         self._azure_endpoint = azure_endpoint or settings.azure_openai_endpoint
-        self._api_key = api_key or settings.azure_openai_api_key
+        self._api_key = api_key or settings.azure_openai_api_key.get_secret_value()
         self._api_version = api_version or settings.azure_openai_api_version
         self._client = client
 
@@ -97,6 +113,16 @@ class AzureOpenAILLMEngine:
             response_format=None,
         )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(_get_retryable_exceptions()),
+        before_sleep=lambda rs: logger.warning(
+            "Azure OpenAI transient error (attempt %d): %s",
+            rs.attempt_number,
+            rs.outcome.exception(),
+        ),
+    )
     async def _create_completion(
         self,
         *,
@@ -193,7 +219,7 @@ def has_azure_openai_credentials(
 ) -> bool:
     return bool(
         (azure_endpoint or settings.azure_openai_endpoint)
-        and (api_key or settings.azure_openai_api_key)
+        and (api_key or settings.azure_openai_api_key.get_secret_value())
     )
 
 
@@ -240,7 +266,10 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
     if isinstance(value, datetime):
         return value
-    return datetime.fromisoformat(str(value))
+    try:
+        return datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
 
 
 def _is_extracted_fact_list(output_schema: type) -> bool:

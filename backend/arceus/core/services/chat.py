@@ -37,12 +37,12 @@ def _build_ceo_agent(startup: Startup, ceo_row: AgentModel) -> Agent:
     )
 
     # Build the model — try Azure OpenAI first, fall back to OpenAI
-    if settings.azure_openai_endpoint and settings.azure_openai_api_key:
+    if settings.azure_openai_endpoint and settings.azure_openai_api_key.get_secret_value():
         from openai import AsyncAzureOpenAI
 
         client = AsyncAzureOpenAI(
             azure_endpoint=settings.azure_openai_endpoint,
-            api_key=settings.azure_openai_api_key,
+            api_key=settings.azure_openai_api_key.get_secret_value(),
             api_version=settings.azure_openai_api_version,
         )
         provider = OpenAIProvider(openai_client=client)

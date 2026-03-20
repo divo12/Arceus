@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from arceus.core.hippocampus.backends.protocols import WorkingMemoryBackend
@@ -12,6 +13,7 @@ class WorkingMemory:
         self._agent_id = agent_id
         self._backend = backend
         self._prefix = f"wm:{agent_id}"
+        self._conversation_locks: dict[str, asyncio.Lock] = {}
 
     async def load_task_context(self, task_id: str, context: dict) -> None:
         key = f"{self._prefix}:task:{task_id}"
@@ -19,10 +21,11 @@ class WorkingMemory:
 
     async def append_conversation(self, task_id: str, message: dict) -> None:
         key = f"{self._prefix}:conv:{task_id}"
-        existing = await self._backend.get(key) or "[]"
-        messages = json.loads(existing)
-        messages.append(message)
-        await self._backend.set(key, json.dumps(messages, default=str), ttl_seconds=7200)
+        async with self._conversation_lock(key):
+            existing = await self._backend.get(key) or "[]"
+            messages = json.loads(existing)
+            messages.append(message)
+            await self._backend.set(key, json.dumps(messages, default=str), ttl_seconds=7200)
 
     async def get_current_context(self, task_id: str) -> dict:
         task = await self._backend.get(f"{self._prefix}:task:{task_id}")
@@ -34,7 +37,18 @@ class WorkingMemory:
             "scratchpad": None if scratchpad is None else json.loads(scratchpad),
         }
 
+    async def set_scratchpad(self, task_id: str, data: dict) -> None:
+        key = f"{self._prefix}:scratch:{task_id}"
+        await self._backend.set(key, json.dumps(data, default=str), ttl_seconds=7200)
+
     async def clear_task(self, task_id: str) -> None:
         await self._backend.clear(f"{self._prefix}:task:{task_id}")
         await self._backend.clear(f"{self._prefix}:conv:{task_id}")
         await self._backend.clear(f"{self._prefix}:scratch:{task_id}")
+
+    def _conversation_lock(self, key: str) -> asyncio.Lock:
+        lock = self._conversation_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._conversation_locks[key] = lock
+        return lock

@@ -28,45 +28,50 @@ async def test_memory_scope_retrieves_shared_private_and_task_memories_without_l
         config=HippocampusConfig(
             sqlite_path=str(tmp_path / "hippocampus.db"),
             graph_store_backend="in_memory",
+            extraction_model="noop",
+            lightweight_model="noop",
         ),
     )
 
-    startup_id = "startup-1"
-    employee_id = "emp-1"
-    task_id = "task-1"
+    try:
+        startup_id = "startup-1"
+        employee_id = "emp-1"
+        task_id = "task-1"
 
-    await hippocampus.remember(
-        "The company uses JWT for authentication",
-        container=scope.startup_container(startup_id),
-        memory_type=MemoryType.STATIC,
-    )
-    await hippocampus.remember(
-        "I prefer writing auth tests before refactoring",
-        container=scope.employee_container(startup_id, employee_id),
-        memory_type=MemoryType.DYNAMIC,
-    )
-    await hippocampus.remember(
-        "The current task is debugging token refresh",
-        container=scope.task_container(startup_id, task_id),
-        memory_type=MemoryType.DYNAMIC,
-    )
-    await hippocampus.remember(
-        "Another employee owns SSO integration",
-        container=scope.employee_container(startup_id, "emp-2"),
-        memory_type=MemoryType.DYNAMIC,
-    )
+        await hippocampus.remember(
+            "The company uses JWT for authentication",
+            container=scope.startup_container(startup_id),
+            memory_type=MemoryType.STATIC,
+        )
+        await hippocampus.remember(
+            "I prefer writing auth tests before refactoring",
+            container=scope.employee_container(startup_id, employee_id),
+            memory_type=MemoryType.DYNAMIC,
+        )
+        await hippocampus.remember(
+            "The current task is debugging token refresh",
+            container=scope.task_container(startup_id, task_id),
+            memory_type=MemoryType.DYNAMIC,
+        )
+        await hippocampus.remember(
+            "Another employee owns SSO integration",
+            container=scope.employee_container(startup_id, "emp-2"),
+            memory_type=MemoryType.DYNAMIC,
+        )
 
-    results = await scope.get_memories_for_agent(
-        hippocampus=hippocampus,
-        query="auth token JWT",
-        startup_id=startup_id,
-        employee_id=employee_id,
-        task_id=task_id,
-        include_shared=True,
-    )
+        results = await scope.get_memories_for_agent(
+            hippocampus=hippocampus,
+            query="auth token JWT",
+            startup_id=startup_id,
+            employee_id=employee_id,
+            task_id=task_id,
+            include_shared=True,
+        )
 
-    contents = [memory.content for memory in results]
-    assert "The company uses JWT for authentication" in contents
-    assert "I prefer writing auth tests before refactoring" in contents
-    assert "The current task is debugging token refresh" in contents
-    assert "Another employee owns SSO integration" not in contents
+        contents = [memory.content for memory in results]
+        assert "The company uses JWT for authentication" in contents
+        assert "I prefer writing auth tests before refactoring" in contents
+        assert "The current task is debugging token refresh" in contents
+        assert "Another employee owns SSO integration" not in contents
+    finally:
+        await hippocampus.close()

@@ -1,3 +1,27 @@
+"""Hippocampus v6 — 5-tier memory system with adaptive intelligence.
+
+Tiers:
+    1. Working   — ephemeral cache for in-flight task context (TTL-based)
+    2. Static    — permanent facts with version chains and graph provenance
+    3. Dynamic   — time-decaying contextual memory (half-life + relevance)
+    4. Procedural— learned habits from repeated successful patterns
+    5. Priming   — agent disposition/mood state updated by task outcomes
+
+Engines:
+    - MemoryExtractor  — LLM-driven fact extraction from conversations
+    - PromotionEngine  — Dynamic-to-Static promotion with contradiction checks
+    - ReasoningBank    — trajectory judging, distillation, and consolidation
+    - PatternLearner   — pattern extraction, evolution, and habit formation
+    - GarbageCollector — expired/decayed memory cleanup and probation demotion
+
+Orchestration:
+    - remember()                  — manual write to Static or Dynamic
+    - recall()                    — MMR-ranked retrieval across tiers + graph
+    - extract_from_conversation() — LLM extraction pipeline
+    - process_trajectory()        — Flow A steps 6-11 (judge -> distill -> pattern -> habit -> priming)
+    - run_promotions()            — batch promotion cycle
+    - run_gc()                    — cleanup cycle
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
