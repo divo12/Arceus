@@ -53,6 +53,43 @@ async def test_static_memory_add_and_search() -> None:
     results = await memory.search("JWT authentication", "startup:1:emp:e1", top_k=3)
     assert len(results) == 1
     assert results[0].memory_type is MemoryType.STATIC
+    assert results[0].source_type == "remember"
+
+
+@pytest.mark.asyncio
+async def test_tier_add_preserves_fact_source_type() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = MockEmbeddingEngine(dimensions=32)
+    static_memory = StaticMemory(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        embedding_engine=embedding,
+    )
+    dynamic_memory = DynamicMemory(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        embedding_engine=embedding,
+    )
+
+    static_fact = ExtractedFact(
+        text="Board approved weekly KPI reviews",
+        memory_type=MemoryType.STATIC,
+        confidence=0.95,
+        source_type="meeting",
+        is_permanent=True,
+    )
+    dynamic_fact = ExtractedFact(
+        text="Auth migration follow-up is due tomorrow",
+        memory_type=MemoryType.DYNAMIC,
+        confidence=0.8,
+        source_type="conversation",
+    )
+
+    static_unit = await static_memory.add(static_fact, container="startup:1:emp:e1")
+    dynamic_unit = await dynamic_memory.add(dynamic_fact, container="startup:1:emp:e1")
+
+    assert static_unit.source_type == "meeting"
+    assert dynamic_unit.source_type == "conversation"
 
 
 @pytest.mark.asyncio

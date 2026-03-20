@@ -16,6 +16,11 @@ class SQLitePatternStore:
         await self._relational.insert_pattern(pattern)
 
     async def update(self, pattern: Pattern) -> None:
+        if pattern.agent_id != self._agent_id:
+            raise PermissionError(
+                f"Pattern {pattern.id} belongs to agent {pattern.agent_id}, "
+                f"not {self._agent_id}"
+            )
         await self._relational.update_pattern(pattern)
 
     async def find_similar(
@@ -43,4 +48,9 @@ class SQLitePatternStore:
         pattern_id: str,
         status: PatternStatus,
     ) -> None:
+        all_patterns = await self._relational.list_patterns(self._agent_id)
+        if not any(p.id == pattern_id for p in all_patterns):
+            raise PermissionError(
+                f"Pattern {pattern_id} does not belong to agent {self._agent_id}"
+            )
         await self._relational.update_pattern_status(pattern_id, status)

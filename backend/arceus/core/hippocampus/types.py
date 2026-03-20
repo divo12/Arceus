@@ -91,6 +91,7 @@ class ExtractedFact:
     text: str = ""
     memory_type: MemoryType = MemoryType.DYNAMIC
     confidence: float = 0.0
+    source_type: str = "remember"
     is_permanent: bool = False
     is_procedural: bool = False
     is_temporal: bool = False

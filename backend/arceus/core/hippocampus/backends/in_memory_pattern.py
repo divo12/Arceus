@@ -15,6 +15,12 @@ class InMemoryPatternStore:
         self._patterns[pattern.id] = pattern
 
     async def update(self, pattern: Pattern) -> None:
+        existing = self._patterns.get(pattern.id)
+        if existing is not None and existing.agent_id != self._agent_id:
+            raise PermissionError(
+                f"Pattern {pattern.id} belongs to agent {existing.agent_id}, "
+                f"not {self._agent_id}"
+            )
         self._patterns[pattern.id] = pattern
 
     async def find_similar(
@@ -25,6 +31,8 @@ class InMemoryPatternStore:
         best: Pattern | None = None
         best_sim = -1.0
         for pattern in self._patterns.values():
+            if pattern.agent_id != self._agent_id:
+                continue
             if pattern.status != PatternStatus.ACTIVE or not pattern.embedding:
                 continue
             sim = cosine_similarity(embedding, pattern.embedding)
@@ -47,6 +55,11 @@ class InMemoryPatternStore:
         existing = self._patterns.get(pattern_id)
         if existing is None:
             return
+        if existing.agent_id != self._agent_id:
+            raise PermissionError(
+                f"Pattern {pattern_id} belongs to agent {existing.agent_id}, "
+                f"not {self._agent_id}"
+            )
         updated = Pattern(
             id=existing.id,
             agent_id=existing.agent_id,

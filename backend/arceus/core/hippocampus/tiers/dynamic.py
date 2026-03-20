@@ -36,7 +36,7 @@ class DynamicMemory:
             confidence=fact.confidence,
             relevance_score=1.0,
             container=container,
-            source_type="remember",
+            source_type=fact.source_type,
             expires_at=fact.expires_at,
             updated_at=utc_now(),
         )

@@ -38,6 +38,7 @@ from arceus.core.hippocampus.tiers.procedural import ProceduralMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
 from arceus.core.hippocampus.types import (
+    DistilledMemory,
     ExtractedFact,
     ExtractionMode,
     ExtractionResult,
@@ -48,6 +49,8 @@ from arceus.core.hippocampus.types import (
     MemorySummaryProjection,
     MemoryType,
     MemoryUnit,
+    Trajectory,
+    TrajectoryVerdict,
 )
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 from arceus.core.hippocampus.utils.usage_tracker import UsageTracker
@@ -351,6 +354,39 @@ class Hippocampus:
             container=container,
             mode=mode,
         )
+
+    async def process_trajectory(self, trajectory: Trajectory) -> dict:
+        """Orchestrate Flow A steps 6-11: judge → distill → extract_pattern → check_habit → update_state."""
+        verdict: TrajectoryVerdict | None = None
+        distilled: DistilledMemory | None = None
+        pattern = None
+        habit: Habit | None = None
+
+        if self.reasoning_bank is not None:
+            verdict = await self.reasoning_bank.judge(trajectory)
+            distilled = await self.reasoning_bank.distill(trajectory, verdict)
+
+        if self.pattern_learner is not None:
+            pattern = await self.pattern_learner.extract_pattern(trajectory)
+            if pattern is not None:
+                habit = await self.pattern_learner.check_habit_formation(pattern)
+                if habit is not None and self.procedural_memory is not None:
+                    await self.procedural_memory.add_habit(habit)
+
+        if self.priming_memory is not None:
+            signal = 1.0 if trajectory.quality >= 0.5 else -0.5
+            await self.priming_memory.update_state(
+                stimulus=f"Task {trajectory.task_id}: {trajectory.outcome}",
+                signal=signal,
+                source="task_completion",
+            )
+
+        return {
+            "verdict": verdict,
+            "distilled": distilled,
+            "pattern": pattern,
+            "habit": habit,
+        }
 
     async def run_promotions(self) -> list[MemoryPromotionEvent]:
         if self.promotion_engine is None:

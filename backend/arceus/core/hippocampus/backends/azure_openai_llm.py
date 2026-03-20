@@ -159,6 +159,7 @@ class AzureOpenAILLMEngine:
             text=text,
             memory_type=_coerce_memory_type(fact_type),
             confidence=float(payload.get("confidence", 0.0) or 0.0),
+            source_type=str(payload.get("source_type", "") or "").strip() or "remember",
             is_permanent=bool(
                 payload.get("is_permanent", fact_type == MemoryType.STATIC.value)
             ),

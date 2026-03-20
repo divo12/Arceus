@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, LLMEngine
 from arceus.core.hippocampus.prompts import (
@@ -53,6 +54,7 @@ class MemoryExtractor:
             messages=messages,
             output_schema=list[ExtractedFact],
         )
+        facts = [self._stamp_source_type(fact, mode) for fact in facts]
 
         actions: list[tuple[MemoryAction, str, str]] = []
         for fact in facts:
@@ -205,6 +207,13 @@ class MemoryExtractor:
             ExtractionMode.CONVERSATION: AGENT_EXTRACTION_PROMPT,
             ExtractionMode.MEETING: MEETING_EXTRACTION_PROMPT,
         }[mode]
+
+    def _stamp_source_type(
+        self,
+        fact: ExtractedFact,
+        mode: ExtractionMode,
+    ) -> ExtractedFact:
+        return replace(fact, source_type=mode.value)
 
     def _normalize_action(self, decision: dict) -> tuple[MemoryAction, str, str]:
         raw_action = str(decision.get("action", MemoryAction.NONE.value)).strip()

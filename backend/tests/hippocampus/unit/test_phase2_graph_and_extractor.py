@@ -269,6 +269,61 @@ async def test_memory_extractor_adds_memory_and_graph_relationships() -> None:
     assert len(stored) == 1
     assert len(graph_backend.list_nodes()) >= 2
     assert any(edge.relation_type is RelationType.USES for edge in graph_backend.list_edges())
+    assert stored[0].source_type == "agent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected_source_type"),
+    [
+        (ExtractionMode.CONVERSATION, "conversation"),
+        (ExtractionMode.MEETING, "meeting"),
+    ],
+)
+async def test_memory_extractor_stamps_source_type_from_mode(
+    mode: ExtractionMode,
+    expected_source_type: str,
+) -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = MockEmbeddingEngine(dimensions=32)
+    graph_store = GraphStore(InMemoryGraphStoreBackend(), embedding)
+    hippocampus = FakeHippocampus(
+        static_memory=StaticMemory("agent-1", vector_store, embedding, graph_store),
+        dynamic_memory=DynamicMemory("agent-1", vector_store, embedding),
+        graph_store=graph_store,
+        vector_store=vector_store,
+        embedding_engine=embedding,
+    )
+    extractor = MemoryExtractor(
+        FakeLLM(
+            extracted_facts=[
+                ExtractedFact(
+                    text="PM clarified the launch checklist owner",
+                    memory_type=MemoryType.DYNAMIC,
+                    confidence=0.8,
+                )
+            ]
+        ),
+        FakeLLM(classification="related_to"),
+        embedding,
+        hippocampus,
+    )
+
+    result = await extractor.extract(
+        messages=[{"role": "assistant", "content": "Launch checklist owner updated"}],
+        agent_id="agent-1",
+        container="startup:1:emp:e1",
+        mode=mode,
+    )
+
+    stored = await vector_store.list_by_type(
+        agent_id="agent-1",
+        container="startup:1:emp:e1",
+        memory_type=MemoryType.DYNAMIC,
+    )
+
+    assert result.facts[0].source_type == expected_source_type
+    assert stored[0].source_type == expected_source_type
 
 
 @pytest.mark.asyncio

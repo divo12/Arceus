@@ -35,7 +35,7 @@ class StaticMemory:
             confidence=fact.confidence,
             relevance_score=1.0,
             container=container,
-            source_type="remember",
+            source_type=fact.source_type,
             updated_at=utc_now(),
         )
         await self._vector_store.upsert(unit)

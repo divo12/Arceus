@@ -45,11 +45,11 @@ Items tagged `[C]` = Claude, `[CR]` = CodeRabbit, `[BOTH]` = found by both.
 
 | # | File | Issue | Source | Status |
 |---|------|-------|--------|--------|
-| H1 | `hippocampus.py` | **Missing `process_trajectory()` orchestration method** — Spec section 7.12 defines `process_trajectory(trajectory)` chaining: `judge -> distill -> extract_pattern -> check_habit_formation -> update_state`. Without this, callers manually orchestrate 5 engine calls. This is the main orchestration method for Flow A steps 6-11. | [C] | Open |
+| H1 | `hippocampus.py` | **Missing `process_trajectory()` orchestration method** — Spec section 7.12 defines `process_trajectory(trajectory)` chaining: `judge -> distill -> extract_pattern -> check_habit_formation -> update_state`. Without this, callers manually orchestrate 5 engine calls. This is the main orchestration method for Flow A steps 6-11. | [C] | Resolved — Added `process_trajectory()` on Hippocampus; chains all 5 steps with nil-safe guards; adds habit to procedural memory when formed |
 | H2 | `hippocampus.py:get_summary()` | **Three fields always empty** — `top_patterns`, `recent_learnings`, `recent_promotions` never populated. Spec fills them from `PatternLearner.get_top_patterns()`, last 5 dynamic memories, and `PromotionEngine.get_recent_promotions()`. | [C] | Open |
 | H3 | `reasoning_bank.py:consolidate()` | **Prune step can delete promotion candidates** — Prune deletes memories >30 days, <5 uses, <0.3 confidence without checking promotion eligibility. Spec guards: `if not self._is_promotion_candidate(mem)`. Fix: Add `qualifies_for_static()` guard before pruning. | [C] | **Resolved** — `ReasoningBankConfig` now carries promotion thresholds, `ReasoningBank` checks `_is_promotion_candidate()` before `stale_prune`, and `Hippocampus.create()` wires the thresholds from `HippocampusConfig` |
 | H4 | `profile_engine.py:41-50` | **Uses `search(query="")` to list memories** — Embeds empty string for arbitrary cosine ranking, returns only top-k (misses memories), and triggers `_touch()` which mutates usage stats on a read path. Fix: Use `list_by_type()` or a non-mutating list/get-all method. | [BOTH] | **Resolved** — added `Hippocampus.list_memories()` and switched `ArceusProfileEngine` to list-based reads |
-| H5 | `graph_store.py:search()` | **Replaced spec's BM25 re-ranking with cosine** — Spec calls for `bm25_rerank(query, nodes)` after cosine retrieval. BM25 handles keyword/term frequency that cosine on embeddings misses. Document deviation or implement. | [C] | Open |
+| H5 | `graph_store.py:search()` | **Replaced spec's BM25 re-ranking with cosine** — Spec calls for `bm25_rerank(query, nodes)` after cosine retrieval. BM25 handles keyword/term frequency that cosine on embeddings misses. Document deviation or implement. | [C] | Deferred → G1 (Phase 5+) |
 
 ### HIGH — Correctness (12)
 
@@ -60,12 +60,12 @@ Items tagged `[C]` = Claude, `[CR]` = CodeRabbit, `[BOTH]` = found by both.
 | H8 | `time.py:9-13` | **`parse_utc_iso()` doesn't normalize aware timestamps to UTC** — Returns timezone-aware values without converting to UTC. Function contract says "ensure UTC" but a `+05:30` timestamp passes through unchanged. Fix: `return dt.astimezone(UTC)` for aware datetimes. | [CR] | Open |
 | H9 | `similarity.py:6-15` | **Silently compares mismatched embedding dimensions** — `cosine_similarity()` uses `zip()` which only compares the shared prefix. Mixed-dimension embeddings produce arbitrary rankings in retrieval, dedup, and contradiction checks. Fix: `if len(a) != len(b): raise ValueError`. | [CR] | Open |
 | H10 | `static.py:53-82` | **Superseded static version not hidden from retrieval** — `update()` writes a new `MemoryUnit` but leaves the old version live. `search()` and `list_by_type()` return both old and new content after an update. Fix: Soft-delete the prior version or add a latest-version flag. Previously tracked as M2.1. | [CR] | **Resolved** — `StaticMemory.update()` now soft-deletes the superseded version so only the latest version remains live for retrieval |
-| H11 | `static.py:80-81` | **UPDATES edge has no corresponding GraphEntity nodes** — Creates an `UPDATES` edge between `MemoryUnit` ids, but `get_version_history()` walks `GraphEntity` nodes and `cypher_query()` returns `[]` when the start id isn't in `_nodes`. Version history is broken. Fix: Create corresponding `GraphEntity` nodes or use consistent id mapping. | [CR] | Open |
+| H11 | `static.py:80-81` | **UPDATES edge has no corresponding GraphEntity nodes** — Creates an `UPDATES` edge between `MemoryUnit` ids, but `get_version_history()` walks `GraphEntity` nodes and `cypher_query()` returns `[]` when the start id isn't in `_nodes`. Version history is broken. Fix: Create corresponding `GraphEntity` nodes or use consistent id mapping. | [CR] | Deferred → G2 (Phase 5+) |
 | H12 | `extractor.py:94-102` | **Accepts hallucinated UPDATE/DELETE target_ids from LLM** — LLM can return any `target_id`. A hallucinated or stale id can delete unrelated memory. Fix: Only honor UPDATE/DELETE when `target_id` is in the `existing` candidate set. | [CR] | Open |
-| H13 | `sqlite_pattern.py:41-46` | **`update_status()` ignores agent scoping** — Updates by `pattern_id` without checking `self._agent_id`. Can cross tenant boundaries. Fix: Add agent ownership check before delegating. | [CR] | Open |
+| H13 | `sqlite_pattern.py:41-46` | **`update_status()` ignores agent scoping** — Updates by `pattern_id` without checking `self._agent_id`. Can cross tenant boundaries. Fix: Add agent ownership check before delegating. | [CR] | Resolved — Added ownership guards to `update()`, `update_status()`, and `find_similar()` in both `InMemoryPatternStore` and `SQLitePatternStore` |
 | H14 | `priming.py:19-37` | **Signal not clamped, can push state outside 0..1** — `update_state()` accepts any float. Values like `2.0` or `-3.0` drive confidence/caution/morale outside expected range. Fix: `bounded_signal = max(-1.0, min(signal, 1.0))`. | [CR] | Open |
 | H15 | `profile_engine.py:52-64` | **Procedural/priming not scoped to startup_id** — Static/dynamic use scoped container `startup:{id}:emp:{agent_id}`, but `get_active()` and `get_current_state()` query only by `agent_id`. Multi-startup agents leak habits and priming state across identity boundaries. | [CR] | Open |
-| H16 | `in_memory_graph.py:97-123` | **`cypher_query()` ignores query, always walks UPDATES chain** — Ignores the `query` parameter entirely and always traverses the first outgoing `UPDATES` chain. Any non-history query returns misleading data. Also ignores `ORDER BY` so in-memory and Neo4j backends return different orderings. Fix: Recognize supported query pattern or raise `NotImplementedError`. | [CR] | Open |
+| H16 | `in_memory_graph.py:97-123` | **`cypher_query()` ignores query, always walks UPDATES chain** — Ignores the `query` parameter entirely and always traverses the first outgoing `UPDATES` chain. Any non-history query returns misleading data. Also ignores `ORDER BY` so in-memory and Neo4j backends return different orderings. Fix: Recognize supported query pattern or raise `NotImplementedError`. | [CR] | Deferred → G3 (Phase 5+) |
 | H17 | `test_promotion_engine.py:240-250` | **Probation test encodes the bug as expected behavior** — Sets `probation_until` to 2 days in the future but expects immediate demotion. Locks in the backwards `now < probation_end` logic from C3. Fix: Change to `utc_now() - timedelta(days=2)` (expired probation). | [CR] | **Resolved** — fixed alongside C3 |
 
 ### HIGH — Code Quality (4)
@@ -254,3 +254,83 @@ Architectural improvements that require broader API changes. Not bugs — the cu
 4. Summarize or compress oversized profiles before sending them to an LLM when token pressure matters
 
 **When:** Post-MVP, once full profiles become large enough to create prompt-budget pressure in production flows
+
+### F5: Replace test-scaffolding backends with production-grade stores
+
+**Current state:** All current backends (`InMemoryVectorStore`, `SQLiteRelationalStore`, `DictCacheStore`, `InMemoryGraphStoreBackend`, `MockEmbeddingEngine`) are test/development scaffolding. They work correctly for validation and integration testing but are not suitable for production workloads.
+
+**What needs to happen:**
+1. **Relational:** Replace `SQLiteRelationalStore` with PostgreSQL (the `RelationalStore` protocol is already correct — just add a `PostgresRelationalStore` implementation)
+2. **Vector store:** Replace `InMemoryVectorStore` with a proper vector DB (Pinecone, Qdrant, Weaviate, pgvector, etc.) implementing the `VectorStore` protocol
+3. **Cache:** Replace `DictCacheStore` with Redis/Valkey implementing the `WorkingMemoryBackend` protocol
+4. **Embedding:** Replace `MockEmbeddingEngine` / local `SentenceTransformerEmbeddingEngine` with a hosted embedding service (OpenAI, Cohere, Azure) for production throughput
+5. **Graph store:** `Neo4jGraphStoreBackend` already exists as the production option; `InMemoryGraphStoreBackend` remains for tests
+6. **Factory updates:** Update `create_*` functions in `backends/factory.py` to route to new implementations based on config. Return types stay as protocols — this is by design (H18 is not a bug)
+
+**Why not fixed now:** The protocol-based architecture is the correct abstraction layer. Current backends validate that the protocols are complete and that all tiers/engines work end-to-end. Swapping backends is a deployment concern, not an architectural one.
+
+**When:** Before production deployment. Each backend can be swapped independently since they all go through protocols
+
+### F6: Add startup-level scoping to Procedural and Priming memory
+
+**Current state:** `ProceduralMemory` and `PrimingMemory` are currently scoped only by `agent_id`. In the SQLite relational schema, `habits` has no `startup_id` column and `priming_state` is keyed only by `agent_id`, so the same agent would share habits and priming state across all startups.
+
+**Why not fixed now:** The current MVP assumption is effectively single-startup-per-agent, so this does not create an active correctness issue in the present deployment shape. Fixing it correctly is a schema-and-protocol change, not just a filter tweak.
+
+**How to fix later:**
+1. Add `startup_id` to the `Habit` model and thread it through `ProceduralMemory` and `PrimingMemory`
+2. Add `startup_id` columns to the `habits` and `priming_state` tables
+3. Change `priming_state` from `agent_id` primary key to a composite `(startup_id, agent_id)` key
+4. Update `RelationalStore` protocol methods and all SQL queries to read/write by both `startup_id` and `agent_id`
+5. Add regression tests proving Startup A habits/state do not appear in Startup B for the same agent
+
+**When:** Phase 5+ or earlier if multi-startup-per-agent support becomes a real product requirement
+
+---
+
+## Pre-MVP but Phase 5+ Changes — Graph Store
+
+Graph is currently observability scaffolding: no agent logic reads graph data, all adapters use `include_graph=False`, and graph provides dashboard visualization, version history, and provenance audit trail only. These issues are real but non-load-bearing — fix when graph becomes part of the agent decision path.
+
+### G1 (was H5): `GraphStore.search()` ignores `container` scoping
+
+Spec calls for `bm25_rerank(query, nodes)` after cosine retrieval. Current implementation uses cosine only and doesn't filter by container. When graph becomes queryable by agents, container isolation and BM25 re-ranking both need to be added.
+
+### G2 (was H11): `UPDATES` edges have no corresponding `GraphEntity` nodes
+
+`StaticMemory.update()` creates an `UPDATES` edge between `MemoryUnit` IDs, but `get_version_history()` walks `GraphEntity` nodes. Since the IDs aren't in the graph node store, version history queries return empty. Fix: create `GraphEntity` nodes when memories are stored, or map `MemoryUnit` IDs to graph node IDs.
+
+### G3 (was H16): `cypher_query()` ignores query, always walks UPDATES chain
+
+`InMemoryGraphStoreBackend.cypher_query()` ignores the `query` parameter entirely and hardcodes an UPDATES chain traversal. Any non-history query returns misleading data. Also ignores `ORDER BY` so in-memory and Neo4j backends return different orderings. Fix: pattern-match supported queries or raise `NotImplementedError`.
+
+### G4 (was H22, originally C7): `create_edge` ignores missing nodes
+
+Neo4j `MATCH` returns zero records when source/target nodes don't exist, but `create_edge()` always returns `rel.id`. Silently drops graph provenance edges. Fix: check records, raise `KeyError` if empty.
+
+---
+
+## Pre-MVP but Phase 5+ Changes — Extraction Modes
+
+Extraction works today, but mode-specific behavior is still shallow outside the base AGENT path. This is a capability gap rather than a correctness blocker, so it should be implemented when meeting and reflection flows become real product paths rather than preemptively.
+
+### E1 (design gap): Flesh out `MemoryExtractor` modes beyond AGENT
+
+Current state:
+- `AGENT` is the most complete path
+- `MEETING` has a dedicated prompt but still shares nearly all downstream behavior
+- `CONVERSATION` currently maps back to the AGENT prompt
+- `REFLECTION` mode does not exist yet
+
+What Phase 5+ should add:
+1. Add an explicit `REFLECTION` mode to `ExtractionMode`
+2. Add dedicated `CONVERSATION` and `REFLECTION` extraction prompts instead of reusing AGENT behavior
+3. Add mode-aware post-processing in `MemoryExtractor` so each mode can bias memory typing differently
+4. Make `MEETING` extraction better at decisions, owners, deadlines, action items, and unresolved items
+5. Make `REFLECTION` extraction better at lessons learned, reusable strategies, and procedural habit formation
+6. Add regression tests proving each mode stores meaningfully different outputs, not just different prompt text
+
+Why deferred:
+- extraction is already functional for current AGENT-centric flows
+- this work is valuable only once meeting transcripts and explicit reflection loops become active product inputs
+- it is not a present correctness or data-integrity bug
