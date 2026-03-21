@@ -4,8 +4,6 @@ import asyncio
 import logging
 from typing import Any
 
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
-
 logger = logging.getLogger(__name__)
 
 
@@ -25,14 +23,10 @@ class SentenceTransformerEmbeddingEngine:
         self._dimensions = dimensions
         self._strict = strict
         self._model: Any | None = None
-        self._load_failed = False
-        self._fallback = MockEmbeddingEngine(dimensions=dimensions or 384)
         self._lock = asyncio.Lock()
 
     async def warmup(self) -> None:
         model = await self._get_model()
-        if model is None:
-            return
         vector = await asyncio.to_thread(
             model.encode,
             ["warmup"],
@@ -48,8 +42,6 @@ class SentenceTransformerEmbeddingEngine:
 
     async def embed(self, text: str) -> list[float]:
         model = await self._get_model()
-        if model is None:
-            return await self._fallback.embed(text)
         vector = await asyncio.to_thread(
             model.encode,
             text,
@@ -61,8 +53,6 @@ class SentenceTransformerEmbeddingEngine:
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         model = await self._get_model()
-        if model is None:
-            return await self._fallback.embed_batch(texts)
         vectors = await asyncio.to_thread(
             model.encode,
             texts,
@@ -83,14 +73,10 @@ class SentenceTransformerEmbeddingEngine:
     async def _get_model(self) -> Any:
         if self._model is not None:
             return self._model
-        if self._load_failed:
-            return None
 
         async with self._lock:
             if self._model is not None:
                 return self._model
-            if self._load_failed:
-                return None
             try:
                 from sentence_transformers import SentenceTransformer
 
@@ -100,20 +86,16 @@ class SentenceTransformerEmbeddingEngine:
                     device=self._device,
                 )
             except Exception as exc:
-                if self._strict:
-                    raise RuntimeError(
-                        "Sentence-transformers model "
-                        f"{self._model_name} could not be loaded on device {self._device}"
-                    ) from exc
-                logger.warning(
-                    "Falling back to simple embeddings because sentence-transformers "
-                    "model %s on device %s could not be loaded: %s",
+                logger.error(
+                    "Sentence-transformers model %s on device %s could not be loaded: %s",
                     self._model_name,
                     self._device,
                     exc,
                 )
-                self._model = None
-                self._load_failed = True
+                raise RuntimeError(
+                    "Sentence-transformers model "
+                    f"{self._model_name} could not be loaded on device {self._device}"
+                ) from exc
         return self._model
 
     def _ensure_dimensions(self, values: list[float]) -> None:

@@ -1,15 +1,11 @@
-from arceus.core.hippocampus.backends.azure_openai_llm import (
+from arceus.core.hippocampus.backends.llm_engine import (
     AzureOpenAILLMEngine,
     has_azure_openai_credentials,
 )
-from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
-from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
-from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.neo4j_graph import (
     Neo4jGraphStoreBackend,
     has_neo4j_credentials,
 )
-from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
 from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
 from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
 from arceus.core.hippocampus.backends.protocols import (
@@ -24,14 +20,10 @@ from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
-from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.config import HippocampusConfig
 
 
 def create_vector_store(backend: str, config: HippocampusConfig) -> VectorStore:
-    if backend == "in_memory":
-        return InMemoryVectorStore()
     if backend == "pgvector":
         return PGVectorStore(
             url=config.postgres_url,
@@ -44,16 +36,12 @@ def create_vector_store(backend: str, config: HippocampusConfig) -> VectorStore:
 
 
 def create_cache(backend: str, config: HippocampusConfig) -> WorkingMemoryBackend:
-    if backend == "dict":
-        return DictCacheStore()
     if backend == "redis":
         return RedisCacheStore(redis_url=config.redis_url)
     raise ValueError(f"Unsupported cache backend: {backend}")
 
 
 def create_relational(backend: str, config: HippocampusConfig) -> RelationalStore:
-    if backend == "sqlite":
-        return SQLiteRelationalStore(config.sqlite_path)
     if backend == "postgresql":
         return PostgreSQLRelationalStore(
             url=config.postgres_url,
@@ -63,8 +51,6 @@ def create_relational(backend: str, config: HippocampusConfig) -> RelationalStor
 
 
 def create_graph_store(backend: str, config: HippocampusConfig) -> GraphStoreBackend:
-    if backend == "in_memory":
-        return InMemoryGraphStoreBackend()
     if backend == "neo4j":
         if not has_neo4j_credentials(
             uri=config.neo4j_uri,
@@ -93,8 +79,6 @@ def create_embedding_engine(
 ) -> EmbeddingEngine:
     if not backend:
         raise ValueError("Embedding backend must not be empty")
-    if backend == "simple":
-        return MockEmbeddingEngine(dimensions=dimensions)
     return SentenceTransformerEmbeddingEngine(
         model_name=backend,
         device=device,
@@ -104,9 +88,6 @@ def create_embedding_engine(
 
 
 def create_llm_engine(model_name: str, config: HippocampusConfig) -> LLMEngine:
-    if model_name == "noop":
-        return NoopLLMEngine(model_name=model_name)
-
     if has_azure_openai_credentials(azure_endpoint=config.azure_openai_endpoint):
         return AzureOpenAILLMEngine(
             model_name=model_name,
@@ -115,5 +96,5 @@ def create_llm_engine(model_name: str, config: HippocampusConfig) -> LLMEngine:
         )
     raise ValueError(
         f"LLM model {model_name!r} requires Azure OpenAI credentials. "
-        "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY or use model_name='noop'."
+        "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY."
     )

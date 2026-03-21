@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 class NoopLLMEngine:
-    """Local placeholder LLM engine for wiring Phase 2 without network calls."""
+    """Local placeholder LLM engine for tests without network calls."""
 
     def __init__(self, model_name: str) -> None:
         self._model_name = model_name

@@ -17,7 +17,7 @@ def _is_accessible(memory: MemoryUnit, agent_id: str) -> bool:
 
 
 class InMemoryVectorStore:
-    """Simple in-process vector store for MVP Phase 0/1 work."""
+    """Simple in-process vector store for tests."""
 
     def __init__(self) -> None:
         self._items: dict[str, MemoryUnit] = {}

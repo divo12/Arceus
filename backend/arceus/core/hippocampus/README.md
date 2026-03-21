@@ -170,17 +170,17 @@ Periodic cleanup:
 
 ## Backend Protocols
 
-All storage is accessed through Python `Protocol` classes (`backends/protocols.py`). This means every backend can be swapped independently — test backends in development, production backends in deployment.
+All storage is accessed through Python `Protocol` classes (`backends/protocols.py`). The runtime `backends/` package now contains only production implementations. Lightweight test doubles live under `tests/hippocampus/support/fakes/`.
 
-| Protocol | Test Backend | Chosen Production Stack |
-|----------|-------------|-------------------|
-| `VectorStore` | `InMemoryVectorStore` | pgvector (PostgreSQL) |
-| `RelationalStore` | `SQLiteRelationalStore` | PostgreSQL |
-| `GraphStoreBackend` | `InMemoryGraphStoreBackend` | `Neo4jGraphStoreBackend` |
-| `WorkingMemoryBackend` | `DictCacheStore` | Redis |
-| `EmbeddingEngine` | `MockEmbeddingEngine` | `SentenceTransformerEmbeddingEngine` |
-| `LLMEngine` | `NoopLLMEngine` | `AzureOpenAILLMEngine` |
-| `PatternStore` | `InMemoryPatternStore` | Relational-backed pattern adapter |
+| Protocol | Test Support Fake | Runtime Backend |
+|----------|-------------------|-----------------|
+| `VectorStore` | `tests.hippocampus.support.fakes.InMemoryVectorStore` | `PGVectorStore` |
+| `RelationalStore` | `tests.hippocampus.support.fakes.SQLiteRelationalStore` | `PostgreSQLRelationalStore` |
+| `GraphStoreBackend` | `tests.hippocampus.support.fakes.InMemoryGraphStoreBackend` | `Neo4jGraphStoreBackend` |
+| `WorkingMemoryBackend` | `tests.hippocampus.support.fakes.DictCacheStore` | `RedisCacheStore` |
+| `EmbeddingEngine` | `tests.hippocampus.support.fakes.MockEmbeddingEngine` | `SentenceTransformerEmbeddingEngine` |
+| `LLMEngine` | `tests.hippocampus.support.fakes.NoopLLMEngine` | `AzureOpenAILLMEngine` |
+| `PatternStore` | `tests.hippocampus.support.fakes.InMemoryPatternStore` | `RelationalPatternStore` |
 
 Backend selection is handled by factory functions in `backends/factory.py`, driven by `HippocampusConfig`.
 
@@ -315,7 +315,7 @@ Memories are scoped by two orthogonal dimensions:
 - `STARTUP_SHARED` — all agents in the startup
 - `BOARD_VISIBLE` — visible to board/oversight
 
-The `InMemoryVectorStore` implements visibility-aware retrieval via `_is_accessible()`:
+Visibility-aware retrieval is enforced in the vector-store layer:
 - Own agent's memories are always accessible
 - Non-PRIVATE memories are accessible to other agents in the same scope
 - PRIVATE cross-agent access is blocked
@@ -329,10 +329,10 @@ All tuning knobs live in `HippocampusConfig` (`config.py`):
 ```python
 config = HippocampusConfig(
     # Backends
-    vector_store_backend="in_memory",     # or "pgvector" in production
-    graph_store_backend="neo4j",          # or "in_memory" for tests
-    cache_backend="dict",                 # or "redis" in production
-    relational_backend="sqlite",          # or "postgresql" in production
+    vector_store_backend="pgvector",
+    graph_store_backend="neo4j",
+    cache_backend="redis",
+    relational_backend="postgresql",
 
     # Memory tuning
     dynamic_memory_half_life_days=30.0,   # how fast dynamic memories decay
@@ -378,8 +378,6 @@ config = HippocampusConfig(
 )
 ```
 
-Use `graph_store_backend="in_memory"` for local/dev fallback when Neo4j is unavailable.
-
 ### Cutover And Rollback
 
 Cutover checklist:
@@ -390,11 +388,11 @@ Cutover checklist:
 4. Boot Hippocampus once to run schema/bootstrap initialization.
 5. Run the integration suite and then the production-profile smoke test.
 
-Rollback is config-driven:
+Rollback is operational:
 
-1. Switch selectors back to `sqlite`, `in_memory`, `dict`, and `in_memory` as needed.
-2. Redeploy the previous config or image.
-3. Keep PostgreSQL/Redis/Neo4j data intact for investigation; no code revert is required.
+1. Redeploy the previous validated release image and configuration.
+2. Keep PostgreSQL/Redis/Neo4j data intact for investigation.
+3. Re-run the integration suite before restoring write traffic.
 
 ---
 
@@ -404,10 +402,20 @@ Rollback is config-driven:
 from arceus.core.hippocampus import Hippocampus, HippocampusConfig
 
 config = HippocampusConfig(
-    graph_store_backend="in_memory",  # no Neo4j needed for dev
-    extraction_model="noop",          # no Azure OpenAI needed for dev
-    lightweight_model="noop",
-    embedding_model="simple",         # deterministic mock embeddings
+    relational_backend="postgresql",
+    postgres_url="postgresql://hippocampus:hippocampus@127.0.0.1:5433/hippocampus",
+    postgres_schema="hippocampus",
+    vector_store_backend="pgvector",
+    cache_backend="redis",
+    redis_url="redis://127.0.0.1:6379/0",
+    graph_store_backend="neo4j",
+    neo4j_uri="bolt://127.0.0.1:7687",
+    neo4j_username="neo4j",
+    neo4j_password="password",
+    embedding_model="all-MiniLM-L6-v2",
+    embedding_dimensions=384,
+    extraction_model="gpt-4.1",
+    lightweight_model="gpt-4.1-mini",
 )
 
 hippocampus = await Hippocampus.create(agent_id="cto-1", config=config)
@@ -458,17 +466,15 @@ arceus/core/hippocampus/
 ├── backends/                # Swappable storage implementations
 │   ├── protocols.py         # Protocol definitions (7 protocols)
 │   ├── factory.py           # Backend creation from config
-│   ├── in_memory_vector.py  # Test vector store
-│   ├── in_memory_graph.py   # Test graph store
-│   ├── in_memory_pattern.py # Test pattern store
-│   ├── dict_cache.py        # Test cache store
-│   ├── sqlite_relational.py # SQLite relational store
-│   ├── sqlite_pattern.py    # SQLite pattern store
 │   ├── neo4j_graph.py       # Neo4j graph backend
-│   ├── azure_openai_llm.py  # Azure OpenAI LLM backend
+│   ├── llm_engine.py        # Azure OpenAI LLM backend
 │   ├── sentence_transformers_embedding.py  # Local embeddings
-│   ├── simple_embedding.py  # Mock embeddings for tests
-│   └── noop_llm.py          # No-op LLM for tests
+│   ├── pgvector_store.py    # pgvector-backed vector store
+│   ├── postgres_relational.py  # PostgreSQL relational store
+│   └── redis_cache.py       # Redis working-memory cache
+│
+├── stores/                  # Higher-level storage adapters
+│   └── relational_pattern_store.py  # PatternStore over RelationalStore
 │
 └── utils/                   # Shared utilities
     ├── similarity.py        # cosine_similarity, max_marginal_relevance

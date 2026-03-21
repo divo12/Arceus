@@ -258,17 +258,10 @@ def _load_json(value: str) -> Any:
         raise
 
 
-def _ensure_json_instruction(system_prompt: str) -> str:
-    if "json" in system_prompt.lower():
-        return system_prompt
-    return f"{system_prompt.rstrip()}\n\nReturn valid JSON only."
-
-
-def _coerce_memory_type(value: str) -> MemoryType:
-    try:
-        return MemoryType(value)
-    except ValueError:
-        return MemoryType.DYNAMIC
+def _ensure_json_instruction(prompt: str) -> str:
+    if "json" in prompt.lower():
+        return prompt
+    return f"{prompt}\n\nReturn valid JSON."
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -277,10 +270,22 @@ def _parse_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     try:
-        return datetime.fromisoformat(str(value))
-    except (ValueError, TypeError):
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
         return None
 
 
+def _coerce_memory_type(value: str) -> MemoryType:
+    normalized = value.strip().lower()
+    for memory_type in MemoryType:
+        if normalized == memory_type.value:
+            return memory_type
+    return MemoryType.DYNAMIC
+
+
 def _is_extracted_fact_list(output_schema: type) -> bool:
-    return get_origin(output_schema) is list and get_args(output_schema) == (ExtractedFact,)
+    origin = get_origin(output_schema)
+    if origin is list:
+        args = get_args(output_schema)
+        return bool(args) and args[0] is ExtractedFact
+    return False

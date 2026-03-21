@@ -20,17 +20,13 @@ def test_memory_scope_generates_canonical_container_names() -> None:
 
 @pytest.mark.asyncio
 async def test_memory_scope_retrieves_shared_private_and_task_memories_without_leakage(
-    tmp_path,
+    patch_fake_hippocampus_runtime,
 ) -> None:
     scope = ArceusMemoryScope()
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
     hippocampus = await Hippocampus.create(
         agent_id="emp-1",
-        config=HippocampusConfig(
-            sqlite_path=str(tmp_path / "hippocampus.db"),
-            graph_store_backend="in_memory",
-            extraction_model="noop",
-            lightweight_model="noop",
-        ),
+        config=HippocampusConfig(embedding_dimensions=32),
     )
 
     try:
@@ -79,17 +75,13 @@ async def test_memory_scope_retrieves_shared_private_and_task_memories_without_l
 
 @pytest.mark.asyncio
 async def test_get_memories_deduplicates_across_scopes(
-    tmp_path,
+    patch_fake_hippocampus_runtime,
 ) -> None:
     scope = ArceusMemoryScope()
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
     hippocampus = await Hippocampus.create(
         agent_id="emp-1",
-        config=HippocampusConfig(
-            sqlite_path=str(tmp_path / "dedupe.db"),
-            graph_store_backend="in_memory",
-            extraction_model="noop",
-            lightweight_model="noop",
-        ),
+        config=HippocampusConfig(embedding_dimensions=32),
     )
 
     try:

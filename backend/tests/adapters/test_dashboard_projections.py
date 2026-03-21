@@ -4,11 +4,11 @@ from datetime import timedelta
 
 import pytest
 
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.types import MemoryType, MemoryUnit, Pattern
 from arceus.core.hippocampus.utils.time import utc_now
 from arceus.core.memory_projections import ArceusMemoryProjections
 from arceus.core.memory_scope import ArceusMemoryScope
+from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
 
 
 @pytest.mark.asyncio

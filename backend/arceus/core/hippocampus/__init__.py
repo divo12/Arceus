@@ -1,10 +1,8 @@
 """Hippocampus kernel exports."""
 
-from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternStore
 from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
 from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
 from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
-from arceus.core.hippocampus.backends.sqlite_pattern import SQLitePatternStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
 from arceus.core.hippocampus.engines.graph_store import GraphStore
@@ -18,6 +16,9 @@ from arceus.core.hippocampus.engines.reasoning_bank import (
     ReasoningBankConfig,
 )
 from arceus.core.hippocampus.hippocampus import Hippocampus, HippocampusBackends
+from arceus.core.hippocampus.stores.relational_pattern_store import (
+    RelationalPatternStore,
+)
 from arceus.core.hippocampus.tiers.priming import PrimingMemory
 from arceus.core.hippocampus.tiers.procedural import ProceduralMemory
 from arceus.core.hippocampus.types import (
@@ -63,7 +64,6 @@ __all__ = [
     "Hippocampus",
     "HippocampusBackends",
     "HippocampusConfig",
-    "InMemoryPatternStore",
     "MemoryGarbageCollector",
     "MemoryAction",
     "MemoryPromotionEvent",
@@ -80,12 +80,12 @@ __all__ = [
     "PostgreSQLRelationalStore",
     "ProceduralMemory",
     "PromotionEngine",
+    "RelationalPatternStore",
     "RelationType",
     "RedisCacheStore",
     "RetrievalResult",
     "ReasoningBank",
     "ReasoningBankConfig",
-    "SQLitePatternStore",
     "Trajectory",
     "TrajectoryStep",
     "TrajectoryVerdict",

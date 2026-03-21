@@ -4,10 +4,6 @@ from datetime import timedelta
 
 import pytest
 
-from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternStore
-from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
-from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.engines.reasoning_bank import (
     ReasoningBank,
     ReasoningBankConfig,
@@ -22,6 +18,10 @@ from arceus.core.hippocampus.types import (
     TrajectoryVerdict,
 )
 from arceus.core.hippocampus.utils.time import utc_now
+from tests.hippocampus.support.fakes.in_memory_pattern import InMemoryPatternStore
+from tests.hippocampus.support.fakes.in_memory_vector import InMemoryVectorStore
+from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
+from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
 
 
 class ReasoningLLMDouble(NoopLLMEngine):

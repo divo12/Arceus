@@ -35,7 +35,6 @@ from arceus.core.hippocampus.backends.factory import (
     create_relational,
     create_vector_store,
 )
-from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternStore
 from arceus.core.hippocampus.backends.protocols import (
     EmbeddingEngine,
     LLMEngine,
@@ -43,7 +42,6 @@ from arceus.core.hippocampus.backends.protocols import (
     VectorStore,
     WorkingMemoryBackend,
 )
-from arceus.core.hippocampus.backends.sqlite_pattern import SQLitePatternStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.extractor import MemoryExtractor
 from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
@@ -56,6 +54,9 @@ from arceus.core.hippocampus.engines.promotion_engine import PromotionEngine
 from arceus.core.hippocampus.engines.reasoning_bank import (
     ReasoningBank,
     ReasoningBankConfig,
+)
+from arceus.core.hippocampus.stores.relational_pattern_store import (
+    RelationalPatternStore,
 )
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.priming import PrimingMemory
@@ -144,12 +145,9 @@ class Hippocampus:
         relational_store = create_relational(config.relational_backend, config)
         await relational_store.initialize()
         strict_embeddings = config.embedding_strict or (
-            config.embedding_model != "simple"
-            and (
-                config.vector_store_backend == "pgvector"
-                or config.relational_backend == "postgresql"
-                or config.cache_backend == "redis"
-            )
+            config.vector_store_backend == "pgvector"
+            or config.relational_backend == "postgresql"
+            or config.cache_backend == "redis"
         )
         embedding_engine = create_embedding_engine(
             config.embedding_model,
@@ -181,10 +179,7 @@ class Hippocampus:
             embedding_engine=embedding_engine,
             llm_light=llm_light,
         )
-        if config.relational_backend in {"sqlite", "postgresql"}:
-            pattern_store = SQLitePatternStore(relational_store, agent_id)
-        else:
-            pattern_store = InMemoryPatternStore(agent_id)
+        pattern_store = RelationalPatternStore(relational_store, agent_id)
         procedural_memory = ProceduralMemory(agent_id, relational_store, llm_light)
         priming_memory = PrimingMemory(agent_id, relational_store, llm_light)
         reasoning_bank = ReasoningBank(

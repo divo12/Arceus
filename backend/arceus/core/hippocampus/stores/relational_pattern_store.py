@@ -5,7 +5,7 @@ from arceus.core.hippocampus.types import Pattern, PatternStatus
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 
-class SQLitePatternStore:
+class RelationalPatternStore:
     """Wraps RelationalStore and adds embedding-based find_similar()."""
 
     def __init__(self, relational: RelationalStore, agent_id: str) -> None:
@@ -49,7 +49,7 @@ class SQLitePatternStore:
         status: PatternStatus,
     ) -> None:
         all_patterns = await self._relational.list_patterns(self._agent_id)
-        if not any(p.id == pattern_id for p in all_patterns):
+        if not any(pattern.id == pattern_id for pattern in all_patterns):
             raise PermissionError(
                 f"Pattern {pattern_id} does not belong to agent {self._agent_id}"
             )

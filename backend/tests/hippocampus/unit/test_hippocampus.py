@@ -1,26 +1,22 @@
 import pytest
 
-from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
-from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
-from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
-from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
-from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.config import HippocampusConfig
 import arceus.core.hippocampus.hippocampus as hippocampus_module
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import GraphEntity, MemoryType
+from tests.hippocampus.support.fakes.dict_cache import DictCacheStore
+from tests.hippocampus.support.fakes.in_memory_graph import InMemoryGraphStoreBackend
+from tests.hippocampus.support.fakes.in_memory_vector import InMemoryVectorStore
+from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
+from tests.hippocampus.support.fakes.sqlite_relational import SQLiteRelationalStore
 
 
 @pytest.mark.asyncio
-async def test_hippocampus_create_remember_and_recall_prioritizes_static(tmp_path) -> None:
-    config = HippocampusConfig(
-        sqlite_path=str(tmp_path / "hippocampus.db"),
-        embedding_model="simple",
-        embedding_dimensions=32,
-        graph_store_backend="in_memory",
-        extraction_model="noop",
-        lightweight_model="noop",
-    )
+async def test_hippocampus_create_remember_and_recall_prioritizes_static(
+    patch_fake_hippocampus_runtime,
+) -> None:
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
+    config = HippocampusConfig(embedding_dimensions=32)
     hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
 
     try:
@@ -47,15 +43,11 @@ async def test_hippocampus_create_remember_and_recall_prioritizes_static(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_hippocampus_recall_does_not_cross_scope(tmp_path) -> None:
-    config = HippocampusConfig(
-        sqlite_path=str(tmp_path / "hippocampus.db"),
-        embedding_model="simple",
-        embedding_dimensions=32,
-        graph_store_backend="in_memory",
-        extraction_model="noop",
-        lightweight_model="noop",
-    )
+async def test_hippocampus_recall_does_not_cross_scope(
+    patch_fake_hippocampus_runtime,
+) -> None:
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
+    config = HippocampusConfig(embedding_dimensions=32)
     hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
 
     try:
@@ -86,15 +78,11 @@ async def test_hippocampus_recall_does_not_cross_scope(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_hippocampus_recall_can_return_graph_results_when_enabled(tmp_path) -> None:
-    config = HippocampusConfig(
-        sqlite_path=str(tmp_path / "hippocampus.db"),
-        embedding_model="simple",
-        embedding_dimensions=32,
-        graph_store_backend="in_memory",
-        extraction_model="noop",
-        lightweight_model="noop",
-    )
+async def test_hippocampus_recall_can_return_graph_results_when_enabled(
+    patch_fake_hippocampus_runtime,
+) -> None:
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
+    config = HippocampusConfig(embedding_dimensions=32)
     hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
     try:
         container = "startup:startup-1:emp:agent-1"
@@ -122,15 +110,11 @@ async def test_hippocampus_recall_can_return_graph_results_when_enabled(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_hippocampus_get_summary_counts_static_and_dynamic(tmp_path) -> None:
-    config = HippocampusConfig(
-        sqlite_path=str(tmp_path / "hippocampus.db"),
-        embedding_model="simple",
-        embedding_dimensions=32,
-        graph_store_backend="in_memory",
-        extraction_model="noop",
-        lightweight_model="noop",
-    )
+async def test_hippocampus_get_summary_counts_static_and_dynamic(
+    patch_fake_hippocampus_runtime,
+) -> None:
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
+    config = HippocampusConfig(embedding_dimensions=32)
     hippocampus = await Hippocampus.create(agent_id="agent-1", config=config)
     try:
         container = "startup:startup-1:emp:agent-1"
@@ -232,11 +216,10 @@ async def test_hippocampus_create_enforces_strict_embedding_on_production_profil
             relational_backend="postgresql",
             vector_store_backend="pgvector",
             cache_backend="redis",
-            graph_store_backend="in_memory",
             embedding_model="all-MiniLM-L6-v2",
             embedding_dimensions=1,
-            extraction_model="noop",
-            lightweight_model="noop",
+            extraction_model="gpt-4.1",
+            lightweight_model="gpt-4.1-mini",
         ),
     )
 

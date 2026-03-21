@@ -99,7 +99,7 @@ async def test_sentence_transformer_engine_rejects_dimension_mismatch(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_sentence_transformer_engine_non_strict_falls_back_to_mock(
+async def test_sentence_transformer_engine_non_strict_still_fails_fast(
     monkeypatch,
 ) -> None:
     class BrokenSentenceTransformer:
@@ -118,6 +118,5 @@ async def test_sentence_transformer_engine_non_strict_falls_back_to_mock(
         strict=False,
     )
 
-    values = await engine.embed("hello")
-
-    assert len(values) == 5
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        await engine.embed("hello")

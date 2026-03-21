@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
 from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
+import arceus.core.hippocampus.hippocampus as hippocampus_module
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.types import Habit, HabitFormation, MemoryType, MemoryUnit
+from tests.hippocampus.support.fakes.dict_cache import DictCacheStore
+from tests.hippocampus.support.fakes.in_memory_graph import InMemoryGraphStoreBackend
+from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
 
 pytestmark = [
     pytest.mark.integration,
@@ -99,8 +104,51 @@ async def test_pgvector_store_round_trip_and_soft_delete(
 async def test_hippocampus_postgres_pgvector_smoke(
     postgres_url: str,
     unique_id: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     container = f"startup:it:{unique_id}"
+    vector_store = PGVectorStore(
+        url=postgres_url,
+        schema=f"hippo_it_{unique_id}",
+        dimensions=3,
+    )
+    relational_store = PostgreSQLRelationalStore(
+        url=postgres_url,
+        schema=f"hippo_it_{unique_id}",
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_vector_store",
+        lambda backend, config: vector_store,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_relational",
+        lambda backend, config: relational_store,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_cache",
+        lambda backend, config: DictCacheStore(),
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_graph_store",
+        lambda backend, config: InMemoryGraphStoreBackend(),
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_embedding_engine",
+        lambda backend, dimensions, *, device="cpu", strict=False: MockEmbeddingEngine(
+            dimensions=dimensions
+        ),
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_llm_engine",
+        lambda model_name, config: NoopLLMEngine(model_name=model_name),
+    )
+
     hippocampus = await Hippocampus.create(
         agent_id=f"agent-{unique_id}",
         config=HippocampusConfig(
@@ -108,12 +156,12 @@ async def test_hippocampus_postgres_pgvector_smoke(
             postgres_url=postgres_url,
             postgres_schema=f"hippo_it_{unique_id}",
             vector_store_backend="pgvector",
-            embedding_model="simple",
+            cache_backend="redis",
+            graph_store_backend="neo4j",
+            embedding_model="all-MiniLM-L6-v2",
             embedding_dimensions=3,
-            cache_backend="dict",
-            graph_store_backend="in_memory",
-            extraction_model="noop",
-            lightweight_model="noop",
+            extraction_model="gpt-4.1",
+            lightweight_model="gpt-4.1-mini",
         ),
     )
 

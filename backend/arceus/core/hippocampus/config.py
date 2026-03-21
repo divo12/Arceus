@@ -4,11 +4,10 @@ from dataclasses import dataclass
 @dataclass(slots=True)
 class HippocampusConfig:
     # Backends
-    vector_store_backend: str = "in_memory"
+    vector_store_backend: str = "pgvector"
     graph_store_backend: str = "neo4j"
-    cache_backend: str = "dict"
-    relational_backend: str = "sqlite"
-    sqlite_path: str = "hippocampus.db"
+    cache_backend: str = "redis"
+    relational_backend: str = "postgresql"
     postgres_url: str = ""
     postgres_schema: str = "hippocampus"
     redis_url: str = ""

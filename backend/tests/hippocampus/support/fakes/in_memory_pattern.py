@@ -5,7 +5,7 @@ from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 
 class InMemoryPatternStore:
-    """In-memory PatternStore for tests."""
+    """In-memory pattern store for tests."""
 
     def __init__(self, agent_id: str = "") -> None:
         self._agent_id = agent_id

@@ -9,10 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class MockEmbeddingEngine:
-    """Hash-based deterministic embedding for tests only.
-
-    NOT suitable for production — produces non-semantic vectors.
-    """
+    """Hash-based deterministic embedding for tests only."""
 
     def __init__(self, dimensions: int = 384) -> None:
         if dimensions <= 0:

@@ -6,11 +6,13 @@ import os
 
 import pytest
 
+import arceus.core.hippocampus.hippocampus as hippocampus_module
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.promotion_engine import PromotionEngine
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import MemoryType
 from arceus.core.hippocampus.utils.time import utc_now
+from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
 
 pytestmark = [
     pytest.mark.integration,
@@ -29,10 +31,17 @@ async def test_production_profile_hippocampus_smoke(
     neo4j_profile: dict[str, str],
     unique_id: str,
     sentence_transformer_enabled: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del sentence_transformer_enabled
     if _env("HIPPOCAMPUS_TEST_RUN_E2E") not in {"1", "true", "TRUE", "yes", "on"}:
         pytest.skip("set HIPPOCAMPUS_TEST_RUN_E2E=1 to enable full production-profile smoke")
+
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_llm_engine",
+        lambda model_name, config: NoopLLMEngine(model_name=model_name),
+    )
 
     container = f"startup:e2e:{unique_id}"
     hippocampus = await Hippocampus.create(
@@ -53,8 +62,8 @@ async def test_production_profile_hippocampus_smoke(
             embedding_dimensions=384,
             embedding_strict=True,
             embedding_warmup=True,
-            extraction_model="noop",
-            lightweight_model="noop",
+            extraction_model="gpt-4.1",
+            lightweight_model="gpt-4.1-mini",
         ),
     )
 

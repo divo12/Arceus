@@ -11,7 +11,7 @@ from arceus.core.hippocampus.types import Habit, HabitFormation, Pattern, Patter
 
 
 class SQLiteRelationalStore:
-    """SQLite storage for Phase 0 relational hippocampus state."""
+    """SQLite relational store used by tests."""
 
     def __init__(self, path: str) -> None:
         self._path = path

@@ -4,30 +4,27 @@ from datetime import timedelta
 
 import pytest
 
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import GCResult, MemoryType, MemoryUnit, Pattern
 from arceus.core.hippocampus.utils.time import utc_now
+from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
 
 
-async def _create_hippocampus(tmp_path, agent_id: str = "agent-1") -> Hippocampus:
+async def _create_hippocampus(
+    patch_fake_hippocampus_runtime,
+    agent_id: str = "agent-1",
+) -> Hippocampus:
+    patch_fake_hippocampus_runtime(embedding_dimensions=32)
     return await Hippocampus.create(
         agent_id=agent_id,
-        config=HippocampusConfig(
-            sqlite_path=str(tmp_path / f"{agent_id}.db"),
-            embedding_model="simple",
-            embedding_dimensions=32,
-            graph_store_backend="in_memory",
-            extraction_model="noop",
-            lightweight_model="noop",
-        ),
+        config=HippocampusConfig(embedding_dimensions=32),
     )
 
 
 @pytest.mark.asyncio
-async def test_gc_runs_all_stages(tmp_path) -> None:
-    hippocampus = await _create_hippocampus(tmp_path)
+async def test_gc_runs_all_stages(patch_fake_hippocampus_runtime) -> None:
+    hippocampus = await _create_hippocampus(patch_fake_hippocampus_runtime)
 
     try:
         result = await hippocampus.run_gc()
@@ -46,8 +43,8 @@ async def test_gc_runs_all_stages(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_gc_skips_promotion_candidates(tmp_path) -> None:
-    hippocampus = await _create_hippocampus(tmp_path)
+async def test_gc_skips_promotion_candidates(patch_fake_hippocampus_runtime) -> None:
+    hippocampus = await _create_hippocampus(patch_fake_hippocampus_runtime)
 
     try:
         qualifying_content = "Important long-term architectural rule"
@@ -98,8 +95,8 @@ async def test_gc_skips_promotion_candidates(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_gc_with_no_engines(tmp_path) -> None:
-    hippocampus = await _create_hippocampus(tmp_path)
+async def test_gc_with_no_engines(patch_fake_hippocampus_runtime) -> None:
+    hippocampus = await _create_hippocampus(patch_fake_hippocampus_runtime)
 
     try:
         hippocampus.reasoning_bank = None
@@ -118,8 +115,10 @@ async def test_gc_with_no_engines(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_gc_integration_runs_decay_dedup_pattern_and_promotion_stages(tmp_path) -> None:
-    hippocampus = await _create_hippocampus(tmp_path)
+async def test_gc_integration_runs_decay_dedup_pattern_and_promotion_stages(
+    patch_fake_hippocampus_runtime,
+) -> None:
+    hippocampus = await _create_hippocampus(patch_fake_hippocampus_runtime)
     embedding = MockEmbeddingEngine(dimensions=32)
     duplicate_embedding = [1.0] + [0.0] * 31
 

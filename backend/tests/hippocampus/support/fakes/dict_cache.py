@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 
 class DictCacheStore:
-    """In-process cache with TTL support for Phase 0/1 working memory."""
+    """In-process cache with TTL support for tests."""
 
     def __init__(self, time_fn: Callable[[], float] | None = None) -> None:
         self._items: dict[str, tuple[str, float | None]] = {}

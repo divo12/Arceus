@@ -60,10 +60,10 @@ def test_phase0_enums_match_v6_contract() -> None:
 def test_phase0_config_contains_spec_fields_with_expected_defaults() -> None:
     config = HippocampusConfig()
 
-    assert config.vector_store_backend == "in_memory"
+    assert config.vector_store_backend == "pgvector"
     assert config.graph_store_backend == "neo4j"
-    assert config.cache_backend == "dict"
-    assert config.relational_backend == "sqlite"
+    assert config.cache_backend == "redis"
+    assert config.relational_backend == "postgresql"
     assert config.postgres_url == ""
     assert config.postgres_schema == "hippocampus"
     assert config.redis_url == ""

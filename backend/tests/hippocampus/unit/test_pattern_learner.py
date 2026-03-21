@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternStore
-from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.engines.pattern_learner import PatternLearner
 from arceus.core.hippocampus.types import Pattern, PatternStatus, Trajectory, TrajectoryStep
 from arceus.core.hippocampus.utils.time import utc_now
+from tests.hippocampus.support.fakes.in_memory_pattern import InMemoryPatternStore
+from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
+from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
 
 
 def _create_pattern_learner() -> tuple[PatternLearner, InMemoryPatternStore, MockEmbeddingEngine]:

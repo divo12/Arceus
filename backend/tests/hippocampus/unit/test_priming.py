@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
-from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.tiers.priming import PrimingMemory
+from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
+from tests.hippocampus.support.fakes.sqlite_relational import SQLiteRelationalStore
 
 
 @pytest_asyncio.fixture

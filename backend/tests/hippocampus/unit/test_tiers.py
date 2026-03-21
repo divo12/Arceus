@@ -4,15 +4,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
-from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
-from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
-from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
 from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
 from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit
+from tests.hippocampus.support.fakes.dict_cache import DictCacheStore
+from tests.hippocampus.support.fakes.in_memory_graph import InMemoryGraphStoreBackend
+from tests.hippocampus.support.fakes.in_memory_vector import InMemoryVectorStore
+from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
 
 
 class SlowDictCacheStore(DictCacheStore):

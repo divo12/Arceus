@@ -8,7 +8,7 @@ from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 
 class InMemoryGraphStoreBackend:
-    """In-process graph backend used for tests and local MVP development."""
+    """In-process graph backend used for tests."""
 
     _VALID_NODE_FIELDS = {field.name for field in fields(GraphEntity)}
 
