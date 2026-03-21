@@ -71,20 +71,27 @@ class FakeNeo4jSession:
         edges: list[dict] = state["edges"]  # type: ignore[assignment]
         call_params = self._state["last_params"] = params
         state["queries"].append(query)
+        normalized = query.strip()
 
-        if "CREATE CONSTRAINT" in query:
+        if normalized.startswith("CREATE CONSTRAINT"):
             return FakeNeo4jResult([])
 
-        if "CREATE (n:GraphEntity)" in query and "SET n = $payload" in query:
+        if normalized.startswith("CREATE (n:GraphEntity)") and "SET n = $payload" in normalized:
             payload = dict(call_params["payload"])
             nodes[payload["id"]] = payload
             return FakeNeo4jResult([{"id": payload["id"]}])
 
-        if "MATCH (n:GraphEntity {id: $node_id})" in query and "LIMIT 1" in query:
+        if (
+            normalized.startswith("MATCH (n:GraphEntity {id: $node_id})")
+            and "LIMIT 1" in normalized
+        ):
             node = nodes.get(call_params["node_id"])
             return FakeNeo4jResult([{"n": node}] if node is not None else [])
 
-        if "MATCH (n:GraphEntity {id: $node_id})" in query and "SET " in query:
+        if (
+            normalized.startswith("MATCH (n:GraphEntity {id: $node_id})")
+            and "SET " in normalized
+        ):
             node = nodes.get(call_params["node_id"])
             if node is None:
                 return FakeNeo4jResult([])
@@ -93,10 +100,14 @@ class FakeNeo4jSession:
                     node[key] = value
             return FakeNeo4jResult([{"n": node}])
 
-        if "CREATE (source)-[r:" in query and "SET r = $payload" in query:
+        if (
+            normalized.startswith("MATCH (source:GraphEntity {id: $source_id})")
+            and "CREATE (source)-[r:" in normalized
+            and "SET r = $payload" in normalized
+        ):
             if call_params["source_id"] not in nodes or call_params["target_id"] not in nodes:
                 return FakeNeo4jResult([])
-            rel_type = query.split("CREATE (source)-[r:", maxsplit=1)[1].split(
+            rel_type = normalized.split("CREATE (source)-[r:", maxsplit=1)[1].split(
                 "]",
                 maxsplit=1,
             )[0]
@@ -105,7 +116,7 @@ class FakeNeo4jSession:
             edges.append(payload)
             return FakeNeo4jResult([{"id": payload["id"]}])
 
-        if "MATCH (n:GraphEntity)" in query and "RETURN n" in query:
+        if normalized.startswith("MATCH (n:GraphEntity)") and "RETURN n" in normalized:
             container = call_params["container"]
             records = [
                 {"n": node}
@@ -114,10 +125,10 @@ class FakeNeo4jSession:
             ]
             return FakeNeo4jResult(records)
 
-        if "MATCH path =" in query and "RETURN DISTINCT neighbor" in query:
+        if normalized.startswith("MATCH path =") and "RETURN DISTINCT neighbor" in normalized:
             node_id = call_params["node_id"]
             allowed = call_params.get("relation_types")
-            max_hops = int(query.split("[*1..", maxsplit=1)[1].split("]", maxsplit=1)[0])
+            max_hops = int(normalized.split("[*1..", maxsplit=1)[1].split("]", maxsplit=1)[0])
             neighbors: list[dict] = []
             seen = {node_id}
             frontier = [(node_id, 0)]
@@ -141,7 +152,10 @@ class FakeNeo4jSession:
                         neighbors.append(nodes[next_id])
             return FakeNeo4jResult([{"neighbor": node} for node in neighbors])
 
-        if "MATCH (source:GraphEntity)-[r]-(target:GraphEntity)" in query and "RETURN r" in query:
+        if (
+            normalized.startswith("MATCH (source:GraphEntity)-[r]-(target:GraphEntity)")
+            and "RETURN r" in normalized
+        ):
             node_id = call_params["node_id"]
             records = [
                 {"r": edge}
@@ -150,7 +164,7 @@ class FakeNeo4jSession:
             ]
             return FakeNeo4jResult(records)
 
-        if "[:UPDATES*]" in query:
+        if "[:UPDATES*]" in normalized:
             current_id = call_params["id"]
             history: list[dict] = []
             seen: set[str] = set()
@@ -269,6 +283,9 @@ async def test_in_memory_vector_store_filters_by_container_type_and_deletion() -
         memory_types=[MemoryType.STATIC, MemoryType.DYNAMIC],
         top_k=5,
     )
+    # search() intentionally does NOT filter by expires_at.
+    # Only find_expired() filters for expiry — search returns all non-deleted memories.
+    # This is by design: expiry is handled by GC, not by search-time filtering.
     assert [memory.content for memory in results] == [
         static_memory.content,
         dynamic_memory.content,
@@ -339,6 +356,30 @@ async def test_in_memory_vector_store_respects_visibility_when_searching() -> No
         agent_id="cto-1",
     )
     assert {memory.id for memory in other_results} == {"shared-1"}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_vector_store_top_k_truncation() -> None:
+    store = InMemoryVectorStore()
+    for index in range(10):
+        await store.upsert(
+            MemoryUnit(
+                agent_id="agent-1",
+                content=f"memory-{index}",
+                embedding=[float(index) / 10] * 32,
+                memory_type=MemoryType.DYNAMIC,
+                container="test",
+            )
+        )
+
+    results = await store.search(
+        embedding=[0.5] * 32,
+        container="test",
+        agent_id="agent-1",
+        top_k=3,
+    )
+
+    assert len(results) == 3
 
 
 @pytest.mark.asyncio
@@ -568,6 +609,9 @@ async def test_neo4j_graph_backend_crud_search_neighbors_and_close() -> None:
     assert loaded.mention_count == 4
     assert [node.id for node in search_results] == ["jwt-node", "auth-node"]
     assert [node.id for node in neighbors] == ["jwt-node"]
+    # NOTE: This assertion verifies the InMemoryGraphStoreBackend's traversal behavior,
+    # which may differ from real Neo4j. The fake walks UPDATES edges forward and reverses.
+    # A contract test against real Neo4j should be added when graph becomes load-bearing (Phase 6+).
     assert [node.id for node in history] == ["memory-v1", "memory-v2"]
     assert driver.state["databases"]
     assert all(item == "hippocampus" for item in driver.state["databases"])

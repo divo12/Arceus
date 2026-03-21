@@ -70,14 +70,14 @@ class ArceusMemoryScope:
         seen: dict[str, MemoryUnit] = {}
 
         for memory in results:
-            existing = seen.get(memory.id)
+            existing = seen.get(memory.content)
             if existing is None:
-                seen[memory.id] = memory
+                seen[memory.content] = memory
                 continue
             if _MEMORY_PRIORITY.get(memory.memory_type, 0) > _MEMORY_PRIORITY.get(
                 existing.memory_type,
                 0,
             ):
-                seen[memory.id] = memory
+                seen[memory.content] = memory
 
         return list(seen.values())

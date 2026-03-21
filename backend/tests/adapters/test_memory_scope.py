@@ -75,3 +75,49 @@ async def test_memory_scope_retrieves_shared_private_and_task_memories_without_l
         assert "Another employee owns SSO integration" not in contents
     finally:
         await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_get_memories_deduplicates_across_scopes(
+    tmp_path,
+) -> None:
+    scope = ArceusMemoryScope()
+    hippocampus = await Hippocampus.create(
+        agent_id="emp-1",
+        config=HippocampusConfig(
+            sqlite_path=str(tmp_path / "dedupe.db"),
+            graph_store_backend="in_memory",
+            extraction_model="noop",
+            lightweight_model="noop",
+        ),
+    )
+
+    try:
+        startup_id = "startup-1"
+        employee_id = "emp-1"
+        duplicate = "JWT refresh policy requires 24h expiry"
+
+        await hippocampus.remember(
+            duplicate,
+            container=scope.startup_container(startup_id),
+            memory_type=MemoryType.STATIC,
+        )
+        await hippocampus.remember(
+            duplicate,
+            container=scope.employee_container(startup_id, employee_id),
+            memory_type=MemoryType.DYNAMIC,
+        )
+
+        results = await scope.get_memories_for_agent(
+            hippocampus=hippocampus,
+            query="JWT refresh policy",
+            startup_id=startup_id,
+            employee_id=employee_id,
+            include_shared=True,
+        )
+
+        matching = [memory for memory in results if memory.content == duplicate]
+        assert len(matching) == 1
+        assert matching[0].memory_type is MemoryType.STATIC
+    finally:
+        await hippocampus.close()

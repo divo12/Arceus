@@ -262,28 +262,21 @@ class ExtractorContext(Protocol):
 
 ---
 
-## 8. Test Quality — New Findings
+## 8. ~~Test Quality — New Findings~~ — ALL RESOLVED Phase 5 Prompt 6
 
-Holistic test review (post Phase 4). T1–T13 from PR#1 are all resolved.
+All 9 test quality issues resolved. T1–T13 from PR#1 + RT1–RT9 from holistic review all done.
 
-### HIGH
-
-| # | File | Issue | Fix |
-|---|------|-------|-----|
-| RT1 | `test_gc.py:29` | **`test_gc_runs_all_stages` asserts nothing meaningful** — Every assertion is `>= 0`. On an empty store all GC stages return 0. A regression breaking every GC stage would still pass. | Assert exact 0 values for empty baseline, or add fixture data and assert specific counts. |
-| RT2 | `test_backends.py:56` | **`FakeNeo4jSession` state mutation leaks across query branches** — Shared mutable `state` dict with fragile `in`-based query matching. `SET` branch can overwrite `node_id` into node dict. | Use precise regex matching or split into dedicated fakes per operation. |
-| RT3 | `test_backends.py:516` | **Neo4j `cypher_query` history assertion encodes fake behavior** — Test asserts `["memory-v1", "memory-v2"]` but this is the fake's traversal order, not necessarily what real Neo4j returns. | Document as fake-only test, or add contract test specifying production behavior. |
-
-### MEDIUM
-
-| # | File | Issue | Fix |
-|---|------|-------|-----|
-| RT4 | `test_backends.py:253` | **Expired memory appears in `search` results** — Assertion encodes expired memory in live search results without documenting intent. | Add comment explaining `search` intentionally ignores expiry (only `find_expired` filters). |
-| RT5 | `test_backends.py:206` | **Missing `top_k` truncation test** — Only tests with fewer candidates than `top_k`. Truncation logic never verified. | Add test with 10 memories, `top_k=3`, assert exactly 3 results. |
-| RT6 | `test_memory_scope.py:22` | **No cross-scope dedup/ordering test** — `get_memories_for_agent` merges 3 containers but only asserts presence/absence. No test for duplicate content across scopes. | Add test with same memory in 2 scopes, assert dedup behavior. |
-| RT7 | `test_promotion_engine.py` | **Missing test: promotion with empty static store** — Contradiction check always tested with pre-seeded static memory. No test for empty-store path (should skip classification). | Add test with empty static store, assert promotion proceeds. |
-| RT8 | `conftest.py:12` | **`hippocampus_factory` is sync fixture returning async factory** — Bypasses pytest-asyncio resource lifecycle. If `_create()` raises, cleanup not guaranteed. | Convert to `@pytest_asyncio.fixture` that yields. |
-| RT9 | `test_memory_projections.py:86` | **Edge type assertion says `"related_to"` but edge was created as `USES`** — Tests the projection's flattening behavior (G5), but if G5 is ever fixed, this test encodes the wrong expected value. | Add comment linking to G5, or parametrize for both pre/post-G5 behavior. |
+| # | Status |
+|---|--------|
+| ~~RT1~~ | **RESOLVED** — Asserts `== 0` not `>= 0` |
+| ~~RT2~~ | **RESOLVED** — `FakeNeo4jSession` uses precise `startswith()` matching |
+| ~~RT3~~ | **RESOLVED** — Comment documenting fake-only traversal behavior |
+| ~~RT4~~ | **RESOLVED** — Comment explaining search ignores expiry by design |
+| ~~RT5~~ | **RESOLVED** — `top_k` truncation test added (10 memories, top_k=3) |
+| ~~RT6~~ | **RESOLVED** — Cross-scope dedup test added |
+| ~~RT7~~ | **RESOLVED** — Empty static store promotion test added |
+| ~~RT8~~ | **RESOLVED** — `@pytest_asyncio.fixture` with proper teardown |
+| ~~RT9~~ | **RESOLVED** — Asserts `"uses"` (G5 fixed in Prompt 5) |
 
 ---
 
@@ -298,9 +291,9 @@ Holistic test review (post Phase 4). T1–T13 from PR#1 are all resolved.
 | ~~Design Thoughts~~ | ~~1~~ | ~~D1~~ **RESOLVED Prompt 2** (L12 deferred) |
 | Future Improvements | 10 | F1–F10 |
 | Standalone Deferred | 1 | S11 |
-| Test Quality (new) | 3 HIGH + 6 MEDIUM | RT1–RT9 |
-| **Total Open** | **0** | All code issues resolved through Phase 5 Prompts 1–4 |
-| **Total Deferred** | **15** | Phase 5+ (F1–F10, G1–G5) |
+| ~~Test Quality~~ | ~~9~~ | ~~RT1–RT9~~ **ALL RESOLVED Prompt 6** |
+| **Total Open** | **0** | All code + test issues resolved through Phase 5 Prompts 1–6 |
+| **Total Deferred** | **12** | Post-MVP (F1–F10, G1, G3) |
 | **Total Test Issues** | **9** | RT1–RT9 |
 
 **Phase 0–4 scorecard:** 65 of 77 original items resolved. **Phase 5 Prompts 1–4:** All 13 code issues resolved (C2, R1–R12). Dashboard wired (H2). D1/M13 resolved. R6 partial (see F8), R8 deferred (see F10).

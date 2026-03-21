@@ -186,6 +186,29 @@ async def test_run_promotions_contradiction_blocks(
 
 
 @pytest.mark.asyncio
+async def test_run_promotions_with_empty_static_store() -> None:
+    vector_store = InMemoryVectorStore()
+    graph_backend = InMemoryGraphStoreBackend()
+    embedding = MockEmbeddingEngine(dimensions=32)
+    graph_store = GraphStore(graph_backend, embedding)
+    engine = PromotionEngine(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        graph_store=graph_store,
+        embedding_engine=embedding,
+        llm_light=PromotionLLMDouble(classify_result="CONTRADICTION"),
+    )
+    await vector_store.upsert(_memory(memory_id="dyn-1", memory_type=MemoryType.DYNAMIC))
+
+    events = await engine.run_promotions()
+    static_memories = await vector_store.list_by_type("agent-1", memory_type=MemoryType.STATIC)
+
+    assert len(events) == 1
+    assert len(static_memories) == 1
+    assert static_memories[0].metadata["promoted_from"] == "dyn-1"
+
+
+@pytest.mark.asyncio
 async def test_run_promotions_rate_limit(
     promotion_engine_fixture: PromotionFixture,
 ) -> None:

@@ -33,14 +33,14 @@ async def test_gc_runs_all_stages(tmp_path) -> None:
         result = await hippocampus.run_gc()
 
         assert isinstance(result, GCResult)
-        assert result.expired_removed >= 0
-        assert result.decayed_removed >= 0
-        assert result.deduped >= 0
-        assert result.pruned >= 0
-        assert result.merged >= 0
-        assert result.patterns_merged >= 0
-        assert result.patterns_pruned >= 0
-        assert result.promotions_fired >= 0
+        assert result.expired_removed == 0
+        assert result.decayed_removed == 0
+        assert result.deduped == 0
+        assert result.pruned == 0
+        assert result.merged == 0
+        assert result.patterns_merged == 0
+        assert result.patterns_pruned == 0
+        assert result.promotions_fired == 0
     finally:
         await hippocampus.close()
 
