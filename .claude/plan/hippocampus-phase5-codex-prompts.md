@@ -65,51 +65,107 @@ Do NOT change any other files. Run `uv run pytest tests/ -v` after changes.
 
 ---
 
-## Prompt 2: Tenant Isolation (C2 + D1 + M13 + L12)
+## Prompt 2: Tenant Isolation with Visibility-Aware Retrieval (C2 + D1 + M13 + L12)
 
 ```
 You are fixing the tenant isolation design inconsistency in the Hippocampus memory system. This is tracked as C2 (critical), M13 (medium), L12 (low), and Design Thought D1.
 
 IMPORTANT RULES:
 - All dataclasses are frozen — use `dataclasses.replace()`.
-- Minimal changes — only touch what's needed for agent_id scoping.
+- Minimal changes — only touch what's needed for visibility-aware scoping.
 - Run tests after each sub-step.
 
 ## Background
 
-The design principle is: one `Hippocampus` instance = one agent. Public methods are instance-scoped. Storage layer enforces `agent_id` filtering.
+The design principle is: one `Hippocampus` instance = one agent. Public methods are instance-scoped. Storage layer enforces access control.
 
 Currently, `VectorStore.search()` filters only by `container`, not `agent_id`. Shared container names can leak memories across agents.
+
+### Design Decision: Visibility-Aware Retrieval (not strict agent_id filtering)
+
+Strict `agent_id` filtering would break startup-shared memory. A memory stored in `startup:acme` by `pm-1` would become invisible to `cto-1`, defeating the purpose of shared containers.
+
+Instead, we use the existing `MemoryVisibility` enum (already on `MemoryUnit`) to control cross-agent access:
+
+```python
+class MemoryVisibility(Enum):
+    PRIVATE = "private"          # only owning agent can see
+    TASK_SCOPED = "task_scoped"  # agents in same startup can see
+    STARTUP_SHARED = "shared"    # agents in same startup can see
+    BOARD_VISIBLE = "board"      # agents in same startup can see
+```
+
+The retrieval predicate is:
+- **Own memories** (`memory.agent_id == caller_agent_id`): always returned
+- **Non-PRIVATE memories** (`memory.visibility != PRIVATE`): returned to any agent (single-startup assumption — all agents share one startup)
+- **PRIVATE + different agent**: blocked
+
+This preserves tenant isolation while keeping startup-shared memory truly shared.
+
+NOTE: We assume a single startup for now. When multi-startup becomes real (F6), add `startup_id` to the search predicate as a one-line change.
 
 ## Sub-step 2A: Add `agent_id` to `VectorStore.search` protocol
 
 File: `backend/arceus/core/hippocampus/backends/protocols.py`
 
-Add `agent_id: str` as a required parameter to `VectorStore.search()`:
+Add `agent_id: str` as a keyword parameter to `VectorStore.search()`:
 ```python
 async def search(
     self,
     embedding: list[float],
     container: str,
-    agent_id: str,  # ADD THIS
+    *,
+    agent_id: str = "",  # ADD THIS — caller's agent_id for visibility filtering
     memory_types: list[MemoryType] | None = None,
     top_k: int = 10,
 ) -> list[MemoryUnit]: ...
 ```
 
-## Sub-step 2B: Implement `agent_id` filtering in `InMemoryVectorStore`
+Also add `agent_id: str = ""` to `list_by_type()` if it exists on the protocol, using the same visibility logic.
+
+## Sub-step 2B: Implement visibility-aware filtering in `InMemoryVectorStore`
 
 File: `backend/arceus/core/hippocampus/backends/in_memory_vector.py`
 
-Update `search()` to accept `agent_id` and filter candidates:
+Add a helper function (module-level or static method):
 ```python
-candidates = [
-    m for m in self._store.values()
-    if m.container == container
-    and m.agent_id == agent_id  # ADD THIS
-    and not m.is_deleted
-    # ... existing filters
-]
+from arceus.core.hippocampus.types import MemoryVisibility
+
+def _is_accessible(memory: MemoryUnit, agent_id: str) -> bool:
+    """Check if a memory is accessible to the given agent.
+
+    Rules (single-startup assumption):
+    - Agent's own memories are always accessible
+    - Non-PRIVATE memories are accessible to all agents
+    - PRIVATE memories from other agents are blocked
+    """
+    if not agent_id:
+        return True  # no agent_id means no filtering (backward compat)
+    if memory.agent_id == agent_id:
+        return True
+    if memory.visibility != MemoryVisibility.PRIVATE:
+        return True
+    return False
+```
+
+Update `search()` to use it:
+```python
+async def search(
+    self,
+    embedding: list[float],
+    container: str,
+    *,
+    agent_id: str = "",
+    memory_types: list[MemoryType] | None = None,
+    top_k: int = 10,
+) -> list[MemoryUnit]:
+    results: list[tuple[float, MemoryUnit]] = []
+    for memory in self._items.values():
+        if memory.container != container:
+            continue
+        if not _is_accessible(memory, agent_id):
+            continue
+        # ... rest of existing filtering (memory_types, deleted, cosine sim)
 ```
 
 ## Sub-step 2C: Thread `agent_id` from Hippocampus into all `search()` calls
@@ -123,7 +179,7 @@ There should be calls in:
 - `search()` method (also remove the dangling `agent_id` parameter from the public signature — this is M13)
 - Any other method that calls `_vector_store.search()`
 
-Also update `engines/reasoning_bank.py` — its `retrieve()` method calls `self._vector_store.search()`. Thread `self._agent_id` there too.
+Also update `engines/reasoning_bank.py` — its `retrieve()` method calls `self._vector_store.search()`. Thread `self._agent_id` there too (add `agent_id` to `ReasoningBank.__init__` if not already present).
 
 And update `engines/graph_store.py` if it calls `_vector_store.search()`.
 
@@ -141,6 +197,38 @@ File: `backend/arceus/core/hippocampus/engines/reasoning_bank.py`
 Update test files that instantiate `InMemoryVectorStore` and call `search()` — they need to pass `agent_id`.
 
 Search for `\.search(` in test files and add the `agent_id` parameter.
+
+Add a NEW test to verify visibility-aware retrieval:
+
+```python
+async def test_search_visibility_isolation():
+    """Verify tenant isolation: PRIVATE memories hidden from other agents,
+    STARTUP_SHARED memories visible to all."""
+    store = InMemoryVectorStore(dimensions=3)
+
+    # Agent pm-1 stores a PRIVATE memory
+    private_mem = MemoryUnit(
+        id="private-1", agent_id="pm-1", content="PM's private note",
+        container="startup:acme", visibility=MemoryVisibility.PRIVATE,
+        embedding=[1.0, 0.0, 0.0],
+    )
+    # Agent pm-1 stores a STARTUP_SHARED memory
+    shared_mem = MemoryUnit(
+        id="shared-1", agent_id="pm-1", content="Enterprise needs security review",
+        container="startup:acme", visibility=MemoryVisibility.STARTUP_SHARED,
+        embedding=[1.0, 0.0, 0.0],
+    )
+    await store.upsert(private_mem)
+    await store.upsert(shared_mem)
+
+    # pm-1 sees both
+    results = await store.search([1.0, 0.0, 0.0], "startup:acme", agent_id="pm-1")
+    assert {r.id for r in results} == {"private-1", "shared-1"}
+
+    # cto-1 sees only the shared memory
+    results = await store.search([1.0, 0.0, 0.0], "startup:acme", agent_id="cto-1")
+    assert {r.id for r in results} == {"shared-1"}
+```
 
 Run `uv run pytest tests/ -v` — all tests must pass.
 ```

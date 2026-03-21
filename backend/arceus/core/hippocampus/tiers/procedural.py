@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from arceus.core.hippocampus.backends.protocols import LLMEngine, RelationalStore
 from arceus.core.hippocampus.prompts import TRIGGER_EVALUATION_PROMPT
 from arceus.core.hippocampus.types import Habit
+
+logger = logging.getLogger(__name__)
 
 
 class ProceduralMemory:
@@ -35,15 +39,41 @@ class ProceduralMemory:
                 triggers=triggers_text,
             )
         )
-        items = result if isinstance(result, list) else result.get("items", [])
+        if isinstance(result, list):
+            items = result
+        elif isinstance(result, dict):
+            items = result.get("items", [])
+        else:
+            logger.warning(
+                "Unexpected LLM response shape in get_matching_habits: %s",
+                type(result).__name__,
+            )
+            return []
+        if not isinstance(items, list):
+            logger.warning(
+                "Unexpected LLM response shape in get_matching_habits items: %s",
+                type(items).__name__,
+            )
+            return []
 
         matches: list[Habit] = []
         for item in items:
             if not isinstance(item, dict):
+                logger.warning(
+                    "Unexpected habit match item type in get_matching_habits: %s",
+                    type(item).__name__,
+                )
                 continue
-            index = item.get("index")
+            try:
+                index = int(item.get("index", -1))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid habit match index in get_matching_habits: %r",
+                    item.get("index"),
+                )
+                continue
             relevant = item.get("relevant")
-            if isinstance(index, int) and relevant is True and 0 <= index < len(habits):
+            if relevant is True and 0 <= index < len(habits):
                 matches.append(habits[index])
         return matches
 

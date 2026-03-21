@@ -6,6 +6,7 @@ LLM-generated human-readable promotion reasons for dashboard.
 """
 from __future__ import annotations
 
+from collections import deque
 from datetime import timedelta
 
 from arceus.core.hippocampus.backends.protocols import (
@@ -50,7 +51,7 @@ class PromotionEngine:
         self._graph_store = graph_store
         self._embedding = embedding_engine
         self._llm = llm_light
-        self._event_log: list[MemoryPromotionEvent] = []
+        self._event_log: deque[MemoryPromotionEvent] = deque(maxlen=200)
 
     async def run_promotions(self) -> list[MemoryPromotionEvent]:
         dynamic_memories = await self._vector_store.list_by_type(
@@ -72,7 +73,7 @@ class PromotionEngine:
         return events
 
     async def get_recent_promotions(self, limit: int = 20) -> list[MemoryPromotionEvent]:
-        return self._event_log[-limit:]
+        return list(self._event_log)[-limit:]
 
     def qualifies_for_static(self, mem: MemoryUnit) -> bool:
         uses = mem.metadata.get("usage_count", 0)

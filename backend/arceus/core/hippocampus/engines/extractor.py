@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, LLMEngine
 from arceus.core.hippocampus.prompts import (
@@ -25,6 +26,9 @@ from arceus.core.hippocampus.types import (
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from arceus.core.hippocampus.hippocampus import Hippocampus
+
 
 class MemoryExtractor:
     """Doc-driven Phase 2 extraction pipeline."""
@@ -34,7 +38,7 @@ class MemoryExtractor:
         llm: LLMEngine,
         llm_light: LLMEngine,
         embedding_engine: EmbeddingEngine,
-        hippocampus,
+        hippocampus: Hippocampus,
     ) -> None:
         self._llm = llm
         self._llm_light = llm_light
@@ -60,7 +64,6 @@ class MemoryExtractor:
         for fact in facts:
             existing = await self._hippocampus.search(
                 query=fact.text,
-                agent_id=agent_id,
                 container=container,
                 top_k=5,
             )

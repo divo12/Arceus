@@ -93,15 +93,14 @@ class FakeHippocampus:
     async def search(
         self,
         query: str,
-        agent_id: str,
         container: str,
         top_k: int = 5,
     ) -> list:
-        del agent_id
         embedding = await self._embedding.embed(query)
         return await self._vector_store.search(
             embedding=embedding,
             container=container,
+            agent_id="agent-1",
             top_k=top_k,
         )
 

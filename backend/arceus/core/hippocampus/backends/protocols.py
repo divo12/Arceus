@@ -23,6 +23,8 @@ class VectorStore(Protocol):
         self,
         embedding: list[float],
         container: str,
+        *,
+        agent_id: str = "",
         memory_types: list[MemoryType] | None = None,
         top_k: int = 10,
     ) -> list[MemoryUnit]: ...

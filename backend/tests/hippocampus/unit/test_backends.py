@@ -29,6 +29,7 @@ from arceus.core.hippocampus.types import (
     GraphRelationship,
     Habit,
     HabitFormation,
+    MemoryVisibility,
     MemoryType,
     MemoryUnit,
     RelationType,
@@ -253,6 +254,7 @@ async def test_in_memory_vector_store_filters_by_container_type_and_deletion() -
     results = await store.search(
         embedding=[1.0, 0.0],
         container="startup:1:emp:e1",
+        agent_id="agent-1",
         memory_types=[MemoryType.STATIC, MemoryType.DYNAMIC],
         top_k=5,
     )
@@ -280,10 +282,52 @@ async def test_in_memory_vector_store_filters_by_container_type_and_deletion() -
     post_delete = await store.search(
         embedding=[1.0, 0.0],
         container="startup:1:emp:e1",
+        agent_id="agent-1",
         memory_types=[MemoryType.STATIC, MemoryType.DYNAMIC],
         top_k=5,
     )
     assert static_memory.content not in [memory.content for memory in post_delete]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_vector_store_respects_visibility_when_searching() -> None:
+    store = InMemoryVectorStore()
+
+    private_memory = MemoryUnit(
+        id="private-1",
+        agent_id="pm-1",
+        content="PM private note",
+        embedding=[1.0, 0.0, 0.0],
+        memory_type=MemoryType.DYNAMIC,
+        container="startup:acme",
+        visibility=MemoryVisibility.PRIVATE,
+    )
+    shared_memory = MemoryUnit(
+        id="shared-1",
+        agent_id="pm-1",
+        content="Enterprise needs security review",
+        embedding=[1.0, 0.0, 0.0],
+        memory_type=MemoryType.DYNAMIC,
+        container="startup:acme",
+        visibility=MemoryVisibility.STARTUP_SHARED,
+    )
+
+    await store.upsert(private_memory)
+    await store.upsert(shared_memory)
+
+    own_results = await store.search(
+        embedding=[1.0, 0.0, 0.0],
+        container="startup:acme",
+        agent_id="pm-1",
+    )
+    assert {memory.id for memory in own_results} == {"private-1", "shared-1"}
+
+    other_results = await store.search(
+        embedding=[1.0, 0.0, 0.0],
+        container="startup:acme",
+        agent_id="cto-1",
+    )
+    assert {memory.id for memory in other_results} == {"shared-1"}
 
 
 @pytest.mark.asyncio
@@ -568,7 +612,7 @@ def test_azure_llm_reads_unprefixed_dotenv_values(monkeypatch: pytest.MonkeyPatc
     engine = AzureOpenAILLMEngine(model_name="gpt-4.1")
 
     assert engine._azure_endpoint == "https://dotenv.openai.azure.com/"
-    assert engine._api_key == "dotenv-key"
+    assert engine._api_key.get_secret_value() == "dotenv-key"
     assert engine._api_version == "2025-03-01-preview"
 
 
@@ -583,7 +627,7 @@ def test_azure_llm_prefers_repo_dotenv_over_shell_env(monkeypatch: pytest.Monkey
     engine = AzureOpenAILLMEngine(model_name="gpt-4.1")
 
     assert engine._azure_endpoint == "https://repo.openai.azure.com/"
-    assert engine._api_key == "repo-key"
+    assert engine._api_key.get_secret_value() == "repo-key"
     assert engine._api_version == "2025-03-01-preview"
 
 

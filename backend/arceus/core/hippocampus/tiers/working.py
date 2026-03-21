@@ -43,8 +43,10 @@ class WorkingMemory:
 
     async def clear_task(self, task_id: str) -> None:
         await self._backend.clear(f"{self._prefix}:task:{task_id}")
-        await self._backend.clear(f"{self._prefix}:conv:{task_id}")
+        conv_key = f"{self._prefix}:conv:{task_id}"
+        await self._backend.clear(conv_key)
         await self._backend.clear(f"{self._prefix}:scratch:{task_id}")
+        self._conversation_locks.pop(conv_key, None)
 
     def _conversation_lock(self, key: str) -> asyncio.Lock:
         lock = self._conversation_locks.get(key)

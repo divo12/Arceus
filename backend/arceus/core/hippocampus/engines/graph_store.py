@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, GraphStoreBackend
 from arceus.core.hippocampus.types import GraphEntity, GraphRelationship, RelationType
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
@@ -96,9 +98,12 @@ class GraphStore:
         )
 
         expanded: dict[str, GraphEntity] = {}
-        for node in seed_nodes:
+        neighbor_lists = await asyncio.gather(
+            *[self._backend.get_neighbors(node.id, max_hops=max_hops) for node in seed_nodes]
+        )
+        for node, neighbors in zip(seed_nodes, neighbor_lists, strict=False):
             expanded[node.id] = node
-            for neighbor in await self._backend.get_neighbors(node.id, max_hops=max_hops):
+            for neighbor in neighbors:
                 expanded[neighbor.id] = neighbor
 
         ranked = sorted(

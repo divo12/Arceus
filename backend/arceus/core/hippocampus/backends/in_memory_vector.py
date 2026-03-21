@@ -2,8 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from arceus.core.hippocampus.types import MemoryType, MemoryUnit
+from arceus.core.hippocampus.types import MemoryType, MemoryUnit, MemoryVisibility
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
+
+
+def _is_accessible(memory: MemoryUnit, agent_id: str) -> bool:
+    if not agent_id:
+        return True
+    if memory.agent_id == agent_id:
+        return True
+    if memory.visibility is not MemoryVisibility.PRIVATE:
+        return True
+    return False
 
 
 class InMemoryVectorStore:
@@ -26,6 +36,8 @@ class InMemoryVectorStore:
         self,
         embedding: list[float],
         container: str,
+        *,
+        agent_id: str = "",
         memory_types: list[MemoryType] | None = None,
         top_k: int = 10,
     ) -> list[MemoryUnit]:
@@ -34,6 +46,8 @@ class InMemoryVectorStore:
             if memory.id in self._deleted:
                 continue
             if memory.container != container:
+                continue
+            if not _is_accessible(memory, agent_id):
                 continue
             if memory_types and memory.memory_type not in memory_types:
                 continue
@@ -90,4 +104,3 @@ class InMemoryVectorStore:
                 results.append(memory)
         results.sort(key=lambda memory: memory.expires_at or before)
         return results
-

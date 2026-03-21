@@ -23,14 +23,14 @@
 | R3 | `graph_store.py:99-102` | **N+1 sequential async calls in `GraphStore.search`** — Each seed node triggers a separate `await get_neighbors()`. With `top_k * 3` seeds (default 30), that's 30 sequential Neo4j round-trips. | Use `asyncio.gather()` to parallelize neighbor fetches. |
 | ~~R4~~ | ~~`types.py`~~ | ~~`DistilledMemory.to_memory_unit()` drops `container`~~ | **RESOLVED Phase 5 Prompt 1** — `container` field added to `DistilledMemory`, threaded through `distill()` and `process_trajectory()`. |
 | R5 | `tiers/priming.py:23-27` | **`update_state` key-errors on corrupt/partial stored state** — Direct dict key access (`current["confidence"]`) crashes if stored state is missing a key from an older schema version. | Use `.get("confidence", 0.5)` with defaults, or validate schema on `get_current_state()`. |
-| R6 | `tiers/procedural.py:38` | **`get_matching_habits` silently drops malformed LLM responses** — If LLM returns unexpected shape or non-int `index`, habits silently skipped with no log. | Add warning log for unexpected response shape; coerce `index` with `int()`. |
+| ~~R6~~ | ~~`tiers/procedural.py:38`~~ | ~~`get_matching_habits` silently drops malformed LLM responses~~ | **PARTIALLY RESOLVED** — warning logs + safe index coercion added. Broader LLM observability remains deferred; see F8. |
 
 ### MEDIUM
 
 | # | File | Issue | Fix |
 |---|------|-------|-----|
 | R7 | `engines/extractor.py:38` | **`hippocampus` parameter untyped** — Circular import workaround loses all type safety. | Use `TYPE_CHECKING` guard + `from __future__ import annotations` (same pattern as `gc.py`). |
-| R8 | `engines/reasoning_bank.py:161` | **O(N^2) consolidation loop blocks event loop** — 5,000 memories = 25M cosine comparisons in Python, all synchronous. | Add `MAX_CONSOLIDATION_MEMORIES = 500` cap; document as TODO for numpy/vector-index batch. |
+| ~~R8~~ | ~~`engines/reasoning_bank.py:161`~~ | ~~O(N^2) consolidation loop blocks event loop~~ | **DEFERRED** — real scale issue, but should be solved with chunking/vectorized batching rather than a blind cap if we revisit it seriously. See F10. |
 | R9 | `tiers/working.py:16,49-53` | **`_conversation_locks` dict leaks memory** — One `asyncio.Lock` per task_id, never removed. Monotonic growth in long-running processes. | Clean up in `clear_task()` with `self._conversation_locks.pop(key, None)`. |
 | R10 | `engines/promotion_engine.py:53,71` | **`_event_log` grows without bound** — Appended on every `run_promotions()`, never trimmed. | Cap with `collections.deque(maxlen=200)` or slice after extend. |
 | R11 | `backends/azure_openai_llm.py:41` | **`_api_key` stored as plain `str` after `get_secret_value()`** — Visible in `repr()`, crash dumps, pytest variable inspector. | Keep as `SecretStr`, call `.get_secret_value()` only in `_get_client()`. |
@@ -170,6 +170,105 @@ Protocol-based architecture is correct. Each backend swappable independently. Fa
 **Fix:** Extend `WorkingMemoryBackend` with atomic append operation. Use Redis Lua / Postgres row locks natively.
 
 **When:** Post-MVP, once working memory written from multiple processes
+
+### F8: Broader LLM observability
+
+Current quick fix adds warning logs at key malformed-response boundaries (for example, habit trigger evaluation). The system still lacks structured observability for LLM fallbacks, malformed outputs, retry frequency, and prompt/result diagnostics.
+
+**Fix:** Add centralized counters/log fields for malformed LLM outputs, fallback paths, and per-engine warning rates. Consider lightweight tracing around extraction, trigger evaluation, contradiction checks, and classification fallbacks.
+
+**When:** Post-MVP, once operational monitoring becomes part of production readiness
+
+### F9: Narrow `ExtractorContext` protocol to remove concrete Hippocampus coupling
+
+`MemoryExtractor` currently depends on the concrete `Hippocampus` object. `TYPE_CHECKING` fixes the import cycle safely, but the better long-term design is to depend on a narrow protocol describing only the capabilities extractor logic actually uses.
+
+**Production-ready protocol sketch:**
+
+```python
+from __future__ import annotations
+
+from typing import Protocol
+
+from arceus.core.hippocampus.types import (
+    ExtractedFact,
+    GraphEntity,
+    Habit,
+    MemoryUnit,
+    RelationType,
+)
+
+
+class SupportsStaticMemory(Protocol):
+    async def add(self, fact: ExtractedFact, container: str) -> MemoryUnit: ...
+    async def update(self, memory_id: str, new_content: str) -> MemoryUnit: ...
+
+
+class SupportsDynamicMemory(Protocol):
+    async def add(self, fact: ExtractedFact, container: str) -> MemoryUnit: ...
+
+
+class SupportsProceduralMemory(Protocol):
+    async def add_habit(self, habit: Habit) -> Habit: ...
+
+
+class SupportsGraphStore(Protocol):
+    async def find_similar_node(
+        self,
+        embedding: list[float],
+        threshold: float = 0.7,
+        container: str = "",
+    ) -> GraphEntity | None: ...
+    async def create_node(self, entity: GraphEntity) -> str: ...
+    async def merge_node(self, existing: GraphEntity, new: GraphEntity) -> GraphEntity: ...
+    async def create_edge_by_name(
+        self,
+        source_name: str,
+        target_name: str,
+        rel_type: RelationType,
+        container: str = "",
+    ) -> str | None: ...
+
+
+class ExtractorContext(Protocol):
+    static_memory: SupportsStaticMemory
+    dynamic_memory: SupportsDynamicMemory
+    graph_store: SupportsGraphStore
+    procedural_memory: SupportsProceduralMemory | None
+
+    async def search(
+        self,
+        query: str,
+        container: str,
+        top_k: int = 5,
+    ) -> list[MemoryUnit]: ...
+
+    async def soft_delete(self, memory_id: str, reason: str = "") -> None: ...
+```
+
+**Refactor path:**
+1. Add `engines/protocols.py`
+2. Move the protocol there
+3. Type `MemoryExtractor.__init__(..., hippocampus: ExtractorContext)`
+4. Keep `Hippocampus` as one implementation of that protocol
+5. Update extractor tests/fakes to implement the same narrow surface
+
+**Why deferred:** Current `TYPE_CHECKING` fix is safe and sufficient. This refactor is about cleaner architecture, lower coupling, and easier testing — not immediate correctness.
+
+### F10: Scalable consolidation for large memory sets
+
+`ReasoningBank.consolidate()` currently performs multiple O(N^2) pairwise passes across memories in Python. This is acceptable for small/medium agent memory sets, but it will eventually become an event-loop and latency problem as memory volume grows.
+
+**Recommended direction:**
+1. Partition candidate sets before pairwise comparison (for example by domain / memory type / recency window)
+2. Generate likely duplicate/merge candidates using vector pre-filtering instead of full all-pairs scans
+3. Batch similarity work with numpy or another vectorized path
+4. Chunk long consolidation passes so async workers can yield between batches
+5. Add metrics/logging for consolidation duration, candidate volume, and skipped batches
+
+**Avoid as final design:** A simple fixed hard cap is acceptable as an emergency guardrail, but it is not the preferred long-term solution because it silently drops part of the memory set from maintenance.
+
+**When:** Before large-memory production workloads or when agent memory cardinality starts growing materially
 
 ---
 

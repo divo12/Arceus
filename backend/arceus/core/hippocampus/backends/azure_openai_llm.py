@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, get_args, get_origin
 
+from pydantic import SecretStr
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -38,7 +39,9 @@ class AzureOpenAILLMEngine:
     ) -> None:
         self._model_name = model_name
         self._azure_endpoint = azure_endpoint or settings.azure_openai_endpoint
-        self._api_key = api_key or settings.azure_openai_api_key.get_secret_value()
+        self._api_key: SecretStr = (
+            SecretStr(api_key) if api_key else settings.azure_openai_api_key
+        )
         self._api_version = api_version or settings.azure_openai_api_version
         self._client = client
 
@@ -96,6 +99,12 @@ class AzureOpenAILLMEngine:
         for option in options:
             if normalized == option.lower():
                 return option
+        logger.warning(
+            "classify() could not match LLM response %r to options %r; defaulting to %r",
+            normalized,
+            options,
+            options[0],
+        )
         return options[0]
 
     async def _complete_json(self, system_prompt: str, user_payload: str) -> Any:
@@ -159,14 +168,15 @@ class AzureOpenAILLMEngine:
     def _get_client(self) -> Any:
         if self._client is not None:
             return self._client
-        if not (self._azure_endpoint and self._api_key):
+        api_key_value = self._api_key.get_secret_value()
+        if not (self._azure_endpoint and api_key_value):
             raise ValueError("Azure OpenAI credentials are missing")
 
         from openai import AsyncAzureOpenAI
 
         self._client = AsyncAzureOpenAI(
             azure_endpoint=self._azure_endpoint,
-            api_key=self._api_key,
+            api_key=api_key_value,
             api_version=self._api_version,
         )
         return self._client

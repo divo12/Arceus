@@ -336,15 +336,14 @@ class Hippocampus:
     async def search(
         self,
         query: str,
-        agent_id: str,
         container: str,
         top_k: int = 5,
     ) -> list[MemoryUnit]:
-        del agent_id
         embedding = await self._embedding.embed(query)
         return await self._vector_store.search(
             embedding=embedding,
             container=container,
+            agent_id=self._agent_id,
             top_k=top_k,
         )
 

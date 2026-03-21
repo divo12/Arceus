@@ -71,6 +71,7 @@ class ReasoningBank:
         candidates = await self._vector_store.search(
             embedding=query_embedding,
             container=container,
+            agent_id=self._agent_id,
             memory_types=[MemoryType.STATIC, MemoryType.DYNAMIC],
             top_k=k * 3,
         )
