@@ -12,7 +12,7 @@
 
 | # | File | Issue | Fix |
 |---|------|-------|-----|
-| C2 | `in_memory_vector.py` + `protocols.py` | **VectorStore.search not agent-scoped (tenant bleed)** — `search()` filters only by `container`, not `agent_id`. Shared container names leak memories across agents. | Add `agent_id: str` to `VectorStore.search` protocol. See D1 below. |
+| ~~C2~~ | ~~`in_memory_vector.py` + `protocols.py`~~ | ~~VectorStore.search not agent-scoped (tenant bleed)~~ | **RESOLVED Phase 5 Prompt 2** — Visibility-aware retrieval: own agent always visible, non-PRIVATE visible to all (single-startup), PRIVATE blocked cross-agent. `_is_accessible()` filter added. D1/M13 also resolved. |
 | ~~R1~~ | ~~`neo4j_graph.py`~~ | ~~Cypher injection via f-string in `get_neighbors`~~ | **RESOLVED Phase 5 Prompt 1** — int validation guard added to both neo4j + in-memory backends. |
 | ~~R2~~ | ~~`neo4j_graph.py`~~ | ~~`_schema_ready` race condition~~ | **RESOLVED Phase 5 Prompt 1** — `asyncio.Lock` + double-checked locking pattern. |
 
@@ -20,21 +20,21 @@
 
 | # | File | Issue | Fix |
 |---|------|-------|-----|
-| R3 | `graph_store.py:99-102` | **N+1 sequential async calls in `GraphStore.search`** — Each seed node triggers a separate `await get_neighbors()`. With `top_k * 3` seeds (default 30), that's 30 sequential Neo4j round-trips. | Use `asyncio.gather()` to parallelize neighbor fetches. |
+| ~~R3~~ | ~~`graph_store.py`~~ | ~~N+1 sequential async calls in `GraphStore.search`~~ | **RESOLVED Phase 5 Prompt 3** — `asyncio.gather()` parallelizes neighbor fetches. |
 | ~~R4~~ | ~~`types.py`~~ | ~~`DistilledMemory.to_memory_unit()` drops `container`~~ | **RESOLVED Phase 5 Prompt 1** — `container` field added to `DistilledMemory`, threaded through `distill()` and `process_trajectory()`. |
-| R5 | `tiers/priming.py:23-27` | **`update_state` key-errors on corrupt/partial stored state** — Direct dict key access (`current["confidence"]`) crashes if stored state is missing a key from an older schema version. | Use `.get("confidence", 0.5)` with defaults, or validate schema on `get_current_state()`. |
+| ~~R5~~ | ~~`tiers/priming.py`~~ | ~~`update_state` key-errors on corrupt/partial stored state~~ | **RESOLVED Phase 5 Prompt 3** — All dict accesses use `.get()` with defaults. |
 | ~~R6~~ | ~~`tiers/procedural.py:38`~~ | ~~`get_matching_habits` silently drops malformed LLM responses~~ | **PARTIALLY RESOLVED** — warning logs + safe index coercion added. Broader LLM observability remains deferred; see F8. |
 
 ### MEDIUM
 
 | # | File | Issue | Fix |
 |---|------|-------|-----|
-| R7 | `engines/extractor.py:38` | **`hippocampus` parameter untyped** — Circular import workaround loses all type safety. | Use `TYPE_CHECKING` guard + `from __future__ import annotations` (same pattern as `gc.py`). |
+| ~~R7~~ | ~~`engines/extractor.py`~~ | ~~`hippocampus` parameter untyped~~ | **RESOLVED Phase 5 Prompt 3** — `TYPE_CHECKING` guard + `from __future__ import annotations`. |
 | ~~R8~~ | ~~`engines/reasoning_bank.py:161`~~ | ~~O(N^2) consolidation loop blocks event loop~~ | **DEFERRED** — real scale issue, but should be solved with chunking/vectorized batching rather than a blind cap if we revisit it seriously. See F10. |
-| R9 | `tiers/working.py:16,49-53` | **`_conversation_locks` dict leaks memory** — One `asyncio.Lock` per task_id, never removed. Monotonic growth in long-running processes. | Clean up in `clear_task()` with `self._conversation_locks.pop(key, None)`. |
-| R10 | `engines/promotion_engine.py:53,71` | **`_event_log` grows without bound** — Appended on every `run_promotions()`, never trimmed. | Cap with `collections.deque(maxlen=200)` or slice after extend. |
-| R11 | `backends/azure_openai_llm.py:41` | **`_api_key` stored as plain `str` after `get_secret_value()`** — Visible in `repr()`, crash dumps, pytest variable inspector. | Keep as `SecretStr`, call `.get_secret_value()` only in `_get_client()`. |
-| R12 | `backends/azure_openai_llm.py:99` | **`classify()` silently falls back to `options[0]`** — No warning log when LLM response doesn't match any option. Can suppress contradictions or cause incorrect dedup. | Add `logger.warning()` on no-match fallback. |
+| ~~R9~~ | ~~`tiers/working.py`~~ | ~~`_conversation_locks` dict leaks memory~~ | **RESOLVED Phase 5 Prompt 3** — `clear_task()` now pops lock. |
+| ~~R10~~ | ~~`engines/promotion_engine.py`~~ | ~~`_event_log` grows without bound~~ | **RESOLVED Phase 5 Prompt 3** — `deque(maxlen=200)`. |
+| ~~R11~~ | ~~`backends/azure_openai_llm.py`~~ | ~~`_api_key` stored as plain `str`~~ | **RESOLVED Phase 5 Prompt 3** — Kept as `SecretStr`, `.get_secret_value()` only in `_get_client()`. |
+| ~~R12~~ | ~~`backends/azure_openai_llm.py`~~ | ~~`classify()` silently falls back to `options[0]`~~ | **RESOLVED Phase 5 Prompt 3** — `logger.warning()` on no-match fallback. |
 
 ---
 
@@ -73,39 +73,21 @@ Phase 5+ should add:
 
 ---
 
-## 4. Dashboard Summary (was H2)
+## 4. ~~Dashboard Summary (was H2)~~ — RESOLVED Phase 5 Prompt 4
 
-`Hippocampus.get_summary()` has three always-empty fields: `top_patterns`, `recent_learnings`, `recent_promotions`.
-
-**Phase 5 wiring:**
-1. `recent_promotions` — call `promotion_engine.get_recent_promotions(limit=5)` (method exists)
-2. `recent_learnings` — call `dynamic_memory.get_recent(container, days=7)[:5]` (method exists)
-3. `top_patterns` — add `get_top_patterns()` to `PatternLearner`, sort by `success_rate * log(usage_count + 1)`
-
-**Why deferred:** No agent logic reads these fields. Purely dashboard display. Underlying data stored correctly.
+All three fields wired: `top_patterns` via `PatternLearner.get_top_patterns()`, `recent_learnings` via `DynamicMemory.get_recent()`, `recent_promotions` via `PromotionEngine.get_recent_promotions()`. Pattern cards projection added to `ArceusMemoryProjections`.
 
 ---
 
-## 5. Design Thought: Instance vs Agent Scoping (D1)
+## 5. ~~Design Thought: Instance vs Agent Scoping (D1)~~ — RESOLVED Phase 5 Prompt 2
 
-`C2` (tenant bleed) and `M13` (`search()` accepts then deletes `agent_id`) are two sides of the same design inconsistency.
+Implemented visibility-aware retrieval model (not strict agent_id filtering). Public `search()` no longer takes `agent_id` (M13 resolved). `VectorStore.search` protocol takes `agent_id`, `_is_accessible()` enforces: own agent → allow, non-PRIVATE → allow (single-startup), PRIVATE cross-agent → block.
 
-**Proper OOP model:**
-- One `Hippocampus` instance = one agent
-- Public methods are instance-scoped (no caller-supplied `agent_id`)
-- Storage layer enforces `agent_id` filtering internally via `self._agent_id`
-
-**Clean refactor:**
-1. Remove `agent_id` from public `Hippocampus.search()` and similar APIs
-2. Add `agent_id` to `VectorStore.search()` protocol, enforce in all implementations
-3. `Hippocampus` passes `self._agent_id` into store calls internally
-4. Shared DB/vector-store support without leaking multi-tenant concerns into public API
-
-**Also linked:** `L12` (unused `pattern_store` param in `ReasoningBank`) — same instance-vs-param scoping question.
+**Remaining:** `L12` (unused `pattern_store` in `ReasoningBank`) — deferred, still vestigial but harmless.
 
 ---
 
-## 6. Future Improvements (F1–F7)
+## 6. Future Improvements (F1–F10)
 
 Architectural improvements that require broader API changes. Not bugs — current code works correctly.
 
@@ -309,23 +291,24 @@ Holistic test review (post Phase 4). T1–T13 from PR#1 are all resolved.
 
 | Category | Count | Status |
 |----------|-------|--------|
-| **Open — Must Fix** | 1 CRITICAL + 3 HIGH + 6 MEDIUM | C2, R3, R5–R12 (R1, R2, R4 resolved) |
+| **Open — Must Fix** | 0 CRITICAL + 0 HIGH + 0 MEDIUM | All resolved (C2, R1–R12). R6 partial→F8, R8 deferred→F10. |
 | Graph Store (deferred) | 5 | G1–G5 |
 | Extraction Modes (deferred) | 1 | E1 |
-| Dashboard Summary (deferred) | 1 | H2 |
-| Design Thoughts | 1 | D1 (+ L12, M13 linked) |
-| Future Improvements | 7 | F1–F7 |
+| ~~Dashboard Summary~~ | ~~1~~ | ~~H2~~ **RESOLVED Prompt 4** |
+| ~~Design Thoughts~~ | ~~1~~ | ~~D1~~ **RESOLVED Prompt 2** (L12 deferred) |
+| Future Improvements | 10 | F1–F10 |
 | Standalone Deferred | 1 | S11 |
 | Test Quality (new) | 3 HIGH + 6 MEDIUM | RT1–RT9 |
-| **Total Open** | **10** | 1 CRITICAL, 3 HIGH, 6 MEDIUM |
-| **Total Deferred** | **12** | Phase 5+ |
+| **Total Open** | **0** | All code issues resolved through Phase 5 Prompts 1–4 |
+| **Total Deferred** | **15** | Phase 5+ (F1–F10, G1–G5) |
 | **Total Test Issues** | **9** | RT1–RT9 |
 
-**Phase 0–4 scorecard:** 65 of 77 original items resolved. 12 deferred to Phase 5+. Holistic review surfaced 13 new code issues (R1–R12 + C2) and 9 test quality issues (RT1–RT9). **Phase 5 Prompt 1: R1, R2, R4 resolved (3 of 13).**
+**Phase 0–4 scorecard:** 65 of 77 original items resolved. **Phase 5 Prompts 1–4:** All 13 code issues resolved (C2, R1–R12). Dashboard wired (H2). D1/M13 resolved. R6 partial (see F8), R8 deferred (see F10).
 
-### Priority Order
-1. ~~**Immediate** (security/data loss): R1 (cypher injection), R2 (schema race), R4 (distilled memory invisible)~~ **ALL RESOLVED — Phase 5 Prompt 1**
-2. **Before production**: C2 (tenant bleed), R5 (priming key-errors), R11 (api key in plain str)
-3. **Performance**: R3 (N+1 graph search), R8 (O(N^2) consolidation)
-4. **Hardening**: R6, R9, R10, R12 (logging, cleanup, bounds)
-5. **Type safety**: R7 (extractor typing)
+### Priority Order — ALL RESOLVED
+1. ~~**Immediate** (security/data loss): R1, R2, R4~~ **Prompt 1**
+2. ~~**Before production**: C2, R5, R11~~ **Prompts 2–3**
+3. ~~**Performance**: R3~~ **Prompt 3** | R8 → F10 (deferred)
+4. ~~**Hardening**: R6, R9, R10, R12~~ **Prompt 3** | R6 partial → F8
+5. ~~**Type safety**: R7~~ **Prompt 3**
+6. ~~**Dashboard**: H2~~ **Prompt 4**

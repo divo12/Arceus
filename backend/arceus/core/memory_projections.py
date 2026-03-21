@@ -20,8 +20,9 @@ class ArceusMemoryProjections:
     async def get_summary(
         self,
         hippocampus: Hippocampus,
+        container: str = "",
     ) -> MemorySummaryProjection:
-        return await hippocampus.get_summary()
+        return await hippocampus.get_summary(container=container)
 
     async def get_graph_view(
         self,
@@ -68,3 +69,24 @@ class ArceusMemoryProjections:
         hippocampus: Hippocampus,
     ) -> list[MemoryPromotionEvent]:
         return await hippocampus.get_recent_promotions()
+
+    async def get_pattern_cards(
+        self,
+        hippocampus: Hippocampus,
+        limit: int = 10,
+    ) -> list[dict]:
+        if hippocampus.pattern_learner is None:
+            return []
+        patterns = await hippocampus.pattern_learner.get_top_patterns(limit=limit)
+        return [
+            {
+                "id": pattern.id,
+                "description": pattern.description,
+                "strategy": pattern.strategy,
+                "domain": pattern.domain,
+                "success_rate": round(pattern.success_rate, 3),
+                "usage_count": pattern.usage_count,
+                "status": pattern.status.value,
+            }
+            for pattern in patterns
+        ]

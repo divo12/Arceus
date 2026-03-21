@@ -157,6 +157,22 @@ class PatternLearner:
 
         return {"merged": merged, "pruned": pruned, "split": 0}
 
+    async def get_top_patterns(self, limit: int = 5) -> list[Pattern]:
+        all_patterns = await self._store.list_all()
+        active = [
+            pattern
+            for pattern in all_patterns
+            if pattern.status is PatternStatus.ACTIVE
+        ]
+        ranked = sorted(
+            active,
+            key=lambda pattern: (
+                pattern.success_rate * math.log(max(pattern.usage_count, 1) + 1)
+            ),
+            reverse=True,
+        )
+        return ranked[:limit]
+
     async def _merge_patterns(self, pa: Pattern, pb: Pattern) -> None:
         merged_data = await self._llm.decide(
             prompt=PATTERN_MERGE_PROMPT.format(

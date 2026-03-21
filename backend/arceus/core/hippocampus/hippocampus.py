@@ -445,7 +445,7 @@ class Hippocampus:
             return ""
         return await self.priming_memory.generate_priming_prompt()
 
-    async def get_summary(self) -> MemorySummaryProjection:
+    async def get_summary(self, container: str = "") -> MemorySummaryProjection:
         """Generate memory summary projection for dashboard."""
         static_results = await self._vector_store.list_by_type(
             agent_id=self._agent_id,
@@ -469,12 +469,37 @@ class Hippocampus:
         current_state = {}
         if self.priming_memory is not None:
             current_state = await self.priming_memory.get_current_state()
+        top_patterns = []
+        if self.pattern_learner is not None:
+            patterns = await self.pattern_learner.get_top_patterns(limit=5)
+            top_patterns = [
+                {
+                    "description": pattern.description,
+                    "success_rate": pattern.success_rate,
+                    "usage_count": pattern.usage_count,
+                }
+                for pattern in patterns
+            ]
+        recent_learnings = []
+        if container:
+            recent = await self.dynamic_memory.get_recent(container, days=7)
+            recent_learnings = [memory.content for memory in recent[:5]]
+        recent_promotions = []
+        if self.promotion_engine is not None:
+            events = await self.promotion_engine.get_recent_promotions(limit=5)
+            recent_promotions = [
+                f"{event.from_type}->{event.to_type}: {event.reason}"
+                for event in events
+            ]
         return MemorySummaryProjection(
             agent_id=self._agent_id,
             static_fact_count=len(static_results),
             dynamic_fact_count=len(dynamic_results),
             active_habits=active_habits,
+            top_patterns=top_patterns,
             current_state=current_state,
+            recent_learnings=recent_learnings,
+            recent_promotions=recent_promotions,
         )
 
     def _tier_boost(self, memory_type: MemoryType) -> float:
