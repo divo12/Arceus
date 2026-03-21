@@ -13,15 +13,15 @@
 | # | File | Issue | Fix |
 |---|------|-------|-----|
 | C2 | `in_memory_vector.py` + `protocols.py` | **VectorStore.search not agent-scoped (tenant bleed)** — `search()` filters only by `container`, not `agent_id`. Shared container names leak memories across agents. | Add `agent_id: str` to `VectorStore.search` protocol. See D1 below. |
-| R1 | `neo4j_graph.py:142-146` | **Cypher injection via f-string in `get_neighbors`** — `max_hops` interpolated directly into Cypher query `[*1..{max_hops}]`. No int validation before interpolation. If caller-supplied data ever reaches `max_hops`, this is a full injection vector. | Add `if not isinstance(max_hops, int) or max_hops < 1 or max_hops > 10: raise ValueError(...)` before query construction. |
-| R2 | `neo4j_graph.py:196-206` | **`_schema_ready` race condition** — Plain instance bool with no lock. Concurrent coroutines can both read `False`, both run `CREATE CONSTRAINT`, and set `True` before the other's `await session.run(...)` completes. | Use `asyncio.Lock` or `asyncio.Event` to gate schema creation (same pattern as `SQLiteRelationalStore`). |
+| ~~R1~~ | ~~`neo4j_graph.py`~~ | ~~Cypher injection via f-string in `get_neighbors`~~ | **RESOLVED Phase 5 Prompt 1** — int validation guard added to both neo4j + in-memory backends. |
+| ~~R2~~ | ~~`neo4j_graph.py`~~ | ~~`_schema_ready` race condition~~ | **RESOLVED Phase 5 Prompt 1** — `asyncio.Lock` + double-checked locking pattern. |
 
 ### HIGH
 
 | # | File | Issue | Fix |
 |---|------|-------|-----|
 | R3 | `graph_store.py:99-102` | **N+1 sequential async calls in `GraphStore.search`** — Each seed node triggers a separate `await get_neighbors()`. With `top_k * 3` seeds (default 30), that's 30 sequential Neo4j round-trips. | Use `asyncio.gather()` to parallelize neighbor fetches. |
-| R4 | `types.py:212-222` | **`DistilledMemory.to_memory_unit()` drops `container`** — Constructs `MemoryUnit` with empty container. Distilled memories upserted by `ReasoningBank.distill()` are never returned by scoped `search()` or `list_by_type()`. | Add `container` field to `DistilledMemory` and thread it from `ReasoningBank`. |
+| ~~R4~~ | ~~`types.py`~~ | ~~`DistilledMemory.to_memory_unit()` drops `container`~~ | **RESOLVED Phase 5 Prompt 1** — `container` field added to `DistilledMemory`, threaded through `distill()` and `process_trajectory()`. |
 | R5 | `tiers/priming.py:23-27` | **`update_state` key-errors on corrupt/partial stored state** — Direct dict key access (`current["confidence"]`) crashes if stored state is missing a key from an older schema version. | Use `.get("confidence", 0.5)` with defaults, or validate schema on `get_current_state()`. |
 | R6 | `tiers/procedural.py:38` | **`get_matching_habits` silently drops malformed LLM responses** — If LLM returns unexpected shape or non-int `index`, habits silently skipped with no log. | Add warning log for unexpected response shape; coerce `index` with `int()`. |
 
@@ -210,7 +210,7 @@ Holistic test review (post Phase 4). T1–T13 from PR#1 are all resolved.
 
 | Category | Count | Status |
 |----------|-------|--------|
-| **Open — Must Fix** | 3 CRITICAL + 4 HIGH + 6 MEDIUM | C2, R1–R12 (holistic review) |
+| **Open — Must Fix** | 1 CRITICAL + 3 HIGH + 6 MEDIUM | C2, R3, R5–R12 (R1, R2, R4 resolved) |
 | Graph Store (deferred) | 5 | G1–G5 |
 | Extraction Modes (deferred) | 1 | E1 |
 | Dashboard Summary (deferred) | 1 | H2 |
@@ -218,14 +218,14 @@ Holistic test review (post Phase 4). T1–T13 from PR#1 are all resolved.
 | Future Improvements | 7 | F1–F7 |
 | Standalone Deferred | 1 | S11 |
 | Test Quality (new) | 3 HIGH + 6 MEDIUM | RT1–RT9 |
-| **Total Open** | **13** | 3 CRITICAL, 4 HIGH, 6 MEDIUM |
+| **Total Open** | **10** | 1 CRITICAL, 3 HIGH, 6 MEDIUM |
 | **Total Deferred** | **12** | Phase 5+ |
 | **Total Test Issues** | **9** | RT1–RT9 |
 
-**Phase 0–4 scorecard:** 65 of 77 original items resolved. 12 deferred to Phase 5+. Holistic review surfaced 13 new code issues (R1–R12 + C2) and 9 test quality issues (RT1–RT9).
+**Phase 0–4 scorecard:** 65 of 77 original items resolved. 12 deferred to Phase 5+. Holistic review surfaced 13 new code issues (R1–R12 + C2) and 9 test quality issues (RT1–RT9). **Phase 5 Prompt 1: R1, R2, R4 resolved (3 of 13).**
 
 ### Priority Order
-1. **Immediate** (security/data loss): R1 (cypher injection), R2 (schema race), R4 (distilled memory invisible)
+1. ~~**Immediate** (security/data loss): R1 (cypher injection), R2 (schema race), R4 (distilled memory invisible)~~ **ALL RESOLVED — Phase 5 Prompt 1**
 2. **Before production**: C2 (tenant bleed), R5 (priming key-errors), R11 (api key in plain str)
 3. **Performance**: R3 (N+1 graph search), R8 (O(N^2) consolidation)
 4. **Hardening**: R6, R9, R10, R12 (logging, cleanup, bounds)

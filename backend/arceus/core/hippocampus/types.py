@@ -205,6 +205,7 @@ class DistilledMemory:
     agent_id: str = ""
     trajectory_id: str = ""
     strategy: str = ""
+    container: str = ""
     embedding: list[float] = field(default_factory=list)
     quality: float = 0.0
     learnings: tuple[str, ...] = ()
@@ -216,6 +217,7 @@ class DistilledMemory:
             embedding=self.embedding,
             memory_type=MemoryType.DYNAMIC,
             confidence=self.quality,
+            container=self.container,
             source_type="distillation",
             source_id=self.trajectory_id,
             provenance=f"Distilled from trajectory {self.trajectory_id}",

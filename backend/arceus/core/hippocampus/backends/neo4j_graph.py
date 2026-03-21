@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict, fields
 from typing import Any
@@ -29,6 +30,7 @@ class Neo4jGraphStoreBackend:
         self._database = database or settings.neo4j_database
         self._driver = driver
         self._schema_ready = False
+        self._schema_lock = asyncio.Lock()
 
     async def close(self) -> None:
         if self._driver is not None:
@@ -136,8 +138,10 @@ class Neo4jGraphStoreBackend:
         max_hops: int,
         relation_types: list[str] | None = None,
     ) -> list[GraphEntity]:
-        if max_hops <= 0:
-            return []
+        if not isinstance(max_hops, int) or max_hops < 1 or max_hops > 10:
+            raise ValueError(
+                f"max_hops must be an integer between 1 and 10, got {max_hops!r}"
+            )
         records = await self._run(
             f"""
             MATCH path =
@@ -196,14 +200,17 @@ class Neo4jGraphStoreBackend:
     async def _ensure_schema(self, session: Any) -> None:
         if self._schema_ready:
             return
-        await session.run(
-            """
-            CREATE CONSTRAINT hippocampus_graph_entity_id IF NOT EXISTS
-            FOR (n:GraphEntity)
-            REQUIRE n.id IS UNIQUE
-            """
-        )
-        self._schema_ready = True
+        async with self._schema_lock:
+            if self._schema_ready:
+                return
+            await session.run(
+                """
+                CREATE CONSTRAINT hippocampus_graph_entity_id IF NOT EXISTS
+                FOR (n:GraphEntity)
+                REQUIRE n.id IS UNIQUE
+                """
+            )
+            self._schema_ready = True
 
 
 def has_neo4j_credentials(

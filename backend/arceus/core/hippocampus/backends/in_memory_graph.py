@@ -60,7 +60,11 @@ class InMemoryGraphStoreBackend:
         max_hops: int,
         relation_types: list[str] | None = None,
     ) -> list[GraphEntity]:
-        if max_hops <= 0 or node_id not in self._nodes:
+        if not isinstance(max_hops, int) or max_hops < 1 or max_hops > 10:
+            raise ValueError(
+                f"max_hops must be an integer between 1 and 10, got {max_hops!r}"
+            )
+        if node_id not in self._nodes:
             return []
 
         allowed = {item.lower() for item in relation_types} if relation_types else None

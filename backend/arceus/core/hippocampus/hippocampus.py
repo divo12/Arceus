@@ -379,7 +379,7 @@ class Hippocampus:
             mode=mode,
         )
 
-    async def process_trajectory(self, trajectory: Trajectory) -> dict:
+    async def process_trajectory(self, trajectory: Trajectory, container: str = "") -> dict:
         """Orchestrate Flow A steps 6-11: judge → distill → extract_pattern → check_habit → update_state."""
         verdict: TrajectoryVerdict | None = None
         distilled: DistilledMemory | None = None
@@ -388,7 +388,11 @@ class Hippocampus:
 
         if self.reasoning_bank is not None:
             verdict = await self.reasoning_bank.judge(trajectory)
-            distilled = await self.reasoning_bank.distill(trajectory, verdict)
+            distilled = await self.reasoning_bank.distill(
+                trajectory,
+                verdict,
+                container=container,
+            )
 
         if self.pattern_learner is not None:
             pattern = await self.pattern_learner.extract_pattern(trajectory)

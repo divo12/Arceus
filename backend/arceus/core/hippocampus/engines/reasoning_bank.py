@@ -139,6 +139,7 @@ class ReasoningBank:
         self,
         trajectory: Trajectory,
         verdict: TrajectoryVerdict,
+        container: str = "",
     ) -> DistilledMemory | None:
         if not verdict.is_successful:
             return None
@@ -151,6 +152,7 @@ class ReasoningBank:
             agent_id=trajectory.agent_id,
             trajectory_id=trajectory.id,
             strategy=strategy,
+            container=container,
             embedding=embedding,
             quality=verdict.quality,
             learnings=(*verdict.strengths, *verdict.suggestions),
