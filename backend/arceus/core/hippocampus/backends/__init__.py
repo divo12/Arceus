@@ -7,6 +7,9 @@ from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternSt
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.neo4j_graph import Neo4jGraphStoreBackend
 from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
+from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
+from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
+from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
@@ -23,6 +26,9 @@ __all__ = [
     "MockEmbeddingEngine",
     "Neo4jGraphStoreBackend",
     "NoopLLMEngine",
+    "PGVectorStore",
+    "PostgreSQLRelationalStore",
+    "RedisCacheStore",
     "SentenceTransformerEmbeddingEngine",
     "SQLitePatternStore",
     "SQLiteRelationalStore",

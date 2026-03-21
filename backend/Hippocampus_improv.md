@@ -32,13 +32,18 @@ Extraction works for current AGENT-centric flows. Expand when meetings and refle
 
 | Backend | Current (test scaffolding) | Production Target |
 |---------|---------------------------|-------------------|
-| Relational | `SQLiteRelationalStore` | PostgreSQL |
-| Vector | `InMemoryVectorStore` | Qdrant / pgvector / Pinecone |
-| Cache | `DictCacheStore` | Redis / Valkey |
-| Embedding | `MockEmbeddingEngine` | Azure OpenAI / Cohere |
+| Relational | `SQLiteRelationalStore` | `PostgreSQLRelationalStore` |
+| Vector | `InMemoryVectorStore` | `PGVectorStore` |
+| Cache | `DictCacheStore` | `RedisCacheStore` |
+| Embedding | `MockEmbeddingEngine` | `SentenceTransformerEmbeddingEngine` |
 | Graph | `InMemoryGraphStoreBackend` | `Neo4jGraphStoreBackend` (already exists) |
 
 Protocol-based architecture is correct. Each backend swappable independently. Factory routes based on config.
+
+Deferred alternatives remain possible later:
+- Vector: Qdrant / Pinecone
+- Cache: Valkey
+- Embedding: Azure OpenAI / Cohere
 
 ---
 

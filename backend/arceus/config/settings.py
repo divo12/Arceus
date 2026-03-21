@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
+    # Hippocampus production backends
+    hippocampus_postgres_url: str = ""
+    hippocampus_postgres_schema: str = "hippocampus"
+    hippocampus_redis_url: str = ""
+    hippocampus_vector_index_type: str = "hnsw"
+    hippocampus_vector_top_k_fetch_multiplier: int = 3
+
     # Celery
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"

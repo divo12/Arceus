@@ -9,14 +9,20 @@ from arceus.config.settings import settings
 from arceus.core.hippocampus.backends.azure_openai_llm import AzureOpenAILLMEngine
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
 from arceus.core.hippocampus.backends.factory import (
+    create_cache,
     create_embedding_engine,
     create_graph_store,
     create_llm_engine,
+    create_relational,
+    create_vector_store,
 )
 from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.neo4j_graph import Neo4jGraphStoreBackend
 from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
+from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
+from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
+from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
@@ -413,10 +419,18 @@ async def test_sqlite_relational_store_reuses_single_connection_for_in_memory_da
 
 def test_embedding_factory_distinguishes_simple_and_sentence_transformer_backends() -> None:
     simple = create_embedding_engine("simple", dimensions=32)
-    sentence_model = create_embedding_engine("all-MiniLM-L6-v2", dimensions=384)
+    sentence_model = create_embedding_engine(
+        "all-MiniLM-L6-v2",
+        dimensions=384,
+        device="cuda",
+        strict=True,
+    )
 
     assert isinstance(simple, MockEmbeddingEngine)
     assert isinstance(sentence_model, SentenceTransformerEmbeddingEngine)
+    assert sentence_model._device == "cuda"
+    assert sentence_model._dimensions == 384
+    assert sentence_model._strict is True
 
 
 @pytest.mark.asyncio
@@ -452,8 +466,8 @@ async def test_sentence_transformer_embedding_engine_logs_warning_and_falls_back
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class BrokenSentenceTransformer:
-        def __init__(self, model_name: str) -> None:
-            raise RuntimeError(f"cannot load {model_name}")
+        def __init__(self, model_name: str, device: str = "cpu") -> None:
+            raise RuntimeError(f"cannot load {model_name} on {device}")
 
     engine = SentenceTransformerEmbeddingEngine(model_name="all-MiniLM-L6-v2")
     fallback = MockEmbeddingEngine(dimensions=384)
@@ -502,6 +516,35 @@ def test_graph_store_factory_uses_repo_dotenv_database_when_config_is_empty(
 
     assert isinstance(backend, Neo4jGraphStoreBackend)
     assert backend._database == "repo-db"
+
+
+def test_factory_relational_postgresql_backend() -> None:
+    """Factory should produce PostgreSQLRelationalStore for postgresql selector."""
+    cfg = HippocampusConfig(
+        relational_backend="postgresql",
+        postgres_url="postgresql+asyncpg://user:pass@localhost:5432/arceus",
+    )
+    pg = create_relational("postgresql", cfg)
+    assert isinstance(pg, PostgreSQLRelationalStore)
+
+
+def test_factory_vector_pgvector_backend() -> None:
+    """Factory should produce PGVectorStore for pgvector selector."""
+    cfg = HippocampusConfig(
+        vector_store_backend="pgvector",
+        postgres_url="postgresql+asyncpg://user:pass@localhost:5432/arceus",
+        embedding_dimensions=768,
+    )
+    vs = create_vector_store("pgvector", cfg)
+    assert isinstance(vs, PGVectorStore)
+    assert vs._dimensions == 768
+
+
+def test_factory_cache_redis_backend() -> None:
+    """Factory should produce RedisCacheStore for redis selector."""
+    cfg = HippocampusConfig(cache_backend="redis")
+    cach = create_cache("redis", cfg)
+    assert isinstance(cach, RedisCacheStore)
 
 
 def test_graph_store_factory_requires_credentials_for_neo4j(

@@ -41,6 +41,7 @@ from arceus.core.hippocampus.backends.protocols import (
     LLMEngine,
     RelationalStore,
     VectorStore,
+    WorkingMemoryBackend,
 )
 from arceus.core.hippocampus.backends.sqlite_pattern import SQLitePatternStore
 from arceus.core.hippocampus.config import HippocampusConfig
@@ -87,6 +88,7 @@ class HippocampusBackends:
     embedding: EmbeddingEngine
     llm: LLMEngine
     llm_light: LLMEngine
+    cache: WorkingMemoryBackend
     vector_store: VectorStore
     relational_store: RelationalStore
 
@@ -134,14 +136,30 @@ class Hippocampus:
     @classmethod
     async def create(cls, agent_id: str, config: HippocampusConfig) -> Hippocampus:
         vector_store = create_vector_store(config.vector_store_backend, config)
+        initialize_vector = getattr(vector_store, "initialize", None)
+        if callable(initialize_vector):
+            await initialize_vector()
         graph_backend = create_graph_store(config.graph_store_backend, config)
         cache_backend = create_cache(config.cache_backend, config)
         relational_store = create_relational(config.relational_backend, config)
         await relational_store.initialize()
+        strict_embeddings = config.embedding_strict or (
+            config.embedding_model != "simple"
+            and (
+                config.vector_store_backend == "pgvector"
+                or config.relational_backend == "postgresql"
+                or config.cache_backend == "redis"
+            )
+        )
         embedding_engine = create_embedding_engine(
             config.embedding_model,
             config.embedding_dimensions,
+            device=config.embedding_device,
+            strict=strict_embeddings,
         )
+        warmup_embedding = getattr(embedding_engine, "warmup", None)
+        if callable(warmup_embedding) and (config.embedding_warmup or strict_embeddings):
+            await warmup_embedding()
         llm_engine = create_llm_engine(config.extraction_model, config)
         llm_light = create_llm_engine(config.lightweight_model, config)
 
@@ -149,6 +167,7 @@ class Hippocampus:
             embedding=embedding_engine,
             llm=llm_engine,
             llm_light=llm_light,
+            cache=cache_backend,
             vector_store=vector_store,
             relational_store=relational_store,
         )
@@ -162,7 +181,7 @@ class Hippocampus:
             embedding_engine=embedding_engine,
             llm_light=llm_light,
         )
-        if config.relational_backend == "sqlite":
+        if config.relational_backend in {"sqlite", "postgresql"}:
             pattern_store = SQLitePatternStore(relational_store, agent_id)
         else:
             pattern_store = InMemoryPatternStore(agent_id)
@@ -237,6 +256,12 @@ class Hippocampus:
     async def close(self) -> None:
         await self.graph_store.close()
         await self._relational_store.close()
+        close_vector = getattr(self._vector_store, "close", None)
+        if callable(close_vector):
+            await close_vector()
+        close_cache = getattr(self._backends.cache, "close", None)
+        if callable(close_cache):
+            await close_cache()
 
     async def soft_delete(self, memory_id: str, reason: str = "") -> None:
         await self._vector_store.soft_delete(memory_id, reason=reason)

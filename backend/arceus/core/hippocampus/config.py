@@ -9,6 +9,11 @@ class HippocampusConfig:
     cache_backend: str = "dict"
     relational_backend: str = "sqlite"
     sqlite_path: str = "hippocampus.db"
+    postgres_url: str = ""
+    postgres_schema: str = "hippocampus"
+    redis_url: str = ""
+    vector_index_type: str = "hnsw"
+    vector_top_k_fetch_multiplier: int = 3
     neo4j_uri: str = ""
     neo4j_username: str = ""
     neo4j_password: str = ""
@@ -48,6 +53,8 @@ class HippocampusConfig:
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimensions: int = 384  # must match embedding_model output size
     embedding_device: str = "cpu"
+    embedding_strict: bool = False
+    embedding_warmup: bool = False
 
     # Azure OpenAI
     azure_openai_endpoint: str = ""

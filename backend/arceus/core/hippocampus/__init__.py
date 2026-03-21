@@ -1,6 +1,9 @@
 """Hippocampus kernel exports."""
 
 from arceus.core.hippocampus.backends.in_memory_pattern import InMemoryPatternStore
+from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
+from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
+from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 from arceus.core.hippocampus.backends.sqlite_pattern import SQLitePatternStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
@@ -72,10 +75,13 @@ __all__ = [
     "PatternLearnerConfig",
     "Pattern",
     "PatternStatus",
+    "PGVectorStore",
     "PrimingMemory",
+    "PostgreSQLRelationalStore",
     "ProceduralMemory",
     "PromotionEngine",
     "RelationType",
+    "RedisCacheStore",
     "RetrievalResult",
     "ReasoningBank",
     "ReasoningBankConfig",

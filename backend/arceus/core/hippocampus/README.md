@@ -172,17 +172,35 @@ Periodic cleanup:
 
 All storage is accessed through Python `Protocol` classes (`backends/protocols.py`). This means every backend can be swapped independently — test backends in development, production backends in deployment.
 
-| Protocol | Test Backend | Production Target |
+| Protocol | Test Backend | Chosen Production Stack |
 |----------|-------------|-------------------|
-| `VectorStore` | `InMemoryVectorStore` | Qdrant / pgvector / Pinecone |
+| `VectorStore` | `InMemoryVectorStore` | pgvector (PostgreSQL) |
 | `RelationalStore` | `SQLiteRelationalStore` | PostgreSQL |
 | `GraphStoreBackend` | `InMemoryGraphStoreBackend` | `Neo4jGraphStoreBackend` |
-| `WorkingMemoryBackend` | `DictCacheStore` | Redis / Valkey |
+| `WorkingMemoryBackend` | `DictCacheStore` | Redis |
 | `EmbeddingEngine` | `MockEmbeddingEngine` | `SentenceTransformerEmbeddingEngine` |
 | `LLMEngine` | `NoopLLMEngine` | `AzureOpenAILLMEngine` |
-| `PatternStore` | `InMemoryPatternStore` | `SQLitePatternStore` |
+| `PatternStore` | `InMemoryPatternStore` | Relational-backed pattern adapter |
 
 Backend selection is handled by factory functions in `backends/factory.py`, driven by `HippocampusConfig`.
+
+### Chosen Production Stack
+
+Sprint 3/4 formalizes the following production targets:
+
+- `RelationalStore`: PostgreSQL running in a dedicated `hippocampus` schema.
+- `VectorStore`: Same PostgreSQL instance with `pgvector` for cosine-aware search, driven by `vector_store_backend="pgvector"`.
+- `WorkingMemoryBackend`: Redis (prefix- and TTL-safe replacements for the dict cache).
+- `EmbeddingEngine`: `SentenceTransformerEmbeddingEngine` with explicit model, device, strict-mode, and optional startup warmup.
+- `GraphStoreBackend`: Neo4j (existing production backend remains unchanged, now treated as the default production graph profile).
+
+Local validation is provided via `docker-compose -f docker-compose.hippocampus.yml up -d`, which launches PostgreSQL (pgvector), Redis, and Neo4j. Consult the production config block in [config.py](/Users/divyansh/Arceus/backend/arceus/core/hippocampus/config.py) for the values you must set before starting Hippocampus in this profile.
+
+Fast tests remain on the lightweight scaffolding stack. Production-stack verification is opt-in:
+
+- Unit/default: `./.venv/bin/pytest tests/ -v`
+- Integration-only: `HIPPOCAMPUS_RUN_INTEGRATION=1 ./.venv/bin/pytest tests/hippocampus/integration -v`
+- Full production smoke: also set `HIPPOCAMPUS_TEST_ENABLE_SENTENCE_TRANSFORMERS=1` and `HIPPOCAMPUS_TEST_RUN_E2E=1`
 
 ---
 
@@ -311,10 +329,10 @@ All tuning knobs live in `HippocampusConfig` (`config.py`):
 ```python
 config = HippocampusConfig(
     # Backends
-    vector_store_backend="in_memory",     # or future: "qdrant", "pgvector"
+    vector_store_backend="in_memory",     # or "pgvector" in production
     graph_store_backend="neo4j",          # or "in_memory" for tests
-    cache_backend="dict",                 # or future: "redis"
-    relational_backend="sqlite",          # or future: "postgresql"
+    cache_backend="dict",                 # or "redis" in production
+    relational_backend="sqlite",          # or "postgresql" in production
 
     # Memory tuning
     dynamic_memory_half_life_days=30.0,   # how fast dynamic memories decay
@@ -332,8 +350,51 @@ config = HippocampusConfig(
     # Embeddings
     embedding_model="all-MiniLM-L6-v2",  # local sentence-transformers
     embedding_dimensions=384,
+    embedding_device="cpu",              # "cuda" in GPU environments
+    embedding_strict=False,              # fail fast if model load must succeed
+    embedding_warmup=False,              # preload model on startup when desired
 )
 ```
+
+### Production Profile
+
+```python
+config = HippocampusConfig(
+    relational_backend="postgresql",
+    postgres_url="postgresql://user:pass@localhost:5432/arceus",
+    postgres_schema="hippocampus",
+    vector_store_backend="pgvector",
+    cache_backend="redis",
+    redis_url="redis://localhost:6379/0",
+    graph_store_backend="neo4j",
+    neo4j_uri="bolt://localhost:7687",
+    neo4j_username="neo4j",
+    neo4j_password="password",
+    embedding_model="all-MiniLM-L6-v2",
+    embedding_dimensions=384,
+    embedding_device="cpu",
+    embedding_strict=True,
+    embedding_warmup=True,
+)
+```
+
+Use `graph_store_backend="in_memory"` for local/dev fallback when Neo4j is unavailable.
+
+### Cutover And Rollback
+
+Cutover checklist:
+
+1. Start PostgreSQL with `pgvector`, Redis, and Neo4j.
+2. Point `HippocampusConfig` at the production selectors and URLs.
+3. Enable `embedding_warmup=True` and `embedding_strict=True` if you want model-load failures to stop startup immediately.
+4. Boot Hippocampus once to run schema/bootstrap initialization.
+5. Run the integration suite and then the production-profile smoke test.
+
+Rollback is config-driven:
+
+1. Switch selectors back to `sqlite`, `in_memory`, `dict`, and `in_memory` as needed.
+2. Redeploy the previous config or image.
+3. Keep PostgreSQL/Redis/Neo4j data intact for investigation; no code revert is required.
 
 ---
 

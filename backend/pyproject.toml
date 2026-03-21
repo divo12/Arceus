@@ -52,6 +52,14 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: opt-in production/infrastructure tests",
+    "postgres: PostgreSQL relational smoke coverage",
+    "pgvector: pgvector-backed vector store smoke coverage",
+    "redis: Redis working-memory smoke coverage",
+    "neo4j: Neo4j graph-profile smoke coverage",
+    "production_stack: end-to-end production-profile Hippocampus smoke coverage",
+]
 
 [dependency-groups]
 dev = [

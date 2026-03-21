@@ -12,12 +12,39 @@ logger = logging.getLogger(__name__)
 class SentenceTransformerEmbeddingEngine:
     """Sentence-transformers embedding backend for the Hippocampus MVP spec."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        *,
+        device: str = "cpu",
+        dimensions: int | None = None,
+        strict: bool = False,
+    ) -> None:
         self._model_name = model_name
+        self._device = device
+        self._dimensions = dimensions
+        self._strict = strict
         self._model: Any | None = None
         self._load_failed = False
-        self._fallback = MockEmbeddingEngine(dimensions=384)
+        self._fallback = MockEmbeddingEngine(dimensions=dimensions or 384)
         self._lock = asyncio.Lock()
+
+    async def warmup(self) -> None:
+        model = await self._get_model()
+        if model is None:
+            return
+        vector = await asyncio.to_thread(
+            model.encode,
+            ["warmup"],
+            normalize_embeddings=True,
+        )
+        if hasattr(vector, "tolist"):
+            vector = vector.tolist()
+        if vector:
+            sample = vector[0]
+            self._ensure_dimensions(
+                sample.tolist() if hasattr(sample, "tolist") else list(sample)
+            )
 
     async def embed(self, text: str) -> list[float]:
         model = await self._get_model()
@@ -28,7 +55,9 @@ class SentenceTransformerEmbeddingEngine:
             text,
             normalize_embeddings=True,
         )
-        return vector.tolist() if hasattr(vector, "tolist") else list(vector)
+        values = vector.tolist() if hasattr(vector, "tolist") else list(vector)
+        self._ensure_dimensions(values)
+        return values
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         model = await self._get_model()
@@ -44,9 +73,11 @@ class SentenceTransformerEmbeddingEngine:
         normalized_vectors: list[list[float]] = []
         for vector in vectors:
             if hasattr(vector, "tolist"):
-                normalized_vectors.append(list(vector.tolist()))
+                values = list(vector.tolist())
             else:
-                normalized_vectors.append(list(vector))
+                values = list(vector)
+            self._ensure_dimensions(values)
+            normalized_vectors.append(values)
         return normalized_vectors
 
     async def _get_model(self) -> Any:
@@ -66,14 +97,30 @@ class SentenceTransformerEmbeddingEngine:
                 self._model = await asyncio.to_thread(
                     SentenceTransformer,
                     self._model_name,
+                    device=self._device,
                 )
             except Exception as exc:
+                if self._strict:
+                    raise RuntimeError(
+                        "Sentence-transformers model "
+                        f"{self._model_name} could not be loaded on device {self._device}"
+                    ) from exc
                 logger.warning(
                     "Falling back to simple embeddings because sentence-transformers "
-                    "model %s could not be loaded: %s",
+                    "model %s on device %s could not be loaded: %s",
                     self._model_name,
+                    self._device,
                     exc,
                 )
                 self._model = None
                 self._load_failed = True
         return self._model
+
+    def _ensure_dimensions(self, values: list[float]) -> None:
+        if self._dimensions is None:
+            return
+        if len(values) != self._dimensions:
+            raise ValueError(
+                "Sentence-transformers embedding dimension mismatch: "
+                f"expected {self._dimensions}, got {len(values)}"
+            )

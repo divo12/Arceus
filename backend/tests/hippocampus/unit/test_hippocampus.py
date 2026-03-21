@@ -1,6 +1,12 @@
 import pytest
 
+from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
+from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
+from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
+from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
+from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalStore
 from arceus.core.hippocampus.config import HippocampusConfig
+import arceus.core.hippocampus.hippocampus as hippocampus_module
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import GraphEntity, MemoryType
 
@@ -145,5 +151,97 @@ async def test_hippocampus_get_summary_counts_static_and_dynamic(tmp_path) -> No
         assert summary.agent_id == "agent-1"
         assert summary.static_fact_count == 1
         assert summary.dynamic_fact_count == 1
+    finally:
+        await hippocampus.close()
+
+
+@pytest.mark.asyncio
+async def test_hippocampus_create_enforces_strict_embedding_on_production_profile(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeEmbeddingEngine:
+        def __init__(self) -> None:
+            self.warmed = False
+
+        async def warmup(self) -> None:
+            self.warmed = True
+
+        async def embed(self, text: str) -> list[float]:
+            del text
+            return [0.0]
+
+        async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            del texts
+            return [[0.0]]
+
+    fake_embedding = FakeEmbeddingEngine()
+    created: dict[str, object] = {}
+    relational_store = SQLiteRelationalStore(str(tmp_path / "hippo.db"))
+    vector_store = InMemoryVectorStore()
+    cache_backend = DictCacheStore()
+    graph_backend = InMemoryGraphStoreBackend()
+
+    def fake_create_embedding_engine(
+        backend: str,
+        dimensions: int,
+        *,
+        device: str = "cpu",
+        strict: bool = False,
+    ) -> FakeEmbeddingEngine:
+        created["backend"] = backend
+        created["dimensions"] = dimensions
+        created["device"] = device
+        created["strict"] = strict
+        return fake_embedding
+
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_vector_store",
+        lambda backend, config: vector_store,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_graph_store",
+        lambda backend, config: graph_backend,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_cache",
+        lambda backend, config: cache_backend,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_relational",
+        lambda backend, config: relational_store,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_embedding_engine",
+        fake_create_embedding_engine,
+    )
+    monkeypatch.setattr(
+        hippocampus_module,
+        "create_llm_engine",
+        lambda model_name, config: NoopLLMEngine(model_name=model_name),
+    )
+
+    hippocampus = await Hippocampus.create(
+        agent_id="agent-1",
+        config=HippocampusConfig(
+            relational_backend="postgresql",
+            vector_store_backend="pgvector",
+            cache_backend="redis",
+            graph_store_backend="in_memory",
+            embedding_model="all-MiniLM-L6-v2",
+            embedding_dimensions=1,
+            extraction_model="noop",
+            lightweight_model="noop",
+        ),
+    )
+
+    try:
+        assert created["strict"] is True
+        assert fake_embedding.warmed is True
     finally:
         await hippocampus.close()

@@ -10,7 +10,17 @@ from arceus.core.hippocampus.backends.neo4j_graph import (
     has_neo4j_credentials,
 )
 from arceus.core.hippocampus.backends.noop_llm import NoopLLMEngine
-from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, GraphStoreBackend, LLMEngine
+from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
+from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
+from arceus.core.hippocampus.backends.protocols import (
+    EmbeddingEngine,
+    GraphStoreBackend,
+    LLMEngine,
+    RelationalStore,
+    VectorStore,
+    WorkingMemoryBackend,
+)
+from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 from arceus.core.hippocampus.backends.sentence_transformers_embedding import (
     SentenceTransformerEmbeddingEngine,
 )
@@ -19,21 +29,36 @@ from arceus.core.hippocampus.backends.sqlite_relational import SQLiteRelationalS
 from arceus.core.hippocampus.config import HippocampusConfig
 
 
-def create_vector_store(backend: str, config: HippocampusConfig) -> InMemoryVectorStore:
+def create_vector_store(backend: str, config: HippocampusConfig) -> VectorStore:
     if backend == "in_memory":
         return InMemoryVectorStore()
+    if backend == "pgvector":
+        return PGVectorStore(
+            url=config.postgres_url,
+            schema=config.postgres_schema,
+            vector_index_type=config.vector_index_type,
+            top_k_fetch_multiplier=config.vector_top_k_fetch_multiplier,
+            dimensions=config.embedding_dimensions,
+        )
     raise ValueError(f"Unsupported vector store backend: {backend}")
 
 
-def create_cache(backend: str, config: HippocampusConfig) -> DictCacheStore:
+def create_cache(backend: str, config: HippocampusConfig) -> WorkingMemoryBackend:
     if backend == "dict":
         return DictCacheStore()
+    if backend == "redis":
+        return RedisCacheStore(redis_url=config.redis_url)
     raise ValueError(f"Unsupported cache backend: {backend}")
 
 
-def create_relational(backend: str, config: HippocampusConfig) -> SQLiteRelationalStore:
+def create_relational(backend: str, config: HippocampusConfig) -> RelationalStore:
     if backend == "sqlite":
         return SQLiteRelationalStore(config.sqlite_path)
+    if backend == "postgresql":
+        return PostgreSQLRelationalStore(
+            url=config.postgres_url,
+            schema=config.postgres_schema,
+        )
     raise ValueError(f"Unsupported relational backend: {backend}")
 
 
@@ -62,12 +87,20 @@ def create_graph_store(backend: str, config: HippocampusConfig) -> GraphStoreBac
 def create_embedding_engine(
     backend: str,
     dimensions: int,
+    *,
+    device: str = "cpu",
+    strict: bool = False,
 ) -> EmbeddingEngine:
+    if not backend:
+        raise ValueError("Embedding backend must not be empty")
     if backend == "simple":
         return MockEmbeddingEngine(dimensions=dimensions)
-    if backend == "all-MiniLM-L6-v2":
-        return SentenceTransformerEmbeddingEngine(model_name=backend)
-    raise ValueError(f"Unsupported embedding backend: {backend}")
+    return SentenceTransformerEmbeddingEngine(
+        model_name=backend,
+        device=device,
+        dimensions=dimensions,
+        strict=strict,
+    )
 
 
 def create_llm_engine(model_name: str, config: HippocampusConfig) -> LLMEngine:

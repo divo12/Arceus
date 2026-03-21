@@ -64,6 +64,11 @@ def test_phase0_config_contains_spec_fields_with_expected_defaults() -> None:
     assert config.graph_store_backend == "neo4j"
     assert config.cache_backend == "dict"
     assert config.relational_backend == "sqlite"
+    assert config.postgres_url == ""
+    assert config.postgres_schema == "hippocampus"
+    assert config.redis_url == ""
+    assert config.vector_index_type == "hnsw"
+    assert config.vector_top_k_fetch_multiplier == 3
     assert config.gc_interval_hours == 6.0
     assert config.distillation_threshold == 0.6
     assert config.pattern_learning_rate == 0.1
@@ -74,12 +79,32 @@ def test_phase0_config_contains_spec_fields_with_expected_defaults() -> None:
     assert config.promotion_age_days == 14
     assert config.extraction_frequency == "per_task_and_meeting"
     assert config.embedding_device == "cpu"
+    assert config.embedding_strict is False
+    assert config.embedding_warmup is False
     assert config.azure_openai_endpoint == ""
     assert config.azure_openai_api_version == "2024-12-01-preview"
     assert config.azure_openai_deployment_reasoning == "gpt-4.1"
     assert config.azure_openai_deployment_lightweight == "gpt-4.1-mini"
     assert config.reasoning_model == "gpt-4.1"
     assert config.lightweight_model == "gpt-4.1-mini"
+
+
+def test_production_backend_config_can_be_set() -> None:
+    config = HippocampusConfig(
+        relational_backend="postgresql",
+        vector_store_backend="pgvector",
+        cache_backend="redis",
+        postgres_url="postgresql+asyncpg://user:pass@localhost:5432/arceus",
+        postgres_schema="hippocampus",
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert config.relational_backend == "postgresql"
+    assert config.vector_store_backend == "pgvector"
+    assert config.cache_backend == "redis"
+    assert config.postgres_url.startswith("postgresql+asyncpg://")
+    assert config.postgres_schema == "hippocampus"
+    assert config.redis_url == "redis://localhost:6379/0"
 
 
 def test_phase0_dataclasses_exist_with_expected_fields() -> None:
