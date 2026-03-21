@@ -207,6 +207,7 @@ class Hippocampus:
             embedding_engine=embedding_engine,
             half_life_days=config.dynamic_memory_half_life_days,
             decay_threshold=config.decay_threshold,
+            graph_store=graph_store,
         )
 
         instance = cls(

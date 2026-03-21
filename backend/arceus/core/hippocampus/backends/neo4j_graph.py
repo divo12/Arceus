@@ -6,7 +6,7 @@ from dataclasses import asdict, fields
 from typing import Any
 
 from arceus.config.settings import settings
-from arceus.core.hippocampus.types import GraphEntity, GraphRelationship
+from arceus.core.hippocampus.types import GraphEntity, GraphRelationship, RelationType
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 _VALID_NODE_FIELDS = {field.name for field in fields(GraphEntity)}
@@ -89,7 +89,7 @@ class Neo4jGraphStoreBackend:
     async def create_edge(self, rel: GraphRelationship) -> str:
         rel_type = rel.relation_type.name
         payload = _relationship_payload(rel)
-        await self._run(
+        records = await self._run(
             f"""
             MATCH (source:GraphEntity {{id: $source_id}})
             MATCH (target:GraphEntity {{id: $target_id}})
@@ -102,6 +102,11 @@ class Neo4jGraphStoreBackend:
             payload=payload,
             ensure_schema=True,
         )
+        if not records:
+            raise KeyError(
+                "Cannot create edge: "
+                f"source={rel.source_id} or target={rel.target_id} not found in graph"
+            )
         return rel.id
 
     async def vector_search(
@@ -159,6 +164,22 @@ class Neo4jGraphStoreBackend:
             if entity is not None and entity.id != node_id:
                 neighbors.append(entity)
         return neighbors
+
+    async def get_edges(self, node_id: str) -> list[GraphRelationship]:
+        records = await self._run(
+            """
+            MATCH (source:GraphEntity)-[r]-(target:GraphEntity)
+            WHERE source.id = $node_id OR target.id = $node_id
+            RETURN r
+            """,
+            node_id=node_id,
+        )
+        edges: list[GraphRelationship] = []
+        for record in records:
+            relationship = _record_to_relationship(record)
+            if relationship is not None:
+                edges.append(relationship)
+        return edges
 
     async def cypher_query(self, query: str, params: dict) -> list[GraphEntity]:
         records = await self._run(query, **params)
@@ -296,6 +317,56 @@ def _coerce_graph_entity(value: Any) -> GraphEntity | None:
         metadata=_deserialize_metadata(payload.get("metadata")),
         is_latest=bool(payload.get("is_latest", True)),
         created_at=payload.get("created_at", GraphEntity().created_at),
+    )
+
+
+def _record_to_relationship(record: Any) -> GraphRelationship | None:
+    values: list[Any] = []
+    getter = getattr(record, "get", None)
+    if callable(getter):
+        relationship_value = getter("r", None)
+        if relationship_value is not None:
+            values.append(relationship_value)
+
+    record_values = getattr(record, "values", None)
+    if callable(record_values):
+        values.extend(list(record_values()))
+    elif isinstance(record, dict):
+        values.extend(record.values())
+    else:
+        values.append(record)
+
+    seen_ids: set[int] = set()
+    for value in values:
+        identifier = id(value)
+        if identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        relationship = _coerce_graph_relationship(value)
+        if relationship is not None:
+            return relationship
+    return None
+
+
+def _coerce_graph_relationship(value: Any) -> GraphRelationship | None:
+    if value is None:
+        return None
+    try:
+        payload = dict(value)
+    except (TypeError, ValueError):
+        return None
+    if "id" not in payload or "source_id" not in payload or "target_id" not in payload:
+        return None
+    relation_name = str(payload.get("relation_type", RelationType.RELATED_TO.value)).upper()
+    relation_type = RelationType.__members__.get(relation_name, RelationType.RELATED_TO)
+    return GraphRelationship(
+        id=str(payload.get("id", "")),
+        source_id=str(payload.get("source_id", "")),
+        target_id=str(payload.get("target_id", "")),
+        relation_type=relation_type,
+        weight=float(payload.get("weight", 1.0) or 1.0),
+        metadata=_deserialize_metadata(payload.get("metadata")),
+        created_at=payload.get("created_at", GraphRelationship().created_at),
     )
 
 

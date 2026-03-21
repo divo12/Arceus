@@ -11,6 +11,8 @@ from arceus.core.hippocampus.types import (
     GraphMemoryView,
     MemoryPromotionEvent,
     MemorySummaryProjection,
+    MemoryType,
+    MemoryUnit,
 )
 
 
@@ -45,17 +47,18 @@ class ArceusMemoryProjections:
             center.id,
             max_hops=depth,
         )
-
-        edges = []
-        for neighbor in neighbors:
-            edges.append(
-                {
-                    "source": center.id,
-                    "target": neighbor.id,
-                    "type": "related_to",
-                    "weight": 1.0,
-                }
-            )
+        node_ids = {center.id, *(node.id for node in neighbors)}
+        all_edges = await hippocampus.graph_store.get_edges(center.id)
+        edges = [
+            {
+                "source": edge.source_id,
+                "target": edge.target_id,
+                "type": edge.relation_type.value,
+                "weight": edge.weight,
+            }
+            for edge in all_edges
+            if edge.source_id in node_ids and edge.target_id in node_ids
+        ]
 
         return GraphMemoryView(
             center_node=center,
@@ -89,4 +92,58 @@ class ArceusMemoryProjections:
                 "status": pattern.status.value,
             }
             for pattern in patterns
+        ]
+
+    async def get_memory_explorer(
+        self,
+        hippocampus: Hippocampus,
+        container: str,
+        memory_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        results: list[MemoryUnit] = []
+        if memory_type:
+            selected_type = MemoryType(memory_type)
+            results = await hippocampus._vector_store.list_by_type(
+                agent_id=hippocampus._agent_id,
+                memory_type=selected_type,
+            )
+            results = [memory for memory in results if memory.container == container]
+        else:
+            for selected_type in (MemoryType.STATIC, MemoryType.DYNAMIC):
+                batch = await hippocampus._vector_store.list_by_type(
+                    agent_id=hippocampus._agent_id,
+                    memory_type=selected_type,
+                )
+                results.extend(memory for memory in batch if memory.container == container)
+
+        results = sorted(results, key=lambda memory: memory.created_at, reverse=True)[:limit]
+        return [
+            {
+                "id": memory.id,
+                "content": memory.content,
+                "memory_type": memory.memory_type.value,
+                "confidence": round(memory.confidence, 3),
+                "created_at": memory.created_at.isoformat(),
+                "container": memory.container,
+                "source_type": memory.source_type,
+                "is_deleted": False,
+            }
+            for memory in results
+        ]
+
+    async def get_version_history(
+        self,
+        hippocampus: Hippocampus,
+        memory_id: str,
+    ) -> list[dict]:
+        history = await hippocampus.graph_store.get_version_history(memory_id)
+        return [
+            {
+                "id": node.id,
+                "name": node.name,
+                "entity_type": node.entity_type,
+                "created_at": node.created_at.isoformat(),
+            }
+            for node in history
         ]

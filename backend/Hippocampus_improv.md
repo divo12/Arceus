@@ -40,15 +40,15 @@
 
 ## 2. Graph Store (G1–G5)
 
-Graph is currently observability scaffolding: no agent logic reads graph data, all adapters use `include_graph=False`. These are real issues but non-load-bearing — fix when graph becomes part of the agent decision path.
+Graph is currently observability scaffolding: no agent logic reads graph data, all adapters use `include_graph=False`. G2, G4, G5 resolved in Phase 5 Prompt 5. G1, G3 remain deferred.
 
 | # | Issue | Summary |
 |---|-------|---------|
 | G1 | `GraphStore.search()` missing BM25 + container scoping | Spec calls for `bm25_rerank()` after cosine. Current impl uses cosine only, no container filter. |
-| G2 | `UPDATES` edges have no `GraphEntity` nodes | `StaticMemory.update()` creates edges between `MemoryUnit` IDs but `get_version_history()` walks `GraphEntity` nodes. Version history returns empty. |
+| ~~G2~~ | ~~`UPDATES` edges have no `GraphEntity` nodes~~ | **RESOLVED Prompt 5** — `ensure_memory_node()` in static + dynamic tiers; `update()` ensures both nodes before UPDATES edge. |
 | G3 | `cypher_query()` ignores query param | `InMemoryGraphStoreBackend` hardcodes UPDATES chain traversal regardless of input query. |
-| G4 | `create_edge` ignores missing nodes | Neo4j `MATCH` silently returns zero records for nonexistent nodes; `create_edge()` always returns `rel.id`. |
-| G5 | `memory_projections.py` flattens edges | `get_graph_view()` emits all links as `{"type": "related_to", "weight": 1.0}`, losing actual `RelationType` and weight. |
+| ~~G4~~ | ~~`create_edge` ignores missing nodes~~ | **RESOLVED Prompt 5** — `KeyError` raised in both neo4j + in-memory backends. |
+| ~~G5~~ | ~~`memory_projections.py` flattens edges~~ | **RESOLVED Prompt 5** — `get_graph_view()` uses real `relation_type.value` + `edge.weight`. |
 
 ---
 

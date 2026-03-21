@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, VectorStore
-from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit, RelationType
+from arceus.core.hippocampus.types import (
+    ExtractedFact,
+    MemoryType,
+    MemoryUnit,
+    RelationType,
+)
 from arceus.core.hippocampus.utils.time import utc_now
 
 if TYPE_CHECKING:
@@ -39,6 +44,8 @@ class StaticMemory:
             updated_at=utc_now(),
         )
         await self._vector_store.upsert(unit)
+        if self._graph_store is not None:
+            await self._graph_store.ensure_memory_node(unit)
         return unit
 
     async def search(self, query: str, container: str, top_k: int = 10) -> list[MemoryUnit]:
@@ -80,6 +87,9 @@ class StaticMemory:
         await self._vector_store.upsert(updated)
         await self._vector_store.soft_delete(existing.id, reason="superseded_by_update")
         if self._graph_store is not None:
+            await self._graph_store.ensure_memory_node(existing)
+            await self._graph_store.ensure_memory_node(updated)
+            await self._graph_store._backend.update_node(existing.id, {"is_latest": False})
             await self._graph_store.create_edge(updated.id, existing.id, RelationType.UPDATES)
         return updated
 

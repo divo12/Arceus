@@ -136,6 +136,8 @@ class PromotionEngine:
         )
         await self._vector_store.upsert(promoted)
         await self._vector_store.soft_delete(mem.id, reason="promoted_to_static")
+        await self._graph_store.ensure_memory_node(mem)
+        await self._graph_store.ensure_memory_node(promoted)
 
         edge = GraphRelationship(
             source_id=promoted.id,

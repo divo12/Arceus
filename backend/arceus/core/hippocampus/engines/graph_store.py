@@ -3,7 +3,12 @@ from __future__ import annotations
 import asyncio
 
 from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, GraphStoreBackend
-from arceus.core.hippocampus.types import GraphEntity, GraphRelationship, RelationType
+from arceus.core.hippocampus.types import (
+    GraphEntity,
+    GraphRelationship,
+    MemoryUnit,
+    RelationType,
+)
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 
 
@@ -49,6 +54,24 @@ class GraphStore:
 
     async def create_node(self, entity: GraphEntity) -> str:
         return await self._backend.create_node(entity)
+
+    async def ensure_memory_node(self, memory: MemoryUnit) -> None:
+        existing = await self._backend.get_node(memory.id)
+        if existing is not None:
+            return
+        entity = GraphEntity(
+            id=memory.id,
+            name=memory.content[:100],
+            entity_type=memory.memory_type.value,
+            embedding=memory.embedding,
+            container=memory.container,
+            metadata={
+                "agent_id": memory.agent_id,
+                "confidence": str(memory.confidence),
+                "created_at": memory.created_at.isoformat(),
+            },
+        )
+        await self._backend.create_node(entity)
 
     async def create_edge(
         self,
@@ -123,6 +146,9 @@ class GraphStore:
     ) -> list[GraphEntity]:
         """Public facade for graph neighbor traversal."""
         return await self._backend.get_neighbors(node_id, max_hops=max_hops)
+
+    async def get_edges(self, node_id: str) -> list[GraphRelationship]:
+        return await self._backend.get_edges(node_id)
 
     async def version_memory(
         self,

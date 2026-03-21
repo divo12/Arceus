@@ -36,6 +36,10 @@ class InMemoryGraphStoreBackend:
         self._nodes[node_id] = replace(existing, **updates)
 
     async def create_edge(self, rel: GraphRelationship) -> str:
+        if rel.source_id not in self._nodes or rel.target_id not in self._nodes:
+            raise KeyError(
+                f"Cannot create edge: source={rel.source_id} or target={rel.target_id} not found"
+            )
         self._edges[rel.id] = rel
         return rel.id
 
@@ -97,6 +101,13 @@ class InMemoryGraphStoreBackend:
                     neighbors.append(node)
 
         return neighbors
+
+    async def get_edges(self, node_id: str) -> list[GraphRelationship]:
+        return [
+            edge
+            for edge in self._edges.values()
+            if edge.source_id == node_id or edge.target_id == node_id
+        ]
 
     async def cypher_query(self, query: str, params: dict) -> list[GraphEntity]:
         del query

@@ -94,6 +94,8 @@ class FakeNeo4jSession:
             return FakeNeo4jResult([{"n": node}])
 
         if "CREATE (source)-[r:" in query and "SET r = $payload" in query:
+            if call_params["source_id"] not in nodes or call_params["target_id"] not in nodes:
+                return FakeNeo4jResult([])
             rel_type = query.split("CREATE (source)-[r:", maxsplit=1)[1].split(
                 "]",
                 maxsplit=1,
@@ -138,6 +140,15 @@ class FakeNeo4jSession:
                     if next_id in nodes:
                         neighbors.append(nodes[next_id])
             return FakeNeo4jResult([{"neighbor": node} for node in neighbors])
+
+        if "MATCH (source:GraphEntity)-[r]-(target:GraphEntity)" in query and "RETURN r" in query:
+            node_id = call_params["node_id"]
+            records = [
+                {"r": edge}
+                for edge in edges
+                if edge["source_id"] == node_id or edge["target_id"] == node_id
+            ]
+            return FakeNeo4jResult(records)
 
         if "[:UPDATES*]" in query:
             current_id = call_params["id"]
@@ -697,3 +708,37 @@ async def test_in_memory_graph_backend_rejects_unknown_update_fields() -> None:
 
     with pytest.raises(ValueError, match="Invalid GraphEntity fields"):
         await backend.update_node(node.id, {"unknown_field": 123})
+
+
+@pytest.mark.asyncio
+async def test_in_memory_graph_backend_create_edge_requires_existing_nodes() -> None:
+    backend = InMemoryGraphStoreBackend()
+
+    with pytest.raises(KeyError, match="Cannot create edge"):
+        await backend.create_edge(
+            GraphRelationship(
+                source_id="missing-source",
+                target_id="missing-target",
+                relation_type=RelationType.RELATED_TO,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_neo4j_graph_backend_create_edge_requires_existing_nodes() -> None:
+    backend = Neo4jGraphStoreBackend(
+        uri="neo4j+s://example.databases.neo4j.io",
+        username="neo4j",
+        password="secret",
+        database="hippocampus",
+        driver=FakeNeo4jDriver(),
+    )
+
+    with pytest.raises(KeyError, match="Cannot create edge"):
+        await backend.create_edge(
+            GraphRelationship(
+                source_id="missing-source",
+                target_id="missing-target",
+                relation_type=RelationType.RELATED_TO,
+            )
+        )

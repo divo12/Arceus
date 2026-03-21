@@ -5,8 +5,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from arceus.core.hippocampus.backends.dict_cache import DictCacheStore
+from arceus.core.hippocampus.backends.in_memory_graph import InMemoryGraphStoreBackend
 from arceus.core.hippocampus.backends.in_memory_vector import InMemoryVectorStore
 from arceus.core.hippocampus.backends.simple_embedding import MockEmbeddingEngine
+from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.tiers.dynamic import DynamicMemory
 from arceus.core.hippocampus.tiers.static import StaticMemory
 from arceus.core.hippocampus.tiers.working import WorkingMemory
@@ -123,6 +125,52 @@ async def test_tier_add_preserves_fact_source_type() -> None:
 
     assert static_unit.source_type == "meeting"
     assert dynamic_unit.source_type == "conversation"
+
+
+@pytest.mark.asyncio
+async def test_tiers_mirror_memories_into_graph_nodes() -> None:
+    vector_store = InMemoryVectorStore()
+    embedding = MockEmbeddingEngine(dimensions=32)
+    graph_backend = InMemoryGraphStoreBackend()
+    graph_store = GraphStore(graph_backend, embedding)
+    static_memory = StaticMemory(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        embedding_engine=embedding,
+        graph_store=graph_store,
+    )
+    dynamic_memory = DynamicMemory(
+        agent_id="agent-1",
+        vector_store=vector_store,
+        embedding_engine=embedding,
+        graph_store=graph_store,
+    )
+
+    static_unit = await static_memory.add(
+        ExtractedFact(
+            text="JWT is our default authentication strategy",
+            memory_type=MemoryType.STATIC,
+            confidence=0.95,
+            is_permanent=True,
+        ),
+        container="startup:1:emp:e1",
+    )
+    dynamic_unit = await dynamic_memory.add(
+        ExtractedFact(
+            text="The PM wants auth metrics in tomorrow's review",
+            memory_type=MemoryType.DYNAMIC,
+            confidence=0.8,
+        ),
+        container="startup:1:emp:e1",
+    )
+
+    static_node = await graph_backend.get_node(static_unit.id)
+    dynamic_node = await graph_backend.get_node(dynamic_unit.id)
+
+    assert static_node is not None
+    assert static_node.entity_type == "static"
+    assert dynamic_node is not None
+    assert dynamic_node.entity_type == "dynamic"
 
 
 @pytest.mark.asyncio
