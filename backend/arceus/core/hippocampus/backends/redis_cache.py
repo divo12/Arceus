@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -16,6 +17,23 @@ class RedisCacheStore:
 
     async def get(self, key: str) -> str | None:
         client = await self._get_client()
+        key_type = await self._key_type(client, key)
+        if key_type == "list":
+            items = await client.lrange(key, 0, -1)
+            if not items:
+                return None
+            payload: list[object] = []
+            for item in items:
+                if isinstance(item, bytes):
+                    item = item.decode()
+                if isinstance(item, str):
+                    try:
+                        payload.append(json.loads(item))
+                    except json.JSONDecodeError:
+                        payload.append(item)
+                else:
+                    payload.append(item)
+            return json.dumps(payload, default=str)
         value = await client.get(key)
         if value is None:
             return None
@@ -29,6 +47,12 @@ class RedisCacheStore:
             await client.set(key, value, ex=ttl_seconds)
             return
         await client.set(key, value)
+
+    async def append(self, key: str, value: str, ttl_seconds: int = 3600) -> None:
+        client = await self._get_client()
+        await client.rpush(key, value)
+        if ttl_seconds > 0:
+            await client.expire(key, ttl_seconds)
 
     async def delete(self, key: str) -> None:
         client = await self._get_client()
@@ -89,3 +113,9 @@ class RedisCacheStore:
                     yield str(key)
             if cursor == 0:
                 break
+
+    async def _key_type(self, client: Any, key: str) -> str:
+        key_type = await client.type(key)
+        if isinstance(key_type, bytes):
+            return key_type.decode()
+        return str(key_type)

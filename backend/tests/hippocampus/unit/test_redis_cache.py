@@ -10,6 +10,7 @@ from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 class FakeRedisClient:
     def __init__(self) -> None:
         self._items: dict[str, tuple[str, int | None]] = {}
+        self._lists: dict[str, tuple[list[str], int | None]] = {}
         self._now = 100
         self.closed = False
         self.scan_calls: list[tuple[int, str | None]] = []
@@ -26,11 +27,60 @@ class FakeRedisClient:
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         expires_at = self._now + ex if ex is not None else None
+        self._lists.pop(key, None)
         self._items[key] = (value, expires_at)
+
+    async def rpush(self, key: str, value: str) -> None:
+        items, expires_at = self._lists.get(key, ([], None))
+        if expires_at is not None and self._now >= expires_at:
+            items = []
+            expires_at = None
+        items = [*items, value]
+        self._items.pop(key, None)
+        self._lists[key] = (items, expires_at)
+
+    async def expire(self, key: str, ttl_seconds: int) -> None:
+        expires_at = self._now + ttl_seconds
+        if key in self._items:
+            value, _ = self._items[key]
+            self._items[key] = (value, expires_at)
+        if key in self._lists:
+            values, _ = self._lists[key]
+            self._lists[key] = (values, expires_at)
+
+    async def lrange(self, key: str, start: int, end: int) -> list[str]:
+        del start
+        items = self._lists.get(key)
+        if items is None:
+            return []
+        values, expires_at = items
+        if expires_at is not None and self._now >= expires_at:
+            self._lists.pop(key, None)
+            return []
+        if end == -1:
+            return list(values)
+        return list(values[: end + 1])
+
+    async def type(self, key: str) -> str:
+        if key in self._lists:
+            values, expires_at = self._lists[key]
+            if expires_at is not None and self._now >= expires_at:
+                self._lists.pop(key, None)
+            else:
+                return "list"
+        if key in self._items:
+            value, expires_at = self._items[key]
+            del value
+            if expires_at is not None and self._now >= expires_at:
+                self._items.pop(key, None)
+            else:
+                return "string"
+        return "none"
 
     async def delete(self, *keys: str) -> None:
         for key in keys:
             self._items.pop(key, None)
+            self._lists.pop(key, None)
 
     async def scan(
         self,
@@ -38,7 +88,7 @@ class FakeRedisClient:
         match: str | None = None,
     ) -> tuple[int, list[str]]:
         self.scan_calls.append((cursor, match))
-        all_keys = sorted(self._items)
+        all_keys = sorted(set(self._items) | set(self._lists))
         matching = [
             key for key in all_keys if match is None or fnmatch.fnmatch(key, match)
         ]
@@ -101,3 +151,16 @@ async def test_redis_cache_store_close_closes_client() -> None:
     await store.close()
 
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_store_append_materializes_json_conversation() -> None:
+    client = FakeRedisClient()
+    store = RedisCacheStore(client=client)
+
+    await store.append("wm:conv:1", '{"role":"user","content":"hello"}', ttl_seconds=30)
+    await store.append("wm:conv:1", '{"role":"assistant","content":"hi"}', ttl_seconds=30)
+
+    assert await store.get("wm:conv:1") == (
+        '[{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]'
+    )

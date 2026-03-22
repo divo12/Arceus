@@ -185,7 +185,6 @@ class Hippocampus:
         reasoning_bank = ReasoningBank(
             agent_id=agent_id,
             vector_store=vector_store,
-            pattern_store=pattern_store,
             llm=llm_engine,
             llm_light=llm_light,
             embedding_engine=embedding_engine,

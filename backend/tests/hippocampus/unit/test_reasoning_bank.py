@@ -18,7 +18,6 @@ from arceus.core.hippocampus.types import (
     TrajectoryVerdict,
 )
 from arceus.core.hippocampus.utils.time import utc_now
-from tests.hippocampus.support.fakes.in_memory_pattern import InMemoryPatternStore
 from tests.hippocampus.support.fakes.in_memory_vector import InMemoryVectorStore
 from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
 from tests.hippocampus.support.fakes.noop_llm import NoopLLMEngine
@@ -51,12 +50,10 @@ def _create_reasoning_bank(
     llm_light: NoopLLMEngine | None = None,
 ) -> tuple[ReasoningBank, InMemoryVectorStore, MockEmbeddingEngine]:
     vector_store = InMemoryVectorStore()
-    pattern_store = InMemoryPatternStore(agent_id="agent-1")
     embedding = MockEmbeddingEngine(dimensions=32)
     bank = ReasoningBank(
         agent_id="agent-1",
         vector_store=vector_store,
-        pattern_store=pattern_store,
         llm=NoopLLMEngine(model_name="noop"),
         llm_light=llm_light or NoopLLMEngine(model_name="noop"),
         embedding_engine=embedding,

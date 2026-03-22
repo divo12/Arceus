@@ -198,8 +198,6 @@ class FakeNeo4jDriver:
 
     async def close(self) -> None:
         self.closed = True
-
-
 def test_embedding_factory_builds_sentence_transformer_backend() -> None:
     sentence_model = create_embedding_engine(
         "all-MiniLM-L6-v2",

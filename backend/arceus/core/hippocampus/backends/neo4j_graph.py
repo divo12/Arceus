@@ -229,7 +229,7 @@ class Neo4jGraphStoreBackend:
                 CREATE CONSTRAINT hippocampus_graph_entity_id IF NOT EXISTS
                 FOR (n:GraphEntity)
                 REQUIRE n.id IS UNIQUE
-                """
+                """,
             )
             self._schema_ready = True
 

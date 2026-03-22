@@ -16,13 +16,9 @@ from tests.hippocampus.support.fakes.mock_embedding import MockEmbeddingEngine
 
 
 class SlowDictCacheStore(DictCacheStore):
-    async def get(self, key: str) -> str | None:
+    async def append(self, key: str, value: str, ttl_seconds: int = 3600) -> None:
         await asyncio.sleep(0)
-        return await super().get(key)
-
-    async def set(self, key: str, value: str, ttl_seconds: int = 3600) -> None:
-        await asyncio.sleep(0)
-        await super().set(key, value, ttl_seconds=ttl_seconds)
+        await super().append(key, value, ttl_seconds=ttl_seconds)
 
 
 @pytest.mark.asyncio

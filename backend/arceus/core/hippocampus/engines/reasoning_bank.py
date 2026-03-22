@@ -6,7 +6,6 @@ from datetime import timedelta
 from arceus.core.hippocampus.backends.protocols import (
     EmbeddingEngine,
     LLMEngine,
-    PatternStore,
     VectorStore,
 )
 from arceus.core.hippocampus.prompts import (
@@ -46,7 +45,6 @@ class ReasoningBank:
         self,
         agent_id: str,
         vector_store: VectorStore,
-        pattern_store: PatternStore,
         llm: LLMEngine,
         llm_light: LLMEngine,
         embedding_engine: EmbeddingEngine,
@@ -54,7 +52,6 @@ class ReasoningBank:
     ) -> None:
         self._agent_id = agent_id
         self._vector_store = vector_store
-        self._pattern_store = pattern_store
         self._llm = llm
         self._llm_light = llm_light
         self._embedding = embedding_engine
