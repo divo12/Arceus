@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  server:
+    build: .
+    ports:
+      - "3100:3100"
+    environment:
+      DATABASE_URL: postgres://paperclip:paperclip@db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      HIPPOCAMPUS_API_URL: "http://hippocampus:8100"
+    volumes:
+      - paperclip-data:/paperclip
+    depends_on:
+      db:
+        condition: service_healthy
+      hippocampus:
+        condition: service_started
+
+  hippocampus:
+    build:
+      context: .
+      dockerfile: services/hippocampus-api/Dockerfile
+    ports:
+      - "8100:8100"
+    environment:
+      ARCEUS_DEBUG: "${ARCEUS_DEBUG:-false}"
+      ARCEUS_SQLITE_PATH: "/data/hippocampus.db"
+      ARCEUS_AZURE_OPENAI_ENDPOINT: "${ARCEUS_AZURE_OPENAI_ENDPOINT:-}"
+      ARCEUS_AZURE_OPENAI_API_KEY: "${ARCEUS_AZURE_OPENAI_API_KEY:-}"
+      ARCEUS_AZURE_OPENAI_API_VERSION: "${ARCEUS_AZURE_OPENAI_API_VERSION:-2024-12-01-preview}"
+      ARCEUS_MODEL_CEO: "${ARCEUS_MODEL_CEO:-gpt-5.1-chat}"
+      ARCEUS_MODEL_SPAWNED: "${ARCEUS_MODEL_SPAWNED:-gpt-5.1-chat}"
+      ARCEUS_EMBEDDING_MODEL: "${ARCEUS_EMBEDDING_MODEL:-all-MiniLM-L6-v2}"
+      ARCEUS_GRAPH_BACKEND: "${ARCEUS_GRAPH_BACKEND:-in_memory}"
+    volumes:
+      - hippocampus-data:/data
+
+volumes:
+  pgdata:
+  paperclip-data:
+  hippocampus-data:
