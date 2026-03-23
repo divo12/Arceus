@@ -60,16 +60,16 @@ export function RuntimeServicesJsonField({
   config,
   mark,
 }: JsonFieldProps) {
-  if (!SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI) {
-    return null;
-  }
-
   const existing = formatJsonObject(config.workspaceRuntime);
   const [draft, setDraft] = useState(existing);
 
   useEffect(() => {
     if (!isCreate) setDraft(existing);
   }, [existing, isCreate]);
+
+  if (!SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI) {
+    return null;
+  }
 
   const value = isCreate ? values?.runtimeServicesJson ?? "" : draft;
 
