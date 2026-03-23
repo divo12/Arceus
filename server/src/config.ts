@@ -83,9 +83,6 @@ export function resolveHippocampusMode(): HippocampusMode {
   if (configured === "off" || configured === "embedded" || configured === "sidecar") {
     return configured;
   }
-  if (process.env.HIPPOCAMPUS_API_URL?.trim()) {
-    return "sidecar";
-  }
   return "off";
 }
 
@@ -227,9 +224,9 @@ export function loadConfig(): Config {
       resolveDefaultBackupDir(),
   );
   const hippocampusMode = resolveHippocampusMode();
-  const hippocampusApiUrl =
-    process.env.HIPPOCAMPUS_API_URL?.trim() ||
-    (hippocampusMode === "sidecar" ? "http://localhost:8100" : undefined);
+  const hippocampusApiUrl = hippocampusMode === "sidecar"
+    ? (process.env.HIPPOCAMPUS_API_URL?.trim() || "http://localhost:8100")
+    : undefined;
 
   return {
     deploymentMode,

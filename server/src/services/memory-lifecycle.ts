@@ -3,22 +3,37 @@
  * memories via the Hippocampus bridge before and after adapter runs.
  */
 
-import { loadConfig } from "../config.js";
 import type { HippocampusBridge } from "./hippocampus-contract.js";
+import { getHippocampusBridge } from "./hippocampus-bridge.js";
 import { logger } from "../middleware/logger.js";
 
-type HippocampusBridgeSurface = Pick<
+type HippocampusLifecycleBridge = Pick<
   HippocampusBridge,
-  "health" | "getPriming" | "getHabits" | "recall" | "extract" | "processTrajectory"
+  "mode" | "health" | "getPriming" | "getHabits" | "recall" | "extract" | "processTrajectory"
 >;
 
-async function getHippocampusBridge(): Promise<HippocampusBridgeSurface> {
-  const mod = await import("./hippocampus-bridge.js");
-  return mod.hippocampusBridge as HippocampusBridgeSurface;
+async function isBridgeAvailable(
+  bridge: Pick<HippocampusBridge, "health">,
+  logContext: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    await bridge.health();
+    return true;
+  } catch (err) {
+    logger.warn(
+      { err, ...logContext },
+      "hippocampus: bridge unavailable (continuing without memory)",
+    );
+    return false;
+  }
 }
 
-function isMemoryEnabled(): boolean {
-  return loadConfig().hippocampusMode !== "off";
+function logLifecycleCallFailure(
+  operation: string,
+  logContext: Record<string, unknown>,
+  err: unknown,
+): void {
+  logger.warn({ err, ...logContext }, `hippocampus: ${operation} failed`);
 }
 
 /**
@@ -35,22 +50,31 @@ export async function buildMemoryContextForRun(input: {
   issueId: string | null;
   wakeReason: string | null;
 }): Promise<string | null> {
-  if (!isMemoryEnabled()) return null;
-
   const { agentId, issueTitle, issueId, wakeReason } = input;
 
   try {
-    const hippocampusBridge = await getHippocampusBridge();
-    const healthy = await hippocampusBridge.health().then(() => true).catch(() => false);
+    const hippocampusBridge = getHippocampusBridge() as HippocampusLifecycleBridge;
+    if (hippocampusBridge.mode === "off") return null;
+
+    const healthy = await isBridgeAvailable(hippocampusBridge, { agentId });
     if (!healthy) return null;
 
     // Fetch priming + habits + recall in parallel
     const query = [issueTitle, wakeReason, issueId].filter(Boolean).join(" — ");
     const [priming, habits, recalled] = await Promise.all([
-      hippocampusBridge.getPriming(agentId).catch(() => ({ prompt: "" })),
-      hippocampusBridge.getHabits(agentId, query).catch(() => ({ habits: [] })),
+      hippocampusBridge.getPriming(agentId).catch((err) => {
+        logLifecycleCallFailure("getPriming", { agentId }, err);
+        return { prompt: "" };
+      }),
+      hippocampusBridge.getHabits(agentId, query).catch((err) => {
+        logLifecycleCallFailure("getHabits", { agentId }, err);
+        return { habits: [] };
+      }),
       query
-        ? hippocampusBridge.recall(agentId, query).catch(() => ({ items: [] }))
+        ? hippocampusBridge.recall(agentId, query).catch((err) => {
+          logLifecycleCallFailure("recall", { agentId }, err);
+          return { items: [] };
+        })
         : Promise.resolve({ items: [] }),
     ]);
 
@@ -103,13 +127,13 @@ export async function extractMemoriesFromRun(input: {
   stdoutExcerpt: string;
   stderrExcerpt: string;
 }): Promise<void> {
-  if (!isMemoryEnabled()) return;
-
   const { agentId, runId, issueId, issueTitle, outcome, stdoutExcerpt, stderrExcerpt } = input;
 
   try {
-    const hippocampusBridge = await getHippocampusBridge();
-    const healthy = await hippocampusBridge.health().then(() => true).catch(() => false);
+    const hippocampusBridge = getHippocampusBridge() as HippocampusLifecycleBridge;
+    if (hippocampusBridge.mode === "off") return;
+
+    const healthy = await isBridgeAvailable(hippocampusBridge, { agentId, runId });
     if (!healthy) return;
 
     // Build pseudo-conversation messages from the run excerpts for extraction
@@ -128,7 +152,7 @@ export async function extractMemoriesFromRun(input: {
 
     // Extract facts from the conversation
     const extractResult = await hippocampusBridge.extract(agentId, messages).catch((err) => {
-      logger.warn({ err, agentId, runId }, "hippocampus: extract failed");
+      logLifecycleCallFailure("extract", { agentId, runId }, err);
       return null;
     });
 
@@ -152,7 +176,7 @@ export async function extractMemoriesFromRun(input: {
           ],
         )
         .catch((err) => {
-          logger.warn({ err, agentId, runId }, "hippocampus: processTrajectory failed");
+          logLifecycleCallFailure("processTrajectory", { agentId, runId }, err);
         });
     }
 

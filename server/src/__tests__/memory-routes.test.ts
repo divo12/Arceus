@@ -27,6 +27,7 @@ function getRouteHandler(router: Router, method: "get" | "post", path: string): 
 }
 
 async function invokeRoute(options: {
+  actor?: { type: string; userId?: string; source?: string };
   body?: Record<string, unknown>;
   hippocampusMode: "off" | "embedded" | "sidecar";
   method: "get" | "post";
@@ -38,7 +39,7 @@ async function invokeRoute(options: {
   const handler = getRouteHandler(router, options.method, options.path);
 
   const req = {
-    actor: { type: "board", userId: "board-user", source: "local_implicit" },
+    actor: options.actor ?? { type: "board", userId: "board-user", source: "local_implicit" },
     body: options.body ?? {},
     params: { agentId: "agent-1" },
     query: options.query ?? {},
@@ -88,9 +89,9 @@ describe("memory routes", () => {
   it("returns 502 when the bridge throws", async () => {
     process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
     vi.doMock("../services/hippocampus-bridge.js", () => ({
-      hippocampusBridge: {
+      getHippocampusBridge: () => ({
         getSummary: vi.fn().mockRejectedValue(new Error("bridge unavailable")),
-      },
+      }),
     }));
 
     const res = await invokeRoute({
@@ -103,12 +104,175 @@ describe("memory routes", () => {
     expect(res.body).toEqual({ error: "bridge unavailable" });
   });
 
+  it("preserves bridge summary response shapes", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        getSummary: vi.fn().mockResolvedValue({
+          total_static: 2,
+          total_dynamic: 3,
+          active_habits: [{ trigger: "deploy", action: "review", confidence: 0.8 }],
+          priming_prompt: "remember the roadmap",
+          graph_node_count: 5,
+          top_patterns: [{ description: "launch review" }],
+          recent_learnings: ["security review"],
+          recent_promotions: ["dynamic→static: repeated success"],
+          generated_at: "2026-03-24T00:00:00Z",
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/summary",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      total_static: 2,
+      total_dynamic: 3,
+      active_habits: [{ trigger: "deploy", action: "review", confidence: 0.8 }],
+      priming_prompt: "remember the roadmap",
+      graph_node_count: 5,
+      top_patterns: [{ description: "launch review" }],
+      recent_learnings: ["security review"],
+      recent_promotions: ["dynamic→static: repeated success"],
+      generated_at: "2026-03-24T00:00:00Z",
+    });
+  });
+
+  it("returns 502 when the bridge is unavailable in enabled mode", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        getSummary: vi.fn().mockRejectedValue(new Error("Hippocampus is disabled")),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/summary",
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toEqual({ error: "Hippocampus is disabled" });
+  });
+
+  it("preserves list response shapes", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        listMemories: vi.fn().mockResolvedValue({
+          items: [
+            {
+              id: "mem-1",
+              content: "remember launch review",
+              memory_type: "dynamic",
+              confidence: 0.9,
+              relevance_score: 0.7,
+              container: "default",
+              visibility: "shared",
+              created_at: "2026-03-24T00:00:00Z",
+              updated_at: "2026-03-24T00:00:00Z",
+              access_count: 2,
+            },
+          ],
+          total: 1,
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/list",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      items: [
+        {
+          id: "mem-1",
+          content: "remember launch review",
+          memory_type: "dynamic",
+          confidence: 0.9,
+          relevance_score: 0.7,
+          container: "default",
+          visibility: "shared",
+          created_at: "2026-03-24T00:00:00Z",
+          updated_at: "2026-03-24T00:00:00Z",
+          access_count: 2,
+        },
+      ],
+      total: 1,
+    });
+  });
+
+  it("preserves recall response shapes", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        recall: vi.fn().mockResolvedValue({
+          items: [
+            {
+              id: "mem-1",
+              content: "security review required",
+              memory_type: "dynamic",
+              confidence: 0.85,
+              relevance_score: 0.91,
+              kind: "vector",
+            },
+          ],
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      body: { query: "security review" },
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/recall",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      items: [
+        {
+          id: "mem-1",
+          content: "security review required",
+          memory_type: "dynamic",
+          confidence: 0.85,
+          relevance_score: 0.91,
+          kind: "vector",
+        },
+      ],
+    });
+  });
+
+  it("does not misclassify board auth failures as bridge failures", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+
+    await expect(
+      invokeRoute({
+        actor: { type: "agent" },
+        hippocampusMode: "embedded",
+        method: "get",
+        path: "/agents/:agentId/memory/summary",
+      }),
+    ).rejects.toMatchObject({
+      message: "Board access required",
+      status: 403,
+    });
+  });
+
   it("returns bridge-backed health when enabled", async () => {
     process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
     vi.doMock("../services/hippocampus-bridge.js", () => ({
-      hippocampusBridge: {
+      getHippocampusBridge: () => ({
         health: vi.fn().mockResolvedValue({ status: "ok", mode: "embedded" }),
-      },
+      }),
     }));
 
     const res = await invokeRoute({

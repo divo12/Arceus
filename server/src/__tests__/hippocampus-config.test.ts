@@ -39,8 +39,19 @@ describe("hippocampus config", () => {
     expect(loadConfig().hippocampusMode).toBe("off");
   });
 
-  it("falls back to sidecar mode when only the legacy sidecar URL is set", () => {
+  it("stays off when only the legacy sidecar URL is set", () => {
     delete process.env.PAPERCLIP_HIPPOCAMPUS_MODE;
+    process.env.HIPPOCAMPUS_API_URL = "http://localhost:8100";
+
+    const config = loadConfig();
+
+    expect(resolveHippocampusMode()).toBe("off");
+    expect(config.hippocampusMode).toBe("off");
+    expect(config.hippocampusApiUrl).toBeUndefined();
+  });
+
+  it("uses the sidecar URL when sidecar mode is explicitly enabled", () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "sidecar";
     process.env.HIPPOCAMPUS_API_URL = "http://localhost:8100";
 
     const config = loadConfig();

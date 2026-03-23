@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { loadConfig, type HippocampusMode } from "../config.js";
-import type { HippocampusBridge } from "../services/hippocampus-contract.js";
+import { type HippocampusBridge } from "../services/hippocampus-contract.js";
+import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
 import { assertBoard } from "./authz.js";
 
 /**
@@ -12,13 +13,21 @@ type HippocampusBridgeSurface = Pick<
   "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "runGC" | "health"
 >;
 
-async function getHippocampusBridge(): Promise<HippocampusBridgeSurface> {
-  const mod = await import("../services/hippocampus-bridge.js");
-  return mod.hippocampusBridge as HippocampusBridgeSurface;
-}
-
 function resolveHippocampusMode(modeOverride?: HippocampusMode): HippocampusMode {
   return modeOverride ?? loadConfig().hippocampusMode;
+}
+
+function sendBridgeError(
+  res: {
+    status(code: number): { json(body: unknown): unknown };
+  },
+  err: unknown,
+): void {
+  res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+}
+
+function resolveBridge(): HippocampusBridgeSurface {
+  return getHippocampusBridge() as HippocampusBridgeSurface;
 }
 
 export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}) {
@@ -35,23 +44,23 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
 
   /** GET /api/agents/:agentId/memory/summary */
   router.get("/agents/:agentId/memory/summary", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const summary = await hippocampusBridge.getSummary(req.params.agentId);
       res.json(summary);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
   /** GET /api/agents/:agentId/memory/list */
   router.get("/agents/:agentId/memory/list", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const { memory_type, container, limit } = req.query;
       const result = await hippocampusBridge.listMemories(
         req.params.agentId,
@@ -61,43 +70,43 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
       );
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
   /** GET /api/agents/:agentId/memory/priming */
   router.get("/agents/:agentId/memory/priming", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.getPriming(req.params.agentId);
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
   /** GET /api/agents/:agentId/memory/habits */
   router.get("/agents/:agentId/memory/habits", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const context = (req.query.context as string) ?? "";
       const result = await hippocampusBridge.getHabits(req.params.agentId, context);
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
   /** POST /api/agents/:agentId/memory/remember */
   router.post("/agents/:agentId/memory/remember", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const { content, container, memory_type } = req.body;
       const result = await hippocampusBridge.remember(
         req.params.agentId,
@@ -107,16 +116,16 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
       );
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
   /** POST /api/agents/:agentId/memory/recall */
   router.post("/agents/:agentId/memory/recall", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const { query, container, top_k } = req.body;
       const result = await hippocampusBridge.recall(
         req.params.agentId,
@@ -126,20 +135,20 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
       );
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
   /** POST /api/agents/:agentId/memory/gc */
   router.post("/agents/:agentId/memory/gc", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
     try {
-      assertBoard(req);
-      if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.runGC(req.params.agentId);
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 
@@ -147,11 +156,11 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
   router.get("/memory/health", async (_req, res) => {
     try {
       if (!ensureEnabled(res)) return;
-      const hippocampusBridge = await getHippocampusBridge();
+      const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.health();
       res.json(result);
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+      sendBridgeError(res, err);
     }
   });
 

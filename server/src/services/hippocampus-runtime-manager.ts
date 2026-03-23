@@ -14,81 +14,21 @@ import {
   type MemorySummary,
   type PromotionItem,
 } from "./hippocampus-contract.js";
+import {
+  createHippocampusRpcRequest,
+  type HippocampusJsonRpcResponse,
+  isHippocampusRpcResponse,
+  parseHippocampusRpcMessage,
+  serializeHippocampusRpcMessage,
+  type HippocampusRpcMethodMap,
+  type HippocampusRpcMethodName,
+} from "./hippocampus-protocol.js";
 
 type RuntimeStatus = HippocampusRuntimeDiagnostics["status"];
-
-type RpcMethodMap = {
-  health: [{}, HealthResult];
-  remember: [{ agent_id: string; content: string; container?: string; memory_type?: string }, {
-    id: string;
-    content: string;
-    memory_type: string;
-    confidence: number;
-  }];
-  recall: [{
-    agent_id: string;
-    query: string;
-    container?: string;
-    top_k?: number;
-    include_graph?: boolean;
-  }, { items: MemoryItem[] }];
-  extract: [{
-    agent_id: string;
-    messages: Array<{ role: string; content: string }>;
-    container?: string;
-    mode?: string;
-  }, ExtractResult];
-  processTrajectory: [{
-    agent_id: string;
-    task_id: string;
-    outcome: string;
-    quality: number;
-    steps?: Array<{ action: string; result: string; reasoning?: string }>;
-    container?: string;
-  }, {
-    verdict: Record<string, unknown> | null;
-    distilled: Record<string, unknown> | null;
-    pattern: Record<string, unknown> | null;
-    habit: Record<string, unknown> | null;
-  }];
-  getPriming: [{ agent_id: string }, { prompt: string }];
-  getHabits: [{ agent_id: string; context?: string }, { habits: HabitItem[] }];
-  getSummary: [{ agent_id: string; container?: string }, MemorySummary & {
-    top_patterns?: unknown[];
-    recent_learnings?: string[];
-    recent_promotions?: string[];
-    current_state?: Record<string, unknown>;
-  }];
-  listMemories: [{
-    agent_id: string;
-    memory_type?: string;
-    container?: string;
-    limit?: number;
-  }, { items: MemoryListItem[]; total: number }];
-  runGC: [{ agent_id: string }, { expired: number; decayed: number; demoted: number }];
-  runPromotions: [{ agent_id: string }, { promotions: PromotionItem[] }];
-  shutdown: [{}, { status: string }];
-};
-
-type RpcMethodName = keyof RpcMethodMap;
-
-interface JsonRpcSuccess<TResult> {
-  jsonrpc: "2.0";
-  id: number;
-  result: TResult;
-}
-
-interface JsonRpcError {
-  jsonrpc: "2.0";
-  id: number | null;
-  error: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
-type JsonRpcResponse<TResult> = JsonRpcSuccess<TResult> | JsonRpcError;
+type RpcMethodMap = HippocampusRpcMethodMap;
+type RpcMethodName = HippocampusRpcMethodName;
+type RpcMethodParams<M extends RpcMethodName> = RpcMethodMap[M]["params"];
+type RpcMethodResult<M extends RpcMethodName> = RpcMethodMap[M]["result"];
 
 interface PendingRequest<TResult> {
   reject: (reason?: unknown) => void;
@@ -308,10 +248,10 @@ export class HippocampusRuntimeManager {
 
   async call<M extends RpcMethodName>(
     method: M,
-    params: RpcMethodMap[M][0],
+    params: RpcMethodParams<M>,
     timeoutMs = this.options.requestTimeoutMs,
     allowWhileStarting = false,
-  ): Promise<RpcMethodMap[M][1]> {
+  ): Promise<RpcMethodResult<M>> {
     if (!allowWhileStarting) {
       await this.ensureReady();
     }
@@ -327,14 +267,9 @@ export class HippocampusRuntimeManager {
     }
 
     const id = this.nextRequestId++;
-    const request = {
-      jsonrpc: "2.0",
-      id,
-      method,
-      params,
-    };
+    const request = createHippocampusRpcRequest(id, method, params);
 
-    return new Promise<RpcMethodMap[M][1]>((resolve, reject) => {
+    return new Promise<RpcMethodResult<M>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new HippocampusTimeoutError(`Hippocampus ${method} timed out after ${timeoutMs}ms`));
@@ -345,7 +280,7 @@ export class HippocampusRuntimeManager {
         reject,
         timer,
       });
-      child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
+      child.stdin.write(serializeHippocampusRpcMessage(request), (error) => {
         if (!error) return;
         clearTimeout(timer);
         this.pending.delete(id);
@@ -383,14 +318,14 @@ export class HippocampusRuntimeManager {
   private async handleStdoutLine(line: string): Promise<void> {
     if (!line.trim()) return;
 
-    let message: JsonRpcResponse<unknown>;
+    let message: HippocampusJsonRpcResponse<unknown>;
     try {
-      message = JSON.parse(line) as JsonRpcResponse<unknown>;
+      message = parseHippocampusRpcMessage(line) as HippocampusJsonRpcResponse<unknown>;
     } catch {
       return;
     }
 
-    if (typeof message !== "object" || message === null || !("id" in message)) {
+    if (!isHippocampusRpcResponse(message)) {
       return;
     }
 
@@ -401,7 +336,7 @@ export class HippocampusRuntimeManager {
     clearTimeout(pending.timer);
     this.pending.delete(pendingId);
 
-    if ("error" in message) {
+    if ("error" in message && message.error) {
       const errorMessage = message.error.message || "Unknown Hippocampus RPC error";
       pending.reject(
         new HippocampusUnavailableError(
