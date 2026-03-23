@@ -1,23 +1,17 @@
 import {
   Inbox,
-  CircleDot,
   Target,
   LayoutDashboard,
   DollarSign,
-  History,
   Search,
-  SquarePen,
-  Network,
-  Boxes,
-  Repeat,
   Settings,
+  Users,
+  ListTodo,
+  Activity,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { SidebarProjects } from "./SidebarProjects";
-import { SidebarAgents } from "./SidebarAgents";
-import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { queryKeys } from "../lib/queryKeys";
@@ -26,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
 export function Sidebar() {
-  const { openNewIssue } = useDialog();
   const { selectedCompanyId, selectedCompany } = useCompany();
   const inboxBadge = useInboxBadge(selectedCompanyId);
   const { data: liveRuns } = useQuery({
@@ -48,17 +41,19 @@ export function Sidebar() {
 
   return (
     <aside className="w-60 h-full min-h-0 border-r border-border bg-background flex flex-col">
-      {/* Top bar: Company name (bold) + Search — aligned with top sections (no visible border) */}
-      <div className="flex items-center gap-1 px-3 h-12 shrink-0">
+      {/* Company header */}
+      <div className="flex items-center gap-2 px-4 h-12 shrink-0">
         {selectedCompany?.brandColor && (
           <div
-            className="w-4 h-4 rounded-sm shrink-0 ml-1"
+            className="w-5 h-5 rounded shrink-0"
             style={{ backgroundColor: selectedCompany.brandColor }}
           />
         )}
-        <span className="flex-1 text-sm font-bold text-foreground truncate pl-1">
-          {selectedCompany?.name ?? "Select company"}
-        </span>
+        <div className="flex-1 min-w-0">
+          <span className="block text-sm font-bold text-foreground truncate">
+            {selectedCompany?.name ?? "Select company"}
+          </span>
+        </div>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -69,56 +64,47 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
-        <div className="flex flex-col gap-0.5">
-          {/* New Issue button aligned with nav items */}
-          <button
-            onClick={() => openNewIssue()}
-            className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
-          >
-            <SquarePen className="h-4 w-4 shrink-0" />
-            <span className="truncate">New Issue</span>
-          </button>
-          <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
-          <SidebarNavItem
-            to="/inbox"
-            label="Inbox"
-            icon={Inbox}
-            badge={inboxBadge.inbox}
-            badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-            alert={inboxBadge.failedRuns > 0}
-          />
-          <PluginSlotOutlet
-            slotTypes={["sidebar"]}
-            context={pluginContext}
-            className="flex flex-col gap-0.5"
-            itemClassName="text-[13px] font-medium"
-            missingBehavior="placeholder"
-          />
+      {/* Company description */}
+      {selectedCompany?.description && (
+        <div className="px-4 pb-2 -mt-1">
+          <span className="text-[11px] text-muted-foreground/70 line-clamp-1">
+            {selectedCompany.description}
+          </span>
         </div>
+      )}
 
-        <SidebarSection label="Work">
-          <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
-          <SidebarNavItem to="/routines" label="Routines" icon={Repeat} textBadge="Beta" textBadgeTone="amber" />
-          <SidebarNavItem to="/goals" label="Goals" icon={Target} />
-        </SidebarSection>
+      <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-0.5 px-3 py-2">
+        <SidebarNavItem to="/dashboard" label="Overview" icon={LayoutDashboard} liveCount={liveRunCount} />
+        <SidebarNavItem
+          to="/inbox"
+          label="Inbox"
+          icon={Inbox}
+          badge={inboxBadge.inbox}
+          badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+          alert={inboxBadge.failedRuns > 0}
+        />
+        <PluginSlotOutlet
+          slotTypes={["sidebar"]}
+          context={pluginContext}
+          className="flex flex-col gap-0.5"
+          itemClassName="text-[13px] font-medium"
+          missingBehavior="placeholder"
+        />
+        <SidebarNavItem to="/agents" label="Employees" icon={Users} />
+        <SidebarNavItem to="/issues" label="Tasks" icon={ListTodo} />
+        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        <SidebarNavItem to="/activity" label="Activity Log" icon={Activity} />
+        <SidebarNavItem to="/costs" label="Budget" icon={DollarSign} />
+        <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
 
-        <SidebarProjects />
-
-        <SidebarAgents />
-
-        <SidebarSection label="Company">
-          <SidebarNavItem to="/org" label="Org" icon={Network} />
-          <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
-          <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
-          <SidebarNavItem to="/activity" label="Activity" icon={History} />
-          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
-        </SidebarSection>
+        <div className="mt-3">
+          <SidebarProjects />
+        </div>
 
         <PluginSlotOutlet
           slotTypes={["sidebarPanel"]}
           context={pluginContext}
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-3 mt-3"
           itemClassName="rounded-lg border border-border p-3"
           missingBehavior="placeholder"
         />

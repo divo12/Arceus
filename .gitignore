@@ -9,6 +9,7 @@ coverage/
 data/
 .paperclip/
 .pnpm-store/
+_arceus-ref/
 tmp-*
 cli/tmp/
 

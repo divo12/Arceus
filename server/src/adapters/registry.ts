@@ -77,6 +77,7 @@ import {
 } from "hermes-paperclip-adapter";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+import { arceusAdapter } from "./arceus/index.js";
 
 const claudeLocalAdapter: ServerAdapterModule = {
   type: "claude_local",
@@ -191,6 +192,7 @@ const adaptersByType = new Map<string, ServerAdapterModule>(
     geminiLocalAdapter,
     openclawGatewayAdapter,
     hermesLocalAdapter,
+    arceusAdapter,
     processAdapter,
     httpAdapter,
   ].map((a) => [a.type, a]),

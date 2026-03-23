@@ -32,7 +32,7 @@ function getRecentIssues(issues: Issue[]): Issue[] {
 }
 
 export function Dashboard() {
-  const { selectedCompanyId, companies } = useCompany();
+  const { selectedCompanyId, selectedCompany, companies } = useCompany();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [animatedActivityIds, setAnimatedActivityIds] = useState<Set<string>>(new Set());
@@ -187,6 +187,24 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Overview header */}
+      <div>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Overview</h1>
+          <span className={cn(
+            "rounded-full px-2.5 py-0.5 text-xs font-medium",
+            selectedCompany?.status === "active"
+              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+              : "bg-muted text-muted-foreground",
+          )}>
+            {selectedCompany?.status ?? "active"}
+          </span>
+        </div>
+        {selectedCompany?.description && (
+          <p className="text-sm text-muted-foreground mt-1">{selectedCompany.description}</p>
+        )}
+      </div>
+
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
       {hasNoAgents && (
@@ -229,54 +247,52 @@ export function Dashboard() {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
             <MetricCard
               icon={Bot}
               value={data.agents.active + data.agents.running + data.agents.paused + data.agents.error}
-              label="Agents Enabled"
+              label="Employees"
               to="/agents"
               description={
                 <span>
-                  {data.agents.running} running{", "}
-                  {data.agents.paused} paused{", "}
-                  {data.agents.error} errors
+                  {data.agents.running} running
                 </span>
               }
             />
             <MetricCard
               icon={CircleDot}
-              value={data.tasks.inProgress}
-              label="Tasks In Progress"
+              value={data.tasks.open + data.tasks.inProgress + data.tasks.blocked + data.tasks.done}
+              label="Tasks"
               to="/issues"
               description={
                 <span>
-                  {data.tasks.open} open{", "}
-                  {data.tasks.blocked} blocked
+                  {data.tasks.open} open{" · "}
+                  {data.tasks.done} done
                 </span>
               }
             />
             <MetricCard
               icon={DollarSign}
-              value={formatCents(data.costs.monthSpendCents)}
-              label="Month Spend"
+              value={`${formatCents(data.costs.monthSpendCents)}/${data.costs.monthBudgetCents > 0 ? formatCents(data.costs.monthBudgetCents) : "∞"}`}
+              label="Budget"
               to="/costs"
               description={
                 <span>
                   {data.costs.monthBudgetCents > 0
-                    ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
+                    ? `${data.costs.monthUtilizationPercent}% used`
+                    : "Unlimited"}
                 </span>
               }
             />
             <MetricCard
               icon={ShieldCheck}
               value={data.pendingApprovals + data.budgets.pendingApprovals}
-              label="Pending Approvals"
+              label="Approvals"
               to="/approvals"
               description={
                 <span>
-                  {data.budgets.pendingApprovals > 0
-                    ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
+                  {(data.pendingApprovals + data.budgets.pendingApprovals) === 0
+                    ? "All clear"
                     : "Awaiting board review"}
                 </span>
               }

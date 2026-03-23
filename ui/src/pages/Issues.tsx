@@ -3,7 +3,6 @@ import { useLocation, useSearchParams } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
-import { projectsApi } from "../api/projects";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -48,12 +47,6 @@ export function Issues() {
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
     queryFn: () => agentsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-
-  const { data: projects } = useQuery({
-    queryKey: queryKeys.projects.list(selectedCompanyId!),
-    queryFn: () => projectsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
@@ -109,7 +102,6 @@ export function Issues() {
       isLoading={isLoading}
       error={error as Error | null}
       agents={agents}
-      projects={projects}
       liveIssueIds={liveIssueIds}
       viewStateKey="paperclip:issues-view"
       issueLinkState={issueLinkState}

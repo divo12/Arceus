@@ -51,6 +51,7 @@ import {
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
+import { buildMemoryContextForRun, extractMemoriesFromRun } from "./memory-lifecycle.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -2372,6 +2373,23 @@ export function heartbeatService(db: Db) {
         });
       };
 
+      // ── Hippocampus: inject memory context before adapter run ──
+      const memoryContext = await buildMemoryContextForRun({
+        agentId: agent.id,
+        issueTitle: issueContext?.title ?? null,
+        issueId: issueId ?? null,
+        wakeReason: readNonEmptyString(context.wakeReason) ?? null,
+      });
+      if (memoryContext) {
+        context.paperclipMemoryContext = memoryContext;
+        // Also append to the session handoff so adapters that read it get the memory
+        const existingHandoff = readNonEmptyString(context.paperclipSessionHandoffMarkdown) ?? "";
+        context.paperclipSessionHandoffMarkdown = existingHandoff
+          ? `${existingHandoff}\n\n${memoryContext}`
+          : memoryContext;
+        await onLog("stdout", "[paperclip] Hippocampus memory context injected into run.\n");
+      }
+
       const adapter = getServerAdapter(agent.adapterType);
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
@@ -2475,6 +2493,17 @@ export function heartbeatService(db: Db) {
       } else {
         outcome = "failed";
       }
+
+      // ── Hippocampus: extract memories from run output (best-effort, non-blocking) ──
+      void extractMemoriesFromRun({
+        agentId: agent.id,
+        runId: run.id,
+        issueId: issueId ?? null,
+        issueTitle: issueContext?.title ?? null,
+        outcome,
+        stdoutExcerpt,
+        stderrExcerpt,
+      });
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
       if (handle) {

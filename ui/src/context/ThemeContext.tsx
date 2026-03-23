@@ -22,7 +22,7 @@ const LIGHT_THEME_COLOR = "#ffffff";
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 function resolveThemeFromDocument(): Theme {
-  if (typeof document === "undefined") return "dark";
+  if (typeof document === "undefined") return "light";
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
 

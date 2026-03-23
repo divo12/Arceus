@@ -23,6 +23,13 @@ export const queryKeys = {
       ["agents", "instructions-bundle", id, "file", relativePath] as const,
     keys: (agentId: string) => ["agents", "keys", agentId] as const,
     configRevisions: (agentId: string) => ["agents", "config-revisions", agentId] as const,
+    memory: {
+      summary: (agentId: string) => ["agents", "memory", "summary", agentId] as const,
+      list: (agentId: string, memoryType?: string) =>
+        ["agents", "memory", "list", agentId, memoryType ?? "__all__"] as const,
+      habits: (agentId: string) => ["agents", "memory", "habits", agentId] as const,
+      priming: (agentId: string) => ["agents", "memory", "priming", agentId] as const,
+    },
     adapterModels: (companyId: string, adapterType: string) =>
       ["agents", companyId, "adapter-models", adapterType] as const,
   },
