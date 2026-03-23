@@ -1,6 +1,6 @@
 # Hippocampus — Future Roadmap
 
-> **Phase 0–5 complete.** All 77 original review items + 13 holistic review items + 9 test quality items resolved. 135 tests passing.
+> **Phase 0–5 complete.** The production backend swap and F7 working-memory atomic append are also complete. Current verification is 150 tests passing, 9 skipped.
 >
 > This file tracks only **remaining deferred work** — architectural improvements for post-MVP.
 >
@@ -25,25 +25,6 @@ Extraction works for current AGENT-centric flows. Expand when meetings and refle
 3. Mode-aware post-processing (bias memory typing per mode)
 4. Better `MEETING` extraction: decisions, owners, deadlines, action items
 5. Regression tests proving each mode stores meaningfully different outputs
-
----
-
-## Production Backend Swap
-
-| Backend | Current (test scaffolding) | Production Target |
-|---------|---------------------------|-------------------|
-| Relational | `SQLiteRelationalStore` | `PostgreSQLRelationalStore` |
-| Vector | `InMemoryVectorStore` | `PGVectorStore` |
-| Cache | `DictCacheStore` | `RedisCacheStore` |
-| Embedding | `MockEmbeddingEngine` | `SentenceTransformerEmbeddingEngine` |
-| Graph | `InMemoryGraphStoreBackend` | `Neo4jGraphStoreBackend` (already exists) |
-
-Protocol-based architecture is correct. Each backend swappable independently. Factory routes based on config.
-
-Deferred alternatives remain possible later:
-- Vector: Qdrant / Pinecone
-- Cache: Valkey
-- Embedding: Azure OpenAI / Cohere
 
 ---
 
@@ -145,12 +126,6 @@ class ExtractorContext(Protocol):
 
 **When:** When multi-startup-per-agent becomes a real product requirement.
 
-### L12: Unused `pattern_store` in ReasoningBank
-
-`ReasoningBank.__init__` accepts `pattern_store: PatternStore` and assigns `self._pattern_store`, but no method ever reads it. Vestigial from an earlier design where reasoning bank would query patterns during consolidation.
-
-Remove the parameter and assignment when next touching `ReasoningBank`. One-line change, two call sites (`hippocampus.py:174`, `test_reasoning_bank.py:59`).
-
 ### Soft-Delete Compaction (F2)
 
 **Problem:** `StaticMemory.update()` soft-deletes old versions (`is_deleted=True, deleted_reason="superseded_by_update"`), but they remain in the vector store forever. Over time, soft-deleted records accumulate — consuming storage, slowing `list_by_type()` scans, and inflating backup size.
@@ -199,24 +174,6 @@ dynamic_facts = await hippocampus.list_memories(...)   # all dynamic
 
 **When:** When profiles create prompt-budget pressure (likely when agents accumulate >50 static facts).
 
-### Backend-Native Atomic Append for Working Memory (F7)
-
-**Problem:** `WorkingMemory.append_conversation()` (`working.py:22-28`) does read-modify-write under an in-process `asyncio.Lock`. Safe for single process, but if two workers serve the same agent:
-1. Worker A reads `[]`, Worker B reads `[]`
-2. Both append and write — one message lost
-
-**Fix:** Extend `WorkingMemoryBackend` protocol with:
-```python
-async def append(self, key: str, value: str, ttl_seconds: int) -> None: ...
-```
-
-Implementation per backend:
-- **Redis:** `RPUSH` + `EXPIRE` (atomic, no read-modify-write needed)
-- **PostgreSQL:** `INSERT INTO conversations (key, message, seq) VALUES ($1, $2, nextval(...))` with row-level locking
-- **DictCacheStore:** Keep current in-process lock (test scaffolding only)
-
-**When:** When working memory is written from multiple processes (distributed deployment).
-
 ### Scalable Consolidation for Large Memory Sets (F10)
 
 **Problem:** `ReasoningBank.consolidate()` loads ALL dynamic memories and runs three O(N^2) pairwise loops:
@@ -261,11 +218,10 @@ With 5,000 memories this is 25M cosine comparisons in pure Python, blocking the 
 |----------|-------|
 | Graph Store | 1 (G1) |
 | Extraction Modes | 1 |
-| Production Backends | 1 (F5) |
-| Architecture | 4 (F1, F6, F9, L12) |
+| Architecture | 3 (F1, F6, F9) |
 | Lifecycle & Storage | 2 (F2, F3) |
-| Performance & Scalability | 3 (F4, F7, F10) |
+| Performance & Scalability | 2 (F4, F10) |
 | Observability | 1 (F8) |
-| **Total Deferred** | **13** |
+| **Total Deferred** | **10** |
 
 All items are post-MVP. No blockers for current development.
