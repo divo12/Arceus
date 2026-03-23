@@ -34,6 +34,17 @@ export interface MemoryHealth {
   status: string;
   agents_loaded: number;
   debug: boolean;
+  diagnostics?: {
+    mode: "off" | "embedded" | "sidecar";
+    status: "stopped" | "starting" | "running" | "stopping" | "crashed" | "backoff";
+    pid: number | null;
+    pendingRequests: number;
+    consecutiveCrashes: number;
+    totalCrashes: number;
+    lastCrashAt: number | null;
+    nextRestartAt: number | null;
+    stderrExcerpt: string;
+  } | null;
 }
 
 export const memoryApi = {

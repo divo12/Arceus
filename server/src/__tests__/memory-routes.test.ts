@@ -271,7 +271,11 @@ describe("memory routes", () => {
     process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
     vi.doMock("../services/hippocampus-bridge.js", () => ({
       getHippocampusBridge: () => ({
-        health: vi.fn().mockResolvedValue({ status: "ok", mode: "embedded" }),
+        health: vi.fn().mockResolvedValue({
+          status: "ok",
+          agents_loaded: 0,
+          debug: false,
+        }),
       }),
     }));
 
@@ -282,6 +286,58 @@ describe("memory routes", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ status: "ok", mode: "embedded" });
+    expect(res.body).toEqual({
+      status: "ok",
+      agents_loaded: 0,
+      debug: false,
+    });
+  });
+
+  it("includes runtime diagnostics on health when the bridge exposes them", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        health: vi.fn().mockResolvedValue({
+          status: "ok",
+          agents_loaded: 1,
+          debug: false,
+        }),
+        diagnostics: vi.fn().mockReturnValue({
+          mode: "embedded",
+          status: "running",
+          pid: 4321,
+          pendingRequests: 2,
+          consecutiveCrashes: 1,
+          totalCrashes: 3,
+          lastCrashAt: 1711234567890,
+          nextRestartAt: 1711234569999,
+          stderrExcerpt: "recent stderr line",
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/memory/health",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      status: "ok",
+      agents_loaded: 1,
+      debug: false,
+      diagnostics: {
+        mode: "embedded",
+        status: "running",
+        pid: 4321,
+        pendingRequests: 2,
+        consecutiveCrashes: 1,
+        totalCrashes: 3,
+        lastCrashAt: 1711234567890,
+        nextRestartAt: 1711234569999,
+        stderrExcerpt: "recent stderr line",
+      },
+    });
   });
 });

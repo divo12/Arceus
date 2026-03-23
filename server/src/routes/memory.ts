@@ -10,7 +10,7 @@ import { assertBoard } from "./authz.js";
  */
 type HippocampusBridgeSurface = Pick<
   HippocampusBridge,
-  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "runGC" | "health"
+  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "runGC" | "health" | "diagnostics"
 >;
 
 function resolveHippocampusMode(modeOverride?: HippocampusMode): HippocampusMode {
@@ -158,7 +158,8 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
       if (!ensureEnabled(res)) return;
       const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.health();
-      res.json(result);
+      const diagnostics = hippocampusBridge.diagnostics?.() ?? null;
+      res.json(diagnostics ? { ...result, diagnostics } : result);
     } catch (err) {
       sendBridgeError(res, err);
     }

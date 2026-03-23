@@ -58,6 +58,7 @@ export interface HealthResult {
   status: string;
   agents_loaded: number;
   debug: boolean;
+  diagnostics?: HippocampusRuntimeDiagnostics | null;
 }
 
 export interface HippocampusRuntimeDiagnostics {
