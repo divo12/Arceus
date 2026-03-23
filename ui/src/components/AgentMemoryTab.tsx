@@ -57,6 +57,26 @@ function ConfidenceBar({ value }: { value: number }) {
   );
 }
 
+function ScoreBar({ value }: { value: number | null }) {
+  if (value == null) return null;
+  const clamped = Math.max(0, Math.min(1, value));
+  const pct = Math.round(clamped * 100);
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="h-1.5 w-16 rounded-full bg-muted overflow-hidden">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            pct >= 80 ? "bg-green-500" : pct >= 50 ? "bg-amber-500" : "bg-red-400",
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="text-[10px] text-muted-foreground tabular-nums">{pct}% match</span>
+    </div>
+  );
+}
+
 function SummaryCards({ agentId }: { agentId: string }) {
   const { data: summary, isLoading } = useQuery({
     queryKey: queryKeys.agents.memory.summary(agentId),
@@ -323,7 +343,7 @@ function RecallTest({ agentId }: { agentId: string }) {
                   <Badge variant="outline" className="text-[10px]">
                     {r.kind}
                   </Badge>
-                  {r.confidence != null && <ConfidenceBar value={r.confidence} />}
+                  <ScoreBar value={r.relevance_score} />
                 </div>
                 <p className="text-muted-foreground">{r.content}</p>
               </div>

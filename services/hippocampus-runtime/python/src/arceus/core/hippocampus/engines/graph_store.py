@@ -130,7 +130,11 @@ class GraphStore:
                 expanded[neighbor.id] = neighbor
 
         ranked = sorted(
-            expanded.values(),
+            (
+                node
+                for node in expanded.values()
+                if cosine_similarity(query_embedding, node.embedding or []) > 0.0
+            ),
             key=lambda node: (
                 cosine_similarity(query_embedding, node.embedding or []),
                 node.mention_count,

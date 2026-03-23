@@ -37,6 +37,7 @@ if (!isSameFile && existsSync(CWD_ENV_PATH)) {
 }
 
 type DatabaseMode = "embedded-postgres" | "postgres";
+export type HippocampusMode = "off" | "embedded" | "sidecar";
 
 export interface Config {
   deploymentMode: DeploymentMode;
@@ -70,6 +71,22 @@ export interface Config {
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
+  hippocampusMode: HippocampusMode;
+  hippocampusApiUrl: string | undefined;
+  hippocampusPythonBin: string;
+  hippocampusStartupTimeoutMs: number;
+  hippocampusRequestTimeoutMs: number;
+}
+
+export function resolveHippocampusMode(): HippocampusMode {
+  const configured = process.env.PAPERCLIP_HIPPOCAMPUS_MODE?.trim().toLowerCase();
+  if (configured === "off" || configured === "embedded" || configured === "sidecar") {
+    return configured;
+  }
+  if (process.env.HIPPOCAMPUS_API_URL?.trim()) {
+    return "sidecar";
+  }
+  return "off";
 }
 
 export function loadConfig(): Config {
@@ -209,6 +226,10 @@ export function loadConfig(): Config {
       fileDatabaseBackup?.dir ??
       resolveDefaultBackupDir(),
   );
+  const hippocampusMode = resolveHippocampusMode();
+  const hippocampusApiUrl =
+    process.env.HIPPOCAMPUS_API_URL?.trim() ||
+    (hippocampusMode === "sidecar" ? "http://localhost:8100" : undefined);
 
   return {
     deploymentMode,
@@ -252,5 +273,16 @@ export function loadConfig(): Config {
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
+    hippocampusMode,
+    hippocampusApiUrl,
+    hippocampusPythonBin: process.env.PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN?.trim() || "python3",
+    hippocampusStartupTimeoutMs: Math.max(
+      1000,
+      Number(process.env.PAPERCLIP_HIPPOCAMPUS_STARTUP_TIMEOUT_MS) || 15000,
+    ),
+    hippocampusRequestTimeoutMs: Math.max(
+      1000,
+      Number(process.env.PAPERCLIP_HIPPOCAMPUS_REQUEST_TIMEOUT_MS) || 30000,
+    ),
   };
 }

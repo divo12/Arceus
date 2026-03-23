@@ -24,7 +24,7 @@ Orchestration:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from arceus.core.hippocampus.backends.factory import (
@@ -316,6 +316,7 @@ class Hippocampus:
         while remaining and len(selected) < top_k:
             best_index = 0
             best_score = float("-inf")
+            best_relevance = 0.0
 
             for index, candidate in enumerate(remaining):
                 relevance = cosine_similarity(query_embedding, candidate.embedding or [])
@@ -336,8 +337,12 @@ class Hippocampus:
                 if score > best_score:
                     best_score = score
                     best_index = index
+                    best_relevance = relevance
 
-            selected.append(remaining.pop(best_index))
+            chosen = remaining.pop(best_index)
+            if best_relevance <= 0.0:
+                continue
+            selected.append(replace(chosen, relevance_score=best_relevance))
 
         selected = await self._usage_tracker.record_access(selected)
 

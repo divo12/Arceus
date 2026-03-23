@@ -23,7 +23,7 @@ import {
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, type Config } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
@@ -66,6 +66,35 @@ export interface StartedServer {
   listenPort: number;
   apiUrl: string;
   databaseUrl: string;
+}
+
+async function loadHippocampusBridgeModule() {
+  const mod = await import("./services/hippocampus-bridge.js");
+  return mod;
+}
+
+export async function startHippocampusRuntimeForConfig(
+  config: Pick<
+    Config,
+    "hippocampusMode" | "hippocampusApiUrl" | "hippocampusPythonBin" | "hippocampusStartupTimeoutMs" | "hippocampusRequestTimeoutMs"
+  >,
+): Promise<void> {
+  const mod = await loadHippocampusBridgeModule();
+  await mod.initializeHippocampusBridge({
+    mode: config.hippocampusMode,
+    apiUrl: config.hippocampusApiUrl,
+    pythonBin: config.hippocampusPythonBin,
+    startupTimeoutMs: config.hippocampusStartupTimeoutMs,
+    requestTimeoutMs: config.hippocampusRequestTimeoutMs,
+  });
+}
+
+export async function stopHippocampusRuntimeForConfig(
+  config: Pick<Config, "hippocampusMode">,
+): Promise<void> {
+  if (config.hippocampusMode === "off") return;
+  const mod = await loadHippocampusBridgeModule();
+  await mod.shutdownHippocampusBridge();
 }
 
 export async function startServer(): Promise<StartedServer> {
@@ -505,6 +534,8 @@ export async function startServer(): Promise<StartedServer> {
   process.env.PAPERCLIP_LISTEN_HOST = runtimeListenHost;
   process.env.PAPERCLIP_LISTEN_PORT = String(listenPort);
   process.env.PAPERCLIP_API_URL = `http://${runtimeApiHost}:${listenPort}`;
+
+  await startHippocampusRuntimeForConfig(config);
   
   setupLiveEventsWebSocketServer(server, db as any, {
     deploymentMode: config.deploymentMode,
@@ -678,18 +709,33 @@ export async function startServer(): Promise<StartedServer> {
     });
   });
   
-  if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
+  if (config.hippocampusMode === "embedded" || (embeddedPostgres && embeddedPostgresStartedByThisProcess)) {
+    let shuttingDown = false;
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
-      logger.info({ signal }, "Stopping embedded PostgreSQL");
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logger.info({ signal }, "Shutting down Paperclip runtime services");
       try {
-        await embeddedPostgres?.stop();
+        await stopHippocampusRuntimeForConfig(config);
       } catch (err) {
-        logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
-      } finally {
-        process.exit(0);
+        logger.error({ err }, "Failed to stop Hippocampus runtime cleanly");
       }
+      if (server.listening) {
+        await new Promise<void>((resolveClose) => {
+          server.close(() => resolveClose());
+        });
+      }
+      if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
+        logger.info({ signal }, "Stopping embedded PostgreSQL");
+        try {
+          await embeddedPostgres.stop();
+        } catch (err) {
+          logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
+        }
+      }
+      process.exit(0);
     };
-  
+
     process.once("SIGINT", () => {
       void shutdown("SIGINT");
     });

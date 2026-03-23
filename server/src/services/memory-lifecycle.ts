@@ -1,12 +1,25 @@
 /**
  * Memory Lifecycle — hooks into the heartbeat to inject/extract
- * memories via the Hippocampus sidecar before and after adapter runs.
+ * memories via the Hippocampus bridge before and after adapter runs.
  */
 
-import { hippocampusClient } from "./hippocampus-client.js";
+import { loadConfig } from "../config.js";
+import type { HippocampusBridge } from "./hippocampus-contract.js";
 import { logger } from "../middleware/logger.js";
 
-const MEMORY_ENABLED = process.env.HIPPOCAMPUS_API_URL != null;
+type HippocampusBridgeSurface = Pick<
+  HippocampusBridge,
+  "health" | "getPriming" | "getHabits" | "recall" | "extract" | "processTrajectory"
+>;
+
+async function getHippocampusBridge(): Promise<HippocampusBridgeSurface> {
+  const mod = await import("./hippocampus-bridge.js");
+  return mod.hippocampusBridge as HippocampusBridgeSurface;
+}
+
+function isMemoryEnabled(): boolean {
+  return loadConfig().hippocampusMode !== "off";
+}
 
 /**
  * Pre-run: fetch priming prompt + recall relevant memories for the current
@@ -22,21 +35,22 @@ export async function buildMemoryContextForRun(input: {
   issueId: string | null;
   wakeReason: string | null;
 }): Promise<string | null> {
-  if (!MEMORY_ENABLED) return null;
+  if (!isMemoryEnabled()) return null;
 
   const { agentId, issueTitle, issueId, wakeReason } = input;
 
   try {
-    const healthy = await hippocampusClient.health().then(() => true).catch(() => false);
+    const hippocampusBridge = await getHippocampusBridge();
+    const healthy = await hippocampusBridge.health().then(() => true).catch(() => false);
     if (!healthy) return null;
 
     // Fetch priming + habits + recall in parallel
     const query = [issueTitle, wakeReason, issueId].filter(Boolean).join(" — ");
     const [priming, habits, recalled] = await Promise.all([
-      hippocampusClient.getPriming(agentId).catch(() => ({ prompt: "" })),
-      hippocampusClient.getHabits(agentId, query).catch(() => ({ habits: [] })),
+      hippocampusBridge.getPriming(agentId).catch(() => ({ prompt: "" })),
+      hippocampusBridge.getHabits(agentId, query).catch(() => ({ habits: [] })),
       query
-        ? hippocampusClient.recall(agentId, query).catch(() => ({ items: [] }))
+        ? hippocampusBridge.recall(agentId, query).catch(() => ({ items: [] }))
         : Promise.resolve({ items: [] }),
     ]);
 
@@ -89,12 +103,13 @@ export async function extractMemoriesFromRun(input: {
   stdoutExcerpt: string;
   stderrExcerpt: string;
 }): Promise<void> {
-  if (!MEMORY_ENABLED) return;
+  if (!isMemoryEnabled()) return;
 
   const { agentId, runId, issueId, issueTitle, outcome, stdoutExcerpt, stderrExcerpt } = input;
 
   try {
-    const healthy = await hippocampusClient.health().then(() => true).catch(() => false);
+    const hippocampusBridge = await getHippocampusBridge();
+    const healthy = await hippocampusBridge.health().then(() => true).catch(() => false);
     if (!healthy) return;
 
     // Build pseudo-conversation messages from the run excerpts for extraction
@@ -112,7 +127,7 @@ export async function extractMemoriesFromRun(input: {
     }
 
     // Extract facts from the conversation
-    const extractResult = await hippocampusClient.extract(agentId, messages).catch((err) => {
+    const extractResult = await hippocampusBridge.extract(agentId, messages).catch((err) => {
       logger.warn({ err, agentId, runId }, "hippocampus: extract failed");
       return null;
     });
@@ -120,7 +135,7 @@ export async function extractMemoriesFromRun(input: {
     // Process trajectory for task-level learning
     if (issueId && (outcome === "succeeded" || outcome === "failed")) {
       const quality = outcome === "succeeded" ? 0.8 : 0.2;
-      await hippocampusClient
+      await hippocampusBridge
         .processTrajectory(
           agentId,
           issueId,
