@@ -276,7 +276,14 @@ export function CommentThread({
   const [submitting, setSubmitting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const effectiveSuggestedAssigneeValue = suggestedAssigneeValue ?? currentAssigneeValue;
-  const [reassignTarget, setReassignTarget] = useState(effectiveSuggestedAssigneeValue);
+  const [reassignState, setReassignState] = useState(() => ({
+    sourceValue: effectiveSuggestedAssigneeValue,
+    value: effectiveSuggestedAssigneeValue,
+  }));
+  const reassignTarget =
+    reassignState.sourceValue === effectiveSuggestedAssigneeValue
+      ? reassignState.value
+      : effectiveSuggestedAssigneeValue;
   const [highlightCommentId, setHighlightCommentId] = useState<string | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const attachInputRef = useRef<HTMLInputElement | null>(null);
@@ -335,10 +342,6 @@ export function CommentThread({
     };
   }, []);
 
-  useEffect(() => {
-    setReassignTarget(effectiveSuggestedAssigneeValue);
-  }, [effectiveSuggestedAssigneeValue]);
-
   // Scroll to comment when URL hash matches #comment-{id}
   useEffect(() => {
     const hash = location.hash;
@@ -369,7 +372,10 @@ export function CommentThread({
       setBody("");
       if (draftKey) clearDraft(draftKey);
       setReopen(true);
-      setReassignTarget(effectiveSuggestedAssigneeValue);
+      setReassignState({
+        sourceValue: effectiveSuggestedAssigneeValue,
+        value: effectiveSuggestedAssigneeValue,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -452,7 +458,12 @@ export function CommentThread({
               noneLabel="No assignee"
               searchPlaceholder="Search assignees..."
               emptyMessage="No assignees found."
-              onChange={setReassignTarget}
+              onChange={(value) =>
+                setReassignState({
+                  sourceValue: effectiveSuggestedAssigneeValue,
+                  value,
+                })
+              }
               className="text-xs h-8"
               renderTriggerValue={(option) => {
                 if (!option) return <span className="text-muted-foreground">Assignee</span>;

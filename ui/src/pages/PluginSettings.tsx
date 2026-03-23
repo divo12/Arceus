@@ -61,7 +61,19 @@ export function PluginSettings() {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { companyPrefix, pluginId } = useParams<{ companyPrefix?: string; pluginId: string }>();
-  const [activeTab, setActiveTab] = useState<"configuration" | "status">("configuration");
+  const [activeTabs, setActiveTabs] = useState<
+    Partial<Record<string, "configuration" | "status">>
+  >({});
+  const activeTab = pluginId ? (activeTabs[pluginId] ?? "configuration") : "configuration";
+  const setActiveTab = useCallback(
+    (value: "configuration" | "status") => {
+      if (!pluginId) return;
+      setActiveTabs((current) =>
+        current[pluginId] === value ? current : { ...current, [pluginId]: value },
+      );
+    },
+    [pluginId],
+  );
 
   const { data: plugin, isLoading: pluginLoading } = useQuery({
     queryKey: queryKeys.plugins.detail(pluginId!),
@@ -120,10 +132,6 @@ export function PluginSettings() {
       { label: plugin?.manifestJson?.displayName ?? plugin?.packageName ?? "Plugin Details" },
     ]);
   }, [selectedCompany?.name, setBreadcrumbs, companyPrefix, plugin]);
-
-  useEffect(() => {
-    setActiveTab("configuration");
-  }, [pluginId]);
 
   if (pluginLoading) {
     return <div className="p-4 text-sm text-muted-foreground">Loading plugin details...</div>;

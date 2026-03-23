@@ -15,6 +15,7 @@ import {
   ToggleField,
   HintIcon
 } from "../components/agent-config-primitives";
+import type { Company } from "@paperclipai/shared";
 
 type AgentSnippetInput = {
   onboardingTextUrl: string;
@@ -31,40 +32,68 @@ export function CompanySettings() {
   } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
-  const queryClient = useQueryClient();
-  // General settings local state
-  const [companyName, setCompanyName] = useState("");
-  const [description, setDescription] = useState("");
-  const [brandColor, setBrandColor] = useState("");
-  const [logoUrl, setLogoUrl] = useState("");
-  const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
-
-  // Sync local state from selected company
   useEffect(() => {
-    if (!selectedCompany) return;
-    setCompanyName(selectedCompany.name);
-    setDescription(selectedCompany.description ?? "");
-    setBrandColor(selectedCompany.brandColor ?? "");
-    setLogoUrl(selectedCompany.logoUrl ?? "");
-  }, [selectedCompany]);
+    setBreadcrumbs([
+      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
+      { label: "Settings" }
+    ]);
+  }, [setBreadcrumbs, selectedCompany?.name]);
 
+  if (!selectedCompany) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        No company selected. Select a company from the switcher above.
+      </div>
+    );
+  }
+
+  return (
+    <CompanySettingsPanel
+      key={selectedCompanyId ?? selectedCompany.id}
+      companies={companies}
+      selectedCompany={selectedCompany}
+      selectedCompanyId={selectedCompanyId!}
+      setSelectedCompanyId={setSelectedCompanyId}
+      pushToast={pushToast}
+    />
+  );
+}
+
+function CompanySettingsPanel({
+  companies,
+  selectedCompany,
+  selectedCompanyId,
+  setSelectedCompanyId,
+  pushToast,
+}: {
+  companies: Company[];
+  selectedCompany: Company;
+  selectedCompanyId: string;
+  setSelectedCompanyId: (companyId: string) => void;
+  pushToast: ReturnType<typeof useToast>["pushToast"];
+}) {
+  const queryClient = useQueryClient();
+  const [companyName, setCompanyName] = useState(selectedCompany.name);
+  const [description, setDescription] = useState(selectedCompany.description ?? "");
+  const [brandColor, setBrandColor] = useState(selectedCompany.brandColor ?? "");
+  const [logoUrl, setLogoUrl] = useState(selectedCompany.logoUrl ?? "");
+  const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
   const [snippetCopied, setSnippetCopied] = useState(false);
   const [snippetCopyDelightId, setSnippetCopyDelightId] = useState(0);
 
   const generalDirty =
-    !!selectedCompany &&
-    (companyName !== selectedCompany.name ||
-      description !== (selectedCompany.description ?? "") ||
-      brandColor !== (selectedCompany.brandColor ?? ""));
+    companyName !== selectedCompany.name ||
+    description !== (selectedCompany.description ?? "") ||
+    brandColor !== (selectedCompany.brandColor ?? "");
 
   const generalMutation = useMutation({
     mutationFn: (data: {
       name: string;
       description: string | null;
       brandColor: string | null;
-    }) => companiesApi.update(selectedCompanyId!, data),
+    }) => companiesApi.update(selectedCompanyId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     }
@@ -72,7 +101,7 @@ export function CompanySettings() {
 
   const settingsMutation = useMutation({
     mutationFn: (requireApproval: boolean) =>
-      companiesApi.update(selectedCompanyId!, {
+      companiesApi.update(selectedCompanyId, {
         requireBoardApprovalForNewAgents: requireApproval
       }),
     onSuccess: () => {
@@ -82,7 +111,7 @@ export function CompanySettings() {
 
   const inviteMutation = useMutation({
     mutationFn: () =>
-      accessApi.createOpenClawInvitePrompt(selectedCompanyId!),
+      accessApi.createOpenClawInvitePrompt(selectedCompanyId),
     onSuccess: async (invite) => {
       setInviteError(null);
       const base = window.location.origin.replace(/\/+$/, "");
@@ -123,7 +152,7 @@ export function CompanySettings() {
         /* clipboard may not be available */
       }
       queryClient.invalidateQueries({
-        queryKey: queryKeys.sidebarBadges(selectedCompanyId!)
+        queryKey: queryKeys.sidebarBadges(selectedCompanyId)
       });
     },
     onError: (err) => {
@@ -141,8 +170,8 @@ export function CompanySettings() {
   const logoUploadMutation = useMutation({
     mutationFn: (file: File) =>
       assetsApi
-        .uploadCompanyLogo(selectedCompanyId!, file)
-        .then((asset) => companiesApi.update(selectedCompanyId!, { logoAssetId: asset.assetId })),
+        .uploadCompanyLogo(selectedCompanyId, file)
+        .then((asset) => companiesApi.update(selectedCompanyId, { logoAssetId: asset.assetId })),
     onSuccess: (company) => {
       syncLogoState(company.logoUrl);
       setLogoUploadError(null);
@@ -150,31 +179,12 @@ export function CompanySettings() {
   });
 
   const clearLogoMutation = useMutation({
-    mutationFn: () => companiesApi.update(selectedCompanyId!, { logoAssetId: null }),
+    mutationFn: () => companiesApi.update(selectedCompanyId, { logoAssetId: null }),
     onSuccess: (company) => {
       setLogoUploadError(null);
       syncLogoState(company.logoUrl);
     }
   });
-
-  function handleLogoFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
-    event.currentTarget.value = "";
-    if (!file) return;
-    setLogoUploadError(null);
-    logoUploadMutation.mutate(file);
-  }
-
-  function handleClearLogo() {
-    clearLogoMutation.mutate();
-  }
-
-  useEffect(() => {
-    setInviteError(null);
-    setInviteSnippet(null);
-    setSnippetCopied(false);
-    setSnippetCopyDelightId(0);
-  }, [selectedCompanyId]);
 
   const archiveMutation = useMutation({
     mutationFn: ({
@@ -197,19 +207,16 @@ export function CompanySettings() {
     }
   });
 
-  useEffect(() => {
-    setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
-      { label: "Settings" }
-    ]);
-  }, [setBreadcrumbs, selectedCompany?.name]);
+  function handleLogoFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    event.currentTarget.value = "";
+    if (!file) return;
+    setLogoUploadError(null);
+    logoUploadMutation.mutate(file);
+  }
 
-  if (!selectedCompany) {
-    return (
-      <div className="text-sm text-muted-foreground">
-        No company selected. Select a company from the switcher above.
-      </div>
-    );
+  function handleClearLogo() {
+    clearLogoMutation.mutate();
   }
 
   function handleSaveGeneral() {

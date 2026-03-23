@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "../lib/utils";
 
 const BAYER_4X4 = [
@@ -167,11 +167,13 @@ export function CompanyPatternIcon({
   className,
 }: CompanyPatternIconProps) {
   const initial = companyName.trim().charAt(0).toUpperCase() || "?";
-  const [imageError, setImageError] = useState(false);
-  const logo = !imageError && typeof logoUrl === "string" && logoUrl.trim().length > 0 ? logoUrl : null;
-  useEffect(() => {
-    setImageError(false);
-  }, [logoUrl]);
+  const normalizedLogoUrl =
+    typeof logoUrl === "string" && logoUrl.trim().length > 0 ? logoUrl.trim() : null;
+  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
+  const logo =
+    normalizedLogoUrl !== null && failedLogoUrl !== normalizedLogoUrl
+      ? normalizedLogoUrl
+      : null;
   const patternDataUrl = useMemo(
     () => makeCompanyPatternDataUrl(companyName.trim().toLowerCase(), brandColor),
     [companyName, brandColor],
@@ -188,7 +190,7 @@ export function CompanyPatternIcon({
         <img
           src={logo}
           alt={`${companyName} logo`}
-          onError={() => setImageError(true)}
+          onError={() => setFailedLogoUrl(logo)}
           className="absolute inset-0 h-full w-full object-cover"
         />
       ) : patternDataUrl ? (

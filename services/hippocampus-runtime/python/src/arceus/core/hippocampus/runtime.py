@@ -438,7 +438,9 @@ class HippocampusRuntimeServer:
             "total_static": summary.static_fact_count,
             "total_dynamic": summary.dynamic_fact_count,
             "active_habits": _json_default(summary.active_habits),
-            "priming_prompt": await hippocampus.get_priming_prompt(),
+            # Keep the response shape stable without forcing an extra LLM-backed
+            # priming generation during the default summary load path.
+            "priming_prompt": "",
             "graph_node_count": graph_node_count,
             "top_patterns": _json_default(summary.top_patterns),
             "current_state": _json_default(summary.current_state),

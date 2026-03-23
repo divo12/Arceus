@@ -10,6 +10,7 @@ import {
   Search,
   Plus,
   RefreshCw,
+  PlayCircle,
 } from "lucide-react";
 import { memoryApi, type MemoryListItem, type RecallItem } from "../api/memory";
 import { queryKeys } from "../lib/queryKeys";
@@ -130,53 +131,115 @@ function SummaryCards({ agentId }: { agentId: string }) {
 }
 
 function PrimingSection({ agentId }: { agentId: string }) {
-  const { data } = useQuery({
+  const [enabled, setEnabled] = useState(false);
+  const { data, isFetching } = useQuery({
     queryKey: queryKeys.agents.memory.priming(agentId),
     queryFn: () => memoryApi.priming(agentId),
+    enabled,
     retry: 1,
     staleTime: 30_000,
   });
 
-  if (!data?.prompt) return null;
+  if (!enabled) {
+    return (
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
+          <Brain className="h-4 w-4 text-rose-500" />
+          Priming Prompt
+        </h3>
+        <p className="text-sm text-muted-foreground mb-3">
+          Generate the current priming prompt on demand. This can take a moment because it uses the memory runtime.
+        </p>
+        <Button size="sm" variant="outline" onClick={() => setEnabled(true)}>
+          <PlayCircle className="h-3.5 w-3.5 mr-1.5" />
+          Load Priming Prompt
+        </Button>
+      </div>
+    );
+  }
+
+  if (isFetching && !data?.prompt) {
+    return <Skeleton className="h-36 rounded-lg" />;
+  }
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
-        <Brain className="h-4 w-4 text-rose-500" />
-        Priming Prompt
-      </h3>
-      <p className="text-sm text-muted-foreground whitespace-pre-wrap">{data.prompt}</p>
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <h3 className="text-sm font-medium flex items-center gap-2">
+          <Brain className="h-4 w-4 text-rose-500" />
+          Priming Prompt
+        </h3>
+        <Button size="sm" variant="ghost" onClick={() => setEnabled(false)}>
+          Hide
+        </Button>
+      </div>
+      {data?.prompt ? (
+        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{data.prompt}</p>
+      ) : (
+        <p className="text-sm text-muted-foreground">No priming prompt is available right now.</p>
+      )}
     </div>
   );
 }
 
 function HabitsSection({ agentId }: { agentId: string }) {
-  const { data } = useQuery({
+  const [enabled, setEnabled] = useState(false);
+  const { data, isFetching } = useQuery({
     queryKey: queryKeys.agents.memory.habits(agentId),
     queryFn: () => memoryApi.habits(agentId),
+    enabled,
     retry: 1,
     staleTime: 30_000,
   });
 
-  if (!data?.habits?.length) return null;
+  if (!enabled) {
+    return (
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
+          <Database className="h-4 w-4 text-purple-500" />
+          Active Habits
+        </h3>
+        <p className="text-sm text-muted-foreground mb-3">
+          Load habit suggestions on demand. This avoids blocking the memory tab on an extra runtime pass.
+        </p>
+        <Button size="sm" variant="outline" onClick={() => setEnabled(true)}>
+          <PlayCircle className="h-3.5 w-3.5 mr-1.5" />
+          Load Habits
+        </Button>
+      </div>
+    );
+  }
+
+  if (isFetching && !data) {
+    return <Skeleton className="h-36 rounded-lg" />;
+  }
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
-        <Database className="h-4 w-4 text-purple-500" />
-        Active Habits
-      </h3>
-      <div className="space-y-2">
-        {data.habits.map((h, i) => (
-          <div key={i} className="flex items-start gap-3 text-sm border-b border-border pb-2 last:border-0 last:pb-0">
-            <div className="flex-1 min-w-0">
-              <p className="font-medium truncate">When: {h.trigger}</p>
-              <p className="text-muted-foreground truncate">Do: {h.action}</p>
-            </div>
-            <ConfidenceBar value={h.confidence} />
-          </div>
-        ))}
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-sm font-medium flex items-center gap-2">
+          <Database className="h-4 w-4 text-purple-500" />
+          Active Habits
+        </h3>
+        <Button size="sm" variant="ghost" onClick={() => setEnabled(false)}>
+          Hide
+        </Button>
       </div>
+      {!data?.habits?.length ? (
+        <p className="text-sm text-muted-foreground">No active habits matched right now.</p>
+      ) : (
+        <div className="space-y-2">
+          {data.habits.map((h, i) => (
+            <div key={i} className="flex items-start gap-3 text-sm border-b border-border pb-2 last:border-0 last:pb-0">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium truncate">When: {h.trigger}</p>
+                <p className="text-muted-foreground truncate">Do: {h.action}</p>
+              </div>
+              <ConfidenceBar value={h.confidence} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -187,7 +250,7 @@ function MemoryList({ agentId }: { agentId: string }) {
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.agents.memory.list(agentId, filter),
-    queryFn: () => memoryApi.list(agentId, filter, undefined, 100),
+    queryFn: () => memoryApi.list(agentId, filter, undefined, 50),
     retry: 1,
     staleTime: 10_000,
   });

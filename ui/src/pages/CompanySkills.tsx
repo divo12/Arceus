@@ -383,25 +383,20 @@ function SkillList({
   skills,
   selectedSkillId,
   skillFilter,
-  expandedSkillId,
   expandedDirs,
   selectedPaths,
-  onToggleSkill,
   onToggleDir,
-  onSelectSkill,
   onSelectPath,
 }: {
   skills: CompanySkillListItem[];
   selectedSkillId: string | null;
   skillFilter: string;
-  expandedSkillId: string | null;
   expandedDirs: Record<string, Set<string>>;
   selectedPaths: Record<string, string>;
-  onToggleSkill: (skillId: string) => void;
   onToggleDir: (skillId: string, path: string) => void;
-  onSelectSkill: (skillId: string) => void;
   onSelectPath: (skillId: string, path: string) => void;
 }) {
+  const [expandedSkillId, setExpandedSkillId] = useState<string | null>(selectedSkillId);
   const filteredSkills = skills.filter((skill) => {
     const haystack = `${skill.name} ${skill.key} ${skill.slug} ${skill.sourceLabel ?? ""}`.toLowerCase();
     return haystack.includes(skillFilter.toLowerCase());
@@ -434,7 +429,7 @@ function SkillList({
               <Link
                 to={skillRoute(skill.id)}
                 className="flex min-w-0 items-center self-stretch pr-2 text-left no-underline"
-                onClick={() => onSelectSkill(skill.id)}
+                onClick={() => setExpandedSkillId(skill.id)}
               >
                 <span className="flex min-w-0 items-center gap-2 self-center">
                   <Tooltip>
@@ -454,7 +449,10 @@ function SkillList({
               <button
                 type="button"
                 className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-sm text-muted-foreground opacity-80 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground group-hover:opacity-100"
-                onClick={() => onToggleSkill(skill.id)}
+                onClick={() =>
+                  setExpandedSkillId((current) =>
+                    current === skill.id ? null : skill.id,
+                  )}
                 aria-label={expanded ? `Collapse ${skill.name}` : `Expand ${skill.name}`}
               >
                 {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -494,11 +492,7 @@ function SkillPane({
   updateStatus,
   updateStatusLoading,
   viewMode,
-  editMode,
-  draft,
   setViewMode,
-  setEditMode,
-  setDraft,
   onCheckUpdates,
   checkUpdatesPending,
   onInstallUpdate,
@@ -513,19 +507,19 @@ function SkillPane({
   updateStatus: CompanySkillUpdateStatus | null | undefined;
   updateStatusLoading: boolean;
   viewMode: "preview" | "code";
-  editMode: boolean;
-  draft: string;
   setViewMode: (mode: "preview" | "code") => void;
-  setEditMode: (value: boolean) => void;
-  setDraft: (value: string) => void;
   onCheckUpdates: () => void;
   checkUpdatesPending: boolean;
   onInstallUpdate: () => void;
   installUpdatePending: boolean;
-  onSave: () => void;
+  onSave: (draft: string) => void;
   savePending: boolean;
 }) {
   const { pushToast } = useToast();
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState(() =>
+    file?.markdown ? splitFrontmatter(file.content).body : file?.content ?? "",
+  );
 
   if (!detail) {
     if (loading) {
@@ -690,7 +684,7 @@ function SkillPane({
                 <Button variant="ghost" size="sm" onClick={() => setEditMode(false)} disabled={savePending}>
                   Cancel
                 </Button>
-                <Button size="sm" onClick={onSave} disabled={savePending}>
+                <Button size="sm" onClick={() => onSave(draft)} disabled={savePending}>
                   <Save className="mr-1.5 h-3.5 w-3.5" />
                   {savePending ? "Saving..." : "Save"}
                 </Button>
@@ -743,13 +737,8 @@ export function CompanySkills() {
   const [source, setSource] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [emptySourceHelpOpen, setEmptySourceHelpOpen] = useState(false);
-  const [expandedSkillId, setExpandedSkillId] = useState<string | null>(null);
   const [expandedDirs, setExpandedDirs] = useState<Record<string, Set<string>>>({});
   const [viewMode, setViewMode] = useState<"preview" | "code">("preview");
-  const [editMode, setEditMode] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [displayedDetail, setDisplayedDetail] = useState<CompanySkillDetail | null>(null);
-  const [displayedFile, setDisplayedFile] = useState<CompanySkillFileDetail | null>(null);
   const [scanStatusMessage, setScanStatusMessage] = useState<string | null>(null);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
   const routeSkillId = parsedRoute.skillId;
@@ -782,12 +771,14 @@ export function CompanySkills() {
     queryKey: queryKeys.companySkills.detail(selectedCompanyId ?? "", selectedSkillId ?? ""),
     queryFn: () => companySkillsApi.detail(selectedCompanyId!, selectedSkillId!),
     enabled: Boolean(selectedCompanyId && selectedSkillId),
+    placeholderData: (previousData) => previousData,
   });
 
   const fileQuery = useQuery({
     queryKey: queryKeys.companySkills.file(selectedCompanyId ?? "", selectedSkillId ?? "", selectedPath),
     queryFn: () => companySkillsApi.file(selectedCompanyId!, selectedSkillId!, selectedPath),
     enabled: Boolean(selectedCompanyId && selectedSkillId && selectedPath),
+    placeholderData: (previousData) => previousData,
   });
 
   const updateStatusQuery = useQuery({
@@ -796,14 +787,10 @@ export function CompanySkills() {
     enabled: Boolean(
       selectedCompanyId
       && selectedSkillId
-      && (detailQuery.data?.sourceType === "github" || displayedDetail?.sourceType === "github"),
+      && detailQuery.data?.sourceType === "github",
     ),
     staleTime: 60_000,
   });
-
-  useEffect(() => {
-    setExpandedSkillId(selectedSkillId);
-  }, [selectedSkillId]);
 
   useEffect(() => {
     if (!selectedSkillId || selectedPath === "SKILL.md") return;
@@ -821,32 +808,9 @@ export function CompanySkills() {
       return changed ? { ...current, [selectedSkillId]: next } : current;
     });
   }, [selectedPath, selectedSkillId]);
-
-  useEffect(() => {
-    setEditMode(false);
-  }, [selectedSkillId, selectedPath]);
-
-  useEffect(() => {
-    if (detailQuery.data) {
-      setDisplayedDetail(detailQuery.data);
-    }
-  }, [detailQuery.data]);
-
-  useEffect(() => {
-    if (fileQuery.data) {
-      setDisplayedFile(fileQuery.data);
-      setDraft(fileQuery.data.markdown ? splitFrontmatter(fileQuery.data.content).body : fileQuery.data.content);
-    }
-  }, [fileQuery.data]);
-
-  useEffect(() => {
-    if (selectedSkillId) return;
-    setDisplayedDetail(null);
-    setDisplayedFile(null);
-  }, [selectedSkillId]);
-
-  const activeDetail = detailQuery.data ?? displayedDetail;
-  const activeFile = fileQuery.data ?? displayedFile;
+  const activeDetail = selectedSkillId ? detailQuery.data : null;
+  const activeFile = selectedSkillId ? fileQuery.data : null;
+  const skillPaneKey = `${selectedSkillId ?? "none"}:${selectedPath}:${fileQuery.dataUpdatedAt}`;
 
   const importSkill = useMutation({
     mutationFn: (importSource: string) => companySkillsApi.importFromSource(selectedCompanyId!, importSource),
@@ -933,7 +897,7 @@ export function CompanySkills() {
   });
 
   const saveFile = useMutation({
-    mutationFn: () => companySkillsApi.updateFile(
+    mutationFn: (draft: string) => companySkillsApi.updateFile(
       selectedCompanyId!,
       selectedSkillId!,
       selectedPath,
@@ -945,8 +909,6 @@ export function CompanySkills() {
         queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.detail(selectedCompanyId!, selectedSkillId!) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.file(selectedCompanyId!, selectedSkillId!, selectedPath) }),
       ]);
-      setDraft(result.markdown ? splitFrontmatter(result.content).body : result.content);
-      setEditMode(false);
       pushToast({
         tone: "success",
         title: "Skill saved",
@@ -1117,15 +1079,12 @@ export function CompanySkills() {
             <div className="px-4 py-6 text-sm text-destructive">{skillsQuery.error.message}</div>
           ) : (
             <SkillList
+              key={selectedSkillId ?? "none"}
               skills={skillsQuery.data ?? []}
               selectedSkillId={selectedSkillId}
               skillFilter={skillFilter}
-              expandedSkillId={expandedSkillId}
               expandedDirs={expandedDirs}
               selectedPaths={selectedSkillId ? { [selectedSkillId]: selectedPath } : {}}
-              onToggleSkill={(currentSkillId) =>
-                setExpandedSkillId((current) => current === currentSkillId ? null : currentSkillId)
-              }
               onToggleDir={(currentSkillId, path) => {
                 setExpandedDirs((current) => {
                   const next = new Set(current[currentSkillId] ?? []);
@@ -1134,7 +1093,6 @@ export function CompanySkills() {
                   return { ...current, [currentSkillId]: next };
                 });
               }}
-              onSelectSkill={(currentSkillId) => setExpandedSkillId(currentSkillId)}
               onSelectPath={() => {}}
             />
           )}
@@ -1142,6 +1100,7 @@ export function CompanySkills() {
 
         <div className="min-w-0 pl-6">
           <SkillPane
+            key={skillPaneKey}
             loading={skillsQuery.isLoading || detailQuery.isLoading}
             detail={activeDetail}
             file={activeFile}
@@ -1149,18 +1108,14 @@ export function CompanySkills() {
             updateStatus={updateStatusQuery.data}
             updateStatusLoading={updateStatusQuery.isLoading}
             viewMode={viewMode}
-            editMode={editMode}
-            draft={draft}
             setViewMode={setViewMode}
-            setEditMode={setEditMode}
-            setDraft={setDraft}
             onCheckUpdates={() => {
               void updateStatusQuery.refetch();
             }}
             checkUpdatesPending={updateStatusQuery.isFetching}
             onInstallUpdate={() => installUpdate.mutate()}
             installUpdatePending={installUpdate.isPending}
-            onSave={() => saveFile.mutate()}
+            onSave={(draft) => saveFile.mutate(draft)}
             savePending={saveFile.isPending}
           />
         </div>
