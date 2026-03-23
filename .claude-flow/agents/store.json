@@ -1,0 +1,19 @@
+{
+  "agents": {
+    "agent-1774286220541-bpz6uq": {
+      "agentId": "agent-1774286220541-bpz6uq",
+      "agentType": "worker",
+      "status": "idle",
+      "health": 1,
+      "taskCount": 0,
+      "config": {
+        "model": "sonnet"
+      },
+      "createdAt": "2026-03-23T17:17:00.542Z",
+      "domain": "coding",
+      "model": "sonnet",
+      "modelRoutedBy": "explicit"
+    }
+  },
+  "version": "3.0.0"
+}
