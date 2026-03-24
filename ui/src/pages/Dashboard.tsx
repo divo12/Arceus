@@ -47,7 +47,7 @@ export function Dashboard() {
   });
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Dashboard" }]);
+    setBreadcrumbs([{ label: "Command Center" }]);
   }, [setBreadcrumbs]);
 
   const { data, isLoading, error } = useQuery({
@@ -168,14 +168,14 @@ export function Dashboard() {
       return (
         <EmptyState
           icon={LayoutDashboard}
-          message="Welcome to Paperclip. Set up your first company and agent to get started."
+          message="Welcome to Arceus. Set up your first startup and hire your AI employees."
           action="Get Started"
           onAction={openOnboarding}
         />
       );
     }
     return (
-      <EmptyState icon={LayoutDashboard} message="Create or select a company to view the dashboard." />
+      <EmptyState icon={LayoutDashboard} message="Create or select a startup to access the command center." />
     );
   }
 
@@ -187,18 +187,26 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Overview header */}
+      {/* Command Center header */}
       <div>
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold">Overview</h1>
-          <span className={cn(
-            "rounded-full px-2.5 py-0.5 text-xs font-medium",
-            selectedCompany?.status === "active"
-              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-              : "bg-muted text-muted-foreground",
-          )}>
-            {selectedCompany?.status ?? "active"}
-          </span>
+          <div className="rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 p-2.5">
+            <LayoutDashboard className="h-6 w-6 text-primary" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold">Command Center</h1>
+            <p className="text-sm text-muted-foreground">
+              Board of Directors overview — {selectedCompany?.name ?? "startup"}
+              <span className={cn(
+                "ml-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium align-middle",
+                selectedCompany?.status === "active"
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  : "bg-muted text-muted-foreground",
+              )}>
+                {selectedCompany?.status ?? "active"}
+              </span>
+            </p>
+          </div>
         </div>
         {selectedCompany?.description && (
           <p className="text-sm text-muted-foreground mt-1">{selectedCompany.description}</p>

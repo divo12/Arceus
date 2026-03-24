@@ -157,7 +157,7 @@ export function OnboardingWizard() {
   useEffect(() => {
     if (!effectiveOnboardingOpen) return;
     const cId = effectiveOnboardingOptions.companyId ?? null;
-    setStep(effectiveOnboardingOptions.initialStep ?? 1);
+    setStep((effectiveOnboardingOptions.initialStep ?? 1) as Step);
     setCreatedCompanyId(cId);
     setCreatedCompanyPrefix(null);
   }, [
