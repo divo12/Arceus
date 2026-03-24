@@ -8,9 +8,14 @@ import {
   Users,
   ListTodo,
   Activity,
+  Brain,
+  MessageSquare,
+  Workflow,
+  GitBranch,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarNavItem } from "./SidebarNavItem";
+import { SidebarSection } from "./SidebarSection";
 import { SidebarProjects } from "./SidebarProjects";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
@@ -51,7 +56,7 @@ export function Sidebar() {
         )}
         <div className="flex-1 min-w-0">
           <span className="block text-sm font-bold text-foreground truncate">
-            {selectedCompany?.name ?? "Select company"}
+            {selectedCompany?.name ?? "Select startup"}
           </span>
         </div>
         <Button
@@ -74,15 +79,18 @@ export function Sidebar() {
       )}
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-0.5 px-3 py-2">
-        <SidebarNavItem to="/dashboard" label="Overview" icon={LayoutDashboard} liveCount={liveRunCount} />
-        <SidebarNavItem
-          to="/inbox"
-          label="Inbox"
-          icon={Inbox}
-          badge={inboxBadge.inbox}
-          badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-          alert={inboxBadge.failedRuns > 0}
-        />
+        <SidebarSection label="Operations">
+          <SidebarNavItem to="/dashboard" label="Command Center" icon={LayoutDashboard} liveCount={liveRunCount} />
+          <SidebarNavItem
+            to="/inbox"
+            label="Inbox"
+            icon={Inbox}
+            badge={inboxBadge.inbox}
+            badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+            alert={inboxBadge.failedRuns > 0}
+          />
+        </SidebarSection>
+
         <PluginSlotOutlet
           slotTypes={["sidebar"]}
           context={pluginContext}
@@ -90,12 +98,25 @@ export function Sidebar() {
           itemClassName="text-[13px] font-medium"
           missingBehavior="placeholder"
         />
-        <SidebarNavItem to="/agents" label="Employees" icon={Users} />
-        <SidebarNavItem to="/issues" label="Tasks" icon={ListTodo} />
-        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
-        <SidebarNavItem to="/activity" label="Activity Log" icon={Activity} />
-        <SidebarNavItem to="/costs" label="Budget" icon={DollarSign} />
-        <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+
+        <SidebarSection label="Company">
+          <SidebarNavItem to="/agents" label="Employees" icon={Users} />
+          <SidebarNavItem to="/org" label="Org Chart" icon={GitBranch} />
+          <SidebarNavItem to="/issues" label="Tasks" icon={ListTodo} />
+          <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        </SidebarSection>
+
+        <SidebarSection label="Intelligence">
+          <SidebarNavItem to="/memory" label="Hippocampus" icon={Brain} />
+          <SidebarNavItem to="/meetings" label="Meetings" icon={MessageSquare} />
+          <SidebarNavItem to="/orchestration" label="Orchestration" icon={Workflow} />
+        </SidebarSection>
+
+        <SidebarSection label="Finance & Audit">
+          <SidebarNavItem to="/costs" label="Budget" icon={DollarSign} />
+          <SidebarNavItem to="/activity" label="Activity Log" icon={Activity} />
+          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+        </SidebarSection>
 
         <div className="mt-3">
           <SidebarProjects />

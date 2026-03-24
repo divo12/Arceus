@@ -1,7 +1,7 @@
 """Hippocampus API — FastAPI sidecar wrapping the Arceus Hippocampus memory system.
 
 This service exposes the 5-tier memory system (Working, Static, Dynamic,
-Procedural, Priming) over HTTP so the Paperclip TypeScript server can
+Procedural, Priming) over HTTP so the Arceus TypeScript server can
 call it during heartbeat runs.
 """
 from __future__ import annotations
