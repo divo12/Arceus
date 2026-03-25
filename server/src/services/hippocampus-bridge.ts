@@ -1,4 +1,5 @@
 import { createSidecarHippocampusBridge } from "./hippocampus-client.js";
+import { initializeMemoryServices, resetMemoryServices } from "./memory-services.js";
 import type {
   ExtractResult,
   HabitItem,
@@ -241,11 +242,13 @@ export async function initializeHippocampusBridge(config: HippocampusBridgeConfi
 
   if (config.mode === "off") {
     hippocampusBridge = new DisabledHippocampusBridge();
+    resetMemoryServices();
     return hippocampusBridge;
   }
 
   if (config.mode === "sidecar") {
     hippocampusBridge = createManagedSidecarHippocampusBridge(config.apiUrl ?? "http://localhost:8100");
+    initializeMemoryServices(hippocampusBridge);
     return hippocampusBridge;
   }
 
@@ -258,12 +261,14 @@ export async function initializeHippocampusBridge(config: HippocampusBridgeConfi
   );
   hippocampusBridge = createEmbeddedHippocampusBridge(runtime);
   await hippocampusBridge.start();
+  initializeMemoryServices(hippocampusBridge);
   return hippocampusBridge;
 }
 
 export async function shutdownHippocampusBridge(): Promise<void> {
   await hippocampusBridge.stop();
   hippocampusBridge = new DisabledHippocampusBridge();
+  resetMemoryServices();
 }
 
 export function setHippocampusBridgeForTests(bridge: ManagedHippocampusBridge): void {

@@ -1,7 +1,9 @@
 import { Router } from "express";
+import { ZodError } from "zod";
 import { loadConfig, type HippocampusMode } from "../config.js";
-import { type HippocampusBridge } from "../services/hippocampus-contract.js";
+import { HippocampusDisabledError, type HippocampusBridge } from "../services/hippocampus-contract.js";
 import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
+import { MemoryServiceError } from "../services/hippocampus-errors.js";
 import { assertBoard } from "./authz.js";
 
 /**
@@ -24,6 +26,36 @@ function sendBridgeError(
   err: unknown,
 ): void {
   res.status(502).json({ error: err instanceof Error ? err.message : "Hippocampus unavailable" });
+}
+
+export function handleMemoryError(
+  res: {
+    status(code: number): { json(body: unknown): unknown };
+  },
+  error: unknown,
+): void {
+  if (error instanceof MemoryServiceError) {
+    res.status(error.statusCode).json({
+      error: error.message,
+      code: error.code,
+      details: error.details,
+    });
+    return;
+  }
+  if (error instanceof HippocampusDisabledError) {
+    res.status(503).json({ error: "Memory system is disabled" });
+    return;
+  }
+  if (error instanceof ZodError) {
+    res.status(400).json({
+      error: "Validation failed",
+      code: "VALIDATION_ERROR",
+      details: error.flatten().fieldErrors,
+    });
+    return;
+  }
+  console.error("[memory-route] unexpected error:", error);
+  res.status(500).json({ error: "Internal server error" });
 }
 
 function resolveBridge(): HippocampusBridgeSurface {
