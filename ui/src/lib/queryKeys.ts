@@ -25,10 +25,35 @@ export const queryKeys = {
     configRevisions: (agentId: string) => ["agents", "config-revisions", agentId] as const,
     memory: {
       summary: (agentId: string) => ["agents", "memory", "summary", agentId] as const,
-      list: (agentId: string, memoryType?: string) =>
-        ["agents", "memory", "list", agentId, memoryType ?? "__all__"] as const,
+      list: (agentId: string, memoryType?: string, container?: string) =>
+        ["agents", "memory", "list", agentId, memoryType ?? "__all__", container ?? "__all__"] as const,
+      scopedRecall: (
+        agentId: string,
+        startupId: string,
+        employeeId: string,
+        taskId?: string,
+        query?: string,
+      ) => [
+        "agents",
+        "memory",
+        "scoped-recall",
+        agentId,
+        startupId,
+        employeeId,
+        taskId ?? "__none__",
+        query ?? "__empty__",
+      ] as const,
+      shareable: (agentId: string, startupId: string, visibility?: string[]) => [
+        "agents",
+        "memory",
+        "shareable",
+        agentId,
+        startupId,
+        visibility?.join(",") ?? "__default__",
+      ] as const,
       habits: (agentId: string) => ["agents", "memory", "habits", agentId] as const,
       priming: (agentId: string) => ["agents", "memory", "priming", agentId] as const,
+      recentList: (agentId: string) => ["agents", "memory", "recent-list", agentId] as const,
     },
     adapterModels: (companyId: string, adapterType: string) =>
       ["agents", companyId, "adapter-models", adapterType] as const,

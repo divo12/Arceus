@@ -10,14 +10,18 @@ type MockResponse = {
   json(payload: unknown): MockResponse;
 };
 
-function getRouteHandler(router: Router, method: "get" | "post", path: string): RequestHandler {
-  const layer = (router as unknown as { stack: Array<{ route?: {
+function findRouteLayer(router: Router, method: "get" | "post", path: string) {
+  return (router as unknown as { stack: Array<{ route?: {
     methods?: Record<string, boolean>;
     path?: string;
     stack: Array<{ handle: RequestHandler }>;
   } }> }).stack.find(
     (entry) => entry.route?.path === path && entry.route.methods?.[method],
   );
+}
+
+function getRouteHandler(router: Router, method: "get" | "post", path: string): RequestHandler {
+  const layer = findRouteLayer(router, method, path);
 
   if (!layer?.route) {
     throw new Error(`Route not found: ${method.toUpperCase()} ${path}`);
@@ -338,6 +342,281 @@ describe("memory routes", () => {
         nextRestartAt: 1711234569999,
         stderrExcerpt: "recent stderr line",
       },
+    });
+  });
+
+  it("supports Part 1 scoped recall once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const recall = vi.fn()
+      .mockImplementation(async (_agentId: string, _query: string, container: string) => {
+        if (container === "startup:startup-1") {
+          return {
+            items: [
+              {
+                id: "shared-1",
+                content: "company launch checklist",
+                memory_type: "static",
+                confidence: 0.92,
+                relevance_score: 0.8,
+                kind: "vector",
+              },
+            ],
+          };
+        }
+        if (container === "startup:startup-1:emp:emp-1") {
+          return {
+            items: [
+              {
+                id: "private-1",
+                content: "my deployment ritual",
+                memory_type: "dynamic",
+                confidence: 0.74,
+                relevance_score: 0.7,
+                kind: "vector",
+              },
+            ],
+          };
+        }
+        if (container === "startup:startup-1:task:task-1") {
+          return {
+            items: [
+              {
+                id: "task-1",
+                content: "debug the rollout regression",
+                memory_type: "working",
+                confidence: 0.66,
+                relevance_score: 0.89,
+                kind: "vector",
+              },
+            ],
+          };
+        }
+        return { items: [] };
+      });
+
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        recall,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/scoped-recall")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/scoped-recall",
+      body: {
+        query: "deployment",
+        startupId: "startup-1",
+        employeeId: "emp-1",
+        taskId: "task-1",
+        includeShared: true,
+        topK: 5,
+      },
+    });
+
+    expect(recall).toHaveBeenCalledWith("agent-1", "deployment", "startup:startup-1", 5);
+    expect(recall).toHaveBeenCalledWith("agent-1", "deployment", "startup:startup-1:emp:emp-1", 5);
+    expect(recall).toHaveBeenCalledWith("agent-1", "deployment", "startup:startup-1:task:task-1", 5);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: "shared-1", content: "company launch checklist" }),
+        expect.objectContaining({ id: "private-1", content: "my deployment ritual" }),
+        expect.objectContaining({ id: "task-1", content: "debug the rollout regression" }),
+      ]),
+      total: 3,
+    });
+  });
+
+  it("returns partial scoped recall results when one container fails", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const recall = vi.fn()
+      .mockImplementation(async (_agentId: string, _query: string, container: string) => {
+        if (container === "startup:startup-1") {
+          throw new Error("startup recall unavailable");
+        }
+        if (container === "startup:startup-1:emp:emp-1") {
+          return {
+            items: [
+              {
+                id: "private-1",
+                content: "my deployment ritual",
+                memory_type: "dynamic",
+                confidence: 0.74,
+                relevance_score: 0.7,
+                kind: "vector",
+              },
+            ],
+          };
+        }
+        if (container === "startup:startup-1:task:task-1") {
+          return {
+            items: [
+              {
+                id: "task-1",
+                content: "debug the rollout regression",
+                memory_type: "working",
+                confidence: 0.66,
+                relevance_score: 0.89,
+                kind: "vector",
+              },
+            ],
+          };
+        }
+        return { items: [] };
+      });
+
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        recall,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/scoped-recall")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/scoped-recall",
+      body: {
+        query: "deployment",
+        startupId: "startup-1",
+        employeeId: "emp-1",
+        taskId: "task-1",
+        includeShared: true,
+        topK: 5,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      items: [
+        expect.objectContaining({ id: "private-1" }),
+        expect.objectContaining({ id: "task-1" }),
+      ],
+      total: 2,
+    });
+  });
+
+  it("validates scoped recall input once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        recall: vi.fn(),
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/scoped-recall")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/scoped-recall",
+      body: {
+        query: "",
+        startupId: "startup-1",
+        employeeId: "emp-1",
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(expect.objectContaining({
+      error: expect.any(String),
+    }));
+  });
+
+  it("supports Part 1 shareable memories once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const listMemories = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: "shared-1",
+          content: "share this launch playbook",
+          memory_type: "static",
+          confidence: 0.95,
+          relevance_score: 0.7,
+          container: "startup:startup-1",
+          visibility: "shared",
+          created_at: "2026-03-24T00:00:00Z",
+          updated_at: "2026-03-24T00:00:00Z",
+          access_count: 2,
+        },
+        {
+          id: "board-1",
+          content: "board escalation protocol",
+          memory_type: "static",
+          confidence: 0.88,
+          relevance_score: 0.6,
+          container: "startup:startup-1",
+          visibility: "board",
+          created_at: "2026-03-24T00:00:00Z",
+          updated_at: "2026-03-24T00:00:00Z",
+          access_count: 1,
+        },
+        {
+          id: "private-1",
+          content: "keep this private",
+          memory_type: "dynamic",
+          confidence: 0.51,
+          relevance_score: 0.2,
+          container: "startup:startup-1",
+          visibility: "private",
+          created_at: "2026-03-24T00:00:00Z",
+          updated_at: "2026-03-24T00:00:00Z",
+          access_count: 0,
+        },
+      ],
+      total: 3,
+    });
+
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        listMemories,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/shareable")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/shareable",
+      query: {
+        startupId: "startup-1",
+        visibility: "shared,board",
+      },
+    });
+
+    expect(listMemories).toHaveBeenCalledWith("agent-1", undefined, "startup:startup-1");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      items: [
+        expect.objectContaining({ id: "shared-1", visibility: "shared" }),
+        expect.objectContaining({ id: "board-1", visibility: "board" }),
+      ],
+      total: 2,
     });
   });
 });

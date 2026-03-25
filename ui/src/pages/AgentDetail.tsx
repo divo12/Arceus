@@ -1054,7 +1054,11 @@ export function AgentDetail() {
       ) : null}
 
       {activeView === "memory" && (
-        <AgentMemoryTab agentId={agent.id} />
+        <AgentMemoryTab
+          agentId={agent.id}
+          startupId={resolvedCompanyId ?? undefined}
+          employeeId={agent.id}
+        />
       )}
     </div>
   );

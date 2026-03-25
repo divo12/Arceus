@@ -1,4 +1,5 @@
 import type { HippocampusBridge } from "./hippocampus-contract.js";
+import { MemoryScopeService } from "./memory-scope.js";
 
 export interface MemoryServices<
   TScope = unknown,
@@ -25,7 +26,7 @@ export interface MemoryServiceFactories<
 }
 
 const defaultFactories: MemoryServiceFactories = {
-  createScope: () => null,
+  createScope: (bridge) => new MemoryScopeService(bridge),
   createProjections: () => null,
   createProfile: () => null,
   createDelegation: () => null,

@@ -6,6 +6,11 @@ export interface MemorySummary {
   active_habits: Array<{ trigger: string; action: string; confidence: number }>;
   priming_prompt: string;
   graph_node_count: number;
+  top_patterns?: Array<Record<string, unknown>>;
+  current_state?: Record<string, unknown>;
+  recent_learnings?: string[];
+  recent_promotions?: string[];
+  generated_at?: string;
 }
 
 export interface MemoryListItem {
@@ -30,6 +35,20 @@ export interface RecallItem {
   kind: string;
 }
 
+export interface ScopedRecallParams {
+  query: string;
+  startupId: string;
+  employeeId: string;
+  taskId?: string;
+  includeShared?: boolean;
+  topK?: number;
+}
+
+export interface ShareableMemoryParams {
+  startupId: string;
+  visibility?: Array<"shared" | "board" | "private" | "task_scoped">;
+}
+
 export interface MemoryHealth {
   status: string;
   agents_loaded: number;
@@ -45,6 +64,13 @@ export interface MemoryHealth {
     nextRestartAt: number | null;
     stderrExcerpt: string;
   } | null;
+}
+
+export interface PromotionRunItem {
+  memory_id: string;
+  from_tier: string;
+  to_tier: string;
+  reason: string;
 }
 
 export const memoryApi = {
@@ -83,9 +109,38 @@ export const memoryApi = {
       { query, container, top_k: topK },
     ),
 
+  scopedRecall: (agentId: string, params: ScopedRecallParams) =>
+    api.post<{ items: RecallItem[]; total: number }>(
+      `/agents/${agentId}/memory/scoped-recall`,
+      {
+        query: params.query,
+        startupId: params.startupId,
+        employeeId: params.employeeId,
+        taskId: params.taskId,
+        includeShared: params.includeShared ?? true,
+        topK: params.topK ?? 10,
+      },
+    ),
+
+  getShareable: (agentId: string, params: ShareableMemoryParams) => {
+    const query = new URLSearchParams({ startupId: params.startupId });
+    if (params.visibility?.length) {
+      query.set("visibility", params.visibility.join(","));
+    }
+    return api.get<{ items: MemoryListItem[]; total: number }>(
+      `/agents/${agentId}/memory/shareable?${query.toString()}`,
+    );
+  },
+
   gc: (agentId: string) =>
     api.post<{ expired: number; decayed: number; demoted: number }>(
       `/agents/${agentId}/memory/gc`,
+      {},
+    ),
+
+  runPromotions: (agentId: string) =>
+    api.post<{ promotions: PromotionRunItem[] }>(
+      `/agents/${agentId}/memory/promotions`,
       {},
     ),
 

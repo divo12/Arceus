@@ -69,6 +69,11 @@
   --chart-3: oklch(0.60 0.20 330);
   --chart-4: oklch(0.75 0.16 85);
   --chart-5: oklch(0.60 0.18 200);
+  --memory-working: var(--chart-3);
+  --memory-dynamic: var(--chart-1);
+  --memory-static: var(--chart-2);
+  --memory-procedural: var(--chart-4);
+  --memory-priming: var(--chart-5);
   --sidebar: oklch(0.975 0.005 280);
   --sidebar-foreground: oklch(0.16 0.015 280);
   --sidebar-primary: oklch(0.55 0.22 270);
@@ -104,6 +109,11 @@
   --chart-3: oklch(0.65 0.20 330);
   --chart-4: oklch(0.75 0.16 85);
   --chart-5: oklch(0.65 0.18 200);
+  --memory-working: var(--chart-3);
+  --memory-dynamic: var(--chart-1);
+  --memory-static: var(--chart-2);
+  --memory-procedural: var(--chart-4);
+  --memory-priming: var(--chart-5);
   --sidebar: oklch(0.12 0.018 280);
   --sidebar-foreground: oklch(0.93 0.01 270);
   --sidebar-primary: oklch(0.65 0.24 270);

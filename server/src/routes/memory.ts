@@ -1,9 +1,13 @@
 import { Router } from "express";
 import { ZodError } from "zod";
+import { z } from "zod";
 import { loadConfig, type HippocampusMode } from "../config.js";
 import { HippocampusDisabledError, type HippocampusBridge } from "../services/hippocampus-contract.js";
 import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
 import { MemoryServiceError } from "../services/hippocampus-errors.js";
+import { getMemoryServices } from "../services/memory-services.js";
+import { type MemoryVisibility, MemoryScopeService } from "../services/memory-scope.js";
+import { ScopedRecallSchema } from "../services/memory-schemas.js";
 import { assertBoard } from "./authz.js";
 
 /**
@@ -12,7 +16,7 @@ import { assertBoard } from "./authz.js";
  */
 type HippocampusBridgeSurface = Pick<
   HippocampusBridge,
-  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "runGC" | "health" | "diagnostics"
+  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "runGC" | "runPromotions" | "health" | "diagnostics"
 >;
 
 function resolveHippocampusMode(modeOverride?: HippocampusMode): HippocampusMode {
@@ -60,6 +64,14 @@ export function handleMemoryError(
 
 function resolveBridge(): HippocampusBridgeSurface {
   return getHippocampusBridge() as HippocampusBridgeSurface;
+}
+
+function resolveScopeService(): MemoryScopeService {
+  const registered = getMemoryServices().scope;
+  if (registered instanceof MemoryScopeService) {
+    return registered;
+  }
+  return new MemoryScopeService(getHippocampusBridge() as HippocampusBridge);
 }
 
 export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}) {
@@ -171,6 +183,52 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
     }
   });
 
+  /** POST /api/agents/:agentId/memory/scoped-recall */
+  router.post("/agents/:agentId/memory/scoped-recall", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const body = ScopedRecallSchema.parse(req.body);
+      const items = await resolveScopeService().getMemoriesForAgent(
+        req.params.agentId,
+        body.query,
+        body.startupId,
+        body.employeeId,
+        body.taskId,
+        body.includeShared,
+        body.topK,
+      );
+      res.json({ items, total: items.length });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/agents/:agentId/memory/shareable */
+  router.get("/agents/:agentId/memory/shareable", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const params = z.object({
+        startupId: z.string().min(1),
+        visibility: z.string().optional(),
+      }).parse(req.query);
+
+      const visibility = params.visibility
+        ?.split(",")
+        .map((value) => value.trim())
+        .filter(Boolean) as MemoryVisibility[] | undefined;
+      const items = await resolveScopeService().getShareableMemories(
+        req.params.agentId,
+        params.startupId,
+        visibility?.length ? visibility : undefined,
+      );
+      res.json({ items, total: items.length });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
   /** POST /api/agents/:agentId/memory/gc */
   router.post("/agents/:agentId/memory/gc", async (req, res) => {
     assertBoard(req);
@@ -178,6 +236,19 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
     try {
       const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.runGC(req.params.agentId);
+      res.json(result);
+    } catch (err) {
+      sendBridgeError(res, err);
+    }
+  });
+
+  /** POST /api/agents/:agentId/memory/promotions */
+  router.post("/agents/:agentId/memory/promotions", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const hippocampusBridge = resolveBridge();
+      const result = await hippocampusBridge.runPromotions(req.params.agentId);
       res.json(result);
     } catch (err) {
       sendBridgeError(res, err);
