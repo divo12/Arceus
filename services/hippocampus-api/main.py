@@ -196,6 +196,22 @@ class HealthResponse(BaseModel):
     debug: bool = False
 
 
+class GraphNodeResponse(BaseModel):
+    id: str
+    name: str
+    entity_type: str
+    mention_count: int = 0
+    created_at: str | None = None
+    container: str | None = None
+
+
+class GraphEdgeResponse(BaseModel):
+    source_id: str
+    target_id: str
+    relation_type: str
+    weight: float = 1.0
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -446,5 +462,75 @@ async def run_promotions(agent_id: str):
                 for e in events
             ]
         }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _serialize_graph_node(node: Any) -> GraphNodeResponse:
+    return GraphNodeResponse(
+        id=node.id,
+        name=getattr(node, "name", ""),
+        entity_type=getattr(node, "entity_type", ""),
+        mention_count=getattr(node, "mention_count", 0),
+        created_at=node.created_at.isoformat() if getattr(node, "created_at", None) else None,
+        container=getattr(node, "container", None),
+    )
+
+
+def _serialize_graph_edge(edge: Any) -> GraphEdgeResponse:
+    relation_type = getattr(edge, "relation_type", "")
+    return GraphEdgeResponse(
+        source_id=edge.source_id,
+        target_id=edge.target_id,
+        relation_type=relation_type.value if hasattr(relation_type, "value") else str(relation_type),
+        weight=getattr(edge, "weight", 1.0),
+    )
+
+
+@app.get("/agents/{agent_id}/graph/search")
+async def graph_search(
+    agent_id: str,
+    query: str,
+    container: str = "default",
+    top_k: int = 10,
+):
+    try:
+        hip = await _get_instance(agent_id)
+        nodes = await hip.graph_store.search(query, container, top_k=top_k)
+        return {"nodes": [_serialize_graph_node(node).model_dump() for node in nodes]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/agents/{agent_id}/graph/{node_id}/neighbors")
+async def graph_neighbors(
+    agent_id: str,
+    node_id: str,
+    max_hops: int = 2,
+):
+    try:
+        hip = await _get_instance(agent_id)
+        nodes = await hip.graph_store.get_neighbors(node_id, max_hops=max_hops)
+        return {"nodes": [_serialize_graph_node(node).model_dump() for node in nodes]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/agents/{agent_id}/graph/{node_id}/edges")
+async def graph_edges(agent_id: str, node_id: str):
+    try:
+        hip = await _get_instance(agent_id)
+        edges = await hip.graph_store.get_edges(node_id)
+        return {"edges": [_serialize_graph_edge(edge).model_dump() for edge in edges]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/agents/{agent_id}/memories/{memory_id}/history")
+async def memory_history(agent_id: str, memory_id: str):
+    try:
+        hip = await _get_instance(agent_id)
+        versions = await hip.graph_store.get_version_history(memory_id)
+        return [_serialize_graph_node(version).model_dump() for version in versions]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

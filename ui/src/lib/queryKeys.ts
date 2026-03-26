@@ -27,6 +27,30 @@ export const queryKeys = {
       summary: (agentId: string) => ["agents", "memory", "summary", agentId] as const,
       list: (agentId: string, memoryType?: string, container?: string) =>
         ["agents", "memory", "list", agentId, memoryType ?? "__all__", container ?? "__all__"] as const,
+      explorer: (agentId: string, container?: string, memoryType?: string, limit: number = 50) =>
+        [
+          "agents",
+          "memory",
+          "explorer",
+          agentId,
+          container ?? "__all__",
+          memoryType ?? "__all__",
+          limit,
+        ] as const,
+      graph: (agentId: string, query: string, container?: string, depth: number = 2) =>
+        [
+          "agents",
+          "memory",
+          "graph",
+          agentId,
+          query,
+          container ?? "__default__",
+          depth,
+        ] as const,
+      versionHistory: (agentId: string, memoryId: string) =>
+        ["agents", "memory", "version-history", agentId, memoryId] as const,
+      promotions: (agentId: string, limit: number = 20) =>
+        ["agents", "memory", "promotions", agentId, limit] as const,
       scopedRecall: (
         agentId: string,
         startupId: string,

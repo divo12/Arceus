@@ -2,6 +2,8 @@ import { createSidecarHippocampusBridge } from "./hippocampus-client.js";
 import { initializeMemoryServices, resetMemoryServices } from "./memory-services.js";
 import type {
   ExtractResult,
+  GraphEdge,
+  GraphNode,
   HabitItem,
   HealthResult,
   HippocampusBridge,
@@ -65,6 +67,10 @@ class DisabledHippocampusBridge implements ManagedHippocampusBridge {
   async getHabits(): Promise<{ habits: HabitItem[] }> { return this.fail(); }
   async getSummary(): Promise<MemorySummary> { return this.fail(); }
   async listMemories(): Promise<{ items: MemoryListItem[]; total: number }> { return this.fail(); }
+  async graphSearch(): Promise<{ nodes: GraphNode[] }> { return this.fail(); }
+  async graphNeighbors(): Promise<{ nodes: GraphNode[] }> { return this.fail(); }
+  async graphEdges(): Promise<{ edges: GraphEdge[] }> { return this.fail(); }
+  async graphVersionHistory(): Promise<{ versions: GraphNode[] }> { return this.fail(); }
   async runGC(): Promise<{ expired: number; decayed: number; demoted: number }> { return this.fail(); }
   async runPromotions(): Promise<{ promotions: PromotionItem[] }> { return this.fail(); }
   async close(): Promise<void> { return; }
@@ -158,6 +164,37 @@ export class EmbeddedHippocampusBridge implements ManagedHippocampusBridge {
     });
   }
 
+  async graphSearch(agentId: string, query: string, container = "default", topK = 10) {
+    return this.runtime.call("graphSearch", {
+      agent_id: agentId,
+      query,
+      container,
+      top_k: topK,
+    });
+  }
+
+  async graphNeighbors(agentId: string, nodeId: string, maxHops = 2) {
+    return this.runtime.call("graphNeighbors", {
+      agent_id: agentId,
+      node_id: nodeId,
+      max_hops: maxHops,
+    });
+  }
+
+  async graphEdges(agentId: string, nodeId: string) {
+    return this.runtime.call("graphEdges", {
+      agent_id: agentId,
+      node_id: nodeId,
+    });
+  }
+
+  async graphVersionHistory(agentId: string, memoryId: string) {
+    return this.runtime.call("graphVersionHistory", {
+      agent_id: agentId,
+      memory_id: memoryId,
+    });
+  }
+
   async runGC(agentId: string) {
     return this.runtime.call("runGC", { agent_id: agentId });
   }
@@ -213,6 +250,18 @@ class SidecarManagedBridge implements ManagedHippocampusBridge {
   getSummary(agentId: string) { return this.delegate.getSummary(agentId); }
   listMemories(agentId: string, memoryType?: string, container?: string, limit = 50) {
     return this.delegate.listMemories(agentId, memoryType, container, limit);
+  }
+  graphSearch(agentId: string, query: string, container = "default", topK = 10) {
+    return this.delegate.graphSearch(agentId, query, container, topK);
+  }
+  graphNeighbors(agentId: string, nodeId: string, maxHops = 2) {
+    return this.delegate.graphNeighbors(agentId, nodeId, maxHops);
+  }
+  graphEdges(agentId: string, nodeId: string) {
+    return this.delegate.graphEdges(agentId, nodeId);
+  }
+  graphVersionHistory(agentId: string, memoryId: string) {
+    return this.delegate.graphVersionHistory(agentId, memoryId);
   }
   runGC(agentId: string) { return this.delegate.runGC(agentId); }
   runPromotions(agentId: string) { return this.delegate.runPromotions(agentId); }

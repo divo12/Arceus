@@ -6,8 +6,15 @@ import { HippocampusDisabledError, type HippocampusBridge } from "../services/hi
 import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
 import { MemoryServiceError } from "../services/hippocampus-errors.js";
 import { getMemoryServices } from "../services/memory-services.js";
+import { MemoryProjectionService } from "../services/memory-projections.js";
 import { type MemoryVisibility, MemoryScopeService } from "../services/memory-scope.js";
-import { ScopedRecallSchema } from "../services/memory-schemas.js";
+import {
+  GraphQuerySchema,
+  MemoryExplorerQuerySchema,
+  MemoryHistoryParamsSchema,
+  PromotionLogQuerySchema,
+  ScopedRecallSchema,
+} from "../services/memory-schemas.js";
 import { assertBoard } from "./authz.js";
 
 /**
@@ -68,10 +75,30 @@ function resolveBridge(): HippocampusBridgeSurface {
 
 function resolveScopeService(): MemoryScopeService {
   const registered = getMemoryServices().scope;
-  if (registered instanceof MemoryScopeService) {
-    return registered;
+  if (
+    registered &&
+    typeof registered === "object" &&
+    "getMemoriesForAgent" in registered &&
+    "getShareableMemories" in registered
+  ) {
+    return registered as MemoryScopeService;
   }
   return new MemoryScopeService(getHippocampusBridge() as HippocampusBridge);
+}
+
+function resolveProjectionService(): MemoryProjectionService {
+  const registered = getMemoryServices().projections;
+  if (
+    registered &&
+    typeof registered === "object" &&
+    "getGraphView" in registered &&
+    "getVersionHistory" in registered &&
+    "getPromotionLog" in registered &&
+    "getMemoryExplorer" in registered
+  ) {
+    return registered as MemoryProjectionService;
+  }
+  return new MemoryProjectionService(getHippocampusBridge() as HippocampusBridge);
 }
 
 export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}) {
@@ -224,6 +251,74 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
         visibility?.length ? visibility : undefined,
       );
       res.json({ items, total: items.length });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/agents/:agentId/memory/graph */
+  router.get("/agents/:agentId/memory/graph", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const params = GraphQuerySchema.parse(req.query);
+      const view = await resolveProjectionService().getGraphView(
+        req.params.agentId,
+        params.query,
+        params.container,
+        params.depth,
+      );
+      res.json(view);
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/agents/:agentId/memory/explorer */
+  router.get("/agents/:agentId/memory/explorer", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const params = MemoryExplorerQuerySchema.parse(req.query);
+      const result = await resolveProjectionService().getMemoryExplorer(
+        req.params.agentId,
+        params.container,
+        params.memory_type,
+        params.limit,
+      );
+      res.json(result);
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/agents/:agentId/memory/promotions */
+  router.get("/agents/:agentId/memory/promotions", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const params = PromotionLogQuerySchema.parse(req.query);
+      const events = await resolveProjectionService().getPromotionLog(
+        req.params.agentId,
+        params.limit,
+      );
+      res.json(events);
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/agents/:agentId/memory/:memoryId/history */
+  router.get("/agents/:agentId/memory/:memoryId/history", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const params = MemoryHistoryParamsSchema.parse(req.params);
+      const items = await resolveProjectionService().getVersionHistory(
+        req.params.agentId,
+        params.memoryId,
+      );
+      res.json(items);
     } catch (error) {
       handleMemoryError(res, error);
     }

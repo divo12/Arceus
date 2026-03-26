@@ -1,5 +1,6 @@
 import type { RequestHandler, Router } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryServiceError } from "../services/hippocampus-errors.js";
 
 const ORIGINAL_PAPERCLIP_HIPPOCAMPUS_MODE = process.env.PAPERCLIP_HIPPOCAMPUS_MODE;
 
@@ -35,6 +36,7 @@ async function invokeRoute(options: {
   body?: Record<string, unknown>;
   hippocampusMode: "off" | "embedded" | "sidecar";
   method: "get" | "post";
+  params?: Record<string, unknown>;
   path: string;
   query?: Record<string, unknown>;
 }) {
@@ -45,7 +47,7 @@ async function invokeRoute(options: {
   const req = {
     actor: options.actor ?? { type: "board", userId: "board-user", source: "local_implicit" },
     body: options.body ?? {},
-    params: { agentId: "agent-1" },
+    params: { agentId: "agent-1", ...(options.params ?? {}) },
     query: options.query ?? {},
   } as any;
 
@@ -617,6 +619,401 @@ describe("memory routes", () => {
         expect.objectContaining({ id: "board-1", visibility: "board" }),
       ],
       total: 2,
+    });
+  });
+
+  // --- Part 2: Graph & Projection tests ---
+
+  function fullProjectionsMock(overrides: Record<string, unknown> = {}) {
+    return {
+      getGraphView: vi.fn(),
+      getVersionHistory: vi.fn(),
+      getPromotionLog: vi.fn(),
+      getMemoryExplorer: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("supports Part 2 graph view once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const getGraphView = vi.fn().mockResolvedValue({
+      center_node: {
+        id: "node-center",
+        name: "Authentication",
+        entity_type: "concept",
+        mention_count: 14,
+        created_at: "2026-03-24T00:00:00Z",
+      },
+      nodes: [
+        {
+          id: "node-center",
+          name: "Authentication",
+          entity_type: "concept",
+          mention_count: 14,
+          created_at: "2026-03-24T00:00:00Z",
+        },
+        {
+          id: "node-related",
+          name: "JWT",
+          entity_type: "dynamic",
+          mention_count: 8,
+          created_at: "2026-03-24T00:00:00Z",
+        },
+      ],
+      edges: [
+        {
+          source_id: "node-center",
+          target_id: "node-related",
+          relation_type: "related_to",
+          weight: 0.9,
+        },
+      ],
+      depth: 2,
+    });
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock({ getGraphView }),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/graph")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/graph",
+      query: {
+        query: "auth",
+        container: "startup:startup-1",
+        depth: "2",
+      },
+    });
+
+    expect(getGraphView).toHaveBeenCalledWith("agent-1", "auth", "startup:startup-1", 2);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      center_node: expect.objectContaining({ id: "node-center", name: "Authentication" }),
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ id: "node-center" }),
+        expect.objectContaining({ id: "node-related" }),
+      ]),
+      edges: [
+        expect.objectContaining({
+          source_id: "node-center",
+          target_id: "node-related",
+          relation_type: "related_to",
+          weight: 0.9,
+        }),
+      ],
+      depth: 2,
+    });
+  });
+
+  it("validates Part 2 graph input once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock(),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/graph")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/graph",
+      query: {
+        query: "",
+        container: "startup:startup-1",
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(expect.objectContaining({
+      error: expect.any(String),
+    }));
+  });
+
+  it("returns an empty Part 2 graph view during graceful degradation", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock({
+          getGraphView: vi.fn().mockResolvedValue({
+            center_node: null,
+            nodes: [],
+            edges: [],
+            depth: 2,
+          }),
+        }),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/graph")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/graph",
+      query: {
+        query: "missing",
+        container: "startup:startup-1",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      center_node: null,
+      nodes: [],
+      edges: [],
+      depth: 2,
+    });
+  });
+
+  it("supports Part 2 version history once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const getVersionHistory = vi.fn().mockResolvedValue([
+      {
+        id: "mem-v2",
+        name: "Updated insight",
+        entity_type: "dynamic",
+        mention_count: 3,
+        created_at: "2026-03-24T12:00:00Z",
+      },
+      {
+        id: "mem-v1",
+        name: "Original insight",
+        entity_type: "dynamic",
+        mention_count: 1,
+        created_at: "2026-03-23T12:00:00Z",
+      },
+    ]);
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock({ getVersionHistory }),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/:memoryId/history")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/:memoryId/history",
+      params: { memoryId: "mem-v2" },
+    });
+
+    expect(getVersionHistory).toHaveBeenCalledWith("agent-1", "mem-v2");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({ id: "mem-v2", name: "Updated insight" }),
+      expect.objectContaining({ id: "mem-v1", name: "Original insight" }),
+    ]);
+  });
+
+  it("supports Part 2 promotion log once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const getPromotionLog = vi.fn().mockResolvedValue([
+      {
+        agent_id: "agent-1",
+        memory_id: "mem-promoted",
+        from_type: "working",
+        to_type: "dynamic",
+        reason: "confidence threshold",
+        status: "completed",
+        timestamp: "2026-03-25T08:00:00Z",
+      },
+    ]);
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock({ getPromotionLog }),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/promotions")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/promotions",
+      query: { limit: "10" },
+    });
+
+    expect(getPromotionLog).toHaveBeenCalledWith("agent-1", 10);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        memory_id: "mem-promoted",
+        from_type: "working",
+        to_type: "dynamic",
+      }),
+    ]);
+  });
+
+  it("supports Part 2 memory explorer once the route lands", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const getMemoryExplorer = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: "mem-1",
+          content: "First memory",
+          memory_type: "static",
+          confidence: 0.95,
+          created_at: "2026-03-24T00:00:00Z",
+          access_count: 5,
+        },
+      ],
+      total: 1,
+    });
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock({ getMemoryExplorer }),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/explorer")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/explorer",
+      query: {
+        container: "startup:startup-1",
+        limit: "25",
+      },
+    });
+
+    expect(getMemoryExplorer).toHaveBeenCalledWith("agent-1", "startup:startup-1", undefined, 25);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      items: [expect.objectContaining({ id: "mem-1", content: "First memory" })],
+      total: 1,
+    });
+  });
+
+  it("validates Part 2 explorer input requires container", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock(),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/explorer")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/explorer",
+      query: { limit: "25" },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(expect.objectContaining({
+      error: expect.any(String),
+    }));
+  });
+
+  it("surfaces Part 2 projection service errors with handleMemoryError", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const { MemoryServiceError: MSE } = await import("../services/hippocampus-errors.js");
+    const serviceError = new MSE(
+      "Graph store is not available",
+      503,
+      "GRAPH_UNAVAILABLE",
+      { backend: "neo4j" },
+    );
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: fullProjectionsMock({
+          getVersionHistory: vi.fn().mockRejectedValue(serviceError),
+        }),
+        profile: null,
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/:memoryId/history")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/:memoryId/history",
+      params: { memoryId: "mem-404" },
+    });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      error: "Graph store is not available",
+      code: "GRAPH_UNAVAILABLE",
+      details: { backend: "neo4j" },
     });
   });
 });

@@ -7,6 +7,8 @@
 
 import type {
   ExtractResult,
+  GraphEdge,
+  GraphNode,
   HabitItem,
   HealthResult,
   HippocampusBridge,
@@ -113,6 +115,40 @@ export function createSidecarHippocampusBridge(baseUrl: string): HippocampusBrid
       return get<{ items: MemoryListItem[]; total: number }>(
         baseUrl,
         `/agents/${agentId}/memories?${params.toString()}`,
+      );
+    },
+
+    async graphSearch(agentId: string, query: string, container = "default", topK = 10) {
+      const params = new URLSearchParams({
+        query,
+        container,
+        top_k: String(topK),
+      });
+      return get<{ nodes: GraphNode[] }>(
+        baseUrl,
+        `/agents/${agentId}/graph/search?${params.toString()}`,
+      );
+    },
+
+    async graphNeighbors(agentId: string, nodeId: string, maxHops = 2) {
+      const params = new URLSearchParams({ max_hops: String(maxHops) });
+      return get<{ nodes: GraphNode[] }>(
+        baseUrl,
+        `/agents/${agentId}/graph/${encodeURIComponent(nodeId)}/neighbors?${params.toString()}`,
+      );
+    },
+
+    async graphEdges(agentId: string, nodeId: string) {
+      return get<{ edges: GraphEdge[] }>(
+        baseUrl,
+        `/agents/${agentId}/graph/${encodeURIComponent(nodeId)}/edges`,
+      );
+    },
+
+    async graphVersionHistory(agentId: string, memoryId: string) {
+      return get<{ versions: GraphNode[] }>(
+        baseUrl,
+        `/agents/${agentId}/memories/${encodeURIComponent(memoryId)}/history`,
       );
     },
 

@@ -29,6 +29,20 @@ export const GraphQuerySchema = z.object({
   depth: z.coerce.number().int().min(1).max(5).default(2),
 });
 
+export const MemoryHistoryParamsSchema = z.object({
+  memoryId: z.string().min(1),
+});
+
+export const MemoryExplorerQuerySchema = z.object({
+  container: z.string().min(1),
+  memory_type: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export const PromotionLogQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export const ProfileQuerySchema = z.object({
   startupId: z.string().min(1),
   role: z.string().min(1).max(200),

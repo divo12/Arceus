@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
@@ -28,6 +28,18 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
 type MemoryTab = "overview" | "explorer" | "graph" | "profile" | "activity";
+
+const MemoryGraphExplorer = lazy(async () => ({
+  default: (await import("./MemoryGraphExplorer")).MemoryGraphExplorer,
+}));
+
+const MemoryVersionTimeline = lazy(async () => ({
+  default: (await import("./MemoryVersionTimeline")).MemoryVersionTimeline,
+}));
+
+const PromotionFeed = lazy(async () => ({
+  default: (await import("./PromotionFeed")).PromotionFeed,
+}));
 
 const TIER_META: Record<string, { label: string; icon: typeof Brain; color: string }> = {
   static: { label: "Static", icon: Shield, color: "text-[var(--memory-static)]" },
@@ -110,6 +122,24 @@ function EmptyPlaceholder({
       <Sparkles className="mb-3 h-8 w-8" />
       <h3 className="text-sm font-medium text-foreground">{title}</h3>
       <p className="mt-2 max-w-md text-sm">{description}</p>
+    </div>
+  );
+}
+
+function PanelSkeleton({
+  rows = 3,
+  className,
+}: {
+  rows?: number;
+  className?: string;
+}) {
+  return (
+    <div className={cn("rounded-lg border border-border bg-card p-4 shadow-sm", className)}>
+      <div className="space-y-3">
+        {Array.from({ length: rows }).map((_, index) => (
+          <Skeleton key={index} className="h-16 rounded-md" />
+        ))}
+      </div>
     </div>
   );
 }
@@ -322,7 +352,15 @@ function HabitsSection({ agentId }: { agentId: string }) {
   );
 }
 
-function MemoryRow({ memory }: { memory: MemoryListItem }) {
+function MemoryRow({
+  memory,
+  agentId,
+  showVersionHistory = false,
+}: {
+  memory: MemoryListItem;
+  agentId?: string;
+  showVersionHistory?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -370,27 +408,34 @@ function MemoryRow({ memory }: { memory: MemoryListItem }) {
         </div>
       </div>
       {expanded ? (
-        <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div>
-              <span className="font-medium text-foreground">Memory ID:</span> {memory.id}
-            </div>
-            <div>
-              <span className="font-medium text-foreground">Confidence:</span> {Math.round(memory.confidence * 100)}%
-            </div>
-            <div>
-              <span className="font-medium text-foreground">Container:</span> {memory.container}
-            </div>
-            <div>
-              <span className="font-medium text-foreground">Relevance:</span> {Math.round(memory.relevance_score * 100)}%
-            </div>
-            <div>
-              <span className="font-medium text-foreground">Created:</span> {memory.created_at ? new Date(memory.created_at).toLocaleString() : "Unknown"}
-            </div>
-            <div>
-              <span className="font-medium text-foreground">Updated:</span> {memory.updated_at ? new Date(memory.updated_at).toLocaleString() : "Unknown"}
+        <div className="mt-3 space-y-3">
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <span className="font-medium text-foreground">Memory ID:</span> {memory.id}
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Confidence:</span> {Math.round(memory.confidence * 100)}%
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Container:</span> {memory.container}
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Relevance:</span> {Math.round(memory.relevance_score * 100)}%
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Created:</span> {memory.created_at ? new Date(memory.created_at).toLocaleString() : "Unknown"}
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Updated:</span> {memory.updated_at ? new Date(memory.updated_at).toLocaleString() : "Unknown"}
+              </div>
             </div>
           </div>
+          {showVersionHistory && agentId ? (
+            <Suspense fallback={<PanelSkeleton rows={3} className="border-dashed bg-muted/20" />}>
+              <MemoryVersionTimeline agentId={agentId} memory={memory} open={expanded} />
+            </Suspense>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -707,7 +752,10 @@ function ExplorerTab({
       tiers.length === 1 ? tiers[0] : undefined,
       container,
     ),
-    queryFn: () => memoryApi.list(agentId, tiers.length === 1 ? tiers[0] : undefined, container, 50),
+    queryFn: () =>
+      container
+        ? memoryApi.memoryExplorer(agentId, container, tiers.length === 1 ? tiers[0] : undefined, 50)
+        : memoryApi.list(agentId, tiers.length === 1 ? tiers[0] : undefined, container, 50),
     retry: 1,
     staleTime: 10_000,
   });
@@ -786,7 +834,12 @@ function ExplorerTab({
         ) : (
           <div className="divide-y divide-border">
             {filteredItems.map((memory) => (
-              <MemoryRow key={memory.id} memory={memory} />
+              <MemoryRow
+                key={memory.id}
+                memory={memory}
+                agentId={agentId}
+                showVersionHistory
+              />
             ))}
             {data && data.total > filteredItems.length ? (
               <div className="px-4 py-2 text-xs text-muted-foreground">
@@ -813,6 +866,16 @@ export function AgentMemoryTab({
   const effectiveStartupId = startupId ?? "";
   const effectiveEmployeeId = employeeId ?? agentId;
   const handleTabChange = (value: string) => setActiveTab(value as MemoryTab);
+  const defaultContainer = useMemo(() => {
+    if (!effectiveStartupId) return undefined;
+    return `startup:${effectiveStartupId}:emp:${effectiveEmployeeId}`;
+  }, [effectiveEmployeeId, effectiveStartupId]);
+  const { data: summary } = useQuery({
+    queryKey: queryKeys.agents.memory.summary(agentId),
+    queryFn: () => memoryApi.summary(agentId),
+    retry: 1,
+    staleTime: 10_000,
+  });
 
   return (
     <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
@@ -840,10 +903,12 @@ export function AgentMemoryTab({
       </TabsContent>
 
       <TabsContent value="graph">
-        <EmptyPlaceholder
-          title="Graph explorer is coming next"
-          description="Part 2 adds graph projections, neighbors, and version history on top of the embedded Hippocampus runtime."
-        />
+        <Suspense fallback={<PanelSkeleton rows={1} className="min-h-[460px]" />}>
+          <MemoryGraphExplorer
+            agentId={agentId}
+            container={defaultContainer}
+          />
+        </Suspense>
       </TabsContent>
 
       <TabsContent value="profile">
@@ -853,11 +918,13 @@ export function AgentMemoryTab({
         />
       </TabsContent>
 
-      <TabsContent value="activity">
-        <EmptyPlaceholder
-          title="Promotion activity is coming next"
-          description="Part 2 will stream recent promotions and later analytics will build on those events."
-        />
+      <TabsContent value="activity" className="space-y-4">
+        <Suspense fallback={<PanelSkeleton rows={4} />}>
+          <PromotionFeed
+            agentId={agentId}
+            fallbackPromotions={summary?.recent_promotions ?? []}
+          />
+        </Suspense>
       </TabsContent>
     </Tabs>
   );

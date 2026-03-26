@@ -48,6 +48,10 @@ SUPPORTED_METHODS = {
     "getHabits",
     "getSummary",
     "listMemories",
+    "graphSearch",
+    "graphNeighbors",
+    "graphEdges",
+    "graphVersionHistory",
     "runGC",
     "runPromotions",
     "shutdown",
@@ -294,6 +298,14 @@ class HippocampusRuntimeServer:
             return await self._get_summary(hippocampus, params)
         if method == "listMemories":
             return await self._list_memories(hippocampus, agent_id, params)
+        if method == "graphSearch":
+            return await self._graph_search(hippocampus, params)
+        if method == "graphNeighbors":
+            return await self._graph_neighbors(hippocampus, params)
+        if method == "graphEdges":
+            return await self._graph_edges(hippocampus, params)
+        if method == "graphVersionHistory":
+            return await self._graph_version_history(hippocampus, params)
         if method == "runGC":
             return await self._run_gc(hippocampus)
         if method == "runPromotions":
@@ -495,6 +507,49 @@ class HippocampusRuntimeServer:
             "promotions_fired": result.promotions_fired,
         }
 
+    async def _graph_search(
+        self,
+        hippocampus: Hippocampus,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        nodes = await hippocampus.graph_store.search(
+            query=self._required_string(params, "query"),
+            container=str(params.get("container", "default")),
+            top_k=int(params.get("top_k", 10)),
+        )
+        return {"nodes": [self._serialize_graph_node(node) for node in nodes]}
+
+    async def _graph_neighbors(
+        self,
+        hippocampus: Hippocampus,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        nodes = await hippocampus.graph_store.get_neighbors(
+            node_id=self._required_string(params, "node_id"),
+            max_hops=int(params.get("max_hops", 2)),
+        )
+        return {"nodes": [self._serialize_graph_node(node) for node in nodes]}
+
+    async def _graph_edges(
+        self,
+        hippocampus: Hippocampus,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        edges = await hippocampus.graph_store.get_edges(
+            self._required_string(params, "node_id")
+        )
+        return {"edges": [self._serialize_graph_edge(edge) for edge in edges]}
+
+    async def _graph_version_history(
+        self,
+        hippocampus: Hippocampus,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        versions = await hippocampus.graph_store.get_version_history(
+            self._required_string(params, "memory_id")
+        )
+        return {"versions": [self._serialize_graph_node(version) for version in versions]}
+
     async def _run_promotions(self, hippocampus: Hippocampus) -> dict[str, Any]:
         promotions = await hippocampus.run_promotions()
         return {
@@ -515,6 +570,28 @@ class HippocampusRuntimeServer:
         if callable(list_nodes):
             return len(list_nodes())
         return 0
+
+    def _serialize_graph_node(self, node: GraphEntity) -> dict[str, Any]:
+        return {
+            "id": node.id,
+            "name": node.name,
+            "entity_type": node.entity_type,
+            "mention_count": node.mention_count,
+            "container": node.container,
+            "created_at": node.created_at.isoformat(),
+        }
+
+    def _serialize_graph_edge(self, edge: Any) -> dict[str, Any]:
+        return {
+            "source_id": edge.source_id,
+            "target_id": edge.target_id,
+            "relation_type": (
+                edge.relation_type.value
+                if isinstance(edge.relation_type, Enum)
+                else str(edge.relation_type)
+            ),
+            "weight": edge.weight,
+        }
 
     def _serialize_promotion(self, event: MemoryPromotionEvent) -> dict[str, Any]:
         return {

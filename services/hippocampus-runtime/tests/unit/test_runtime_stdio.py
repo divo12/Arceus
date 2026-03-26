@@ -227,6 +227,55 @@ async def test_runtime_stdio_exposes_memory_surface_and_reuses_agent_instances(
         promotions = await _rpc(proc, 14, "runPromotions", {"agent_id": "agent-1"})
         assert promotions["result"]["promotions"] == []
 
+        graph_search = await _rpc(
+            proc,
+            15,
+            "graphSearch",
+            {
+                "agent_id": "agent-1",
+                "query": "JWT",
+                "container": "startup:acme",
+                "top_k": 5,
+            },
+        )
+        assert any(node["name"] == "JWT is the default auth strategy" for node in graph_search["result"]["nodes"])
+
+        center_node_id = graph_search["result"]["nodes"][0]["id"]
+
+        graph_neighbors = await _rpc(
+            proc,
+            16,
+            "graphNeighbors",
+            {
+                "agent_id": "agent-1",
+                "node_id": center_node_id,
+                "max_hops": 2,
+            },
+        )
+        assert graph_neighbors["result"] == {"nodes": []}
+
+        graph_edges = await _rpc(
+            proc,
+            17,
+            "graphEdges",
+            {
+                "agent_id": "agent-1",
+                "node_id": center_node_id,
+            },
+        )
+        assert graph_edges["result"] == {"edges": []}
+
+        graph_history = await _rpc(
+            proc,
+            18,
+            "graphVersionHistory",
+            {
+                "agent_id": "agent-1",
+                "memory_id": center_node_id,
+            },
+        )
+        assert graph_history["result"]["versions"][0]["id"] == center_node_id
+
 
 @pytest.mark.asyncio
 async def test_runtime_stdio_returns_parse_error_for_malformed_json(
@@ -247,10 +296,10 @@ async def test_runtime_stdio_returns_method_not_found_for_unknown_method(
     tmp_path: Path,
 ) -> None:
     async with spawn_runtime(tmp_path) as proc:
-        response = await _rpc(proc, 15, "unknownMethod", {})
+        response = await _rpc(proc, 19, "unknownMethod", {})
 
         assert response["error"]["code"] == -32601
-        assert response["id"] == 15
+        assert response["id"] == 19
 
 
 @pytest.mark.asyncio
@@ -260,7 +309,7 @@ async def test_runtime_stdio_serializes_handler_exceptions(
     async with spawn_runtime(tmp_path) as proc:
         response = await _rpc(
             proc,
-            16,
+            20,
             "remember",
             {
                 "agent_id": "agent-1",
@@ -272,7 +321,7 @@ async def test_runtime_stdio_serializes_handler_exceptions(
 
         assert response["error"]["code"] == -32602
         assert response["error"]["data"]["type"] == "ValueError"
-        assert response["id"] == 16
+        assert response["id"] == 20
 
 
 @pytest.mark.asyncio
@@ -280,7 +329,7 @@ async def test_runtime_stdio_shutdown_exits_cleanly(
     tmp_path: Path,
 ) -> None:
     async with spawn_runtime(tmp_path) as proc:
-        response = await _rpc(proc, 17, "shutdown")
+        response = await _rpc(proc, 21, "shutdown")
 
         assert response["result"]["status"] == "stopping"
         exit_code = await asyncio.wait_for(proc.wait(), timeout=5.0)
