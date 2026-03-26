@@ -39,9 +39,13 @@ async function invokeRoute(options: {
   params?: Record<string, unknown>;
   path: string;
   query?: Record<string, unknown>;
+  resolveAgentCompanyId?: (agentId: string) => Promise<string | undefined>;
 }) {
   const { memoryRoutes } = await import("../routes/memory.js");
-  const router = memoryRoutes({ hippocampusMode: options.hippocampusMode });
+  const router = memoryRoutes({
+    hippocampusMode: options.hippocampusMode,
+    resolveAgentCompanyId: options.resolveAgentCompanyId,
+  });
   const handler = getRouteHandler(router, options.method, options.path);
 
   const req = {
@@ -254,6 +258,95 @@ describe("memory routes", () => {
           kind: "vector",
         },
       ],
+    });
+  });
+
+  it("extracts meeting memories for each participant", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const extract = vi.fn()
+      .mockImplementation(async (agentId: string) => ({
+        added: agentId === "agent-2" ? 2 : 1,
+        updated: 0,
+        deleted: 0,
+      }));
+
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        extract,
+      }),
+    }));
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/extract-meeting",
+      body: {
+        meetingId: "meeting-42",
+        transcript: "We decided to ship the auth fix this week.",
+        participants: ["agent-2", "agent-3"],
+      },
+    });
+
+    expect(extract).toHaveBeenCalledTimes(2);
+    expect(extract).toHaveBeenCalledWith(
+      "agent-2",
+      [{ role: "user", content: "We decided to ship the auth fix this week." }],
+      "meeting:meeting-42",
+    );
+    expect(extract).toHaveBeenCalledWith(
+      "agent-3",
+      [{ role: "user", content: "We decided to ship the auth fix this week." }],
+      "meeting:meeting-42",
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      meetingId: "meeting-42",
+      participants: [
+        { participantId: "agent-2", added: 2, updated: 0, deleted: 0 },
+        { participantId: "agent-3", added: 1, updated: 0, deleted: 0 },
+      ],
+      failedCount: 0,
+    });
+  });
+
+  it("returns partial meeting extraction results when one participant fails", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const extract = vi.fn()
+      .mockImplementation(async (agentId: string) => {
+        if (agentId === "agent-2") {
+          throw new Error("participant extraction failed");
+        }
+        return {
+          added: 1,
+          updated: 1,
+          deleted: 0,
+        };
+      });
+
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        extract,
+      }),
+    }));
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/extract-meeting",
+      body: {
+        meetingId: "meeting-42",
+        transcript: "We decided to ship the auth fix this week.",
+        participants: ["agent-2", "agent-3"],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      meetingId: "meeting-42",
+      participants: [
+        { participantId: "agent-3", added: 1, updated: 1, deleted: 0 },
+      ],
+      failedCount: 1,
     });
   });
 
@@ -907,6 +1000,158 @@ describe("memory routes", () => {
         to_type: "dynamic",
       }),
     ]);
+  });
+
+  it("emits live events for promotion runs when company scope is provided", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const publishLiveEvent = vi.fn();
+
+    vi.doMock("../services/live-events.js", () => ({
+      publishLiveEvent,
+    }));
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        runPromotions: vi.fn().mockResolvedValue({
+          promotions: [
+            {
+              memory_id: "mem-1",
+              from_tier: "dynamic",
+              to_tier: "static",
+              reason: "repeated success",
+            },
+            {
+              memory_id: "mem-2",
+              from_tier: "working",
+              to_tier: "dynamic",
+              reason: "recent extraction",
+            },
+          ],
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      body: { companyId: "company-1" },
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/promotions",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(publishLiveEvent).toHaveBeenCalledTimes(2);
+    expect(publishLiveEvent).toHaveBeenNthCalledWith(1, {
+      companyId: "company-1",
+      type: "memory:promotion",
+      payload: {
+        agentId: "agent-1",
+        memoryId: "mem-1",
+        fromTier: "dynamic",
+        toTier: "static",
+        reason: "repeated success",
+      },
+    });
+    expect(publishLiveEvent).toHaveBeenNthCalledWith(2, {
+      companyId: "company-1",
+      type: "memory:promotion",
+      payload: {
+        agentId: "agent-1",
+        memoryId: "mem-2",
+        fromTier: "working",
+        toTier: "dynamic",
+        reason: "recent extraction",
+      },
+    });
+  });
+
+  it("emits a live event for GC runs when company scope is provided", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const publishLiveEvent = vi.fn();
+
+    vi.doMock("../services/live-events.js", () => ({
+      publishLiveEvent,
+    }));
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        runGC: vi.fn().mockResolvedValue({
+          expired: 3,
+          decayed: 7,
+          demoted: 1,
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      actor: {
+        type: "board",
+        userId: "board-user",
+        source: "session",
+        companyIds: ["company-1"],
+      },
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/gc",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(publishLiveEvent).toHaveBeenCalledTimes(1);
+    expect(publishLiveEvent).toHaveBeenCalledWith({
+      companyId: "company-1",
+      type: "memory:gc",
+      payload: {
+        agentId: "agent-1",
+        expired: 3,
+        decayed: 7,
+        demoted: 1,
+      },
+    });
+  });
+
+  it("resolves company scope from agent lookup for promotions in local trusted mode", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const publishLiveEvent = vi.fn();
+
+    vi.doMock("../services/live-events.js", () => ({
+      publishLiveEvent,
+    }));
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        runPromotions: vi.fn().mockResolvedValue({
+          promotions: [
+            {
+              memory_id: "mem-1",
+              from_tier: "dynamic",
+              to_tier: "static",
+              reason: "repeated success",
+            },
+          ],
+        }),
+      }),
+    }));
+
+    const res = await invokeRoute({
+      actor: {
+        type: "board",
+        userId: "local-board",
+        source: "local_implicit",
+      },
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/promotions",
+      resolveAgentCompanyId: async () => "company-1",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(publishLiveEvent).toHaveBeenCalledWith({
+      companyId: "company-1",
+      type: "memory:promotion",
+      payload: {
+        agentId: "agent-1",
+        memoryId: "mem-1",
+        fromTier: "dynamic",
+        toTier: "static",
+        reason: "repeated success",
+      },
+    });
   });
 
   it("supports Part 2 memory explorer once the route lands", async (context) => {

@@ -19,6 +19,7 @@ import { memoryApi, type MemoryListItem, type MemorySummary, type RecallItem } f
 import { queryKeys } from "../lib/queryKeys";
 import { cn } from "../lib/utils";
 import { PageTabBar } from "./PageTabBar";
+import { MemoryAnalytics } from "./MemoryAnalytics";
 import { ScopeFilterBar, type MemoryScopeOption, type MemoryTierOption, type MemoryVisibilityOption } from "./ScopeFilterBar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-type MemoryTab = "overview" | "explorer" | "graph" | "profile" | "activity";
+type MemoryTab = "overview" | "analytics" | "explorer" | "graph" | "profile" | "activity";
 
 const MemoryGraphExplorer = lazy(async () => ({
   default: (await import("./MemoryGraphExplorer")).MemoryGraphExplorer,
@@ -55,6 +56,7 @@ const TIER_META: Record<string, { label: string; icon: typeof Brain; color: stri
 
 const memoryTabItems = [
   { value: "overview", label: "Overview" },
+  { value: "analytics", label: "Analytics" },
   { value: "explorer", label: "Explorer" },
   { value: "graph", label: "Graph" },
   { value: "profile", label: "Profile" },
@@ -939,6 +941,13 @@ export function AgentMemoryTab({
           agentId={agentId}
           startupId={effectiveStartupId}
           employeeId={effectiveEmployeeId}
+        />
+      </TabsContent>
+
+      <TabsContent value="analytics" className="space-y-4">
+        <MemoryAnalytics
+          agentId={agentId}
+          summary={summary}
         />
       </TabsContent>
 

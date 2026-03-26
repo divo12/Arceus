@@ -328,6 +328,45 @@ function buildRunStatusToast(
   };
 }
 
+function buildMemoryToast(
+  eventType: LiveEvent["type"],
+  payload: Record<string, unknown>,
+  nameOf: (id: string) => string | null,
+): ToastInput | null {
+  const agentId = readString(payload.agentId);
+  if (!agentId) return null;
+
+  const name = nameOf(agentId) ?? `Agent ${shortId(agentId)}`;
+
+  if (eventType === "memory:promotion") {
+    const fromTier = readString(payload.fromTier) ?? "memory";
+    const toTier = readString(payload.toTier) ?? "memory";
+    const reason = readString(payload.reason);
+    return {
+      title: `${name} promoted a memory`,
+      body: reason ? `${fromTier} -> ${toTier} - ${reason}` : `${fromTier} -> ${toTier}`,
+      tone: "success",
+      action: { label: "View memory", href: `/agents/${agentId}?view=memory` },
+      dedupeKey: `memory-promotion:${readString(payload.memoryId) ?? agentId}:${fromTier}:${toTier}`,
+    };
+  }
+
+  if (eventType === "memory:gc") {
+    const expired = typeof payload.expired === "number" ? payload.expired : 0;
+    const decayed = typeof payload.decayed === "number" ? payload.decayed : 0;
+    const demoted = typeof payload.demoted === "number" ? payload.demoted : 0;
+    return {
+      title: `${name} ran memory cleanup`,
+      body: `Expired: ${expired} - Decayed: ${decayed} - Demoted: ${demoted}`,
+      tone: "info",
+      action: { label: "View memory", href: `/agents/${agentId}?view=memory` },
+      dedupeKey: `memory-gc:${agentId}:${expired}:${decayed}:${demoted}`,
+    };
+  }
+
+  return null;
+}
+
 function invalidateHeartbeatQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   companyId: string,
@@ -432,6 +471,20 @@ function invalidateActivityQueries(
   }
 }
 
+function invalidateMemoryQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  companyId: string,
+  payload: Record<string, unknown>,
+) {
+  queryClient.invalidateQueries({ queryKey: ["agents", "memory"] });
+  queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(companyId) });
+
+  const agentId = readString(payload.agentId);
+  if (agentId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });
+  }
+}
+
 interface ToastGate {
   cooldownHits: Map<string, number[]>;
   suppressUntil: number;
@@ -504,6 +557,13 @@ function handleLiveEvent(
     if (agentId) queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });
     const toast = buildAgentStatusToast(payload, nameOf, queryClient, expectedCompanyId);
     if (toast) gatedPushToast(gate, pushToast, "agent-status", toast);
+    return;
+  }
+
+  if (event.type === "memory:promotion" || event.type === "memory:gc") {
+    invalidateMemoryQueries(queryClient, expectedCompanyId, payload);
+    const toast = buildMemoryToast(event.type, payload, nameOf);
+    if (toast) gatedPushToast(gate, pushToast, event.type, toast);
     return;
   }
 

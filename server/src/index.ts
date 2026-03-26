@@ -534,6 +534,9 @@ export async function startServer(): Promise<StartedServer> {
   process.env.PAPERCLIP_LISTEN_HOST = runtimeListenHost;
   process.env.PAPERCLIP_LISTEN_PORT = String(listenPort);
   process.env.PAPERCLIP_API_URL = `http://${runtimeApiHost}:${listenPort}`;
+  if (process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_URL === undefined) {
+    process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_URL = activeDatabaseConnectionString;
+  }
 
   await startHippocampusRuntimeForConfig(config);
   

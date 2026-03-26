@@ -1,11 +1,12 @@
 import { DelegationMemoryService } from "../services/delegation-memory.js";
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { ZodError } from "zod";
 import { z } from "zod";
 import { loadConfig, type HippocampusMode } from "../config.js";
 import { HippocampusDisabledError, type HippocampusBridge } from "../services/hippocampus-contract.js";
 import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
 import { MemoryServiceError } from "../services/hippocampus-errors.js";
+import { publishLiveEvent } from "../services/live-events.js";
 import { getMemoryServices } from "../services/memory-services.js";
 import { MemoryProjectionService } from "../services/memory-projections.js";
 import { type MemoryVisibility, MemoryScopeService } from "../services/memory-scope.js";
@@ -16,11 +17,12 @@ import {
   InternalizeDelegationSchema,
   MemoryExplorerQuerySchema,
   MemoryHistoryParamsSchema,
+  MeetingExtractSchema,
   ProfileQuerySchema,
   PromotionLogQuerySchema,
   ScopedRecallSchema,
 } from "../services/memory-schemas.js";
-import { assertBoard } from "./authz.js";
+import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 /**
  * Memory routes — proxied to the Hippocampus bridge.
@@ -28,7 +30,7 @@ import { assertBoard } from "./authz.js";
  */
 type HippocampusBridgeSurface = Pick<
   HippocampusBridge,
-  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "runGC" | "runPromotions" | "health" | "diagnostics"
+  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "extract" | "runGC" | "runPromotions" | "health" | "diagnostics"
 >;
 
 function resolveHippocampusMode(modeOverride?: HippocampusMode): HippocampusMode {
@@ -76,6 +78,10 @@ export function handleMemoryError(
 
 function resolveBridge(): HippocampusBridgeSurface {
   return getHippocampusBridge() as HippocampusBridgeSurface;
+}
+
+function readCompanyId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function resolveScopeService(): MemoryScopeService {
@@ -131,7 +137,10 @@ function resolveDelegationService(): DelegationMemoryService {
   return new DelegationMemoryService(getHippocampusBridge() as HippocampusBridge);
 }
 
-export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}) {
+export function memoryRoutes(options: {
+  hippocampusMode?: HippocampusMode;
+  resolveAgentCompanyId?: (agentId: string) => Promise<string | undefined>;
+} = {}) {
   const router = Router();
   const hippocampusMode = resolveHippocampusMode(options.hippocampusMode);
 
@@ -141,6 +150,29 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
     if (hippocampusMode !== "off") return true;
     res.status(503).json({ error: "Hippocampus is disabled" });
     return false;
+  }
+
+  async function resolveEventCompanyId(req: Request, agentId: string): Promise<string | undefined> {
+    const explicitCompanyId = readCompanyId(req.body?.companyId) ?? readCompanyId(req.query.companyId);
+    if (explicitCompanyId) {
+      assertCompanyAccess(req, explicitCompanyId);
+      return explicitCompanyId;
+    }
+
+    if (req.actor.type === "agent" && req.actor.companyId) {
+      return req.actor.companyId;
+    }
+
+    if (req.actor.type === "board" && req.actor.companyIds?.length === 1) {
+      return req.actor.companyIds[0];
+    }
+
+    if (!options.resolveAgentCompanyId) return undefined;
+
+    const resolvedCompanyId = await options.resolveAgentCompanyId(agentId);
+    if (!resolvedCompanyId) return undefined;
+    assertCompanyAccess(req, resolvedCompanyId);
+    return resolvedCompanyId;
   }
 
   /** GET /api/agents/:agentId/memory/summary */
@@ -237,6 +269,44 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
       res.json(result);
     } catch (err) {
       sendBridgeError(res, err);
+    }
+  });
+
+  /** POST /api/agents/:agentId/memory/extract-meeting */
+  router.post("/agents/:agentId/memory/extract-meeting", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const body = MeetingExtractSchema.parse(req.body);
+      const hippocampusBridge = resolveBridge();
+      const messages = [{ role: "user", content: body.transcript }];
+      const container = `meeting:${body.meetingId}`;
+
+      const settled = await Promise.allSettled(
+        body.participants.map((participantId) =>
+          hippocampusBridge.extract(participantId, messages, container).then((result) => ({
+            participantId,
+            ...result,
+          }))
+        ),
+      );
+
+      const participants = settled
+        .filter((result): result is PromiseFulfilledResult<{
+          participantId: string;
+          added: number;
+          updated: number;
+          deleted: number;
+        }> => result.status === "fulfilled")
+        .map((result) => result.value);
+
+      res.json({
+        meetingId: body.meetingId,
+        participants,
+        failedCount: settled.filter((result) => result.status === "rejected").length,
+      });
+    } catch (error) {
+      handleMemoryError(res, error);
     }
   });
 
@@ -416,6 +486,19 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
     try {
       const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.runGC(req.params.agentId);
+      const companyId = await resolveEventCompanyId(req, req.params.agentId);
+      if (companyId) {
+        publishLiveEvent({
+          companyId,
+          type: "memory:gc",
+          payload: {
+            agentId: req.params.agentId,
+            expired: result.expired,
+            decayed: result.decayed,
+            demoted: result.demoted,
+          },
+        });
+      }
       res.json(result);
     } catch (err) {
       sendBridgeError(res, err);
@@ -429,6 +512,22 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
     try {
       const hippocampusBridge = resolveBridge();
       const result = await hippocampusBridge.runPromotions(req.params.agentId);
+      const companyId = await resolveEventCompanyId(req, req.params.agentId);
+      if (companyId) {
+        for (const promotion of result.promotions) {
+          publishLiveEvent({
+            companyId,
+            type: "memory:promotion",
+            payload: {
+              agentId: req.params.agentId,
+              memoryId: promotion.memory_id,
+              fromTier: promotion.from_tier,
+              toTier: promotion.to_tier,
+              reason: promotion.reason,
+            },
+          });
+        }
+      }
       res.json(result);
     } catch (err) {
       sendBridgeError(res, err);
