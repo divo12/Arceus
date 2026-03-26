@@ -84,6 +84,20 @@ export interface ShareableMemoryParams {
   visibility?: Array<"shared" | "board" | "private" | "task_scoped">;
 }
 
+export interface DelegateMemoryParams {
+  toAgentId: string;
+  startupId: string;
+  taskId: string;
+  taskDescription: string;
+  topK?: number;
+}
+
+export interface InternalizeDelegationParams {
+  startupId: string;
+  learnings: string[];
+  quality: number;
+}
+
 export interface MemoryHealth {
   status: string;
   agents_loaded: number;
@@ -106,6 +120,28 @@ export interface PromotionRunItem {
   from_tier: string;
   to_tier: string;
   reason: string;
+}
+
+export interface DelegationMemoryResult {
+  copiedCount: number;
+  failedCount: number;
+  memories: MemoryListItem[];
+}
+
+export interface InternalizeDelegationResult {
+  internalized: number;
+}
+
+export interface EmployeeProfile {
+  role: string;
+  core_knowledge: string[];
+  current_context: string[];
+  habits: Array<{ trigger: string; action: string; confidence: number }>;
+  state: {
+    priming_prompt?: string;
+    partial?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 function buildQuery(params: Record<string, string | number | undefined>) {
@@ -254,6 +290,33 @@ export const memoryApi = {
     api.post<{ promotions: PromotionRunItem[] }>(
       `/agents/${agentId}/memory/promotions`,
       {},
+    ),
+
+  getProfile: (agentId: string, startupId: string, role = "Agent") => {
+    const params = buildQuery({ startupId, role });
+    return api.get<EmployeeProfile>(`/agents/${agentId}/memory/profile?${params}`);
+  },
+
+  delegate: (agentId: string, params: DelegateMemoryParams) =>
+    api.post<DelegationMemoryResult>(
+      `/agents/${agentId}/memory/delegate`,
+      {
+        toAgentId: params.toAgentId,
+        startupId: params.startupId,
+        taskId: params.taskId,
+        taskDescription: params.taskDescription,
+        topK: params.topK ?? 10,
+      },
+    ),
+
+  internalizeDelegation: (agentId: string, params: InternalizeDelegationParams) =>
+    api.post<InternalizeDelegationResult>(
+      `/agents/${agentId}/memory/internalize-delegation`,
+      {
+        startupId: params.startupId,
+        learnings: params.learnings,
+        quality: params.quality,
+      },
     ),
 
   graphView: async (agentId: string, query: string, container?: string, depth = 2) => {

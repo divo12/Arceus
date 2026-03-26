@@ -1,3 +1,4 @@
+import { DelegationMemoryService } from "../services/delegation-memory.js";
 import { Router } from "express";
 import { ZodError } from "zod";
 import { z } from "zod";
@@ -8,10 +9,14 @@ import { MemoryServiceError } from "../services/hippocampus-errors.js";
 import { getMemoryServices } from "../services/memory-services.js";
 import { MemoryProjectionService } from "../services/memory-projections.js";
 import { type MemoryVisibility, MemoryScopeService } from "../services/memory-scope.js";
+import { ProfileService } from "../services/profile-service.js";
 import {
+  DelegateSchema,
   GraphQuerySchema,
+  InternalizeDelegationSchema,
   MemoryExplorerQuerySchema,
   MemoryHistoryParamsSchema,
+  ProfileQuerySchema,
   PromotionLogQuerySchema,
   ScopedRecallSchema,
 } from "../services/memory-schemas.js";
@@ -99,6 +104,31 @@ function resolveProjectionService(): MemoryProjectionService {
     return registered as MemoryProjectionService;
   }
   return new MemoryProjectionService(getHippocampusBridge() as HippocampusBridge);
+}
+
+function resolveProfileService(): ProfileService {
+  const registered = getMemoryServices().profile;
+  if (
+    registered &&
+    typeof registered === "object" &&
+    "generateProfile" in registered
+  ) {
+    return registered as ProfileService;
+  }
+  return new ProfileService(getHippocampusBridge() as HippocampusBridge);
+}
+
+function resolveDelegationService(): DelegationMemoryService {
+  const registered = getMemoryServices().delegation;
+  if (
+    registered &&
+    typeof registered === "object" &&
+    "prepareDelegationContext" in registered &&
+    "internalizeDelegationResult" in registered
+  ) {
+    return registered as DelegationMemoryService;
+  }
+  return new DelegationMemoryService(getHippocampusBridge() as HippocampusBridge);
 }
 
 export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}) {
@@ -251,6 +281,61 @@ export function memoryRoutes(options: { hippocampusMode?: HippocampusMode } = {}
         visibility?.length ? visibility : undefined,
       );
       res.json({ items, total: items.length });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/agents/:agentId/memory/profile */
+  router.get("/agents/:agentId/memory/profile", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const params = ProfileQuerySchema.parse(req.query);
+      const profile = await resolveProfileService().generateProfile(
+        req.params.agentId,
+        params.startupId,
+        params.role,
+      );
+      res.json(profile);
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** POST /api/agents/:agentId/memory/delegate */
+  router.post("/agents/:agentId/memory/delegate", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const body = DelegateSchema.parse(req.body);
+      const result = await resolveDelegationService().prepareDelegationContext(
+        req.params.agentId,
+        body.toAgentId,
+        body.startupId,
+        body.taskId,
+        body.taskDescription,
+        body.topK,
+      );
+      res.status(result.failedCount > 0 ? 207 : 200).json(result);
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** POST /api/agents/:agentId/memory/internalize-delegation */
+  router.post("/agents/:agentId/memory/internalize-delegation", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      const body = InternalizeDelegationSchema.parse(req.body);
+      const result = await resolveDelegationService().internalizeDelegationResult(
+        req.params.agentId,
+        body.startupId,
+        body.learnings,
+        body.quality,
+      );
+      res.json(result);
     } catch (error) {
       handleMemoryError(res, error);
     }

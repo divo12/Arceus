@@ -1058,6 +1058,7 @@ export function AgentDetail() {
           agentId={agent.id}
           startupId={resolvedCompanyId ?? undefined}
           employeeId={agent.id}
+          profileRole={agent.title ?? roleLabels[agent.role] ?? agent.role}
         />
       )}
     </div>

@@ -51,6 +51,34 @@ export const queryKeys = {
         ["agents", "memory", "version-history", agentId, memoryId] as const,
       promotions: (agentId: string, limit: number = 20) =>
         ["agents", "memory", "promotions", agentId, limit] as const,
+      profile: (agentId: string, startupId: string, role: string) =>
+        ["agents", "memory", "profile", agentId, startupId, role] as const,
+      delegation: (
+        agentId: string,
+        toAgentId: string,
+        startupId: string,
+        taskId: string,
+      ) => [
+        "agents",
+        "memory",
+        "delegation",
+        agentId,
+        toAgentId,
+        startupId,
+        taskId,
+      ] as const,
+      internalizeDelegation: (
+        agentId: string,
+        startupId: string,
+        quality: number,
+      ) => [
+        "agents",
+        "memory",
+        "internalize-delegation",
+        agentId,
+        startupId,
+        quality,
+      ] as const,
       scopedRecall: (
         agentId: string,
         startupId: string,

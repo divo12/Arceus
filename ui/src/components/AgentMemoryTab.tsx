@@ -15,7 +15,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { memoryApi, type MemoryListItem, type RecallItem } from "../api/memory";
+import { memoryApi, type MemoryListItem, type MemorySummary, type RecallItem } from "../api/memory";
 import { queryKeys } from "../lib/queryKeys";
 import { cn } from "../lib/utils";
 import { PageTabBar } from "./PageTabBar";
@@ -39,6 +39,10 @@ const MemoryVersionTimeline = lazy(async () => ({
 
 const PromotionFeed = lazy(async () => ({
   default: (await import("./PromotionFeed")).PromotionFeed,
+}));
+
+const AgentProfileCard = lazy(async () => ({
+  default: (await import("./AgentProfileCard")).AgentProfileCard,
 }));
 
 const TIER_META: Record<string, { label: string; icon: typeof Brain; color: string }> = {
@@ -853,14 +857,58 @@ function ExplorerTab({
   );
 }
 
+function ProfileTab({
+  agentId,
+  startupId,
+  profileRole,
+  summary,
+}: {
+  agentId: string;
+  startupId: string;
+  profileRole: string;
+  summary?: MemorySummary;
+}) {
+  const { data, error, isLoading } = useQuery({
+    queryKey: queryKeys.agents.memory.profile(agentId, startupId || "__missing__", profileRole),
+    queryFn: () => memoryApi.getProfile(agentId, startupId, profileRole),
+    enabled: Boolean(startupId),
+    retry: 1,
+    staleTime: 15_000,
+  });
+
+  return (
+    <Suspense fallback={<PanelSkeleton rows={4} className="min-h-[420px]" />}>
+      <AgentProfileCard
+        profile={data ?? null}
+        summary={summary}
+        loading={Boolean(startupId) && isLoading}
+        errorMessage={error instanceof Error ? error.message : null}
+        variant="full"
+        emptyTitle={
+          startupId
+            ? "Profile builds as the agent accumulates memories."
+            : "Profile needs startup context"
+        }
+        emptyDescription={
+          startupId
+            ? "No profile signals are available yet. Static knowledge, current context, and habits will appear here as the agent learns."
+            : "Open this memory view with a startup-scoped agent context to synthesize a Hippocampus profile."
+        }
+      />
+    </Suspense>
+  );
+}
+
 export function AgentMemoryTab({
   agentId,
   startupId,
   employeeId,
+  profileRole = "Agent",
 }: {
   agentId: string;
   startupId?: string;
   employeeId?: string;
+  profileRole?: string;
 }) {
   const [activeTab, setActiveTab] = useState<MemoryTab>("overview");
   const effectiveStartupId = startupId ?? "";
@@ -912,9 +960,11 @@ export function AgentMemoryTab({
       </TabsContent>
 
       <TabsContent value="profile">
-        <EmptyPlaceholder
-          title="Profile view is coming next"
-          description="Part 3 will synthesize static knowledge, current context, habits, and priming into an agent memory profile."
+        <ProfileTab
+          agentId={agentId}
+          startupId={effectiveStartupId}
+          profileRole={profileRole}
+          summary={summary}
         />
       </TabsContent>
 

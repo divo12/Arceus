@@ -1,6 +1,8 @@
+import { DelegationMemoryService } from "./delegation-memory.js";
 import type { HippocampusBridge } from "./hippocampus-contract.js";
 import { MemoryProjectionService } from "./memory-projections.js";
 import { MemoryScopeService } from "./memory-scope.js";
+import { ProfileService } from "./profile-service.js";
 
 export interface MemoryServices<
   TScope = unknown,
@@ -29,8 +31,8 @@ export interface MemoryServiceFactories<
 const defaultFactories: MemoryServiceFactories = {
   createScope: (bridge) => new MemoryScopeService(bridge),
   createProjections: (bridge) => new MemoryProjectionService(bridge),
-  createProfile: () => null,
-  createDelegation: () => null,
+  createProfile: (bridge) => new ProfileService(bridge),
+  createDelegation: (bridge) => new DelegationMemoryService(bridge),
 };
 
 let memoryServices: MemoryServices = createEmptyMemoryServices();

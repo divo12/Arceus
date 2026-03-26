@@ -116,13 +116,90 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { StatusIcon } from "@/components/StatusIcon";
 import { PriorityIcon } from "@/components/PriorityIcon";
 import { agentStatusDot, agentStatusDotDefault } from "@/lib/status-colors";
+import { AgentProfileCard } from "@/components/AgentProfileCard";
 import { EntityRow } from "@/components/EntityRow";
+import { DelegationMemoryView } from "@/components/DelegationMemoryView";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { InlineEditor } from "@/components/InlineEditor";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Identity } from "@/components/Identity";
+import type { EmployeeProfile, MemoryListItem, MemorySummary } from "@/api/memory";
+
+const demoDelegatedMemories: MemoryListItem[] = [
+  {
+    id: "mem-delegate-1",
+    content: "JWT access tokens expire after 24 hours and use rotating refresh tokens.",
+    memory_type: "static",
+    confidence: 0.92,
+    relevance_score: 0.88,
+    container: "startup:acme:task:token-refresh",
+    visibility: "task_scoped",
+    created_at: "2026-03-24T09:30:00Z",
+    updated_at: "2026-03-24T09:30:00Z",
+    access_count: 6,
+  },
+  {
+    id: "mem-delegate-2",
+    content: "OAuth2 flows should use PKCE for browser and native clients.",
+    memory_type: "static",
+    confidence: 0.88,
+    relevance_score: 0.8,
+    container: "startup:acme:task:token-refresh",
+    visibility: "task_scoped",
+    created_at: "2026-03-24T09:32:00Z",
+    updated_at: "2026-03-24T09:32:00Z",
+    access_count: 3,
+  },
+  {
+    id: "mem-delegate-3",
+    content: "Revocation should rely on jti claims and a bounded denylist in Redis.",
+    memory_type: "dynamic",
+    confidence: 0.73,
+    relevance_score: 0.69,
+    container: "startup:acme:task:token-refresh",
+    visibility: "task_scoped",
+    created_at: "2026-03-25T14:12:00Z",
+    updated_at: "2026-03-25T14:12:00Z",
+    access_count: 1,
+  },
+];
+
+const demoProfile: EmployeeProfile = {
+  role: "Chief Technology Officer",
+  core_knowledge: [
+    "JWT authentication should use short-lived access tokens with rotating refresh tokens.",
+    "PostgreSQL handles transactional control-plane state better than ad hoc document storage.",
+    "Redis is the right place for fast ephemeral coordination and working memory.",
+    "Neo4j is reserved for relationship-heavy memory and graph exploration paths.",
+    "Production deploys require rollback playbooks and release checkpoints.",
+    "Observability should prioritize traces, error rates, and queue lag during rollout windows.",
+  ],
+  current_context: [
+    "Reviewing token refresh edge cases before rollout.",
+    "Preparing a migration plan for embedded Hippocampus runtime adoption.",
+    "Watching memory retrieval quality on short informal queries.",
+  ],
+  habits: [
+    { trigger: "code review", action: "check failure modes and rollback paths first", confidence: 0.87 },
+    { trigger: "production changes", action: "confirm migration, metrics, and on-call readiness", confidence: 0.91 },
+    { trigger: "design discussion", action: "start from system boundaries before implementation detail", confidence: 0.79 },
+  ],
+  state: {
+    priming_prompt:
+      "Bias toward resilient rollout plans, explicit ownership, and observable system behavior.",
+    partial: false,
+  },
+};
+
+const demoProfileSummary: MemorySummary = {
+  total_static: 42,
+  total_dynamic: 18,
+  active_habits: demoProfile.habits,
+  priming_prompt: "Bias toward resilient rollout plans, explicit ownership, and observable system behavior.",
+  graph_node_count: 27,
+};
 
 /* ------------------------------------------------------------------ */
 /*  Section wrapper                                                    */
@@ -224,7 +301,7 @@ export function DesignGuide() {
               {[
                 "StatusBadge", "StatusIcon", "PriorityIcon", "EntityRow", "EmptyState", "MetricCard",
                 "FilterBar", "InlineEditor", "PageSkeleton", "Identity", "CommentThread", "MarkdownEditor",
-                "PropertiesPanel", "Sidebar", "CommandPalette",
+                "PropertiesPanel", "Sidebar", "CommandPalette", "AgentProfileCard", "DelegationMemoryView",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -880,6 +957,48 @@ export function DesignGuide() {
             selected
           />
         </div>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  MEMORY PATTERNS                                             */}
+      {/* ============================================================ */}
+      <Section title="Memory Patterns">
+        <SubSection title="AgentProfileCard">
+          <AgentProfileCard
+            profile={demoProfile}
+            summary={demoProfileSummary}
+            variant="full"
+          />
+        </SubSection>
+
+        <SubSection title="DelegationMemoryView">
+          <DelegationMemoryView
+            fromAgentName="CTO Agent"
+            toAgentName="Engineer Agent"
+            taskTitle='Implement "token refresh endpoint"'
+            delegatedAt="2026-03-26T08:30:00Z"
+            copiedCount={demoDelegatedMemories.length}
+            failedCount={1}
+            memories={demoDelegatedMemories}
+            quality={0.92}
+            internalizedAs="static"
+            learnings={[
+              { text: "Refresh token revocation should use jti claims for targeted invalidation." },
+              { text: "PKCE code_verifier length must stay within the 43-128 character range." },
+            ]}
+          />
+        </SubSection>
+
+        <SubSection title="DelegationMemoryView empty state">
+          <DelegationMemoryView
+            fromAgentName="Strategist Agent"
+            toAgentName="Research Agent"
+            taskTitle="Investigate onboarding drop-off"
+            copiedCount={0}
+            memories={[]}
+            learnings={[]}
+          />
+        </SubSection>
       </Section>
 
       {/* ============================================================ */}

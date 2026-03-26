@@ -634,6 +634,21 @@ describe("memory routes", () => {
     };
   }
 
+  function fullProfileMock(overrides: Record<string, unknown> = {}) {
+    return {
+      generateProfile: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  function fullDelegationMock(overrides: Record<string, unknown> = {}) {
+    return {
+      prepareDelegationContext: vi.fn(),
+      internalizeDelegationResult: vi.fn(),
+      ...overrides,
+    };
+  }
+
   it("supports Part 2 graph view once the route lands", async (context) => {
     process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
     const getGraphView = vi.fn().mockResolvedValue({
@@ -1015,5 +1030,471 @@ describe("memory routes", () => {
       code: "GRAPH_UNAVAILABLE",
       details: { backend: "neo4j" },
     });
+  });
+
+  it("supports Part 3 profile route", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const generateProfile = vi.fn().mockResolvedValue({
+      role: "CTO",
+      core_knowledge: ["JWT auth with PKCE"],
+      current_context: ["Reviewing token refresh"],
+      habits: [{ trigger: "code review", action: "check errors", confidence: 0.82 }],
+      state: {
+        priming_prompt: "Focus on reliability",
+        partial: false,
+      },
+    });
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: fullProfileMock({ generateProfile }),
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/profile")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/profile",
+      query: {
+        startupId: "startup-1",
+        role: "CTO",
+      },
+    });
+
+    expect(generateProfile).toHaveBeenCalledWith("agent-1", "startup-1", "CTO");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      role: "CTO",
+      core_knowledge: ["JWT auth with PKCE"],
+      current_context: ["Reviewing token refresh"],
+      habits: [{ trigger: "code review", action: "check errors", confidence: 0.82 }],
+      state: {
+        priming_prompt: "Focus on reliability",
+        partial: false,
+      },
+    });
+  });
+
+  it("validates Part 3 profile query", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: fullProfileMock(),
+        delegation: null,
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "get", "/agents/:agentId/memory/profile")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "get",
+      path: "/agents/:agentId/memory/profile",
+      query: {
+        startupId: "",
+        role: "CTO",
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(expect.objectContaining({
+      error: expect.any(String),
+    }));
+  });
+
+  it("supports Part 3 delegation route", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const prepareDelegationContext = vi.fn().mockResolvedValue({
+      copiedCount: 2,
+      failedCount: 0,
+      memories: [
+        {
+          id: "delegated-1",
+          content: "[delegated:agent-1] JWT auth with PKCE",
+          memory_type: "dynamic",
+          confidence: 0.93,
+          relevance_score: 0.88,
+          container: "startup:startup-1:task:task-7",
+          visibility: null,
+          created_at: null,
+          updated_at: null,
+          access_count: 0,
+        },
+      ],
+    });
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: null,
+        delegation: fullDelegationMock({ prepareDelegationContext }),
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/delegate")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/delegate",
+      body: {
+        toAgentId: "agent-2",
+        startupId: "startup-1",
+        taskId: "task-7",
+        taskDescription: "Implement token refresh endpoint",
+        topK: 5,
+      },
+    });
+
+    expect(prepareDelegationContext).toHaveBeenCalledWith(
+      "agent-1",
+      "agent-2",
+      "startup-1",
+      "task-7",
+      "Implement token refresh endpoint",
+      5,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual(expect.objectContaining({
+      copiedCount: 2,
+      failedCount: 0,
+      memories: expect.arrayContaining([
+        expect.objectContaining({ id: "delegated-1" }),
+      ]),
+    }));
+  });
+
+  it("returns 207 for partial Part 3 delegation copy", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const prepareDelegationContext = vi.fn().mockResolvedValue({
+      copiedCount: 1,
+      failedCount: 1,
+      memories: [
+        {
+          id: "delegated-1",
+          content: "[delegated:agent-1] OAuth2 flow uses PKCE",
+          memory_type: "dynamic",
+          confidence: 0.88,
+          relevance_score: 0.79,
+          container: "startup:startup-1:task:task-7",
+          visibility: null,
+          created_at: null,
+          updated_at: null,
+          access_count: 0,
+        },
+      ],
+    });
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: null,
+        delegation: fullDelegationMock({ prepareDelegationContext }),
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/delegate")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/delegate",
+      body: {
+        toAgentId: "agent-2",
+        startupId: "startup-1",
+        taskId: "task-7",
+        taskDescription: "Implement token refresh endpoint",
+        topK: 5,
+      },
+    });
+
+    expect(res.statusCode).toBe(207);
+    expect(res.body).toEqual(expect.objectContaining({
+      copiedCount: 1,
+      failedCount: 1,
+    }));
+  });
+
+  it("validates Part 3 delegation input", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: null,
+        delegation: fullDelegationMock(),
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/delegate")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/delegate",
+      body: {
+        toAgentId: "",
+        startupId: "startup-1",
+        taskId: "task-7",
+        taskDescription: "Implement token refresh endpoint",
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(expect.objectContaining({
+      error: expect.any(String),
+    }));
+  });
+
+  it("supports Part 3 internalize-delegation route", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    const internalizeDelegationResult = vi.fn().mockResolvedValue({ internalized: 2 });
+
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: null,
+        delegation: fullDelegationMock({ internalizeDelegationResult }),
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/internalize-delegation")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/internalize-delegation",
+      body: {
+        startupId: "startup-1",
+        learnings: ["Refresh tokens should use jti", "PKCE verifier length matters"],
+        quality: 0.92,
+      },
+    });
+
+    expect(internalizeDelegationResult).toHaveBeenCalledWith(
+      "agent-1",
+      "startup-1",
+      ["Refresh tokens should use jti", "PKCE verifier length matters"],
+      0.92,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ internalized: 2 });
+  });
+
+  it("validates Part 3 internalize-delegation input", async (context) => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+    vi.doMock("../services/memory-services.js", () => ({
+      getMemoryServices: () => ({
+        scope: null,
+        projections: null,
+        profile: null,
+        delegation: fullDelegationMock(),
+      }),
+    }));
+
+    const { memoryRoutes } = await import("../routes/memory.js");
+    const router = memoryRoutes({ hippocampusMode: "embedded" });
+    if (!findRouteLayer(router, "post", "/agents/:agentId/memory/internalize-delegation")) {
+      context.skip();
+      return;
+    }
+
+    const res = await invokeRoute({
+      hippocampusMode: "embedded",
+      method: "post",
+      path: "/agents/:agentId/memory/internalize-delegation",
+      body: {
+        startupId: "startup-1",
+        learnings: [],
+        quality: 0.92,
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(expect.objectContaining({
+      error: expect.any(String),
+    }));
+  });
+
+  it("ProfileService returns a partial profile when some bridge calls fail", async () => {
+    const { ProfileService } = await import("../services/profile-service.js");
+    const bridge = {
+      listMemories: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{ content: "JWT auth with PKCE" }],
+          total: 1,
+        })
+        .mockRejectedValueOnce(new Error("dynamic down")),
+      getHabits: vi.fn().mockResolvedValue({
+        habits: [{ trigger: "code review", action: "check errors", confidence: 0.82 }],
+      }),
+      getPriming: vi.fn().mockResolvedValue({ prompt: "Focus on reliability" }),
+    } as unknown as import("../services/hippocampus-contract.js").HippocampusBridge;
+
+    const service = new ProfileService(bridge);
+    const result = await service.generateProfile("agent-1", "startup-1", "CTO");
+
+    expect(result).toEqual({
+      role: "CTO",
+      core_knowledge: ["JWT auth with PKCE"],
+      current_context: [],
+      habits: [{ trigger: "code review", action: "check errors", confidence: 0.82 }],
+      state: {
+        priming_prompt: "Focus on reliability",
+        partial: true,
+      },
+    });
+  });
+
+  it("DelegationMemoryService handles partial copies and internalization thresholds", async () => {
+    const { DelegationMemoryService } = await import("../services/delegation-memory.js");
+    const remember = vi.fn()
+      .mockResolvedValueOnce({
+        id: "delegated-1",
+        content: "[delegated:agent-1] JWT auth with PKCE",
+        memory_type: "dynamic",
+        confidence: 0.91,
+      })
+      .mockRejectedValueOnce(new Error("write failed"))
+      .mockResolvedValueOnce({
+        id: "mem-static",
+        content: "Use jti for refresh token revocation",
+        memory_type: "static",
+        confidence: 0.95,
+      })
+      .mockResolvedValueOnce({
+        id: "mem-dynamic",
+        content: "Remember to validate PKCE verifier length",
+        memory_type: "dynamic",
+        confidence: 0.9,
+      });
+    const bridge = {
+      recall: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: "src-1",
+            content: "JWT auth with PKCE",
+            memory_type: "static",
+            confidence: 0.94,
+            relevance_score: 0.82,
+            kind: "vector",
+          },
+          {
+            id: "src-2",
+            content: "OAuth2 flow uses PKCE",
+            memory_type: "static",
+            confidence: 0.89,
+            relevance_score: 0.76,
+            kind: "vector",
+          },
+        ],
+      }),
+      remember,
+    } as unknown as import("../services/hippocampus-contract.js").HippocampusBridge;
+
+    const service = new DelegationMemoryService(bridge);
+    const delegated = await service.prepareDelegationContext(
+      "agent-1",
+      "agent-2",
+      "startup-1",
+      "task-7",
+      "Implement token refresh endpoint",
+      5,
+    );
+
+    expect(delegated.copiedCount).toBe(1);
+    expect(delegated.failedCount).toBe(1);
+    expect(remember).toHaveBeenNthCalledWith(
+      1,
+      "agent-2",
+      "[delegated:agent-1] JWT auth with PKCE",
+      "startup:startup-1:task:task-7",
+      "dynamic",
+    );
+    expect(remember).toHaveBeenNthCalledWith(
+      2,
+      "agent-2",
+      "[delegated:agent-1] OAuth2 flow uses PKCE",
+      "startup:startup-1:task:task-7",
+      "dynamic",
+    );
+
+    const skipped = await service.internalizeDelegationResult(
+      "agent-2",
+      "startup-1",
+      ["Low quality learning"],
+      0.59,
+    );
+    expect(skipped).toEqual({ internalized: 0 });
+
+    const staticInternalized = await service.internalizeDelegationResult(
+      "agent-2",
+      "startup-1",
+      ["Use jti for refresh token revocation"],
+      0.95,
+    );
+    expect(staticInternalized).toEqual({ internalized: 1 });
+    expect(remember).toHaveBeenNthCalledWith(
+      3,
+      "agent-2",
+      "Use jti for refresh token revocation",
+      "startup:startup-1:emp:agent-2",
+      "static",
+    );
+
+    const dynamicInternalized = await service.internalizeDelegationResult(
+      "agent-2",
+      "startup-1",
+      ["Remember to validate PKCE verifier length"],
+      0.75,
+    );
+    expect(dynamicInternalized).toEqual({ internalized: 1 });
+    expect(remember).toHaveBeenNthCalledWith(
+      4,
+      "agent-2",
+      "Remember to validate PKCE verifier length",
+      "startup:startup-1:emp:agent-2",
+      "dynamic",
+    );
   });
 });
