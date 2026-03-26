@@ -1056,9 +1056,11 @@ export function AgentDetail() {
       {activeView === "memory" && (
         <AgentMemoryTab
           agentId={agent.id}
+          companyId={resolvedCompanyId ?? undefined}
           startupId={resolvedCompanyId ?? undefined}
           employeeId={agent.id}
           profileRole={agent.title ?? roleLabels[agent.role] ?? agent.role}
+          agentName={agent.name}
         />
       )}
     </div>

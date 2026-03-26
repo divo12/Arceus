@@ -903,14 +903,18 @@ function ProfileTab({
 
 export function AgentMemoryTab({
   agentId,
+  companyId,
   startupId,
   employeeId,
   profileRole = "Agent",
+  agentName,
 }: {
   agentId: string;
+  companyId?: string;
   startupId?: string;
   employeeId?: string;
   profileRole?: string;
+  agentName?: string;
 }) {
   const [activeTab, setActiveTab] = useState<MemoryTab>("overview");
   const effectiveStartupId = startupId ?? "";
@@ -947,6 +951,8 @@ export function AgentMemoryTab({
       <TabsContent value="analytics" className="space-y-4">
         <MemoryAnalytics
           agentId={agentId}
+          companyId={companyId}
+          agentName={agentName}
           summary={summary}
         />
       </TabsContent>

@@ -1,18 +1,51 @@
-import type { LucideIcon } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Minus, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "@/lib/router";
+import { cn } from "@/lib/utils";
+
+interface MetricDelta {
+  value: number;
+  label?: ReactNode;
+}
 
 interface MetricCardProps {
   icon: LucideIcon;
   value: string | number;
   label: string;
   description?: ReactNode;
+  delta?: MetricDelta;
+  descriptionClassName?: string;
   to?: string;
   onClick?: () => void;
 }
 
-export function MetricCard({ icon: Icon, value, label, description, to, onClick }: MetricCardProps) {
+export function MetricCard({
+  icon: Icon,
+  value,
+  label,
+  description,
+  delta,
+  descriptionClassName,
+  to,
+  onClick,
+}: MetricCardProps) {
   const isClickable = !!(to || onClick);
+  const DeltaIcon =
+    delta == null
+      ? null
+      : delta.value > 0
+        ? ArrowUpRight
+        : delta.value < 0
+          ? ArrowDownRight
+          : Minus;
+  const deltaToneClass =
+    delta == null
+      ? null
+      : delta.value > 0
+        ? "text-emerald-600 dark:text-emerald-400"
+        : delta.value < 0
+          ? "text-red-600 dark:text-red-400"
+          : "text-muted-foreground";
 
   const inner = (
     <div className={`h-full rounded-xl border border-border bg-card px-5 py-4 transition-all duration-200${isClickable ? " hover:shadow-md hover:border-primary/20 cursor-pointer" : ""}`}>
@@ -27,8 +60,18 @@ export function MetricCard({ icon: Icon, value, label, description, to, onClick 
       <p className="text-3xl font-bold tracking-tight tabular-nums">
         {value}
       </p>
+      {delta ? (
+        <div className={cn("mt-2 flex items-center gap-1.5 text-xs font-medium", deltaToneClass)}>
+          {DeltaIcon ? <DeltaIcon className="h-3.5 w-3.5 shrink-0" /> : null}
+          <span className="tabular-nums">
+            {delta.value > 0 ? "+" : ""}
+            {delta.value}
+          </span>
+          {delta.label ? <span className="text-muted-foreground">{delta.label}</span> : null}
+        </div>
+      ) : null}
       {description && (
-        <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1.5">{description}</div>
+        <div className={cn("mt-1.5 text-xs text-emerald-600 dark:text-emerald-400", descriptionClassName)}>{description}</div>
       )}
     </div>
   );

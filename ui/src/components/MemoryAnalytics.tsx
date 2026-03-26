@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
@@ -9,10 +9,13 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
+import type { Agent } from "@paperclipai/shared";
 import { getLast14Days } from "./ActivityCharts";
 import { MetricCard } from "./MetricCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import { memoryApi, type MemoryListItem, type MemorySummary, type PromotionEvent } from "../api/memory";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { agentsApi } from "../api/agents";
+import { memoryApi, type MemoryHealth, type MemoryListItem, type MemorySummary, type PromotionEvent } from "../api/memory";
 import { queryKeys } from "../lib/queryKeys";
 
 const TIER_COLORS: Record<string, string> = {
@@ -58,6 +61,18 @@ type TierDatum = {
   label: string;
   count: number;
   color: string;
+};
+
+type AgentOption = {
+  id: string;
+  name: string;
+};
+
+type MemoryAnalyticsDemoData = {
+  items: MemoryListItem[];
+  promotions: PromotionEvent[];
+  health: MemoryHealth;
+  agents?: AgentOption[];
 };
 
 function formatCompact(value: number): string {
@@ -187,6 +202,16 @@ function tierColorForPair(pair: string): string {
   return TIER_COLORS[destination] ?? "var(--primary)";
 }
 
+function countPromotionsTo(events: PromotionEvent[], targets: string[]) {
+  const targetSet = new Set(targets);
+  return events.filter((event) => targetSet.has(event.to_type)).length;
+}
+
+function countPromotionsFrom(events: PromotionEvent[], sources: string[]) {
+  const sourceSet = new Set(sources);
+  return events.filter((event) => sourceSet.has(event.from_type)).length;
+}
+
 function PromotionActivity({ events }: { events: PromotionEvent[] }) {
   const { days, pairs, perDay, maxValue } = useMemo(() => derivePromotionSeries(events), [events]);
   const hasData = pairs.length > 0;
@@ -250,63 +275,117 @@ function PromotionActivity({ events }: { events: PromotionEvent[] }) {
 export function MemoryAnalytics({
   agentId,
   summary,
+  companyId,
+  agentName,
+  demoData,
 }: {
   agentId: string;
   summary?: MemorySummary;
+  companyId?: string;
+  agentName?: string;
+  demoData?: MemoryAnalyticsDemoData;
 }) {
+  const [selectedAgentId, setSelectedAgentId] = useState(agentId);
+
+  useEffect(() => {
+    setSelectedAgentId(agentId);
+  }, [agentId]);
+
+  const { data: agentsData } = useQuery({
+    queryKey: companyId ? queryKeys.agents.list(companyId) : ["agents", "memory-analytics", "none"],
+    queryFn: () => agentsApi.list(companyId!),
+    enabled: Boolean(companyId) && !demoData?.agents,
+    retry: 1,
+    staleTime: 30_000,
+  });
+  const { data: selectedSummary, isLoading: summaryLoading } = useQuery({
+    queryKey: queryKeys.agents.memory.summary(selectedAgentId),
+    queryFn: () => memoryApi.summary(selectedAgentId),
+    enabled: !demoData,
+    retry: 1,
+    staleTime: 15_000,
+    initialData: selectedAgentId === agentId ? summary : undefined,
+  });
   const { data: listData, isLoading: listLoading } = useQuery({
-    queryKey: queryKeys.agents.memory.list(agentId, undefined, "__analytics__"),
-    queryFn: () => memoryApi.list(agentId, undefined, undefined, 200),
+    queryKey: queryKeys.agents.memory.list(selectedAgentId, undefined, "__analytics__"),
+    queryFn: () => memoryApi.list(selectedAgentId, undefined, undefined, 200),
+    enabled: !demoData,
     retry: 1,
     staleTime: 15_000,
   });
   const { data: promotions, isLoading: promotionsLoading } = useQuery({
-    queryKey: queryKeys.agents.memory.promotions(agentId, 50),
-    queryFn: () => memoryApi.promotionLog(agentId, 50),
+    queryKey: queryKeys.agents.memory.promotions(selectedAgentId, 50),
+    queryFn: () => memoryApi.promotionLog(selectedAgentId, 50),
+    enabled: !demoData,
     retry: 1,
     staleTime: 15_000,
   });
   const { data: health } = useQuery({
     queryKey: ["memory", "health"],
     queryFn: () => memoryApi.health(),
+    enabled: !demoData,
     retry: 1,
     staleTime: 10_000,
   });
 
-  const items = listData?.items ?? [];
-  const promotionItems = promotions ?? [];
-  const tierDistribution = useMemo(() => deriveTierDistribution(summary, items), [summary, items]);
+  const activeSummary = demoData ? summary : selectedSummary ?? summary;
+  const items = demoData?.items ?? listData?.items ?? [];
+  const promotionItems = demoData?.promotions ?? promotions ?? [];
+  const activeHealth = demoData?.health ?? health;
+  const tierDistribution = useMemo(() => deriveTierDistribution(activeSummary, items), [activeSummary, items]);
   const totalTierCount = tierDistribution.reduce((sum, tier) => sum + tier.count, 0);
   const topEntities = useMemo(() => deriveTopEntities(items), [items]);
+  const agentOptions = useMemo(() => {
+    const fromDemo = demoData?.agents;
+    if (fromDemo?.length) return fromDemo;
+    const fromQuery = (agentsData ?? []).map((agent: Agent) => ({
+      id: agent.id,
+      name: agent.name,
+    }));
+    if (fromQuery.length > 0) return fromQuery;
+    return [{ id: agentId, name: agentName ?? "Current agent" }];
+  }, [agentId, agentName, agentsData, demoData?.agents]);
+  const metricDeltas = useMemo(() => ({
+    static: countPromotionsTo(promotionItems, ["static"]),
+    dynamic:
+      countPromotionsTo(promotionItems, ["dynamic"]) -
+      countPromotionsFrom(promotionItems, ["dynamic"]),
+    habits: countPromotionsTo(promotionItems, ["procedural", "habit"]),
+    nodes: activeSummary?.recent_learnings?.length ?? Math.min(topEntities.length, 5),
+  }), [activeSummary?.recent_learnings?.length, promotionItems, topEntities.length]);
 
   const cards = [
     {
       icon: Shield,
-      value: summary?.total_static ?? 0,
+      value: activeSummary?.total_static ?? 0,
       label: "Static",
-      description: `${summary?.recent_promotions?.length ?? 0} recent promotions`,
+      delta: { value: metricDeltas.static, label: "14d promotions" },
+      description: `${activeSummary?.recent_promotions?.length ?? 0} recent promotions`,
     },
     {
       icon: Zap,
-      value: summary?.total_dynamic ?? 0,
+      value: activeSummary?.total_dynamic ?? 0,
       label: "Dynamic",
+      delta: { value: metricDeltas.dynamic, label: "14d net flow" },
       description: `${items.length} recent units sampled`,
     },
     {
       icon: Database,
-      value: summary?.active_habits.length ?? 0,
+      value: activeSummary?.active_habits.length ?? 0,
       label: "Habits",
-      description: `${summary?.recent_learnings?.length ?? 0} recent learnings`,
+      delta: { value: metricDeltas.habits, label: "14d promotions" },
+      description: `${activeSummary?.recent_learnings?.length ?? 0} recent learnings`,
     },
     {
       icon: Brain,
-      value: summary?.graph_node_count ?? 0,
+      value: activeSummary?.graph_node_count ?? 0,
       label: "Nodes",
-      description: health?.status === "ok" ? "runtime healthy" : "runtime unavailable",
+      delta: { value: metricDeltas.nodes, label: "recent signals" },
+      description: activeHealth?.status === "ok" ? "runtime healthy" : "runtime unavailable",
     },
   ];
 
-  if (!summary && listLoading) {
+  if (!activeSummary && (summaryLoading || listLoading)) {
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -322,6 +401,31 @@ export function MemoryAnalytics({
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-foreground">Memory Analytics</h3>
+          <p className="text-xs text-muted-foreground">
+            Track memory growth, promotions, and maintenance signals over the recent window.
+          </p>
+        </div>
+        {agentOptions.length > 0 ? (
+          <div className="w-full sm:w-64">
+            <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Select agent" />
+              </SelectTrigger>
+              <SelectContent>
+                {agentOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+      </div>
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {cards.map((card) => (
           <MetricCard
@@ -329,6 +433,7 @@ export function MemoryAnalytics({
             icon={card.icon}
             value={formatCompact(Number(card.value))}
             label={card.label}
+            delta={card.delta}
             description={card.description}
           />
         ))}
@@ -437,15 +542,15 @@ export function MemoryAnalytics({
             />
             <PropertyRow
               label="Runtime"
-              value={health?.status === "ok" ? "Healthy" : "Unavailable"}
+              value={activeHealth?.status === "ok" ? "Healthy" : "Unavailable"}
             />
             <PropertyRow
               label="Agents loaded"
-              value={String(health?.agents_loaded ?? 0)}
+              value={String(activeHealth?.agents_loaded ?? 0)}
             />
             <PropertyRow
               label="Recent learnings"
-              value={String(summary?.recent_learnings?.length ?? 0)}
+              value={String(activeSummary?.recent_learnings?.length ?? 0)}
             />
             <PropertyRow
               label="Promotions (14d)"

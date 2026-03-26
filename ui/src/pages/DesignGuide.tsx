@@ -119,13 +119,14 @@ import { agentStatusDot, agentStatusDotDefault } from "@/lib/status-colors";
 import { AgentProfileCard } from "@/components/AgentProfileCard";
 import { EntityRow } from "@/components/EntityRow";
 import { DelegationMemoryView } from "@/components/DelegationMemoryView";
+import { MemoryAnalytics } from "@/components/MemoryAnalytics";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { InlineEditor } from "@/components/InlineEditor";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Identity } from "@/components/Identity";
-import type { EmployeeProfile, MemoryListItem, MemorySummary } from "@/api/memory";
+import type { EmployeeProfile, MemoryHealth, MemoryListItem, MemorySummary, PromotionEvent } from "@/api/memory";
 
 const demoDelegatedMemories: MemoryListItem[] = [
   {
@@ -199,6 +200,102 @@ const demoProfileSummary: MemorySummary = {
   active_habits: demoProfile.habits,
   priming_prompt: "Bias toward resilient rollout plans, explicit ownership, and observable system behavior.",
   graph_node_count: 27,
+  recent_learnings: [
+    "Token revocation should remain bounded by jti + TTL.",
+    "PKCE is required for browser and native OAuth clients.",
+    "Redis-backed working memory reduces coordination latency.",
+  ],
+  recent_promotions: [
+    "dynamic→static: rollout guidance repeated across tasks",
+    "working→dynamic: meeting extraction captured a new decision",
+  ],
+};
+
+const demoAnalyticsItems: MemoryListItem[] = [
+  {
+    id: "mem-analytics-1",
+    content: "PostgreSQL migrations should include rollback checkpoints for production rollout.",
+    memory_type: "static",
+    confidence: 0.93,
+    relevance_score: 0.88,
+    container: "startup:acme:emp:cto",
+    visibility: "shared",
+    created_at: "2026-03-24T10:00:00Z",
+    updated_at: "2026-03-24T10:00:00Z",
+    access_count: 9,
+  },
+  {
+    id: "mem-analytics-2",
+    content: "Redis is the preferred backend for working memory append operations in distributed runs.",
+    memory_type: "dynamic",
+    confidence: 0.85,
+    relevance_score: 0.76,
+    container: "startup:acme:emp:cto",
+    visibility: "shared",
+    created_at: "2026-03-25T09:00:00Z",
+    updated_at: "2026-03-25T09:00:00Z",
+    access_count: 5,
+  },
+  {
+    id: "mem-analytics-3",
+    content: "Neo4j graph nodes mirror static and dynamic memory entries for version history and exploration.",
+    memory_type: "static",
+    confidence: 0.91,
+    relevance_score: 0.83,
+    container: "startup:acme:emp:cto",
+    visibility: "board",
+    created_at: "2026-03-25T11:00:00Z",
+    updated_at: "2026-03-25T11:00:00Z",
+    access_count: 4,
+  },
+  {
+    id: "mem-analytics-4",
+    content: "Authentication, PostgreSQL, and Redis appear together in rollout planning memories.",
+    memory_type: "working",
+    confidence: 0.68,
+    relevance_score: 0.7,
+    container: "startup:acme:task:rollout",
+    visibility: "task_scoped",
+    created_at: "2026-03-26T08:00:00Z",
+    updated_at: "2026-03-26T08:00:00Z",
+    access_count: 1,
+  },
+];
+
+const demoAnalyticsPromotions: PromotionEvent[] = [
+  {
+    agent_id: "agent-demo-cto",
+    memory_id: "mem-analytics-2",
+    from_type: "dynamic",
+    to_type: "static",
+    reason: "repeated success in deployment planning",
+    status: "completed",
+    timestamp: "2026-03-20T09:00:00Z",
+  },
+  {
+    agent_id: "agent-demo-cto",
+    memory_id: "mem-analytics-4",
+    from_type: "working",
+    to_type: "dynamic",
+    reason: "meeting extraction captured a stable decision",
+    status: "completed",
+    timestamp: "2026-03-22T11:30:00Z",
+  },
+  {
+    agent_id: "agent-demo-cto",
+    memory_id: "mem-analytics-5",
+    from_type: "dynamic",
+    to_type: "procedural",
+    reason: "pattern became a repeated rollout habit",
+    status: "completed",
+    timestamp: "2026-03-25T14:15:00Z",
+  },
+];
+
+const demoAnalyticsHealth: MemoryHealth = {
+  status: "ok",
+  agents_loaded: 3,
+  debug: false,
 };
 
 /* ------------------------------------------------------------------ */
@@ -301,7 +398,7 @@ export function DesignGuide() {
               {[
                 "StatusBadge", "StatusIcon", "PriorityIcon", "EntityRow", "EmptyState", "MetricCard",
                 "FilterBar", "InlineEditor", "PageSkeleton", "Identity", "CommentThread", "MarkdownEditor",
-                "PropertiesPanel", "Sidebar", "CommandPalette", "AgentProfileCard", "DelegationMemoryView",
+                "PropertiesPanel", "Sidebar", "CommandPalette", "AgentProfileCard", "DelegationMemoryView", "MemoryAnalytics",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -997,6 +1094,19 @@ export function DesignGuide() {
             copiedCount={0}
             memories={[]}
             learnings={[]}
+          />
+        </SubSection>
+
+        <SubSection title="MemoryAnalytics">
+          <MemoryAnalytics
+            agentId="agent-demo-cto"
+            agentName="CTO Agent"
+            summary={demoProfileSummary}
+            demoData={{
+              items: demoAnalyticsItems,
+              promotions: demoAnalyticsPromotions,
+              health: demoAnalyticsHealth,
+            }}
           />
         </SubSection>
       </Section>
