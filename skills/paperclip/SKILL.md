@@ -249,6 +249,37 @@ PATCH /api/agents/{agentId}/instructions-path
 }
 ```
 
+## Meeting Participation Workflow
+
+When `PAPERCLIP_WAKE_REASON` starts with `meeting_` or `PAPERCLIP_MEETING_ID` is set:
+
+1. Read the Meeting Context from the AGENTS.md `## Meeting Context` section.
+2. Fetch full meeting details: `GET /api/meetings/{PAPERCLIP_MEETING_ID}`
+3. Review the agenda, participants, and any prior contributions/decisions.
+4. Prepare your contribution based on the meeting type:
+   - **STANDUP**: What you did, what you're doing, blockers, learnings
+   - **ESCALATION**: Your assessment of the blocker, proposed solutions, needed resources
+   - **SYNC**: Information to share, questions for peers, proposals
+5. Submit your contribution:
+   ```bash
+   POST /api/meetings/{meetingId}/participants/{yourAgentId}/contribution
+   { "whatIDid": "...", "whatImDoing": "...", "blockers": "...", "learnings": "..." }
+   ```
+6. Record any decisions or learnings:
+   ```bash
+   POST /api/meetings/{meetingId}/events
+   { "kind": "decision", "content": "Adopted X approach for Y", "agentId": "yourId" }
+   ```
+7. Continue with normal heartbeat procedure (check inbox, pick work, etc.).
+
+**When you need to escalate:**
+If a blocker is unresolvable at your level:
+```bash
+POST /api/companies/{companyId}/meetings/escalation
+{ "blockerAgentId": "yourId", "description": "Cannot resolve X", "linkedIssueId": "..." }
+```
+This auto-creates an escalation meeting with your manager and starts it immediately.
+
 ## Key Endpoints (Quick Reference)
 
 | Action                                    | Endpoint                                                                                   |
@@ -289,6 +320,16 @@ PATCH /api/agents/{agentId}/instructions-path
 | List issue attachments                    | `GET /api/issues/:issueId/attachments`                                                     |
 | Get attachment content                    | `GET /api/attachments/:attachmentId/content`                                               |
 | Delete attachment                         | `DELETE /api/attachments/:attachmentId`                                                    |
+| List meetings                             | `GET /api/companies/:companyId/meetings?type=&status=`                                     |
+| Create meeting                            | `POST /api/companies/:companyId/meetings`                                                  |
+| Get meeting detail                        | `GET /api/meetings/:meetingId`                                                             |
+| Start meeting                             | `POST /api/meetings/:meetingId/start`                                                      |
+| Complete meeting                          | `POST /api/meetings/:meetingId/complete`                                                   |
+| Cancel meeting                            | `POST /api/meetings/:meetingId/cancel`                                                     |
+| List meeting events                       | `GET /api/meetings/:meetingId/events`                                                      |
+| Add meeting event                         | `POST /api/meetings/:meetingId/events`                                                     |
+| Submit meeting contribution               | `POST /api/meetings/:meetingId/participants/:agentId/contribution`                         |
+| Create escalation meeting                 | `POST /api/companies/:companyId/meetings/escalation`                                       |
 
 ## Company Import / Export
 

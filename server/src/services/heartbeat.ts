@@ -52,6 +52,7 @@ import {
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { buildMemoryContextForRun, extractMemoriesFromRun } from "./memory-lifecycle.js";
+import { buildMeetingContextForRun } from "./meeting-context.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -2388,6 +2389,19 @@ export function heartbeatService(db: Db) {
           ? `${existingHandoff}\n\n${memoryContext}`
           : memoryContext;
         await onLog("stdout", "[paperclip] Hippocampus memory context injected into run.\n");
+      }
+
+      // ── Meeting context: inject if run was triggered by a meeting ──
+      const meetingContextMarkdown = await buildMeetingContextForRun(db, context);
+      if (meetingContextMarkdown) {
+        context.paperclipMeetingContext = meetingContextMarkdown;
+        context.meetingId = context.meetingId ?? (context as Record<string, unknown>).meetingId;
+        context.meetingType = context.meetingType ?? (context as Record<string, unknown>).meetingType;
+        const existingHandoff = readNonEmptyString(context.paperclipSessionHandoffMarkdown) ?? "";
+        context.paperclipSessionHandoffMarkdown = existingHandoff
+          ? `${existingHandoff}\n\n${meetingContextMarkdown}`
+          : meetingContextMarkdown;
+        await onLog("stdout", "[paperclip] Meeting context injected into run.\n");
       }
 
       const adapter = getServerAdapter(agent.adapterType);

@@ -176,6 +176,21 @@ export {
 } from "./approval.js";
 
 export {
+  agendaItemSchema,
+  createMeetingSchema,
+  updateMeetingSchema,
+  addMeetingEventSchema,
+  meetingParticipantContributionSchema,
+  createEscalationMeetingSchema,
+  type AgendaItemInput,
+  type CreateMeeting,
+  type UpdateMeeting,
+  type AddMeetingEvent,
+  type MeetingParticipantContributionInput,
+  type CreateEscalationMeeting,
+} from "./meeting.js";
+
+export {
   envBindingPlainSchema,
   envBindingSecretRefSchema,
   envBindingSchema,

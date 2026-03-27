@@ -158,6 +158,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
   if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+  const meetingId =
+    typeof context.meetingId === "string" && context.meetingId.trim().length > 0
+      ? context.meetingId.trim()
+      : null;
+  const meetingType =
+    typeof context.meetingType === "string" && context.meetingType.trim().length > 0
+      ? context.meetingType.trim()
+      : null;
+  if (meetingId) env.PAPERCLIP_MEETING_ID = meetingId;
+  if (meetingType) env.PAPERCLIP_MEETING_TYPE = meetingType;
   if (effectiveWorkspaceCwd) env.PAPERCLIP_WORKSPACE_CWD = effectiveWorkspaceCwd;
   if (workspaceSource) env.PAPERCLIP_WORKSPACE_SOURCE = workspaceSource;
   if (workspaceId) env.PAPERCLIP_WORKSPACE_ID = workspaceId;
