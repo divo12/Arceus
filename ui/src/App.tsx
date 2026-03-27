@@ -38,6 +38,7 @@ import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { OrgChart } from "./pages/OrgChart";
 import { Memory } from "./pages/Memory";
 import { Meetings } from "./pages/Meetings";
+import { MeetingDetail } from "./pages/MeetingDetail";
 import { Orchestration } from "./pages/Orchestration";
 import { NewAgent } from "./pages/NewAgent";
 import { AuthPage } from "./pages/Auth";
@@ -134,6 +135,7 @@ function boardRoutes() {
       <Route path="org" element={<OrgChart />} />
       <Route path="memory" element={<Memory />} />
       <Route path="meetings" element={<Meetings />} />
+      <Route path="meetings/:meetingId" element={<MeetingDetail />} />
       <Route path="orchestration" element={<Orchestration />} />
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
       <Route path="agents/all" element={<Agents />} />

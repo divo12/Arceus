@@ -204,6 +204,18 @@ export const PROJECT_COLORS = [
   "#3b82f6", // blue
 ] as const;
 
+export const MEETING_TYPES = ["standup", "escalation", "sync"] as const;
+export type MeetingType = (typeof MEETING_TYPES)[number];
+
+export const MEETING_STATUSES = ["scheduled", "in_progress", "completed", "cancelled"] as const;
+export type MeetingStatus = (typeof MEETING_STATUSES)[number];
+
+export const MEETING_PARTICIPANT_ROLES = ["facilitator", "attendee", "observer"] as const;
+export type MeetingParticipantRole = (typeof MEETING_PARTICIPANT_ROLES)[number];
+
+export const MEETING_EVENT_KINDS = ["decision", "learning", "task_modification", "escalation", "memory_transfer", "note"] as const;
+export type MeetingEventKind = (typeof MEETING_EVENT_KINDS)[number];
+
 export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "budget_override_required"] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
@@ -339,6 +351,11 @@ export const LIVE_EVENT_TYPES = [
   "plugin.ui.updated",
   "plugin.worker.crashed",
   "plugin.worker.restarted",
+  "meeting.created",
+  "meeting.started",
+  "meeting.completed",
+  "meeting.event",
+  "meeting.escalation",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
 

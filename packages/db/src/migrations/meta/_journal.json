@@ -316,6 +316,13 @@
       "when": 1774591276616,
       "tag": "0044_chubby_blue_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1774625112326,
+      "tag": "0045_cultured_nightcrawler",
+      "breakpoints": true
     }
   ]
 }

@@ -1,18 +1,3 @@
 {
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "azure-cognitive-services": {
-      "options": {
-        "resourceName": "pranj-mfvfs2fg-swedencentral"
-      },
-      "models": {
-        "gpt-5.1-chat": {}
-      }
-    }
-  },
-  "agent": {
-    "build": {
-      "model": "azure-cognitive-services/gpt-5.1-chat"
-    }
-  }
+  "$schema": "https://opencode.ai/config.json"
 }

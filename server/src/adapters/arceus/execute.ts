@@ -243,6 +243,7 @@ async function writeAgentsMd(
   const handoff = asString(context.paperclipSessionHandoffMarkdown as string, "");
   const memCtx = asString(context.paperclipMemoryContext as string, "");
   const roleBlock = buildRoleContextBlock(context);
+  const meetingCtx = asString(context.paperclipMeetingContext as string, "");
 
   const md = [
     `# ${agent.name} — Paperclip Agent`,
@@ -279,6 +280,7 @@ async function writeAgentsMd(
     "",
     ...(handoff ? ["## Session Handoff\n", handoff, ""] : []),
     ...(memCtx ? ["## Memory Context\n", memCtx, ""] : []),
+    ...(meetingCtx ? ["## Meeting Context\n", meetingCtx, ""] : []),
   ].join("\n");
 
   const agentsMdPath = path.join(OPENCODE_DIR, "AGENTS.md");
@@ -329,6 +331,10 @@ export async function execute(
   if (approvalStatus) paperclipEnv.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
   const linkedIssueIds = asString(context.linkedIssueIds as string, "");
   if (linkedIssueIds) paperclipEnv.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds;
+  const meetingId = asString(context.meetingId as string, "");
+  if (meetingId) paperclipEnv.PAPERCLIP_MEETING_ID = meetingId;
+  const meetingType = asString(context.meetingType as string, "");
+  if (meetingType) paperclipEnv.PAPERCLIP_MEETING_TYPE = meetingType;
 
   // 1. Inject Paperclip skills into ~/.claude/skills/ (OpenCode reads them)
   await ensureSkillsInjected(onLog, config);

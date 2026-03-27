@@ -92,6 +92,16 @@ export type {
 export type { Goal } from "./goal.js";
 export type { Approval, ApprovalComment } from "./approval.js";
 export type {
+  AgendaItem,
+  MeetingParticipantContribution,
+  MeetingParticipant,
+  MeetingEvent,
+  MeetingSummary,
+  Meeting,
+  MeetingDetail,
+  MeetingListItem,
+} from "./meeting.js";
+export type {
   BudgetPolicy,
   BudgetPolicySummary,
   BudgetIncident,
