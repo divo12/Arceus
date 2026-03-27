@@ -52,6 +52,7 @@ const mockSecretService = vi.hoisted(() => ({
 
 const mockDelegationGuardService = vi.hoisted(() => ({
   assertCanDelegate: vi.fn(),
+  getDelegationAuthority: vi.fn(),
 }));
 
 const mockSpawnGovernanceService = vi.hoisted(() => ({
@@ -59,6 +60,7 @@ const mockSpawnGovernanceService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const mockRecordDelegationEvent = vi.hoisted(() => vi.fn());
 
 const mockAdapter = vi.hoisted(() => ({
   listSkills: vi.fn(),
@@ -76,6 +78,7 @@ vi.mock("../services/index.js", () => ({
   issueApprovalService: () => mockIssueApprovalService,
   issueService: () => ({}),
   logActivity: mockLogActivity,
+  recordDelegationEvent: mockRecordDelegationEvent,
   secretService: () => mockSecretService,
   delegationGuardService: () => mockDelegationGuardService,
   spawnGovernanceService: () => mockSpawnGovernanceService,
@@ -223,7 +226,12 @@ describe("agent skill routes", () => {
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
     mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockDelegationGuardService.getDelegationAuthority.mockResolvedValue({
+      canDelegateTo: ["engineer", "pm", "designer"],
+      delegationStyle: "collaborative",
+    });
     mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
+    mockRecordDelegationEvent.mockResolvedValue(undefined);
   });
 
   it("skips runtime materialization when listing Claude skills", async () => {

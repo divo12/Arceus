@@ -4,7 +4,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import type { BillingType } from "@paperclipai/shared";
+import type { BillingType, DelegationStyle } from "@paperclipai/shared";
 import {
   agents,
   agentRuntimeState,
@@ -52,6 +52,8 @@ import {
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { buildMemoryContextForRun, extractMemoriesFromRun } from "./memory-lifecycle.js";
+import { roleDefinitionService } from "./role-definitions.js";
+import { spawnGovernanceService } from "./spawn-governance.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -263,6 +265,16 @@ export function prioritizeProjectWorkspaceCandidatesForRun<T extends ProjectWork
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function formatOrgRoleLabel(role: string): string {
+  if (role === "ceo" || role === "cto" || role === "pm" || role === "qa") {
+    return role.toUpperCase();
+  }
+  return role
+    .split("_")
+    .map((part) => (part.length > 0 ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(" ");
 }
 
 function normalizeLedgerBillingType(value: unknown): BillingType {
@@ -732,11 +744,111 @@ export function heartbeatService(db: Db) {
   const issuesSvc = issueService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
+  const roleDefs = roleDefinitionService(db);
+  const spawnGovernance = spawnGovernanceService(db);
   const activeRunExecutions = new Set<string>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
   const budgets = budgetService(db, budgetHooks);
+
+  async function resolveOrgPosition(agent: typeof agents.$inferSelect) {
+    if (agent.kind === "spawned") {
+      return {
+        reportsTo: null,
+        directReports: [] as string[],
+      };
+    }
+
+    const [manager, directReports] = await Promise.all([
+      agent.reportsTo
+        ? db
+            .select({ name: agents.name, role: agents.role })
+            .from(agents)
+            .where(eq(agents.id, agent.reportsTo))
+            .then((rows) => rows[0] ?? null)
+        : Promise.resolve(null),
+      db
+        .select({ name: agents.name, role: agents.role })
+        .from(agents)
+        .where(and(eq(agents.reportsTo, agent.id), eq(agents.kind, "employee"))),
+    ]);
+
+    return {
+      reportsTo: manager ? `${formatOrgRoleLabel(manager.role)} (${manager.name})` : null,
+      directReports: directReports.map((report) => `${formatOrgRoleLabel(report.role)} (${report.name})`),
+    };
+  }
+
+  async function computeDelegationDepth(agent: typeof agents.$inferSelect): Promise<number> {
+    if (agent.kind === "spawned") return 0;
+
+    let depth = 0;
+    let currentReportsTo = agent.reportsTo;
+    const seen = new Set<string>();
+
+    while (currentReportsTo && depth < 10) {
+      if (seen.has(currentReportsTo)) break;
+      seen.add(currentReportsTo);
+      const parent = await db
+        .select({ reportsTo: agents.reportsTo })
+        .from(agents)
+        .where(eq(agents.id, currentReportsTo))
+        .then((rows) => rows[0] ?? null);
+      depth += 1;
+      currentReportsTo = parent?.reportsTo ?? null;
+    }
+
+    return depth;
+  }
+
+  async function resolveDelegationRunContext(input: {
+    agent: typeof agents.$inferSelect;
+    wakeReason: string | null;
+    wakeupRequestId: string | null;
+  }): Promise<{ delegatorAgentId: string | null; delegationStyle: DelegationStyle | undefined }> {
+    const { agent, wakeReason, wakeupRequestId } = input;
+
+    let delegatorAgentId = agent.kind === "spawned" ? agent.spawnedByAgentId ?? null : null;
+
+    if (!delegatorAgentId && wakeReason === "issue_assigned" && wakeupRequestId) {
+      const wakeupRequest = await db
+        .select({
+          requestedByActorType: agentWakeupRequests.requestedByActorType,
+          requestedByActorId: agentWakeupRequests.requestedByActorId,
+        })
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.id, wakeupRequestId))
+        .then((rows) => rows[0] ?? null);
+
+      if (wakeupRequest?.requestedByActorType === "agent" && wakeupRequest.requestedByActorId) {
+        delegatorAgentId = wakeupRequest.requestedByActorId;
+      }
+    }
+
+    if (!delegatorAgentId) {
+      return { delegatorAgentId: null, delegationStyle: undefined };
+    }
+
+    const delegator = await db
+      .select({
+        id: agents.id,
+        companyId: agents.companyId,
+        delegationStyle: agents.delegationStyle,
+      })
+      .from(agents)
+      .where(eq(agents.id, delegatorAgentId))
+      .then((rows) => rows[0] ?? null);
+
+    if (!delegator || delegator.companyId !== agent.companyId) {
+      return { delegatorAgentId: null, delegationStyle: undefined };
+    }
+
+    return {
+      delegatorAgentId: delegator.id,
+      delegationStyle: delegator.delegationStyle,
+    };
+  }
 
   async function getAgent(agentId: string) {
     return db
@@ -1874,6 +1986,7 @@ export function heartbeatService(db: Db) {
     const taskKey = deriveTaskKey(context, null);
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const issueId = readNonEmptyString(context.issueId);
+    const wakeReason = readNonEmptyString(context.wakeReason);
     const issueContext = issueId
       ? await db
           .select({
@@ -2167,6 +2280,42 @@ export function heartbeatService(db: Db) {
     } else {
       delete context.paperclipRuntimeServiceIntents;
     }
+    const [roleDef, spawnBudget, orgPosition, delegationDepth, delegationRunContext] = await Promise.all([
+      roleDefs.getForAgent(agent.id),
+      spawnGovernance.checkSpawnBudget(agent.id),
+      resolveOrgPosition(agent),
+      computeDelegationDepth(agent),
+      resolveDelegationRunContext({
+        agent,
+        wakeReason,
+        wakeupRequestId: run.wakeupRequestId ?? null,
+      }),
+    ]);
+    if (roleDef) {
+      context.paperclipRoleDefinition = {
+        label: roleDef.label,
+        slug: roleDef.slug,
+        systemPrompt: roleDef.systemPrompt,
+        canDelegateTo: roleDef.canDelegateTo,
+        delegationStyle: roleDef.delegationStyle,
+        spawnRules: roleDef.spawnRules,
+      };
+    } else {
+      delete context.paperclipRoleDefinition;
+    }
+    context.paperclipSpawnBudget = spawnBudget;
+    context.paperclipOrgPosition = orgPosition;
+    context.paperclipDelegationDepth = delegationDepth;
+    if (delegationRunContext.delegatorAgentId) {
+      context.paperclipDelegatorAgentId = delegationRunContext.delegatorAgentId;
+    } else {
+      delete context.paperclipDelegatorAgentId;
+    }
+    if (delegationRunContext.delegationStyle) {
+      context.paperclipDelegationStyle = delegationRunContext.delegationStyle;
+    } else {
+      delete context.paperclipDelegationStyle;
+    }
     if (executionWorkspace.projectId && !readNonEmptyString(context.projectId)) {
       context.projectId = executionWorkspace.projectId;
     }
@@ -2378,7 +2527,9 @@ export function heartbeatService(db: Db) {
         agentId: agent.id,
         issueTitle: issueContext?.title ?? null,
         issueId: issueId ?? null,
-        wakeReason: readNonEmptyString(context.wakeReason) ?? null,
+        wakeReason,
+        delegationStyle: delegationRunContext.delegationStyle,
+        delegatorAgentId: delegationRunContext.delegatorAgentId,
       });
       if (memoryContext) {
         context.paperclipMemoryContext = memoryContext;

@@ -60,6 +60,85 @@ describe("memory lifecycle", () => {
     expect(warn).toHaveBeenCalledOnce();
   });
 
+  it("uses delegation style to cap recall and appends delegator context when available", async () => {
+    const recall = vi.fn().mockResolvedValue({
+      items: Array.from({ length: 8 }, (_, index) => ({
+        id: `memory-${index}`,
+        kind: "dynamic",
+        content: `memory ${index}`,
+      })),
+    });
+    const getHabits = vi.fn().mockResolvedValue({
+      habits: Array.from({ length: 5 }, (_, index) => ({
+        trigger: `trigger ${index}`,
+        action: `action ${index}`,
+        confidence: 0.9,
+      })),
+    });
+    const getDelegationContext = vi.fn().mockResolvedValue("Goal: ship this safely.");
+
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        mode: "embedded",
+        health: vi.fn().mockResolvedValue({ status: "ok" }),
+        getPriming: vi.fn().mockResolvedValue({ prompt: "You care about quality." }),
+        getHabits,
+        recall,
+        getDelegationContext,
+      }),
+    }));
+
+    const { buildMemoryContextForRun } = await import("../services/memory-lifecycle.js");
+
+    const result = await buildMemoryContextForRun({
+      agentId: "agent-1",
+      issueTitle: "Fix recall",
+      issueId: "ISSUE-1",
+      wakeReason: "issue_assigned",
+      delegationStyle: "autonomous",
+      delegatorAgentId: "agent-boss",
+    });
+
+    expect(recall).toHaveBeenCalledWith("agent-1", "Fix recall — issue_assigned — ISSUE-1", undefined, 3);
+    expect(getDelegationContext).toHaveBeenCalledWith("agent-boss", "agent-1", "autonomous");
+    expect(result).toContain("## Delegator Context");
+    expect(result?.match(/^- \[dynamic\]/gm)?.length).toBe(3);
+    expect(result?.match(/^- When:/gm)?.length).toBe(3);
+  });
+
+  it("records delegation events for both delegator and delegatee", async () => {
+    const extract = vi.fn().mockResolvedValue({ added: 1, updated: 0, deleted: 0 });
+    vi.doMock("../services/hippocampus-bridge.js", () => ({
+      getHippocampusBridge: () => ({
+        mode: "embedded",
+        health: vi.fn().mockResolvedValue({ status: "ok" }),
+        extract,
+      }),
+    }));
+
+    const { recordDelegationEvent } = await import("../services/memory-lifecycle.js");
+
+    await expect(recordDelegationEvent({
+      fromAgentId: "agent-a",
+      toAgentId: "agent-b",
+      taskDescription: "Review the migration plan",
+      style: "directive",
+      issueId: "ISSUE-9",
+    })).resolves.toBeUndefined();
+
+    expect(extract).toHaveBeenCalledTimes(2);
+    expect(extract).toHaveBeenNthCalledWith(
+      1,
+      "agent-a",
+      [expect.objectContaining({ role: "system", content: expect.stringContaining("Delegated task to agent-b") })],
+    );
+    expect(extract).toHaveBeenNthCalledWith(
+      2,
+      "agent-b",
+      [expect.objectContaining({ role: "system", content: expect.stringContaining("Received delegated task from agent-a") })],
+    );
+  });
+
   it("swallows extract and trajectory failures during post-run processing", async () => {
     vi.doMock("../middleware/logger.js", () => ({
       logger: {

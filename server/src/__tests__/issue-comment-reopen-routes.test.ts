@@ -27,9 +27,11 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockDelegationGuardService = vi.hoisted(() => ({
   assertCanDelegate: vi.fn(),
+  getDelegationAuthority: vi.fn(),
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+const mockRecordDelegationEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
@@ -42,6 +44,7 @@ vi.mock("../services/index.js", () => ({
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
   logActivity: mockLogActivity,
+  recordDelegationEvent: mockRecordDelegationEvent,
   projectService: () => ({}),
   routineService: () => ({
     syncRunStatusForIssue: vi.fn(async () => undefined),
@@ -95,6 +98,11 @@ describe("issue comment reopen routes", () => {
     });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockDelegationGuardService.getDelegationAuthority.mockResolvedValue({
+      canDelegateTo: ["engineer", "pm", "designer"],
+      delegationStyle: "collaborative",
+    });
+    mockRecordDelegationEvent.mockResolvedValue(undefined);
   });
 
   it("treats reopen=true as a no-op when the issue is already open", async () => {

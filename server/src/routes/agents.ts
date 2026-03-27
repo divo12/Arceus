@@ -39,6 +39,7 @@ import {
   issueApprovalService,
   issueService,
   logActivity,
+  recordDelegationEvent,
   secretService,
   spawnGovernanceService,
   syncInstructionsBundleConfigFromFilePath,
@@ -1311,6 +1312,17 @@ export function agentRoutes(db: Db) {
         agent.id,
         actor.actorType === "user" ? actor.actorId : null,
       );
+    }
+
+    if (requestingAgent) {
+      const { delegationStyle } = await delegationGuard.getDelegationAuthority(requestingAgent.id);
+      void recordDelegationEvent({
+        fromAgentId: requestingAgent.id,
+        toAgentId: agent.id,
+        taskDescription: `Spawned ${agent.role} agent "${agent.name}"`,
+        style: delegationStyle,
+        issueId: sourceIssueIds[0] ?? null,
+      });
     }
 
     if (approval) {

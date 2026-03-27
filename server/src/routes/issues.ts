@@ -27,6 +27,7 @@ import {
   issueService,
   documentService,
   logActivity,
+  recordDelegationEvent,
   projectService,
   routineService,
   workProductService,
@@ -810,6 +811,10 @@ export function issueRoutes(db: Db, storage: StorageService) {
     }
 
     const actor = getActorInfo(req);
+    const delegationAuthority =
+      actor.actorType === "agent" && actor.agentId && typeof req.body.assigneeAgentId === "string"
+        ? await delegationGuard.getDelegationAuthority(actor.agentId)
+        : null;
     const issue = await svc.create(companyId, {
       ...req.body,
       createdByAgentId: actor.agentId,
@@ -828,6 +833,21 @@ export function issueRoutes(db: Db, storage: StorageService) {
       details: { title: issue.title, identifier: issue.identifier },
     });
 
+    if (
+      actor.actorType === "agent"
+      && actor.agentId
+      && typeof issue.assigneeAgentId === "string"
+      && delegationAuthority
+    ) {
+      void recordDelegationEvent({
+        fromAgentId: actor.agentId,
+        toAgentId: issue.assigneeAgentId,
+        taskDescription: issue.title,
+        style: delegationAuthority.delegationStyle,
+        issueId: issue.id,
+      });
+    }
+
     void queueIssueAssignmentWakeup({
       heartbeat,
       issue,
@@ -836,6 +856,13 @@ export function issueRoutes(db: Db, storage: StorageService) {
       contextSource: "issue.create",
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
+      contextSnapshot:
+        actor.actorType === "agent" && actor.agentId && typeof issue.assigneeAgentId === "string" && delegationAuthority
+          ? {
+            delegatorAgentId: actor.agentId,
+            delegationStyle: delegationAuthority.delegationStyle,
+          }
+          : undefined,
     });
 
     res.status(201).json(issue);
@@ -913,6 +940,10 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
+    const delegationAuthority =
+      actor.actorType === "agent" && actor.agentId && typeof issue.assigneeAgentId === "string"
+        ? await delegationGuard.getDelegationAuthority(actor.agentId)
+        : null;
     await routinesSvc.syncRunStatusForIssue(issue.id);
 
     if (actor.runId) {
@@ -1000,7 +1031,16 @@ export function issueRoutes(db: Db, storage: StorageService) {
           payload: { issueId: issue.id, mutation: "update" },
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
-          contextSnapshot: { issueId: issue.id, source: "issue.update" },
+          contextSnapshot: {
+            issueId: issue.id,
+            source: "issue.update",
+            ...(actor.actorType === "agent" && actor.agentId && delegationAuthority
+              ? {
+                delegatorAgentId: actor.agentId,
+                delegationStyle: delegationAuthority.delegationStyle,
+              }
+              : {}),
+          },
         });
       }
 
@@ -1052,6 +1092,22 @@ export function issueRoutes(db: Db, storage: StorageService) {
           .catch((err) => logger.warn({ err, issueId: issue.id, agentId }, "failed to wake agent on issue update"));
       }
     })();
+
+    if (
+      assigneeChanged
+      && actor.actorType === "agent"
+      && actor.agentId
+      && typeof issue.assigneeAgentId === "string"
+      && delegationAuthority
+    ) {
+      void recordDelegationEvent({
+        fromAgentId: actor.agentId,
+        toAgentId: issue.assigneeAgentId,
+        taskDescription: issue.title,
+        style: delegationAuthority.delegationStyle,
+        issueId: issue.id,
+      });
+    }
 
     res.json({ ...issue, comment });
   });

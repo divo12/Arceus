@@ -130,6 +130,102 @@ function asString(val: unknown, fallback: string): string {
   return typeof val === "string" && val.trim().length > 0 ? val.trim() : fallback;
 }
 
+type DelegationStyleValue = "directive" | "collaborative" | "autonomous";
+
+const DELEGATION_STYLE_HINTS: Record<DelegationStyleValue, string> = {
+  directive: "provide specific instructions, retain control of decisions",
+  collaborative: "share context and goals, let delegatees own approach",
+  autonomous: "state the goal and definition of done, then step back",
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+      .map((entry) => asString(entry, ""))
+      .filter((entry) => entry.length > 0)
+    : [];
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function truncateForAgentsMd(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function asDelegationStyle(value: unknown): DelegationStyleValue | null {
+  return value === "directive" || value === "collaborative" || value === "autonomous"
+    ? value
+    : null;
+}
+
+function buildRoleContextBlock(context: Record<string, unknown>): string {
+  const roleDef = asRecord(context.paperclipRoleDefinition);
+  if (!roleDef) return "";
+
+  const label = asString(roleDef.label, "");
+  if (!label) return "";
+
+  const prompt = truncateForAgentsMd(asString(roleDef.systemPrompt, ""), 1600);
+  const canDelegateTo = asStringArray(roleDef.canDelegateTo);
+  const delegationStyle = asDelegationStyle(roleDef.delegationStyle);
+  const spawnRules = asRecord(roleDef.spawnRules);
+  const canSpawn = asStringArray(spawnRules?.allowedAgentTypes);
+
+  const spawnBudget = asRecord(context.paperclipSpawnBudget);
+  const active = asNumber(spawnBudget?.active, 0);
+  const max = asNumber(spawnBudget?.max, 0);
+  const remaining = asNumber(spawnBudget?.remaining, Math.max(0, max - active));
+  const delegationDepth = Math.max(0, asNumber(context.paperclipDelegationDepth, 0));
+
+  const orgPosition = asRecord(context.paperclipOrgPosition);
+  const reportsTo = asString(orgPosition?.reportsTo, "");
+  const directReports = asStringArray(orgPosition?.directReports);
+
+  const lines: string[] = [`## Your Role: ${label}`];
+  if (prompt) {
+    lines.push(prompt, "");
+  } else {
+    lines.push("");
+  }
+
+  lines.push("## Action Space");
+  if (canDelegateTo.length > 0) {
+    lines.push(`Delegation authority: ${canDelegateTo.join(", ")}`);
+    if (delegationStyle) {
+      lines.push(`  Style: ${delegationStyle} — ${DELEGATION_STYLE_HINTS[delegationStyle]}`);
+    }
+    lines.push(`  Chain depth limit: 3 (you are at depth ${delegationDepth})`);
+  } else {
+    lines.push("Delegation authority: none — you execute tasks directly");
+  }
+
+  if (canSpawn.length > 0) {
+    lines.push(`Spawn authority: ${canSpawn.join(", ")} (ephemeral only — employee roles are never spawned)`);
+    lines.push(`  Budget: ${active}/${max} active (${remaining} remaining)`);
+  } else {
+    lines.push("Spawn authority: none");
+  }
+
+  lines.push("", "## Org Position");
+  lines.push(`Reports to: ${reportsTo || "Board (no manager)"}`);
+  if (directReports.length > 0) {
+    lines.push(`Direct reports: ${directReports.join(", ")}`);
+  } else {
+    lines.push("Direct reports: none");
+  }
+
+  return lines.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // AGENTS.md writer — OpenCode picks this up as its instruction file.
 // We write per-run context here so the agent knows who it is and has env vars.
@@ -146,6 +242,7 @@ async function writeAgentsMd(
 
   const handoff = asString(context.paperclipSessionHandoffMarkdown as string, "");
   const memCtx = asString(context.paperclipMemoryContext as string, "");
+  const roleBlock = buildRoleContextBlock(context);
 
   const md = [
     `# ${agent.name} — Paperclip Agent`,
@@ -174,6 +271,7 @@ async function writeAgentsMd(
     `- API URL: \`${env.PAPERCLIP_API_URL}\``,
     `- Run ID: \`${env.PAPERCLIP_RUN_ID}\``,
     "",
+    ...(roleBlock ? [roleBlock, ""] : []),
     "## Instructions",
     "",
     "Use the **paperclip** skill (load it via the skill tool) for the full heartbeat procedure,",

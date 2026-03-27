@@ -6,11 +6,48 @@
 import type { HippocampusBridge } from "./hippocampus-contract.js";
 import { getHippocampusBridge } from "./hippocampus-bridge.js";
 import { logger } from "../middleware/logger.js";
+import type { DelegationStyle } from "@paperclipai/shared";
 
 type HippocampusLifecycleBridge = Pick<
   HippocampusBridge,
   "mode" | "health" | "getPriming" | "getHabits" | "recall" | "extract" | "processTrajectory"
 >;
+
+type HippocampusDelegationBridge = HippocampusLifecycleBridge & {
+  getDelegationContext?: (
+    delegatorAgentId: string,
+    delegateeAgentId: string,
+    style: DelegationStyle,
+  ) => Promise<unknown>;
+};
+
+function recallLimitForStyle(style: DelegationStyle | undefined): number {
+  if (style === "directive") return 10;
+  if (style === "autonomous") return 3;
+  return 5;
+}
+
+function habitLimitForStyle(style: DelegationStyle | undefined): number {
+  if (style === "directive") return 5;
+  if (style === "autonomous") return 3;
+  return 5;
+}
+
+function normalizeDelegationContext(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (value && typeof value === "object") {
+    const asRecord = value as Record<string, unknown>;
+    const candidate = asRecord.context ?? asRecord.markdown ?? asRecord.content;
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+  }
+  return null;
+}
 
 async function isBridgeAvailable(
   bridge: Pick<HippocampusBridge, "health">,
@@ -49,19 +86,22 @@ export async function buildMemoryContextForRun(input: {
   issueTitle: string | null;
   issueId: string | null;
   wakeReason: string | null;
+  delegationStyle?: DelegationStyle;
+  delegatorAgentId?: string | null;
 }): Promise<string | null> {
-  const { agentId, issueTitle, issueId, wakeReason } = input;
+  const { agentId, issueTitle, issueId, wakeReason, delegationStyle, delegatorAgentId } = input;
 
   try {
-    const hippocampusBridge = getHippocampusBridge() as HippocampusLifecycleBridge;
+    const hippocampusBridge = getHippocampusBridge() as HippocampusDelegationBridge;
     if (hippocampusBridge.mode === "off") return null;
 
     const healthy = await isBridgeAvailable(hippocampusBridge, { agentId });
     if (!healthy) return null;
 
-    // Fetch priming + habits + recall in parallel
+    const recallLimit = recallLimitForStyle(delegationStyle);
+    const habitLimit = habitLimitForStyle(delegationStyle);
     const query = [issueTitle, wakeReason, issueId].filter(Boolean).join(" — ");
-    const [priming, habits, recalled] = await Promise.all([
+    const [priming, habits, recalled, rawDelegationContext] = await Promise.all([
       hippocampusBridge.getPriming(agentId).catch((err) => {
         logLifecycleCallFailure("getPriming", { agentId }, err);
         return { prompt: "" };
@@ -71,36 +111,44 @@ export async function buildMemoryContextForRun(input: {
         return { habits: [] };
       }),
       query
-        ? hippocampusBridge.recall(agentId, query).catch((err) => {
+        ? hippocampusBridge.recall(agentId, query, undefined, recallLimit).catch((err) => {
           logLifecycleCallFailure("recall", { agentId }, err);
           return { items: [] };
         })
         : Promise.resolve({ items: [] }),
+      delegatorAgentId && delegationStyle && typeof hippocampusBridge.getDelegationContext === "function"
+        ? hippocampusBridge.getDelegationContext(delegatorAgentId, agentId, delegationStyle).catch((err) => {
+          logLifecycleCallFailure("getDelegationContext", { agentId, delegatorAgentId }, err);
+          return null;
+        })
+        : Promise.resolve(null),
     ]);
 
     const sections: string[] = [];
 
-    // Priming — long-term identity/preferences context
     if (priming.prompt.trim()) {
       sections.push(`## Agent Memory — Priming\n${priming.prompt.trim()}`);
     }
 
-    // Recalled memories relevant to the current task
     if (recalled.items.length > 0) {
       const lines = recalled.items
-        .slice(0, 10)
+        .slice(0, recallLimit)
         .map((m) => `- [${m.kind}] ${m.content}`)
         .join("\n");
       sections.push(`## Agent Memory — Relevant Recall\n${lines}`);
     }
 
-    // Habits for the current context
     if (habits.habits.length > 0) {
       const lines = habits.habits
-        .slice(0, 5)
+        .slice(0, habitLimit)
         .map((h) => `- When: ${h.trigger} → Do: ${h.action} (confidence ${(h.confidence * 100).toFixed(0)}%)`)
         .join("\n");
       sections.push(`## Agent Memory — Habits\n${lines}`);
+    }
+
+    const delegatorContext = normalizeDelegationContext(rawDelegationContext);
+    if (delegatorContext) {
+      sections.push(`## Delegator Context\n${delegatorContext}`);
     }
 
     if (sections.length === 0) return null;
@@ -192,6 +240,56 @@ export async function extractMemoriesFromRun(input: {
     logger.warn(
       { err, agentId, runId },
       "hippocampus: post-run memory extraction failed (non-fatal)",
+    );
+  }
+}
+
+export async function recordDelegationEvent(input: {
+  fromAgentId: string;
+  toAgentId: string;
+  taskDescription: string;
+  style: DelegationStyle;
+  issueId: string | null;
+}): Promise<void> {
+  try {
+    const hippocampusBridge = getHippocampusBridge() as HippocampusLifecycleBridge;
+    if (hippocampusBridge.mode === "off") return;
+
+    const healthy = await isBridgeAvailable(hippocampusBridge, {
+      fromAgentId: input.fromAgentId,
+      toAgentId: input.toAgentId,
+      issueId: input.issueId,
+    });
+    if (!healthy) return;
+
+    const issueSuffix = input.issueId ? ` (issue: ${input.issueId})` : "";
+    const delegatorMessage = {
+      role: "system",
+      content:
+        `Delegated task to ${input.toAgentId}: "${input.taskDescription}" `
+        + `(style: ${input.style})${issueSuffix}`,
+    };
+    const delegateeMessage = {
+      role: "system",
+      content:
+        `Received delegated task from ${input.fromAgentId}: "${input.taskDescription}" `
+        + `(style: ${input.style})${issueSuffix}`,
+    };
+
+    await Promise.all([
+      hippocampusBridge.extract(input.fromAgentId, [delegatorMessage]).catch((err) => {
+        logLifecycleCallFailure("recordDelegationEvent.delegator", input, err);
+        return null;
+      }),
+      hippocampusBridge.extract(input.toAgentId, [delegateeMessage]).catch((err) => {
+        logLifecycleCallFailure("recordDelegationEvent.delegatee", input, err);
+        return null;
+      }),
+    ]);
+  } catch (err) {
+    logger.warn(
+      { err, ...input },
+      "hippocampus: failed to record delegation event (non-fatal)",
     );
   }
 }
