@@ -1,14 +1,16 @@
 import {
   type AnyPgColumn,
-  pgTable,
-  uuid,
-  text,
-  integer,
-  timestamp,
-  jsonb,
   index,
+  jsonb,
+  pgTable,
+  integer,
+  text,
+  timestamp,
+  uuid,
 } from "drizzle-orm/pg-core";
+import type { AgentKind, DelegationStyle } from "@paperclipai/shared";
 import { companies } from "./companies.js";
+import { roleDefinitions } from "./role_definitions.js";
 
 export const agents = pgTable(
   "agents",
@@ -17,10 +19,14 @@ export const agents = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     name: text("name").notNull(),
     role: text("role").notNull().default("general"),
+    roleDefinitionId: uuid("role_definition_id").references(() => roleDefinitions.id),
+    delegationStyle: text("delegation_style").$type<DelegationStyle>().notNull().default("collaborative"),
+    kind: text("kind").$type<AgentKind>().notNull().default("employee"),
     title: text("title"),
     icon: text("icon"),
     status: text("status").notNull().default("idle"),
     reportsTo: uuid("reports_to").references((): AnyPgColumn => agents.id),
+    spawnedByAgentId: uuid("spawned_by_agent_id").references((): AnyPgColumn => agents.id),
     capabilities: text("capabilities"),
     adapterType: text("adapter_type").notNull().default("process"),
     adapterConfig: jsonb("adapter_config").$type<Record<string, unknown>>().notNull().default({}),
@@ -38,5 +44,8 @@ export const agents = pgTable(
   (table) => ({
     companyStatusIdx: index("agents_company_status_idx").on(table.companyId, table.status),
     companyReportsToIdx: index("agents_company_reports_to_idx").on(table.companyId, table.reportsTo),
+    companyKindIdx: index("agents_company_kind_idx").on(table.companyId, table.kind),
+    companySpawnedByIdx: index("agents_company_spawned_by_idx").on(table.companyId, table.spawnedByAgentId),
+    companyRoleDefinitionIdx: index("agents_company_role_definition_idx").on(table.companyId, table.roleDefinitionId),
   }),
 );

@@ -1,5 +1,7 @@
 import type {
   AgentAdapterType,
+  AgentKind,
+  DelegationStyle,
   PauseReason,
   AgentRole,
   AgentStatus,
@@ -65,6 +67,10 @@ export interface Agent {
   name: string;
   urlKey: string;
   role: AgentRole;
+  roleDefinitionId?: string | null;
+  delegationStyle: DelegationStyle;
+  kind: AgentKind;
+  spawnedByAgentId?: string | null;
   title: string | null;
   icon: string | null;
   status: AgentStatus;

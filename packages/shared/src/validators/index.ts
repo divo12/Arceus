@@ -101,6 +101,20 @@ export {
   type TestAdapterEnvironment,
   type UpdateAgentPermissions,
 } from "./agent.js";
+export {
+  spawnRuleConfigSchema,
+  createRoleDefinitionSchema,
+  updateRoleDefinitionSchema,
+  type CreateRoleDefinition,
+  type UpdateRoleDefinition,
+  type SpawnRuleConfigInput,
+} from "./role.js";
+export {
+  proposeHierarchyChangeSchema,
+  resolveHierarchyProposalSchema,
+  type ProposeHierarchyChange,
+  type ResolveHierarchyProposal,
+} from "./hierarchy.js";
 
 export {
   createProjectSchema,

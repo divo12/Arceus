@@ -64,6 +64,25 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   general: "General",
 };
 
+export const AGENT_KINDS = ["employee", "spawned"] as const;
+export type AgentKind = (typeof AGENT_KINDS)[number];
+
+export const EMPLOYEE_ROLES = ["ceo", "cto", "engineer", "designer", "pm"] as const;
+export type EmployeeRole = (typeof EMPLOYEE_ROLES)[number];
+
+export function isEmployeeRole(role: string): role is EmployeeRole {
+  return (EMPLOYEE_ROLES as readonly string[]).includes(role);
+}
+
+export const DELEGATION_STYLES = ["directive", "collaborative", "autonomous"] as const;
+export type DelegationStyle = (typeof DELEGATION_STYLES)[number];
+
+export const HIERARCHY_STATUSES = ["proposed", "approved", "active", "superseded", "rejected"] as const;
+export type HierarchyStatus = (typeof HIERARCHY_STATUSES)[number];
+
+export const HIERARCHY_EDGE_TYPES = ["reports_to", "delegates_to"] as const;
+export type HierarchyEdgeType = (typeof HIERARCHY_EDGE_TYPES)[number];
+
 export const AGENT_ICON_NAMES = [
   "bot",
   "cpu",

@@ -4,6 +4,9 @@ export { authUsers, authSessions, authAccounts, authVerifications } from "./auth
 export { instanceSettings } from "./instance_settings.js";
 export { instanceUserRoles } from "./instance_user_roles.js";
 export { agents } from "./agents.js";
+export { roleDefinitions } from "./role_definitions.js";
+export { hierarchySnapshots } from "./hierarchy_snapshots.js";
+export { hierarchyEdges } from "./hierarchy_edges.js";
 export { companyMemberships } from "./company_memberships.js";
 export { principalPermissionGrants } from "./principal_permission_grants.js";
 export { invites } from "./invites.js";

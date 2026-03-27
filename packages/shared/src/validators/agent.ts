@@ -2,8 +2,10 @@ import { z } from "zod";
 import {
   AGENT_ADAPTER_TYPES,
   AGENT_ICON_NAMES,
+  AGENT_KINDS,
   AGENT_ROLES,
   AGENT_STATUSES,
+  DELEGATION_STYLES,
 } from "../constants.js";
 import { envConfigSchema } from "./secret.js";
 
@@ -46,6 +48,10 @@ const adapterConfigSchema = z.record(z.unknown()).superRefine((value, ctx) => {
 export const createAgentSchema = z.object({
   name: z.string().min(1),
   role: z.enum(AGENT_ROLES).optional().default("general"),
+  roleDefinitionId: z.string().uuid().optional().nullable(),
+  delegationStyle: z.enum(DELEGATION_STYLES).optional().default("collaborative"),
+  kind: z.enum(AGENT_KINDS).optional().default("employee"),
+  spawnedByAgentId: z.string().uuid().optional().nullable(),
   title: z.string().optional().nullable(),
   icon: z.enum(AGENT_ICON_NAMES).optional().nullable(),
   reportsTo: z.string().uuid().optional().nullable(),
