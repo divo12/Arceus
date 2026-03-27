@@ -31,6 +31,14 @@ const mockSecretService = vi.hoisted(() => ({
   normalizeAdapterConfigForPersistence: vi.fn(async (_companyId: string, config: Record<string, unknown>) => config),
 }));
 
+const mockDelegationGuardService = vi.hoisted(() => ({
+  assertCanDelegate: vi.fn(),
+}));
+
+const mockSpawnGovernanceService = vi.hoisted(() => ({
+  assertCanSpawn: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
@@ -45,6 +53,8 @@ vi.mock("../services/index.js", () => ({
   issueService: () => ({}),
   logActivity: mockLogActivity,
   secretService: () => mockSecretService,
+  delegationGuardService: () => mockDelegationGuardService,
+  spawnGovernanceService: () => mockSpawnGovernanceService,
   syncInstructionsBundleConfigFromFilePath: vi.fn((_agent, config) => config),
   workspaceOperationService: () => ({}),
 }));
@@ -94,6 +104,8 @@ describe("agent instructions bundle routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAgentService.getById.mockResolvedValue(makeAgent());
+    mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
     mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...makeAgent(),
       adapterConfig: patch.adapterConfig ?? {},

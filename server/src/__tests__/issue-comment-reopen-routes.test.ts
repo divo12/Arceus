@@ -25,11 +25,16 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
 
+const mockDelegationGuardService = vi.hoisted(() => ({
+  assertCanDelegate: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
   agentService: () => mockAgentService,
+  delegationGuardService: () => mockDelegationGuardService,
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   goalService: () => ({}),
@@ -44,17 +49,17 @@ vi.mock("../services/index.js", () => ({
   workProductService: () => ({}),
 }));
 
-function createApp() {
+function createApp(actor: Record<string, unknown> = {
+  type: "board",
+  userId: "local-board",
+  companyIds: ["company-1"],
+  source: "local_implicit",
+  isInstanceAdmin: false,
+}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
+    (req as any).actor = actor;
     next();
   });
   app.use("/api", issueRoutes({} as any, {} as any));
@@ -89,6 +94,7 @@ describe("issue comment reopen routes", () => {
       authorUserId: "local-board",
     });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
   });
 
   it("treats reopen=true as a no-op when the issue is already open", async () => {
@@ -142,5 +148,76 @@ describe("issue comment reopen routes", () => {
         }),
       }),
     );
+  });
+
+  it("lets an agent delegate to another employee without legacy tasks:assign", async () => {
+    mockAccessService.hasPermission.mockResolvedValue(false);
+    mockAgentService.getById.mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      companyId: "company-1",
+      role: "cto",
+      kind: "employee",
+      permissions: { canCreateAgents: false },
+    });
+    mockIssueService.getById.mockResolvedValue({
+      ...makeIssue("todo"),
+      assigneeAgentId: "22222222-2222-4222-8222-222222222222",
+      createdByUserId: "local-board",
+    });
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeIssue("todo"),
+      ...patch,
+    }));
+
+    const res = await request(createApp({
+      type: "agent",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      companyId: "company-1",
+      source: "agent_key",
+    }))
+      .patch("/api/issues/11111111-1111-4111-8111-111111111111")
+      .send({ assigneeAgentId: "33333333-3333-4333-8333-333333333333" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockDelegationGuardService.assertCanDelegate).toHaveBeenCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+    );
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      { assigneeAgentId: "33333333-3333-4333-8333-333333333333" },
+    );
+  });
+
+  it("blocks agent assignment directly to board users", async () => {
+    mockAccessService.hasPermission.mockResolvedValue(false);
+    mockAgentService.getById.mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      companyId: "company-1",
+      role: "cto",
+      kind: "employee",
+      permissions: { canCreateAgents: false },
+    });
+    mockIssueService.getById.mockResolvedValue({
+      ...makeIssue("todo"),
+      assigneeAgentId: "22222222-2222-4222-8222-222222222222",
+      createdByUserId: "local-board",
+    });
+
+    const res = await request(createApp({
+      type: "agent",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      companyId: "company-1",
+      source: "agent_key",
+    }))
+      .patch("/api/issues/11111111-1111-4111-8111-111111111111")
+      .send({
+        assigneeAgentId: null,
+        assigneeUserId: "different-board-user",
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("employee agents");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 });

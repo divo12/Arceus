@@ -34,11 +34,13 @@ import {
   approvalService,
   companySkillService,
   budgetService,
+  delegationGuardService,
   heartbeatService,
   issueApprovalService,
   issueService,
   logActivity,
   secretService,
+  spawnGovernanceService,
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
 } from "../services/index.js";
@@ -79,9 +81,11 @@ export function agentRoutes(db: Db) {
   const access = accessService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
+  const delegationGuard = delegationGuardService(db);
   const heartbeat = heartbeatService(db);
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
+  const spawnGovernance = spawnGovernanceService(db);
   const instructions = agentInstructionsService();
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
@@ -197,6 +201,16 @@ export function agentRoutes(db: Db) {
 
   async function assertCanReadConfigurations(req: Request, companyId: string) {
     return assertCanCreateAgentsForCompany(req, companyId);
+  }
+
+  async function resolveActorAgentForCompany(req: Request, companyId: string) {
+    assertCompanyAccess(req, companyId);
+    if (!req.actor.agentId) throw forbidden("Agent authentication required");
+    const actorAgent = await svc.getById(req.actor.agentId);
+    if (!actorAgent || actorAgent.companyId !== companyId) {
+      throw forbidden("Agent key cannot access another company");
+    }
+    return actorAgent;
   }
 
   async function actorCanReadConfigurationsForCompany(req: Request, companyId: string) {
@@ -1141,7 +1155,16 @@ export function agentRoutes(db: Db) {
 
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    await assertCanCreateAgentsForCompany(req, companyId);
+    const targetRole = (req.body.role ?? "general") as typeof req.body.role;
+    let requestingAgent: Awaited<ReturnType<typeof svc.getById>> | null = null;
+
+    if (req.actor.type === "agent") {
+      requestingAgent = await resolveActorAgentForCompany(req, companyId);
+      await spawnGovernance.assertCanSpawn(requestingAgent.id, targetRole ?? "general");
+    } else {
+      await assertCanCreateAgentsForCompany(req, companyId);
+    }
+
     const sourceIssueIds = parseSourceIssueIds(req.body);
     const {
       desiredSkills: requestedDesiredSkills,
@@ -1186,8 +1209,16 @@ export function agentRoutes(db: Db) {
 
     const requiresApproval = company.requireBoardApprovalForNewAgents;
     const status = requiresApproval ? "pending_approval" : "idle";
+
+    if (requestingAgent && req.body.reportsTo && req.body.reportsTo !== requestingAgent.id) {
+      await delegationGuard.assertCanDelegate(requestingAgent.id, req.body.reportsTo);
+    }
+
     const createdAgent = await svc.create(companyId, {
       ...normalizedHireInput,
+      kind: requestingAgent ? "spawned" : (normalizedHireInput.kind ?? "employee"),
+      spawnedByAgentId: requestingAgent?.id ?? null,
+      reportsTo: requestingAgent ? null : (normalizedHireInput.reportsTo ?? null),
       status,
       spentMonthlyCents: 0,
       lastHeartbeatAt: null,
@@ -1274,11 +1305,13 @@ export function agentRoutes(db: Db) {
       },
     });
 
-    await applyDefaultAgentTaskAssignGrant(
-      companyId,
-      agent.id,
-      actor.actorType === "user" ? actor.actorId : null,
-    );
+    if (agent.kind === "employee") {
+      await applyDefaultAgentTaskAssignGrant(
+        companyId,
+        agent.id,
+        actor.actorType === "user" ? actor.actorId : null,
+      );
+    }
 
     if (approval) {
       await logActivity(db, {

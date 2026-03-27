@@ -19,6 +19,7 @@ import { validate } from "../middleware/validate.js";
 import {
   accessService,
   agentService,
+  delegationGuardService,
   executionWorkspaceService,
   goalService,
   heartbeatService,
@@ -45,6 +46,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
   const access = accessService(db);
   const heartbeat = heartbeatService(db);
   const agentsSvc = agentService(db);
+  const delegationGuard = delegationGuardService(db);
   const projectsSvc = projectService(db);
   const goalsSvc = goalService(db);
   const issueApprovalsSvc = issueApprovalService(db);
@@ -96,21 +98,62 @@ export function issueRoutes(db: Db, storage: StorageService) {
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
   }
 
-  async function assertCanAssignTasks(req: Request, companyId: string) {
+  async function assertBoardCanAssignTasks(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
+    if (req.actor.type !== "board") throw unauthorized();
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");
+    if (!allowed) throw forbidden("Missing permission: tasks:assign");
+  }
+
+  async function assertAgentCanAssignIssue(
+    req: Request,
+    companyId: string,
+    options: {
+      assigneeAgentId?: string | null;
+      assigneeUserId?: string | null;
+      allowReturnToCreator?: boolean;
+    },
+  ) {
+    assertCompanyAccess(req, companyId);
+    if (req.actor.type !== "agent" || !req.actor.agentId) {
+      throw unauthorized();
+    }
+
+    if (typeof options.assigneeAgentId === "string") {
+      await delegationGuard.assertCanDelegate(req.actor.agentId, options.assigneeAgentId);
+      return;
+    }
+
+    if (
+      options.assigneeAgentId === null &&
+      typeof options.assigneeUserId === "string" &&
+      options.allowReturnToCreator
+    ) {
+      return;
+    }
+
+    if (options.assigneeUserId !== undefined || options.assigneeAgentId === null) {
+      throw forbidden("Agents can only delegate issues to employee agents");
+    }
+  }
+
+  async function assertCanAssignIssue(
+    req: Request,
+    companyId: string,
+    options: {
+      assigneeAgentId?: string | null;
+      assigneeUserId?: string | null;
+      allowReturnToCreator?: boolean;
+    },
+  ) {
     if (req.actor.type === "board") {
-      if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-      const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");
-      if (!allowed) throw forbidden("Missing permission: tasks:assign");
+      await assertBoardCanAssignTasks(req, companyId);
       return;
     }
     if (req.actor.type === "agent") {
-      if (!req.actor.agentId) throw forbidden("Agent authentication required");
-      const allowedByGrant = await access.hasPermission(companyId, "agent", req.actor.agentId, "tasks:assign");
-      if (allowedByGrant) return;
-      const actorAgent = await agentsSvc.getById(req.actor.agentId);
-      if (actorAgent && actorAgent.companyId === companyId && canCreateAgentsLegacy(actorAgent)) return;
-      throw forbidden("Missing permission: tasks:assign");
+      await assertAgentCanAssignIssue(req, companyId, options);
+      return;
     }
     throw unauthorized();
   }
@@ -760,7 +803,10 @@ export function issueRoutes(db: Db, storage: StorageService) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
-      await assertCanAssignTasks(req, companyId);
+      await assertCanAssignIssue(req, companyId, {
+        assigneeAgentId: req.body.assigneeAgentId,
+        assigneeUserId: req.body.assigneeUserId,
+      });
     }
 
     const actor = getActorInfo(req);
@@ -818,7 +864,11 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
     if (assigneeWillChange) {
       if (!isAgentReturningIssueToCreator) {
-        await assertCanAssignTasks(req, existing.companyId);
+        await assertCanAssignIssue(req, existing.companyId, {
+          assigneeAgentId: req.body.assigneeAgentId,
+          assigneeUserId: req.body.assigneeUserId,
+          allowReturnToCreator: isAgentReturningIssueToCreator,
+        });
       }
     }
     if (!(await assertAgentRunCheckoutOwnership(req, res, existing))) return;

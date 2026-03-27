@@ -11,8 +11,9 @@ import {
   costEvents,
   heartbeatRunEvents,
   heartbeatRuns,
+  roleDefinitions,
 } from "@paperclipai/db";
-import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import { isEmployeeRole, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
@@ -258,6 +259,37 @@ export function agentService(db: Db) {
     return manager;
   }
 
+  async function resolveRoleDefinitionLink(
+    companyId: string,
+    role: string,
+    roleDefinitionId: string | null | undefined,
+  ) {
+    if (roleDefinitionId !== undefined && roleDefinitionId !== null) {
+      return db
+        .select({
+          id: roleDefinitions.id,
+          delegationStyle: roleDefinitions.delegationStyle,
+          slug: roleDefinitions.slug,
+        })
+        .from(roleDefinitions)
+        .where(eq(roleDefinitions.id, roleDefinitionId))
+        .then((rows) => rows[0] ?? null);
+    }
+
+    return db
+      .select({
+        id: roleDefinitions.id,
+        delegationStyle: roleDefinitions.delegationStyle,
+        slug: roleDefinitions.slug,
+      })
+      .from(roleDefinitions)
+      .where(and(
+        eq(roleDefinitions.companyId, companyId),
+        eq(roleDefinitions.slug, role),
+      ))
+      .then((rows) => rows[0] ?? null);
+  }
+
   async function assertNoCycle(agentId: string, reportsTo: string | null | undefined) {
     if (!reportsTo) return;
     if (reportsTo === agentId) throw unprocessable("Agent cannot report to itself");
@@ -382,7 +414,21 @@ export function agentService(db: Db) {
     getById,
 
     create: async (companyId: string, data: Omit<typeof agents.$inferInsert, "companyId">) => {
-      if (data.reportsTo) {
+      const requestedRole = data.role ?? "general";
+      const requestedKind = data.kind ?? "employee";
+
+      if (requestedKind === "spawned") {
+        if (!data.spawnedByAgentId) {
+          throw unprocessable("Spawned agents require spawnedByAgentId");
+        }
+        if (isEmployeeRole(requestedRole)) {
+          throw unprocessable(`Employee role "${requestedRole}" cannot be spawned`);
+        }
+      } else if (data.spawnedByAgentId) {
+        throw unprocessable("Employee agents cannot set spawnedByAgentId");
+      }
+
+      if (requestedKind === "employee" && data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
       }
 
@@ -392,11 +438,23 @@ export function agentService(db: Db) {
         .where(eq(agents.companyId, companyId));
       const uniqueName = deduplicateAgentName(data.name, existingAgents);
 
-      const role = data.role ?? "general";
+      const role = requestedRole;
+      const resolvedRoleDefinition = await resolveRoleDefinitionLink(companyId, role, data.roleDefinitionId);
       const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
       const created = await db
         .insert(agents)
-        .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions })
+        .values({
+          ...data,
+          name: uniqueName,
+          companyId,
+          role,
+          roleDefinitionId: resolvedRoleDefinition?.id ?? data.roleDefinitionId ?? null,
+          delegationStyle: data.delegationStyle ?? resolvedRoleDefinition?.delegationStyle ?? "collaborative",
+          kind: requestedKind,
+          reportsTo: requestedKind === "spawned" ? null : (data.reportsTo ?? null),
+          spawnedByAgentId: requestedKind === "spawned" ? data.spawnedByAgentId ?? null : null,
+          permissions: normalizedPermissions,
+        })
         .returning()
         .then((rows) => rows[0]);
 

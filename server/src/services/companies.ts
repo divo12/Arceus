@@ -27,9 +27,11 @@ import {
   companyMemberships,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
+import { roleDefinitionService } from "./role-definitions.js";
 
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
+  const roleDefinitions = roleDefinitionService(db);
 
   const companySelection = {
     id: companies.id,
@@ -164,6 +166,7 @@ export function companyService(db: Db) {
 
     create: async (data: typeof companies.$inferInsert) => {
       const created = await createCompanyWithUniquePrefix(data);
+      await roleDefinitions.seedForCompany(created.id);
       const row = await getCompanyQuery(db)
         .where(eq(companies.id, created.id))
         .then((rows) => rows[0] ?? null);

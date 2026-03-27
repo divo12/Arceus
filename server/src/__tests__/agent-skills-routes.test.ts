@@ -50,6 +50,14 @@ const mockSecretService = vi.hoisted(() => ({
   normalizeAdapterConfigForPersistence: vi.fn(async (_companyId: string, config: Record<string, unknown>) => config),
 }));
 
+const mockDelegationGuardService = vi.hoisted(() => ({
+  assertCanDelegate: vi.fn(),
+}));
+
+const mockSpawnGovernanceService = vi.hoisted(() => ({
+  assertCanSpawn: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 const mockAdapter = vi.hoisted(() => ({
@@ -69,6 +77,8 @@ vi.mock("../services/index.js", () => ({
   issueService: () => ({}),
   logActivity: mockLogActivity,
   secretService: () => mockSecretService,
+  delegationGuardService: () => mockDelegationGuardService,
+  spawnGovernanceService: () => mockSpawnGovernanceService,
   syncInstructionsBundleConfigFromFilePath: vi.fn((_agent, config) => config),
   workspaceOperationService: () => mockWorkspaceOperationService,
 }));
@@ -93,17 +103,20 @@ function createDb(requireBoardApprovalForNewAgents = false) {
   };
 }
 
-function createApp(db: Record<string, unknown> = createDb()) {
+function createApp(
+  db: Record<string, unknown> = createDb(),
+  actor: Record<string, unknown> = {
+    type: "board",
+    userId: "local-board",
+    companyIds: ["company-1"],
+    source: "local_implicit",
+    isInstanceAdmin: false,
+  },
+) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
+    (req as any).actor = actor;
     next();
   });
   app.use("/api", agentRoutes(db as any));
@@ -209,6 +222,8 @@ describe("agent skill routes", () => {
     mockAccessService.listPrincipalGrants.mockResolvedValue([]);
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
+    mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
   });
 
   it("skips runtime materialization when listing Claude skills", async () => {
@@ -458,5 +473,47 @@ describe("agent skill routes", () => {
       | { payload?: { adapterConfig?: Record<string, unknown> } }
       | undefined;
     expect(approvalInput?.payload?.adapterConfig?.promptTemplate).toBeUndefined();
+  });
+
+  it("lets an agent hire a spawned agent through spawn governance", async () => {
+    mockAgentService.getById.mockResolvedValueOnce({
+      ...makeAgent("claude_local"),
+      id: "22222222-2222-4222-8222-222222222222",
+      role: "cto",
+      companyId: "company-1",
+      kind: "employee",
+    });
+
+    const res = await request(createApp(
+      createDb(false),
+      {
+        type: "agent",
+        agentId: "22222222-2222-4222-8222-222222222222",
+        companyId: "company-1",
+        source: "agent_key",
+      },
+    ))
+      .post("/api/companies/company-1/agent-hires")
+      .send({
+        name: "Research Helper",
+        role: "researcher",
+        adapterType: "claude_local",
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockSpawnGovernanceService.assertCanSpawn).toHaveBeenCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+      "researcher",
+    );
+    expect(mockAgentService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        kind: "spawned",
+        spawnedByAgentId: "22222222-2222-4222-8222-222222222222",
+        reportsTo: null,
+      }),
+    );
+    expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
   });
 });

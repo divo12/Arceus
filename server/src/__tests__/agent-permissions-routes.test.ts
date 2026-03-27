@@ -76,6 +76,14 @@ const mockSecretService = vi.hoisted(() => ({
   resolveAdapterConfigForRuntime: vi.fn(),
 }));
 
+const mockDelegationGuardService = vi.hoisted(() => ({
+  assertCanDelegate: vi.fn(),
+}));
+
+const mockSpawnGovernanceService = vi.hoisted(() => ({
+  assertCanSpawn: vi.fn(),
+}));
+
 const mockAgentInstructionsService = vi.hoisted(() => ({
   materializeManagedBundle: vi.fn(),
 }));
@@ -98,6 +106,8 @@ vi.mock("../services/index.js", () => ({
   issueService: () => mockIssueService,
   logActivity: mockLogActivity,
   secretService: () => mockSecretService,
+  delegationGuardService: () => mockDelegationGuardService,
+  spawnGovernanceService: () => mockSpawnGovernanceService,
   syncInstructionsBundleConfigFromFilePath: vi.fn((_agent, config) => config),
   workspaceOperationService: () => mockWorkspaceOperationService,
 }));
@@ -151,6 +161,8 @@ describe("agent permission routes", () => {
     mockAccessService.listPrincipalGrants.mockResolvedValue([]);
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
+    mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
     mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([]);
     mockCompanySkillService.resolveRequestedSkillKeys.mockImplementation(async (_companyId, requested) => requested);
     mockBudgetService.upsertPolicy.mockResolvedValue(undefined);
