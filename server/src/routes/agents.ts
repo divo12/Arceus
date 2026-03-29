@@ -64,6 +64,9 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
+import { logger } from "../middleware/logger.js";
+import { roleDefinitionService } from "../services/role-definitions.js";
 
 export function agentRoutes(db: Db) {
   const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
@@ -91,6 +94,7 @@ export function agentRoutes(db: Db) {
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
   const instanceSettings = instanceSettingsService(db);
+  const roleDefs = roleDefinitionService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function getCurrentUserRedactionOptions() {
@@ -202,6 +206,40 @@ export function agentRoutes(db: Db) {
 
   async function assertCanReadConfigurations(req: Request, companyId: string) {
     return assertCanCreateAgentsForCompany(req, companyId);
+  }
+
+  async function seedRoleDefinitionMemory(
+    agent: { id: string; roleDefinitionId?: string | null },
+  ): Promise<void> {
+    const roleDefinitionId =
+      typeof agent.roleDefinitionId === "string" && agent.roleDefinitionId.trim().length > 0
+        ? agent.roleDefinitionId
+        : null;
+    if (!roleDefinitionId) return;
+
+    let roleDef: Awaited<ReturnType<typeof roleDefs.getById>> | null = null;
+    try {
+      roleDef = await roleDefs.getById(roleDefinitionId);
+    } catch {
+      return;
+    }
+
+    const systemPrompt = roleDef.systemPrompt.trim();
+    if (!systemPrompt) return;
+
+    const hippocampus = getHippocampusBridge();
+    if (hippocampus.mode === "off") return;
+
+    await hippocampus.storeStaticMemory(agent.id, {
+      kind: "identity",
+      content: systemPrompt,
+      source: "role_definition_seed",
+    }).catch((err) => {
+      logger.warn(
+        { err, agentId: agent.id, roleDefinitionId },
+        "failed to seed role definition prompt into hippocampus",
+      );
+    });
   }
 
   async function resolveActorAgentForCompany(req: Request, companyId: string) {
@@ -1017,6 +1055,46 @@ export function agentRoutes(db: Db) {
     res.json(await buildAgentDetail(agent));
   });
 
+  router.get("/agents/:id/delegation-authority", async (req, res) => {
+    const agentId = req.params.id as string;
+    const agent = await svc.getById(agentId);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+
+    const [authority, budget] = await Promise.all([
+      delegationGuard.getDelegationAuthority(agentId),
+      spawnGovernance.checkSpawnBudget(agentId),
+    ]);
+
+    res.json({
+      canDelegateTo: authority.canDelegateTo,
+      delegationStyle: authority.delegationStyle,
+      spawnBudget: {
+        active: budget.active,
+        max: budget.max,
+        remaining: budget.remaining,
+      },
+      allowedSpawnTypes: budget.allowedTypes,
+    });
+  });
+
+  router.get("/agents/:id/can-delegate-to/:targetId", async (req, res) => {
+    const fromId = req.params.id as string;
+    const toId = req.params.targetId as string;
+    const agent = await svc.getById(fromId);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+
+    const result = await delegationGuard.canDelegate(fromId, toId);
+    res.json(result);
+  });
+
   router.get("/agents/:id/configuration", async (req, res) => {
     const id = req.params.id as string;
     const agent = await svc.getById(id);
@@ -1225,6 +1303,7 @@ export function agentRoutes(db: Db) {
       lastHeartbeatAt: null,
     });
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent);
+    await seedRoleDefinitionMemory(agent);
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
     const actor = getActorInfo(req);
@@ -1383,6 +1462,7 @@ export function agentRoutes(db: Db) {
       lastHeartbeatAt: null,
     });
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent);
+    await seedRoleDefinitionMemory(agent);
 
     const actor = getActorInfo(req);
     await logActivity(db, {

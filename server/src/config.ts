@@ -37,7 +37,7 @@ if (!isSameFile && existsSync(CWD_ENV_PATH)) {
 }
 
 type DatabaseMode = "embedded-postgres" | "postgres";
-export type HippocampusMode = "off" | "embedded" | "sidecar";
+export type HippocampusMode = "off" | "embedded";
 
 export interface Config {
   deploymentMode: DeploymentMode;
@@ -72,7 +72,6 @@ export interface Config {
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
   hippocampusMode: HippocampusMode;
-  hippocampusApiUrl: string | undefined;
   hippocampusPythonBin: string;
   hippocampusStartupTimeoutMs: number;
   hippocampusRequestTimeoutMs: number;
@@ -80,7 +79,7 @@ export interface Config {
 
 export function resolveHippocampusMode(): HippocampusMode {
   const configured = process.env.PAPERCLIP_HIPPOCAMPUS_MODE?.trim().toLowerCase();
-  if (configured === "off" || configured === "embedded" || configured === "sidecar") {
+  if (configured === "off" || configured === "embedded") {
     return configured;
   }
   return "off";
@@ -224,9 +223,6 @@ export function loadConfig(): Config {
       resolveDefaultBackupDir(),
   );
   const hippocampusMode = resolveHippocampusMode();
-  const hippocampusApiUrl = hippocampusMode === "sidecar"
-    ? (process.env.HIPPOCAMPUS_API_URL?.trim() || "http://localhost:8100")
-    : undefined;
 
   return {
     deploymentMode,
@@ -271,7 +267,6 @@ export function loadConfig(): Config {
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
     hippocampusMode,
-    hippocampusApiUrl,
     hippocampusPythonBin: process.env.PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN?.trim() || "python3",
     hippocampusStartupTimeoutMs: Math.max(
       1000,

@@ -24,7 +24,7 @@ type EmbeddedPostgresCtor = new (opts: {
 
 function resolveRuntimePythonBin(): string {
   return process.env.PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN?.trim()
-    || path.resolve(process.cwd(), "backend/.venv/bin/python");
+    || path.resolve(process.cwd(), "services/hippocampus-runtime/python/.venv/bin/python");
 }
 
 async function getEmbeddedPostgresCtor(): Promise<EmbeddedPostgresCtor> {
@@ -94,7 +94,7 @@ describe("embedded hippocampus server smoke", () => {
   });
 
   it(
-    "starts without an HTTP sidecar and serves memory APIs through the embedded runtime",
+    "starts with the embedded runtime and serves memory APIs",
     async () => {
       const runtimePythonBin = resolveRuntimePythonBin();
       expect(fs.existsSync(runtimePythonBin)).toBe(true);
@@ -102,7 +102,6 @@ describe("embedded hippocampus server smoke", () => {
       const envKeys = [
         "DATABASE_URL",
         "HEARTBEAT_SCHEDULER_ENABLED",
-        "HIPPOCAMPUS_API_URL",
         "HOST",
         "PAPERCLIP_DB_BACKUP_ENABLED",
         "PAPERCLIP_HIPPOCAMPUS_MODE",
@@ -136,7 +135,6 @@ describe("embedded hippocampus server smoke", () => {
       process.env.PAPERCLIP_MIGRATION_AUTO_APPLY = "true";
       process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
       process.env.PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN = runtimePythonBin;
-      delete process.env.HIPPOCAMPUS_API_URL;
       process.env.ARCEUS_HIPPOCAMPUS_PROFILE = "test_fakes";
       process.env.ARCEUS_HIPPOCAMPUS_TEST_DIR = runtimeDataDir;
       process.env.ARCEUS_HIPPOCAMPUS_TEST_EMBEDDING_DIMENSIONS = "32";

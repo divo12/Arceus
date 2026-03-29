@@ -34,7 +34,7 @@ function getRouteHandler(router: Router, method: "get" | "post", path: string): 
 async function invokeRoute(options: {
   actor?: { type: string; userId?: string; source?: string };
   body?: Record<string, unknown>;
-  hippocampusMode: "off" | "embedded" | "sidecar";
+  hippocampusMode: "off" | "embedded";
   method: "get" | "post";
   params?: Record<string, unknown>;
   path: string;

@@ -76,13 +76,12 @@ async function loadHippocampusBridgeModule() {
 export async function startHippocampusRuntimeForConfig(
   config: Pick<
     Config,
-    "hippocampusMode" | "hippocampusApiUrl" | "hippocampusPythonBin" | "hippocampusStartupTimeoutMs" | "hippocampusRequestTimeoutMs"
+    "hippocampusMode" | "hippocampusPythonBin" | "hippocampusStartupTimeoutMs" | "hippocampusRequestTimeoutMs"
   >,
 ): Promise<void> {
   const mod = await loadHippocampusBridgeModule();
   await mod.initializeHippocampusBridge({
     mode: config.hippocampusMode,
-    apiUrl: config.hippocampusApiUrl,
     pythonBin: config.hippocampusPythonBin,
     startupTimeoutMs: config.hippocampusStartupTimeoutMs,
     requestTimeoutMs: config.hippocampusRequestTimeoutMs,

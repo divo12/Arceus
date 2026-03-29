@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedHippocampusBridge,
-  createSidecarHippocampusBridge,
 } from "../services/hippocampus-bridge.js";
 
 afterEach(() => {
@@ -9,52 +8,34 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("createSidecarHippocampusBridge", () => {
-  it("posts remember payloads to the sidecar", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ id: "mem-1", content: "hello", memory_type: "dynamic", confidence: 1 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const bridge = createSidecarHippocampusBridge("http://hippo.test");
-    await bridge.remember("agent-1", "hello", "startup:paperclip", "dynamic");
-
-    expect(fetchMock).toHaveBeenCalledWith("http://hippo.test/remember", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agent_id: "agent-1",
-        content: "hello",
-        container: "startup:paperclip",
-        memory_type: "dynamic",
-      }),
-    });
-  });
-
-  it("builds memory list query params", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ items: [], total: 0 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const bridge = createSidecarHippocampusBridge("http://hippo.test");
-    await bridge.listMemories("agent-1", "dynamic", "startup:paperclip", 12);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://hippo.test/agents/agent-1/memories?memory_type=dynamic&container=startup%3Apaperclip&limit=12",
-    );
-  });
-});
-
 describe("createEmbeddedHippocampusBridge", () => {
   it("delegates start, close, and RPC calls to the runtime manager", async () => {
     const start = vi.fn().mockResolvedValue(undefined);
     const stop = vi.fn().mockResolvedValue(undefined);
-    const call = vi.fn()
-      .mockResolvedValueOnce({ status: "ok", agents_loaded: 1, debug: false })
-      .mockResolvedValueOnce({ prompt: "priming:agent-1" });
+    const call = vi.fn(async (method: string, payload: Record<string, unknown>) => {
+      if (method === "health") {
+        return { status: "ok", agents_loaded: 1, debug: false };
+      }
+      if (method === "getPriming" && payload.agent_id === "agent-1") {
+        return { prompt: "priming:agent-1" };
+      }
+      if (method === "getPriming" && payload.agent_id === "agent-boss") {
+        return { prompt: "Lead with context." };
+      }
+      if (method === "listMemories" && payload.agent_id === "agent-boss") {
+        return {
+          items: [
+            { id: "mem-1", content: "Constraint A", memory_type: "static", confidence: 1, relevance_score: 0.9, container: "default", visibility: null, created_at: null, updated_at: null, access_count: 0 },
+            { id: "mem-2", content: "Prior delegation with agent-1 on release prep", memory_type: "dynamic", confidence: 0.8, relevance_score: 0.7, container: "default", visibility: null, created_at: null, updated_at: null, access_count: 0 },
+          ],
+          total: 2,
+        };
+      }
+      if (method === "remember" && payload.agent_id === "agent-1") {
+        return { id: "mem-static", content: "identity prompt", memory_type: "static", confidence: 1 };
+      }
+      throw new Error(`Unexpected runtime call: ${method}`);
+    });
     const diagnostics = vi.fn().mockReturnValue({ status: "running" });
 
     const bridge = createEmbeddedHippocampusBridge({
@@ -67,12 +48,34 @@ describe("createEmbeddedHippocampusBridge", () => {
     await bridge.start();
     await bridge.health();
     await bridge.getPriming("agent-1");
+    const delegationContext = await bridge.getDelegationContext("agent-boss", "agent-1", "collaborative");
+    await bridge.storeStaticMemory("agent-1", {
+      kind: "identity",
+      content: "identity prompt",
+      source: "role_definition_seed",
+    });
     await bridge.close();
 
     expect(start).toHaveBeenCalledTimes(1);
     expect(call).toHaveBeenNthCalledWith(1, "health", {});
     expect(call).toHaveBeenNthCalledWith(2, "getPriming", { agent_id: "agent-1" });
+    expect(call).toHaveBeenNthCalledWith(3, "getPriming", { agent_id: "agent-boss" });
+    expect(call).toHaveBeenNthCalledWith(4, "listMemories", {
+      agent_id: "agent-boss",
+      memory_type: undefined,
+      container: undefined,
+      limit: 5,
+    });
+    expect(call).toHaveBeenNthCalledWith(5, "remember", {
+      agent_id: "agent-1",
+      content: "identity prompt",
+      container: "default",
+      memory_type: "static",
+    });
     expect(stop).toHaveBeenCalledTimes(1);
     expect(bridge.diagnostics()).toEqual({ status: "running" });
+    expect(delegationContext).toContain("## Delegation Context For agent-1");
+    expect(delegationContext).toContain("Lead with context.");
+    expect(delegationContext).toContain("Prior delegation with agent-1 on release prep");
   });
 });

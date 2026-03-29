@@ -103,7 +103,7 @@ export interface MemoryHealth {
   agents_loaded: number;
   debug: boolean;
   diagnostics?: {
-    mode: "off" | "embedded" | "sidecar";
+    mode: "off" | "embedded";
     status: "stopped" | "starting" | "running" | "stopping" | "crashed" | "backoff";
     pid: number | null;
     pendingRequests: number;

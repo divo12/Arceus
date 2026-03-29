@@ -17,27 +17,18 @@ describe("hippocampus runtime lifecycle helpers", () => {
 
     await startHippocampusRuntimeForConfig({
       hippocampusMode: "off",
-      hippocampusApiUrl: undefined,
-      hippocampusPythonBin: "python3",
-      hippocampusStartupTimeoutMs: 1000,
-      hippocampusRequestTimeoutMs: 1000,
-    });
-    await startHippocampusRuntimeForConfig({
-      hippocampusMode: "sidecar",
-      hippocampusApiUrl: "http://localhost:8100",
       hippocampusPythonBin: "python3",
       hippocampusStartupTimeoutMs: 1000,
       hippocampusRequestTimeoutMs: 1000,
     });
     await startHippocampusRuntimeForConfig({
       hippocampusMode: "embedded",
-      hippocampusApiUrl: undefined,
       hippocampusPythonBin: "python3",
       hippocampusStartupTimeoutMs: 1000,
       hippocampusRequestTimeoutMs: 1000,
     });
 
-    expect(initialize).toHaveBeenCalledTimes(3);
+    expect(initialize).toHaveBeenCalledTimes(2);
   });
 
   it("stops the runtime for every enabled mode", async () => {
@@ -50,9 +41,8 @@ describe("hippocampus runtime lifecycle helpers", () => {
     const { stopHippocampusRuntimeForConfig } = await import("../index.js");
 
     await stopHippocampusRuntimeForConfig({ hippocampusMode: "off" });
-    await stopHippocampusRuntimeForConfig({ hippocampusMode: "sidecar" });
     await stopHippocampusRuntimeForConfig({ hippocampusMode: "embedded" });
 
-    expect(shutdown).toHaveBeenCalledTimes(2);
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 });

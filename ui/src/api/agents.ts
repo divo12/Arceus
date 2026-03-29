@@ -11,6 +11,8 @@ import type {
   HeartbeatRun,
   Approval,
   AgentConfigRevision,
+  AgentRole,
+  DelegationStyle,
 } from "@paperclipai/shared";
 import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { ApiError, api } from "./client";
@@ -47,6 +49,22 @@ export interface OrgNode {
 export interface AgentHireResponse {
   agent: Agent;
   approval: Approval | null;
+}
+
+export interface AgentDelegationAuthority {
+  canDelegateTo: AgentRole[];
+  delegationStyle: DelegationStyle;
+  spawnBudget: {
+    active: number;
+    max: number;
+    remaining: number;
+  };
+  allowedSpawnTypes: AgentRole[];
+}
+
+export interface AgentDelegationCheck {
+  allowed: boolean;
+  reason: string;
 }
 
 export interface AgentPermissionUpdate {
@@ -153,6 +171,12 @@ export const agentsApi = {
     api.get<AgentRuntimeState>(agentPath(id, companyId, "/runtime-state")),
   taskSessions: (id: string, companyId?: string) =>
     api.get<AgentTaskSession[]>(agentPath(id, companyId, "/task-sessions")),
+  delegationAuthority: (id: string, companyId?: string) =>
+    api.get<AgentDelegationAuthority>(agentPath(id, companyId, "/delegation-authority")),
+  canDelegateTo: (fromId: string, toId: string, companyId?: string) =>
+    api.get<AgentDelegationCheck>(
+      agentPath(fromId, companyId, `/can-delegate-to/${encodeURIComponent(toId)}`),
+    ),
   resetSession: (id: string, taskKey?: string | null, companyId?: string) =>
     api.post<void>(agentPath(id, companyId, "/runtime-state/reset-session"), { taskKey: taskKey ?? null }),
   adapterModels: (companyId: string, type: string) =>

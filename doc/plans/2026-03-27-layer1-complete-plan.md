@@ -37,7 +37,7 @@
 | **Agent roles** | Enum only: `ceo, cto, cmo, cfo, engineer, designer, pm, qa, devops, researcher, general` | `packages/shared/src/constants.ts:38` |
 | **`reportsTo`** | Single FK on `agents` table — flat self-reference | `packages/db/src/schema/agents.ts:23` |
 | **OrgChart UI** | Tree layout from `reportsTo` links, visual cards with status | `ui/src/pages/OrgChart.tsx` |
-| **Memory delegation** | `DelegationMemoryManager` — copies memories between scopes | `backend/arceus/core/delegation_memory.py` |
+| **Memory delegation** | Delegation-aware context assembly + scoped memory helpers | `server/src/services/memory-lifecycle.ts`, `server/src/services/delegation-memory.ts` |
 | **Agent adapter** | OpenCode (+ 8 others) — heartbeat-based execution | `packages/adapters/opencode-local/` |
 | **CEO SOUL.md** | Static persona file for CEO only | `server/src/onboarding-assets/ceo/SOUL.md` |
 
@@ -3451,7 +3451,7 @@ Add a new `<Section title="Organization">` after existing sections:
 
 ### 6.1 Role-aware delegation memory
 
-**File**: `backend/arceus/core/delegation_memory.py` (modify)
+**File**: `services/hippocampus-runtime/python/src/arceus/core/hippocampus/runtime.py` or `server/src/services/memory-lifecycle.ts` (modify)
 
 Extend `DelegationMemoryManager` to accept `delegationStyle`:
 - **directive**: copy full delegator context (all relevant memories)
@@ -3529,7 +3529,7 @@ Phase 7 (Testing) runs alongside each phase
 | **Breaking existing hire/assignment flows** | High | Governance checks return `{allowed, reason}` — when `roleDefinitionId` is null, fall back to permissive. Board always bypasses. |
 | **heartbeat.ts complexity (130KB)** | Medium | Only change: add role definition to execution context object (single const). AGENTS.md changes are in isolated adapter file. |
 | **Hierarchy snapshot ↔ `agents.reportsTo` desync** | Medium | Activation runs in DB transaction: update all `reportsTo` + mark snapshot active + supersede old. Rollback on failure. |
-| **Python sidecar lagging Node.js changes** | Low | Phase 6 is independently deliverable. Services work without Hippocampus enrichment. |
+| **Embedded runtime lagging Node.js changes** | Low | Phase 6 is independently deliverable. Services work without Hippocampus enrichment. |
 | **Role definitions diverging across companies** | Low | Built-in roles seeded from canonical definitions. `isBuiltIn: true` flag. "Reset to Default" UI action. |
 
 ---

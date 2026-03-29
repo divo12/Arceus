@@ -12,6 +12,8 @@ import {
   MessageSquare,
   Workflow,
   GitBranch,
+  GitPullRequest,
+  Shield,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -21,6 +23,7 @@ import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { usePendingProposalCount } from "../hooks/useHierarchy";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
@@ -34,6 +37,7 @@ export function Sidebar() {
     refetchInterval: 10_000,
   });
   const liveRunCount = liveRuns?.length ?? 0;
+  const pendingProposalCount = usePendingProposalCount();
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -102,6 +106,14 @@ export function Sidebar() {
         <SidebarSection label="Company">
           <SidebarNavItem to="/agents" label="Employees" icon={Users} />
           <SidebarNavItem to="/org" label="Org Chart" icon={GitBranch} />
+          <SidebarNavItem to="/roles" label="Roles" icon={Shield} />
+          <SidebarNavItem
+            to="/hierarchy/proposals"
+            label="Proposals"
+            icon={GitPullRequest}
+            badge={pendingProposalCount > 0 ? pendingProposalCount : undefined}
+            badgeTone={pendingProposalCount > 0 ? "danger" : "default"}
+          />
           <SidebarNavItem to="/issues" label="Tasks" icon={ListTodo} />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
         </SidebarSection>

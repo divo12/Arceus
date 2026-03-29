@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
+import { hierarchyApi } from "../api/hierarchy";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -10,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { AgentIcon } from "../components/AgentIconPicker";
-import { Download, Network, Upload } from "lucide-react";
+import { Download, Network, Upload, AlertTriangle, GitBranch } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
+import { DelegationStyleBadge } from "../components/DelegationStyleBadge";
+import { HierarchyEdgeLegend } from "../components/HierarchyEdgeLegend";
 
 // Layout constants
 const CARD_W = 200;
@@ -155,6 +158,21 @@ export function OrgChart() {
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+  const { data: activeHierarchy } = useQuery({
+    queryKey: queryKeys.hierarchy.active(selectedCompanyId!),
+    queryFn: () => hierarchyApi.getActive(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const { data: proposals } = useQuery({
+    queryKey: queryKeys.hierarchy.proposals(selectedCompanyId!),
+    queryFn: () => hierarchyApi.listProposals(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const pendingCount = useMemo(
+    () => (proposals ?? []).filter((proposal) => proposal.status === "proposed").length,
+    [proposals],
+  );
+  const [showDelegation, setShowDelegation] = useState(true);
 
   const agentMap = useMemo(() => {
     const m = new Map<string, Agent>();
@@ -170,6 +188,14 @@ export function OrgChart() {
   const layout = useMemo(() => layoutForest(orgTree ?? []), [orgTree]);
   const allNodes = useMemo(() => flattenLayout(layout), [layout]);
   const edges = useMemo(() => collectEdges(layout), [layout]);
+  const nodeLayoutMap = useMemo(
+    () => new Map(allNodes.map((node) => [node.id, node])),
+    [allNodes],
+  );
+  const delegationEdges = useMemo(
+    () => (activeHierarchy?.edges ?? []).filter((edge) => edge.edgeType === "delegates_to"),
+    [activeHierarchy],
+  );
 
   // Compute SVG bounds
   const bounds = useMemo(() => {
@@ -269,6 +295,15 @@ export function OrgChart() {
 
   return (
     <div className="flex flex-col h-full">
+    {pendingCount > 0 && (
+      <Link
+        to="/hierarchy/proposals"
+        className="mb-3 flex items-center gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-4 py-2 text-sm text-yellow-700 no-underline transition-colors hover:bg-yellow-500/15 dark:text-yellow-300"
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0 text-yellow-500" />
+        <span>{pendingCount} hierarchy proposal{pendingCount === 1 ? "" : "s"} pending review</span>
+      </Link>
+    )}
     <div className="mb-2 flex items-center justify-start gap-2 shrink-0">
       <Link to="/company/import">
         <Button variant="outline" size="sm">
@@ -282,6 +317,14 @@ export function OrgChart() {
           Export company
         </Button>
       </Link>
+      <button
+        className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs hover:bg-accent/50"
+        onClick={() => setShowDelegation((value) => !value)}
+        type="button"
+      >
+        <GitBranch className="h-3.5 w-3.5" />
+        Delegation {showDelegation ? "on" : "off"}
+      </button>
     </div>
     <div
       ref={containerRef}
@@ -350,6 +393,12 @@ export function OrgChart() {
         </button>
       </div>
 
+      {activeHierarchy ? (
+        <div className="absolute left-3 top-3 z-10 rounded-md border border-border bg-background/85 px-2.5 py-1.5 text-[10px] text-muted-foreground backdrop-blur">
+          Active snapshot · {new Date(activeHierarchy.createdAt).toLocaleDateString()}
+        </div>
+      ) : null}
+
       {/* SVG layer for edges */}
       <svg
         className="absolute inset-0 pointer-events-none"
@@ -373,6 +422,29 @@ export function OrgChart() {
                 fill="none"
                 stroke="var(--border)"
                 strokeWidth={1.5}
+              />
+            );
+          })}
+          {showDelegation && delegationEdges.map((edge) => {
+            const source = nodeLayoutMap.get(edge.sourceAgentId);
+            const target = nodeLayoutMap.get(edge.targetAgentId);
+            if (!source || !target) return null;
+
+            const x1 = source.x + CARD_W / 2;
+            const y1 = source.y + CARD_H / 2;
+            const x2 = target.x + CARD_W / 2;
+            const y2 = target.y + CARD_H / 2;
+            const curve = Math.max(40, Math.abs(x2 - x1) / 3);
+
+            return (
+              <path
+                key={edge.id}
+                d={`M ${x1} ${y1} C ${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`}
+                fill="none"
+                stroke="var(--chart-1)"
+                strokeWidth={1.5}
+                strokeDasharray="6,4"
+                opacity={0.65}
               />
             );
           })}
@@ -424,15 +496,24 @@ export function OrgChart() {
                     {agent?.title ?? roleLabel(node.role)}
                   </span>
                   {agent && (
-                    <span className="text-[10px] text-muted-foreground/60 font-mono leading-tight mt-1">
-                      {adapterLabels[agent.adapterType] ?? agent.adapterType}
-                    </span>
+                    <>
+                      <span className="text-[10px] text-muted-foreground/60 font-mono leading-tight mt-1">
+                        {adapterLabels[agent.adapterType] ?? agent.adapterType}
+                      </span>
+                      <div className="mt-1">
+                        <DelegationStyleBadge style={agent.delegationStyle} />
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
             </div>
           );
         })}
+      </div>
+
+      <div className="absolute bottom-3 left-3 z-10">
+        <HierarchyEdgeLegend />
       </div>
     </div>
     </div>

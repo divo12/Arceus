@@ -10,16 +10,8 @@ import type { DelegationStyle } from "@paperclipai/shared";
 
 type HippocampusLifecycleBridge = Pick<
   HippocampusBridge,
-  "mode" | "health" | "getPriming" | "getHabits" | "recall" | "extract" | "processTrajectory"
+  "mode" | "health" | "getPriming" | "getHabits" | "recall" | "extract" | "processTrajectory" | "getDelegationContext"
 >;
-
-type HippocampusDelegationBridge = HippocampusLifecycleBridge & {
-  getDelegationContext?: (
-    delegatorAgentId: string,
-    delegateeAgentId: string,
-    style: DelegationStyle,
-  ) => Promise<unknown>;
-};
 
 function recallLimitForStyle(style: DelegationStyle | undefined): number {
   if (style === "directive") return 10;
@@ -78,7 +70,7 @@ function logLifecycleCallFailure(
  * task context.  Returns a markdown block suitable for injection into the
  * adapter prompt (e.g. via context.paperclipMemoryContext).
  *
- * On failure (sidecar down, timeout, etc.) returns null so the heartbeat
+ * On failure (runtime down, timeout, etc.) returns null so the heartbeat
  * can continue without memory.
  */
 export async function buildMemoryContextForRun(input: {
@@ -92,7 +84,7 @@ export async function buildMemoryContextForRun(input: {
   const { agentId, issueTitle, issueId, wakeReason, delegationStyle, delegatorAgentId } = input;
 
   try {
-    const hippocampusBridge = getHippocampusBridge() as HippocampusDelegationBridge;
+    const hippocampusBridge = getHippocampusBridge() as HippocampusLifecycleBridge;
     if (hippocampusBridge.mode === "off") return null;
 
     const healthy = await isBridgeAvailable(hippocampusBridge, { agentId });
@@ -116,7 +108,7 @@ export async function buildMemoryContextForRun(input: {
           return { items: [] };
         })
         : Promise.resolve({ items: [] }),
-      delegatorAgentId && delegationStyle && typeof hippocampusBridge.getDelegationContext === "function"
+      delegatorAgentId && delegationStyle
         ? hippocampusBridge.getDelegationContext(delegatorAgentId, agentId, delegationStyle).catch((err) => {
           logLifecycleCallFailure("getDelegationContext", { agentId, delegatorAgentId }, err);
           return null;

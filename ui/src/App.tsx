@@ -36,6 +36,8 @@ import { PluginSettings } from "./pages/PluginSettings";
 import { PluginPage } from "./pages/PluginPage";
 import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { OrgChart } from "./pages/OrgChart";
+import { RoleEditor } from "./pages/RoleEditor";
+import { HierarchyProposals } from "./pages/HierarchyProposals";
 import { Memory } from "./pages/Memory";
 import { Meetings } from "./pages/Meetings";
 import { MeetingDetail } from "./pages/MeetingDetail";
@@ -133,6 +135,8 @@ function boardRoutes() {
       <Route path="settings/*" element={<LegacySettingsRedirect />} />
       <Route path="plugins/:pluginId" element={<PluginPage />} />
       <Route path="org" element={<OrgChart />} />
+      <Route path="roles" element={<RoleEditor />} />
+      <Route path="hierarchy/proposals" element={<HierarchyProposals />} />
       <Route path="memory" element={<Memory />} />
       <Route path="meetings" element={<Meetings />} />
       <Route path="meetings/:meetingId" element={<MeetingDetail />} />

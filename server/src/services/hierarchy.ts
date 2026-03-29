@@ -93,7 +93,7 @@ export function hierarchyService(db: Db) {
         .where(eq(hierarchySnapshots.id, snapshotId))
         .then((rows) => rows[0] ?? null);
       if (!snapshot) throw notFound("Hierarchy snapshot not found");
-      if (snapshot.status !== "approved" && snapshot.status !== "proposed") {
+      if (snapshot.status !== "approved") {
         throw unprocessable(`Cannot activate snapshot in "${snapshot.status}" status`);
       }
 

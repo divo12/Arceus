@@ -12,6 +12,24 @@ export const queryKeys = {
     file: (companyId: string, skillId: string, relativePath: string) =>
       ["company-skills", companyId, skillId, "file", relativePath] as const,
   },
+  roles: {
+    list: (companyId: string) => ["roles", companyId] as const,
+    detail: (id: string) => ["roles", "detail", id] as const,
+    bySlug: (companyId: string, slug: string) => ["roles", companyId, slug] as const,
+    authorityMatrix: (id: string) => ["roles", "authority-matrix", id] as const,
+  },
+  hierarchy: {
+    active: (companyId: string) => ["hierarchy", companyId, "active"] as const,
+    proposals: (companyId: string) => ["hierarchy", companyId, "proposals"] as const,
+    snapshot: (id: string) => ["hierarchy", "snapshot", id] as const,
+    diff: (id: string) => ["hierarchy", "diff", id] as const,
+    pendingCount: (companyId: string) => ["hierarchy", companyId, "pending-count"] as const,
+  },
+  delegation: {
+    authority: (agentId: string) => ["delegation", agentId, "authority"] as const,
+    canDelegateTo: (fromId: string, toId: string) =>
+      ["delegation", fromId, "can-delegate", toId] as const,
+  },
   agents: {
     list: (companyId: string) => ["agents", companyId] as const,
     detail: (id: string) => ["agents", "detail", id] as const,

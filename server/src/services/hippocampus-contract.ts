@@ -1,4 +1,6 @@
-export type HippocampusMode = "off" | "embedded" | "sidecar";
+import type { DelegationStyle } from "@paperclipai/shared";
+
+export type HippocampusMode = "off" | "embedded";
 
 export interface MemoryItem {
   id: string;
@@ -110,6 +112,13 @@ export interface HippocampusRuntimeDiagnostics {
   stderrExcerpt: string;
 }
 
+export interface StaticMemorySeedInput {
+  kind: string;
+  content: string;
+  source: string;
+  container?: string;
+}
+
 export interface HippocampusBridge {
   readonly mode: HippocampusMode;
   start?(): Promise<void>;
@@ -141,7 +150,21 @@ export interface HippocampusBridge {
     habit: Record<string, unknown> | null;
   }>;
   getPriming(agentId: string): Promise<{ prompt: string }>;
+  getDelegationContext(
+    delegatorId: string,
+    delegateeId: string,
+    style: DelegationStyle,
+  ): Promise<string | null>;
   getHabits(agentId: string, context?: string): Promise<{ habits: HabitItem[] }>;
+  storeStaticMemory(
+    agentId: string,
+    input: StaticMemorySeedInput,
+  ): Promise<{
+    id: string;
+    content: string;
+    memory_type: string;
+    confidence: number;
+  }>;
   getSummary(agentId: string): Promise<MemorySummary>;
   listMemories(
     agentId: string,

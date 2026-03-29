@@ -6,7 +6,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { agentsApi } from "../api/agents";
 import { companySkillsApi } from "../api/companySkills";
 import { queryKeys } from "../lib/queryKeys";
-import { AGENT_ROLES } from "@paperclipai/shared";
+import { AGENT_ROLES, DELEGATION_STYLES, type DelegationStyle } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -14,13 +14,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Shield, User } from "lucide-react";
+import { Shield, User, GitBranch, AlertTriangle, Lock } from "lucide-react";
 import { cn, agentUrl } from "../lib/utils";
 import { roleLabels } from "../components/agent-config-primitives";
 import { AgentConfigForm, type CreateConfigValues } from "../components/AgentConfigForm";
 import { defaultCreateValues } from "../components/agent-config-defaults";
 import { getUIAdapter } from "../adapters";
 import { AgentIcon } from "../components/AgentIconPicker";
+import { useRoles } from "../hooks/useRoles";
+import { useSpawnGovernance } from "../hooks/useSpawnGovernance";
+import { DelegationStyleBadge } from "../components/DelegationStyleBadge";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL,
@@ -73,6 +76,7 @@ export function NewAgent() {
   const [selectedSkillKeys, setSelectedSkillKeys] = useState<string[]>([]);
   const [roleOpen, setRoleOpen] = useState(false);
   const [reportsToOpen, setReportsToOpen] = useState(false);
+  const [delegationStyle, setDelegationStyle] = useState<DelegationStyle>("collaborative");
   const [formError, setFormError] = useState<string | null>(null);
 
   const { data: agents } = useQuery({
@@ -102,6 +106,8 @@ export function NewAgent() {
 
   const isFirstAgent = !agents || agents.length === 0;
   const effectiveRole = isFirstAgent ? "ceo" : role;
+  const { data: roles } = useRoles();
+  const governance = useSpawnGovernance(reportsTo || undefined);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -181,6 +187,7 @@ export function NewAgent() {
     createAgent.mutate({
       name: name.trim(),
       role: effectiveRole,
+      delegationStyle,
       ...(title.trim() ? { title: title.trim() } : {}),
       ...(reportsTo ? { reportsTo } : {}),
       ...(selectedSkillKeys.length > 0 ? { desiredSkills: selectedSkillKeys } : {}),
@@ -200,6 +207,21 @@ export function NewAgent() {
   }
 
   const currentReportsTo = (agents ?? []).find((a) => a.id === reportsTo);
+  const availableRoleDefinitions = roles ?? AGENT_ROLES.map((slug) => ({
+    id: slug,
+    companyId: selectedCompanyId ?? "",
+    slug,
+    label: roleLabels[slug] ?? slug,
+    systemPrompt: "",
+    tools: [],
+    skillsSeed: [],
+    canDelegateTo: [],
+    delegationStyle: "collaborative" as DelegationStyle,
+    spawnRules: { allowedAgentTypes: [], maxConcurrentSpawns: 0, spawnDepth: 1 as const },
+    isBuiltIn: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }));
   const availableSkills = (companySkills ?? []).filter((skill) => !skill.key.startsWith("paperclipai/paperclip/"));
 
   function toggleSkill(key: string, checked: boolean) {
@@ -254,22 +276,51 @@ export function NewAgent() {
                 disabled={isFirstAgent}
               >
                 <Shield className="h-3 w-3 text-muted-foreground" />
-                {roleLabels[effectiveRole] ?? effectiveRole}
+                {availableRoleDefinitions.find((entry) => entry.slug === effectiveRole)?.label ?? roleLabels[effectiveRole] ?? effectiveRole}
               </button>
             </PopoverTrigger>
-            <PopoverContent className="w-36 p-1" align="start">
-              {AGENT_ROLES.map((r) => (
-                <button
-                  key={r}
-                  className={cn(
-                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
-                    r === role && "bg-accent"
-                  )}
-                  onClick={() => { setRole(r); setRoleOpen(false); }}
-                >
-                  {roleLabels[r] ?? r}
-                </button>
-              ))}
+            <PopoverContent className="w-72 p-1" align="start">
+              <div className="max-h-72 overflow-y-auto">
+                {availableRoleDefinitions.map((roleDef) => {
+                  const isDisabled = Boolean(
+                    governance
+                    && reportsTo
+                    && governance.disabledRoles.some((candidate) => candidate.slug === roleDef.slug),
+                  );
+                  return (
+                    <button
+                      key={roleDef.slug}
+                      className={cn(
+                        "flex w-full items-start gap-3 rounded-md px-3 py-2 text-left hover:bg-accent/50",
+                        roleDef.slug === role && "bg-accent/40",
+                        isDisabled && "opacity-60",
+                      )}
+                      onClick={() => {
+                        if (isDisabled) return;
+                        setRole(roleDef.slug);
+                        setDelegationStyle(roleDef.delegationStyle);
+                        setRoleOpen(false);
+                      }}
+                    >
+                      <AgentIcon icon={null} className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{roleDef.label}</span>
+                          {roleDef.delegationStyle ? (
+                            <DelegationStyleBadge style={roleDef.delegationStyle} />
+                          ) : null}
+                        </div>
+                        <div className="line-clamp-2 text-xs text-muted-foreground">
+                          {roleDef.systemPrompt || "No role description configured yet."}
+                        </div>
+                      </div>
+                      {isDisabled ? (
+                        <Lock className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
             </PopoverContent>
           </Popover>
 
@@ -317,6 +368,36 @@ export function NewAgent() {
                   <AgentIcon icon={a.icon} className="shrink-0 h-3 w-3 text-muted-foreground" />
                   {a.name}
                   <span className="text-muted-foreground ml-auto">{roleLabels[a.role] ?? a.role}</span>
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors"
+              >
+                <GitBranch className="h-3 w-3 text-muted-foreground" />
+                {delegationStyle}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-1" align="start">
+              {DELEGATION_STYLES.map((style) => (
+                <button
+                  key={style}
+                  className={cn(
+                    "w-full rounded-md px-3 py-2 text-left hover:bg-accent/50",
+                    delegationStyle === style && "bg-accent/40",
+                  )}
+                  onClick={() => setDelegationStyle(style)}
+                >
+                  <div className="text-sm font-medium capitalize">{style}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {style === "directive" && "Full oversight with specific instructions"}
+                    {style === "collaborative" && "Shared context with mutual input"}
+                    {style === "autonomous" && "Goal-driven execution with minimal oversight"}
+                  </div>
                 </button>
               ))}
             </PopoverContent>
@@ -373,6 +454,14 @@ export function NewAgent() {
         <div className="border-t border-border px-4 py-3">
           {isFirstAgent && (
             <p className="text-xs text-muted-foreground mb-2">This will be the CEO</p>
+          )}
+          {governance?.isFull && currentReportsTo && (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                {currentReportsTo.name} has reached the max active spawn budget ({governance.budget.max}).
+              </p>
+            </div>
           )}
           {formError && (
             <p className="text-xs text-destructive mb-2">{formError}</p>

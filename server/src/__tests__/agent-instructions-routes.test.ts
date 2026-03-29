@@ -33,11 +33,13 @@ const mockSecretService = vi.hoisted(() => ({
 
 const mockDelegationGuardService = vi.hoisted(() => ({
   assertCanDelegate: vi.fn(),
+  canDelegate: vi.fn(),
   getDelegationAuthority: vi.fn(),
 }));
 
 const mockSpawnGovernanceService = vi.hoisted(() => ({
   assertCanSpawn: vi.fn(),
+  checkSpawnBudget: vi.fn(),
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
@@ -108,11 +110,21 @@ describe("agent instructions bundle routes", () => {
     vi.clearAllMocks();
     mockAgentService.getById.mockResolvedValue(makeAgent());
     mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockDelegationGuardService.canDelegate.mockResolvedValue({
+      allowed: true,
+      reason: "Allowed by role delegation matrix",
+    });
     mockDelegationGuardService.getDelegationAuthority.mockResolvedValue({
       canDelegateTo: ["engineer", "pm", "designer"],
       delegationStyle: "collaborative",
     });
     mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
+    mockSpawnGovernanceService.checkSpawnBudget.mockResolvedValue({
+      active: 0,
+      max: 2,
+      remaining: 2,
+      allowedTypes: ["general"],
+    });
     mockRecordDelegationEvent.mockResolvedValue(undefined);
     mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...makeAgent(),

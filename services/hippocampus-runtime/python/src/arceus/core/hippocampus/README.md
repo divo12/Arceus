@@ -194,7 +194,7 @@ Sprint 3/4 formalizes the following production targets:
 - `EmbeddingEngine`: `SentenceTransformerEmbeddingEngine` with explicit model, device, strict-mode, and optional startup warmup.
 - `GraphStoreBackend`: Neo4j (existing production backend remains unchanged, now treated as the default production graph profile).
 
-Local validation is provided via `docker-compose -f docker-compose.hippocampus.yml up -d`, which launches PostgreSQL (pgvector), Redis, and Neo4j. Consult the production config block in [config.py](/Users/divyansh/Arceus/backend/arceus/core/hippocampus/config.py) for the values you must set before starting Hippocampus in this profile.
+Local validation is provided via `docker-compose -f docker-compose.hippocampus.yml up -d`, which launches PostgreSQL (pgvector), Redis, and Neo4j. Consult the production config block in [config.py](/Users/divyansh/Arceus/services/hippocampus-runtime/python/src/arceus/core/hippocampus/config.py) for the values you must set before starting Hippocampus in this profile.
 
 Fast tests remain on the lightweight scaffolding stack. Production-stack verification is opt-in:
 
@@ -505,6 +505,6 @@ tests/adapters/              # Arceus adapter tests
 
 Run all tests:
 ```bash
-cd backend
-uv run pytest tests/hippocampus tests/adapters -v
+cd services/hippocampus-runtime/python
+uv run pytest ../tests -v
 ```

@@ -74,6 +74,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
 import { AgentMemoryTab } from "../components/AgentMemoryTab";
+import { DelegationStyleBadge } from "../components/DelegationStyleBadge";
+import { RoleTagChip } from "../components/RoleTagChip";
+import { SpawnBudgetBar } from "../components/SpawnBudgetBar";
+import { useDelegationAuthority } from "../hooks/useDelegationAuthority";
+import { useRoleBySlug } from "../hooks/useRoles";
 import { RunTranscriptView, type TranscriptMode } from "../components/transcript/RunTranscriptView";
 import {
   isUuidLike,
@@ -221,7 +226,7 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget" | "memory";
+type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget" | "memory" | "authority";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "instructions" || value === "prompts") return "instructions";
@@ -229,6 +234,7 @@ function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "skills") return "skills";
   if (value === "budget") return "budget";
   if (value === "memory") return "memory";
+  if (value === "authority") return "authority";
   if (value === "runs") return value;
   return "dashboard";
 }
@@ -632,6 +638,12 @@ export function AgentDetail() {
     () => (heartbeats ?? []).find((r) => r.status === "running" || r.status === "queued") ?? null,
     [heartbeats],
   );
+  const authorityQuery = useDelegationAuthority(
+    activeView === "authority" ? resolvedAgentId ?? undefined : undefined,
+  );
+  const roleDefinitionQuery = useRoleBySlug(
+    activeView === "authority" ? agent?.role : undefined,
+  );
 
   useEffect(() => {
     if (!agent) return;
@@ -654,6 +666,8 @@ export function AgentDetail() {
                 ? "budget"
               : activeView === "memory"
                 ? "memory"
+              : activeView === "authority"
+                ? "authority"
               : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
       navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
@@ -777,6 +791,8 @@ export function AgentDetail() {
         crumbs.push({ label: "Runs" });
       } else if (activeView === "budget") {
         crumbs.push({ label: "Budget" });
+      } else if (activeView === "authority") {
+        crumbs.push({ label: "Authority" });
       } else {
         crumbs.push({ label: "Dashboard" });
       }
@@ -917,6 +933,7 @@ export function AgentDetail() {
               { value: "configuration", label: "Configuration" },
               { value: "runs", label: "Runs" },
               { value: "budget", label: "Budget" },
+              { value: "authority", label: "Authority" },
               { value: "memory", label: "Memory" },
             ]}
             value={activeView}
@@ -1063,6 +1080,16 @@ export function AgentDetail() {
           agentName={agent.name}
         />
       )}
+
+      {activeView === "authority" && (
+        <AuthorityTab
+          agent={agent}
+          authority={authorityQuery.data}
+          roleDefinition={roleDefinitionQuery.data}
+          isLoading={authorityQuery.isLoading || roleDefinitionQuery.isLoading}
+          onEditRole={() => navigate("/roles")}
+        />
+      )}
     </div>
   );
 }
@@ -1074,6 +1101,100 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
     <div className="flex items-center justify-between">
       <span className="text-muted-foreground text-xs">{label}</span>
       <div className="flex items-center gap-1">{children}</div>
+    </div>
+  );
+}
+
+function AuthorityTab({
+  agent,
+  authority,
+  roleDefinition,
+  isLoading,
+  onEditRole,
+}: {
+  agent: AgentDetailRecord;
+  authority: ReturnType<typeof useDelegationAuthority>["data"];
+  roleDefinition: ReturnType<typeof useRoleBySlug>["data"];
+  isLoading: boolean;
+  onEditRole: () => void;
+}) {
+  const navigate = useNavigate();
+
+  if (isLoading) {
+    return <PageSkeleton variant="detail" />;
+  }
+
+  if (!authority || !roleDefinition) {
+    return (
+      <div className="rounded-lg border border-border bg-card px-4 py-4 text-sm text-muted-foreground">
+        Authority data is not available for this agent yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl space-y-5">
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Role Definition
+        </h3>
+        <div className="rounded-lg border border-border bg-muted/20 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <AgentIcon icon={agent.icon} className="h-5 w-5" />
+            <span className="text-sm font-semibold">{roleDefinition.label}</span>
+            <DelegationStyleBadge style={authority.delegationStyle} />
+            <Button variant="ghost" size="xs" className="ml-auto" onClick={onEditRole}>
+              Edit Role
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {roleDefinition.systemPrompt || "No system prompt configured for this role."}
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Delegation Authority
+        </h3>
+        {authority.canDelegateTo.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {authority.canDelegateTo.map((role) => (
+              <RoleTagChip
+                key={role}
+                role={role}
+                variant="delegation"
+                onClick={() => {
+                  const nextAgent = agent.chainOfCommand.find((entry) => entry.role === role);
+                  if (nextAgent) navigate(`/agents/${nextAgent.id}/dashboard`);
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs italic text-muted-foreground">No delegation authority</p>
+        )}
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Spawn Authority
+        </h3>
+        {authority.allowedSpawnTypes.length > 0 ? (
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {authority.allowedSpawnTypes.map((role) => (
+              <RoleTagChip key={role} role={role} variant="spawn" />
+            ))}
+          </div>
+        ) : null}
+        <SpawnBudgetBar
+          active={authority.spawnBudget.active}
+          max={authority.spawnBudget.max}
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {authority.spawnBudget.active}/{authority.spawnBudget.max} active · {authority.spawnBudget.remaining} remaining
+        </p>
+      </div>
     </div>
   );
 }

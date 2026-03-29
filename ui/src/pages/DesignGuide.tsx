@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { RoleDefinition } from "@paperclipai/shared";
 import {
   BookOpen,
   Bot,
@@ -120,6 +121,11 @@ import { AgentProfileCard } from "@/components/AgentProfileCard";
 import { EntityRow } from "@/components/EntityRow";
 import { DelegationMemoryView } from "@/components/DelegationMemoryView";
 import { MemoryAnalytics } from "@/components/MemoryAnalytics";
+import { DelegationStyleBadge } from "@/components/DelegationStyleBadge";
+import { RoleTagChip } from "@/components/RoleTagChip";
+import { AuthorityMatrix } from "@/components/AuthorityMatrix";
+import { SpawnBudgetBar } from "@/components/SpawnBudgetBar";
+import { HierarchyEdgeLegend } from "@/components/HierarchyEdgeLegend";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
@@ -298,6 +304,66 @@ const demoAnalyticsHealth: MemoryHealth = {
   debug: false,
 };
 
+const demoRoleDefinitions: RoleDefinition[] = [
+  {
+    id: "role-ceo",
+    companyId: "company-demo",
+    slug: "ceo",
+    label: "CEO",
+    systemPrompt: "Set company direction and coordinate executives.",
+    tools: ["strategy-board"],
+    skillsSeed: ["leadership", "prioritization"],
+    canDelegateTo: ["cto", "designer", "pm"],
+    delegationStyle: "directive",
+    spawnRules: {
+      allowedAgentTypes: ["researcher", "qa", "general"],
+      maxConcurrentSpawns: 4,
+      spawnDepth: 1,
+    },
+    isBuiltIn: true,
+    createdAt: new Date("2026-03-20T09:00:00Z"),
+    updatedAt: new Date("2026-03-24T10:30:00Z"),
+  },
+  {
+    id: "role-cto",
+    companyId: "company-demo",
+    slug: "cto",
+    label: "CTO",
+    systemPrompt: "Own architecture and technical execution quality.",
+    tools: ["repo-search", "system-design"],
+    skillsSeed: ["architecture", "debugging"],
+    canDelegateTo: ["designer", "pm"],
+    delegationStyle: "collaborative",
+    spawnRules: {
+      allowedAgentTypes: ["engineer", "qa", "devops", "researcher"],
+      maxConcurrentSpawns: 6,
+      spawnDepth: 1,
+    },
+    isBuiltIn: true,
+    createdAt: new Date("2026-03-20T09:00:00Z"),
+    updatedAt: new Date("2026-03-24T10:30:00Z"),
+  },
+  {
+    id: "role-pm",
+    companyId: "company-demo",
+    slug: "pm",
+    label: "PM",
+    systemPrompt: "Clarify scope and keep delivery aligned to goals.",
+    tools: ["roadmap"],
+    skillsSeed: ["requirements"],
+    canDelegateTo: ["designer"],
+    delegationStyle: "autonomous",
+    spawnRules: {
+      allowedAgentTypes: ["general", "researcher"],
+      maxConcurrentSpawns: 2,
+      spawnDepth: 1,
+    },
+    isBuiltIn: true,
+    createdAt: new Date("2026-03-20T09:00:00Z"),
+    updatedAt: new Date("2026-03-24T10:30:00Z"),
+  },
+];
+
 /* ------------------------------------------------------------------ */
 /*  Section wrapper                                                    */
 /* ------------------------------------------------------------------ */
@@ -399,6 +465,7 @@ export function DesignGuide() {
                 "StatusBadge", "StatusIcon", "PriorityIcon", "EntityRow", "EmptyState", "MetricCard",
                 "FilterBar", "InlineEditor", "PageSkeleton", "Identity", "CommentThread", "MarkdownEditor",
                 "PropertiesPanel", "Sidebar", "CommandPalette", "AgentProfileCard", "DelegationMemoryView", "MemoryAnalytics",
+                "DelegationStyleBadge", "RoleTagChip", "AuthorityMatrix", "SpawnBudgetBar", "HierarchyEdgeLegend",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -1495,6 +1562,82 @@ export function DesignGuide() {
             <span className="text-sm">Right</span>
           </div>
         </div>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  ORGANIZATION                                                 */}
+      {/* ============================================================ */}
+      <Section title="Organization">
+        <SubSection title="DelegationStyleBadge">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <DelegationStyleBadge style="directive" />
+              <DelegationStyleBadge style="collaborative" />
+              <DelegationStyleBadge style="autonomous" />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <DelegationStyleBadge style="directive" size="md" />
+              <DelegationStyleBadge style="collaborative" size="md" />
+              <DelegationStyleBadge style="autonomous" size="md" />
+            </div>
+          </div>
+        </SubSection>
+
+        <SubSection title="RoleTagChip">
+          <div className="flex flex-wrap items-center gap-2">
+            <RoleTagChip role="ceo" variant="delegation" />
+            <RoleTagChip role="cto" variant="delegation" />
+            <RoleTagChip role="researcher" variant="spawn" />
+            <RoleTagChip role="qa" variant="spawn" removable onRemove={() => undefined} />
+          </div>
+        </SubSection>
+
+        <SubSection title="AuthorityMatrix">
+          <AuthorityMatrix roles={demoRoleDefinitions} />
+        </SubSection>
+
+        <SubSection title="SpawnBudgetBar">
+          <div className="space-y-3">
+            <SpawnBudgetBar active={2} max={10} />
+            <SpawnBudgetBar active={7} max={10} />
+            <SpawnBudgetBar active={9} max={10} />
+            <SpawnBudgetBar active={0} max={0} />
+          </div>
+        </SubSection>
+
+        <SubSection title="HierarchyEdgeLegend">
+          <div className="relative h-14 rounded-md border border-dashed border-border bg-muted/20 p-3">
+            <div className="absolute left-3 top-3">
+              <HierarchyEdgeLegend />
+            </div>
+          </div>
+        </SubSection>
+
+        <SubSection title="Org Chart Edge Types">
+          <div className="flex flex-wrap items-center gap-8">
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <svg width="40" height="2" aria-hidden="true">
+                <line x1="0" y1="1" x2="40" y2="1" stroke="currentColor" strokeWidth="2" />
+              </svg>
+              reports_to
+            </span>
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <svg width="40" height="2" aria-hidden="true">
+                <line
+                  x1="0"
+                  y1="1"
+                  x2="40"
+                  y2="1"
+                  stroke="var(--chart-1)"
+                  strokeWidth="1.5"
+                  strokeDasharray="6,4"
+                  opacity="0.7"
+                />
+              </svg>
+              delegates_to
+            </span>
+          </div>
+        </SubSection>
       </Section>
 
       {/* ============================================================ */}

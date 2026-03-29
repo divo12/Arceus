@@ -52,15 +52,18 @@ const mockSecretService = vi.hoisted(() => ({
 
 const mockDelegationGuardService = vi.hoisted(() => ({
   assertCanDelegate: vi.fn(),
+  canDelegate: vi.fn(),
   getDelegationAuthority: vi.fn(),
 }));
 
 const mockSpawnGovernanceService = vi.hoisted(() => ({
   assertCanSpawn: vi.fn(),
+  checkSpawnBudget: vi.fn(),
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 const mockRecordDelegationEvent = vi.hoisted(() => vi.fn());
+const mockStoreStaticMemory = vi.hoisted(() => vi.fn());
 
 const mockAdapter = vi.hoisted(() => ({
   listSkills: vi.fn(),
@@ -91,6 +94,13 @@ vi.mock("../adapters/index.js", () => ({
   listAdapterModels: vi.fn(),
 }));
 
+vi.mock("../services/hippocampus-bridge.js", () => ({
+  getHippocampusBridge: () => ({
+    mode: "embedded",
+    storeStaticMemory: mockStoreStaticMemory,
+  }),
+}));
+
 function createDb(requireBoardApprovalForNewAgents = false) {
   return {
     select: vi.fn(() => ({
@@ -101,6 +111,41 @@ function createDb(requireBoardApprovalForNewAgents = false) {
             requireBoardApprovalForNewAgents,
           },
         ]),
+      })),
+    })),
+  };
+}
+
+function createDbWithRoleDefinition(systemPrompt: string) {
+  let queryCount = 0;
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(async () => {
+          queryCount += 1;
+          if (queryCount === 1) {
+            return [
+              {
+                id: "company-1",
+                requireBoardApprovalForNewAgents: false,
+              },
+            ];
+          }
+
+          return [
+            {
+              id: "role-def-1",
+              companyId: "company-1",
+              slug: "engineer",
+              label: "Engineer",
+              systemPrompt,
+              canDelegateTo: [],
+              delegationStyle: "collaborative",
+              spawnRules: null,
+              isBuiltIn: true,
+            },
+          ];
+        }),
       })),
     })),
   };
@@ -218,6 +263,22 @@ describe("agent skill routes", () => {
         },
       }),
     );
+    mockDelegationGuardService.assertCanDelegate.mockResolvedValue(undefined);
+    mockDelegationGuardService.canDelegate.mockResolvedValue({
+      allowed: true,
+      reason: "Allowed by role delegation matrix",
+    });
+    mockDelegationGuardService.getDelegationAuthority.mockResolvedValue({
+      canDelegateTo: ["engineer", "pm", "designer"],
+      delegationStyle: "collaborative",
+    });
+    mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
+    mockSpawnGovernanceService.checkSpawnBudget.mockResolvedValue({
+      active: 0,
+      max: 2,
+      remaining: 2,
+      allowedTypes: ["general"],
+    });
     mockLogActivity.mockResolvedValue(undefined);
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.hasPermission.mockResolvedValue(true);
@@ -232,6 +293,12 @@ describe("agent skill routes", () => {
     });
     mockSpawnGovernanceService.assertCanSpawn.mockResolvedValue(undefined);
     mockRecordDelegationEvent.mockResolvedValue(undefined);
+    mockStoreStaticMemory.mockResolvedValue({
+      id: "mem-static-1",
+      content: "You own delivery quality.",
+      memory_type: "static",
+      confidence: 1,
+    });
   });
 
   it("skips runtime materialization when listing Claude skills", async () => {
@@ -523,5 +590,37 @@ describe("agent skill routes", () => {
       }),
     );
     expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+  });
+
+  it("seeds the role definition system prompt into static memory for hired agents", async () => {
+    const createdAgent = {
+      ...makeAgent("claude_local"),
+      role: "engineer",
+      roleDefinitionId: "role-def-1",
+    };
+    mockAgentService.create.mockResolvedValueOnce(createdAgent);
+    mockAgentService.update.mockImplementationOnce(async (_id: string, patch: Record<string, unknown>) => ({
+      ...createdAgent,
+      adapterConfig: patch.adapterConfig ?? {},
+    }));
+
+    const res = await request(createApp(createDbWithRoleDefinition("You own delivery quality.")))
+      .post("/api/companies/company-1/agent-hires")
+      .send({
+        name: "QA Agent",
+        role: "engineer",
+        adapterType: "claude_local",
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockStoreStaticMemory).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      {
+        kind: "identity",
+        content: "You own delivery quality.",
+        source: "role_definition_seed",
+      },
+    );
   });
 });
