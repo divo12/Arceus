@@ -18,3 +18,4 @@ export { sidebarBadgesApi } from "./sidebarBadges";
 export { companySkillsApi } from "./companySkills";
 export { rolesApi } from "./roles";
 export { hierarchyApi } from "./hierarchy";
+export { chatApi } from "./chat";

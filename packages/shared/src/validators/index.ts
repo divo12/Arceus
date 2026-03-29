@@ -205,6 +205,13 @@ export {
 } from "./meeting.js";
 
 export {
+  sendChatMessageSchema,
+  chatCardActionSchema,
+  type SendChatMessage,
+  type ChatCardAction,
+} from "./chat.js";
+
+export {
   envBindingPlainSchema,
   envBindingSecretRefSchema,
   envBindingSchema,

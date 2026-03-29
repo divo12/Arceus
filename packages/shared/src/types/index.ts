@@ -102,6 +102,24 @@ export type {
   MeetingListItem,
 } from "./meeting.js";
 export type {
+  ChatRole,
+  ChatCardType,
+  CardActionType,
+  TaskProposalCardData,
+  OrgPlanCardData,
+  IssueCardData,
+  BudgetRequestCardData,
+  StatusReportCardData,
+  EscalationCardData,
+  ChatCardData,
+  ChatCardState,
+  ChatMessageMetadata,
+  ChatMessage,
+  ChatInput,
+  ChatCardActionInput,
+  ChatStreamEvent,
+} from "./chat.js";
+export type {
   BudgetPolicy,
   BudgetPolicySummary,
   BudgetIncident,

@@ -32,6 +32,7 @@ import { accessRoutes } from "./routes/access.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { roleRoutes } from "./routes/roles.js";
 import { hierarchyRoutes } from "./routes/hierarchy.js";
+import { chatRoutes } from "./routes/chat.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -161,6 +162,7 @@ export async function createApp(
   api.use(instanceSettingsRoutes(db));
   api.use(roleRoutes(db));
   api.use(hierarchyRoutes(db));
+  api.use(chatRoutes(db));
   const agentsSvc = agentService(db);
   api.use(memoryRoutes({
     resolveAgentCompanyId: async (agentId) => {

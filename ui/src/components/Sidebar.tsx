@@ -1,7 +1,7 @@
 import {
   Inbox,
   Target,
-  LayoutDashboard,
+  MessageSquare as ChatIcon,
   DollarSign,
   Search,
   Settings,
@@ -84,7 +84,7 @@ export function Sidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-0.5 px-3 py-2">
         <SidebarSection label="Operations">
-          <SidebarNavItem to="/dashboard" label="Command Center" icon={LayoutDashboard} liveCount={liveRunCount} />
+          <SidebarNavItem to="/dashboard" label="CEO Chat" icon={ChatIcon} liveCount={liveRunCount} />
           <SidebarNavItem
             to="/inbox"
             label="Inbox"

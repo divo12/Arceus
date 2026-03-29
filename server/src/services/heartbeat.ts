@@ -2331,13 +2331,18 @@ export function heartbeatService(db: Db) {
       readNonEmptyString(runtimeSessionParams?.sessionId) ?? runtimeSessionFallback;
     let runtimeSessionParamsForAdapter = runtimeSessionParams;
 
+    // Preserve any pre-existing handoff markdown (e.g. chat context set by caller)
+    const callerHandoffMarkdown = readNonEmptyString(context.paperclipSessionHandoffMarkdown) ?? "";
+
     const sessionCompaction = await evaluateSessionCompaction({
       agent,
       sessionId: previousSessionDisplayId ?? runtimeSessionIdForAdapter,
       issueId,
     });
     if (sessionCompaction.rotate) {
-      context.paperclipSessionHandoffMarkdown = sessionCompaction.handoffMarkdown;
+      context.paperclipSessionHandoffMarkdown = callerHandoffMarkdown
+        ? `${callerHandoffMarkdown}\n\n${sessionCompaction.handoffMarkdown}`
+        : sessionCompaction.handoffMarkdown;
       context.paperclipSessionRotationReason = sessionCompaction.reason;
       context.paperclipPreviousSessionId = previousSessionDisplayId ?? runtimeSessionIdForAdapter;
       runtimeSessionIdForAdapter = null;
@@ -2349,7 +2354,12 @@ export function heartbeatService(db: Db) {
         );
       }
     } else {
-      delete context.paperclipSessionHandoffMarkdown;
+      // Restore caller handoff if present, otherwise clear
+      if (callerHandoffMarkdown) {
+        context.paperclipSessionHandoffMarkdown = callerHandoffMarkdown;
+      } else {
+        delete context.paperclipSessionHandoffMarkdown;
+      }
       delete context.paperclipSessionRotationReason;
       delete context.paperclipPreviousSessionId;
     }

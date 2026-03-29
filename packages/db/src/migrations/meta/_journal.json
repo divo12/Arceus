@@ -323,6 +323,13 @@
       "when": 1774625112326,
       "tag": "0045_cultured_nightcrawler",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1774776680727,
+      "tag": "0046_regular_puck",
+      "breakpoints": true
     }
   ]
 }

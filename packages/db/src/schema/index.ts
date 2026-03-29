@@ -57,3 +57,4 @@ export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export { meetings, meetingParticipants, meetingEvents } from "./meetings.js";
+export { chatMessages } from "./chat-messages.js";

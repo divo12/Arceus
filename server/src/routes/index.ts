@@ -18,3 +18,4 @@ export { instanceSettingsRoutes } from "./instance-settings.js";
 export { memoryRoutes } from "./memory.js";
 export { roleRoutes } from "./roles.js";
 export { hierarchyRoutes } from "./hierarchy.js";
+export { chatRoutes } from "./chat.js";

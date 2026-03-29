@@ -216,6 +216,15 @@ export type MeetingParticipantRole = (typeof MEETING_PARTICIPANT_ROLES)[number];
 export const MEETING_EVENT_KINDS = ["decision", "learning", "task_modification", "escalation", "memory_transfer", "note"] as const;
 export type MeetingEventKind = (typeof MEETING_EVENT_KINDS)[number];
 
+export const CHAT_ROLES = ["user", "assistant", "system"] as const;
+export type ChatRole = (typeof CHAT_ROLES)[number];
+
+export const CHAT_CARD_TYPES = ["task_proposal", "org_plan", "issue", "budget_request", "status_report", "escalation"] as const;
+export type ChatCardType = (typeof CHAT_CARD_TYPES)[number];
+
+export const CARD_ACTION_TYPES = ["approved", "rejected", "edited", "dismissed"] as const;
+export type CardActionType = (typeof CARD_ACTION_TYPES)[number];
+
 export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "budget_override_required"] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
