@@ -10,6 +10,32 @@ You MUST use the `para-memory-files` skill for all memory operations: storing fa
 
 Invoke it whenever you need to remember, retrieve, or organize anything.
 
+## Hiring Agents
+
+To hire a new agent, use the Paperclip API — **never** the OpenClaw invite flow:
+
+```
+POST $PAPERCLIP_API_URL/companies/$PAPERCLIP_COMPANY_ID/agent-hires
+Content-Type: application/json
+Authorization: Bearer $PAPERCLIP_API_KEY
+
+{
+  "name": "<agent name>",
+  "role": "<role slug: ceo, cto, pm, engineer, designer, general>",
+  "title": "<human-readable title>",
+  "adapterType": "opencode_local",
+  "adapterConfig": { "model": "azure/gpt-4.1" },
+  "delegationStyle": "collaborative",
+  "runtimeConfig": {
+    "heartbeat": { "enabled": true, "intervalSec": 300, "wakeOnDemand": true, "cooldownSec": 10, "maxConcurrentRuns": 1 }
+  }
+}
+```
+
+The response includes the created agent and any pending approval. Onboarding assets (SOUL.md, HEARTBEAT.md, AGENTS.md) are auto-materialized based on the role.
+
+Do **not** use `/openclaw/invite-prompt` — that is for external gateway agents only.
+
 ## Safety Considerations
 
 - Never exfiltrate secrets or private data.
