@@ -68,6 +68,9 @@ export interface Config {
   storageS3Endpoint: string | undefined;
   storageS3Prefix: string;
   storageS3ForcePathStyle: boolean;
+  storageSupabaseProjectUrl: string | undefined;
+  storageSupabaseServiceRoleKey: string | undefined;
+  storageSupabaseBucket: string;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
@@ -130,6 +133,12 @@ export function loadConfig(): Config {
     process.env.PAPERCLIP_STORAGE_S3_FORCE_PATH_STYLE !== undefined
       ? process.env.PAPERCLIP_STORAGE_S3_FORCE_PATH_STYLE === "true"
       : (fileStorage?.s3?.forcePathStyle ?? false);
+  const storageSupabaseProjectUrl =
+    process.env.PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL ?? fileStorage?.supabase?.projectUrl ?? undefined;
+  const storageSupabaseServiceRoleKey =
+    process.env.PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY ?? fileStorage?.supabase?.serviceRoleKey ?? undefined;
+  const storageSupabaseBucket =
+    process.env.PAPERCLIP_STORAGE_SUPABASE_BUCKET ?? fileStorage?.supabase?.bucket ?? "paperclip";
 
   const deploymentModeFromEnvRaw = process.env.PAPERCLIP_DEPLOYMENT_MODE;
   const deploymentModeFromEnv =
@@ -263,6 +272,9 @@ export function loadConfig(): Config {
     storageS3Endpoint,
     storageS3Prefix,
     storageS3ForcePathStyle,
+    storageSupabaseProjectUrl,
+    storageSupabaseServiceRoleKey,
+    storageSupabaseBucket,
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,

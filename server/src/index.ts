@@ -534,6 +534,14 @@ export async function startServer(): Promise<StartedServer> {
   process.env.PAPERCLIP_LISTEN_PORT = String(listenPort);
   process.env.PAPERCLIP_API_URL = `http://${runtimeApiHost}:${listenPort}`;
   if (process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_URL === undefined) {
+    if (activeDatabaseConnectionString?.includes(":6543")) {
+      logger.warn(
+        "Auto-inheriting DATABASE_URL for Hippocampus, but it appears to be a Supabase " +
+        "pooled connection (port 6543). Hippocampus requires a direct connection (port 5432) " +
+        "for DDL operations. Set ARCEUS_HIPPOCAMPUS_POSTGRES_URL explicitly to a direct " +
+        "connection string to avoid issues.",
+      );
+    }
     process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_URL = activeDatabaseConnectionString;
   }
 
