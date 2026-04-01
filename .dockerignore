@@ -1,10 +1,13 @@
 .git
 .github
 .paperclip
+.omx
 .pnpm-store
 node_modules
 **/node_modules
+**/.venv
 coverage
 data
+opencode
 tmp
 *.log

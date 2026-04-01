@@ -59,7 +59,7 @@ export async function testEnvironment(
       code: "opencode_server_unreachable",
       level: "error",
       message: `OpenCode server not reachable at ${openCodeUrl}: ${ocProbe.error || `HTTP ${ocProbe.status}`}`,
-      hint: "Start the OpenCode server: opencode server --port 4098",
+      hint: "Start the OpenCode server: opencode serve --port 4098",
     });
   }
 

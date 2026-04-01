@@ -1,39 +1,80 @@
 services:
   db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_USER: paperclip
-      POSTGRES_PASSWORD: paperclip
-      POSTGRES_DB: paperclip
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
-      interval: 2s
-      timeout: 5s
-      retries: 30
+    image: pgvector/pgvector:pg17
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER:-paperclip}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-paperclip}
+      POSTGRES_DB: ${DB_NAME:-paperclip}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-paperclip} -d ${DB_NAME:-paperclip}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   server:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "3100:3100"
+      - "${PORT:-3100}:3100"
+      - "${OPENCODE_PORT:-4098}:4098"
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://paperclip:paperclip@db:5432/paperclip
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set}"
+      ARCEUS_HIPPOCAMPUS_POSTGRES_URL: "${ARCEUS_HIPPOCAMPUS_POSTGRES_URL:?ARCEUS_HIPPOCAMPUS_POSTGRES_URL must be set}"
+      ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA: "${ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA:-public}"
+      REDIS_URL: redis://redis:6379/0
+      ARCEUS_HIPPOCAMPUS_REDIS_URL: redis://redis:6379/0
       PORT: "3100"
+      HOST: "0.0.0.0"
       SERVE_UI: "true"
-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
-      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_DEPLOYMENT_MODE: "${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}"
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
-      PAPERCLIP_HIPPOCAMPUS_MODE: "embedded"
+      PAPERCLIP_HIPPOCAMPUS_MODE: "active"
+      PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN: "/app/services/hippocampus-runtime/python/.venv/bin/python"
+      PAPERCLIP_MIGRATION_AUTO_APPLY: "true"
+      OPENCODE_URL: "http://127.0.0.1:4098"
+      PAPERCLIP_STORAGE_PROVIDER: "${PAPERCLIP_STORAGE_PROVIDER:-local_disk}"
+      PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL: "${PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL:-}"
+      PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY: "${PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY:-}"
+      PAPERCLIP_STORAGE_SUPABASE_BUCKET: "${PAPERCLIP_STORAGE_SUPABASE_BUCKET:-paperclip}"
+      ARCEUS_AZURE_OPENAI_ENDPOINT: "${ARCEUS_AZURE_OPENAI_ENDPOINT:-}"
+      ARCEUS_AZURE_OPENAI_API_KEY: "${ARCEUS_AZURE_OPENAI_API_KEY:-}"
+      ARCEUS_AZURE_OPENAI_API_VERSION: "${ARCEUS_AZURE_OPENAI_API_VERSION:-}"
+      ARCEUS_HIPPOCAMPUS_VECTOR_INDEX_TYPE: "${ARCEUS_HIPPOCAMPUS_VECTOR_INDEX_TYPE:-hnsw}"
+      ARCEUS_OPENCODE_PROVIDER: "${ARCEUS_OPENCODE_PROVIDER:-}"
+      ARCEUS_OPENCODE_MODEL: "${ARCEUS_OPENCODE_MODEL:-}"
     volumes:
       - paperclip-data:/paperclip
-    depends_on:
-      db:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3100/api/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
 volumes:
   pgdata:
+  redis_data:
   paperclip-data:
