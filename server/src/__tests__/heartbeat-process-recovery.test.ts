@@ -18,7 +18,7 @@ import {
   issues,
 } from "@paperclipai/db";
 import { runningProcesses } from "../adapters/index.ts";
-import { heartbeatService } from "../services/heartbeat.ts";
+import { heartbeatService } from "../services/heartbeat/index.ts";
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;

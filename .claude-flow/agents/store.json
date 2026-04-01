@@ -13,6 +13,34 @@
       "domain": "coding",
       "model": "sonnet",
       "modelRoutedBy": "explicit"
+    },
+    "agent-1774910449447-ei493a": {
+      "agentId": "agent-1774910449447-ei493a",
+      "agentType": "researcher",
+      "status": "terminated",
+      "health": 1,
+      "taskCount": 0,
+      "config": {
+        "model": "sonnet"
+      },
+      "createdAt": "2026-03-30T22:40:49.451Z",
+      "domain": "backend",
+      "model": "sonnet",
+      "modelRoutedBy": "explicit"
+    },
+    "agent-1774910449460-s583us": {
+      "agentId": "agent-1774910449460-s583us",
+      "agentType": "researcher",
+      "status": "terminated",
+      "health": 1,
+      "taskCount": 0,
+      "config": {
+        "model": "sonnet"
+      },
+      "createdAt": "2026-03-30T22:40:49.462Z",
+      "domain": "backend",
+      "model": "sonnet",
+      "modelRoutedBy": "explicit"
     }
   },
   "version": "3.0.0"

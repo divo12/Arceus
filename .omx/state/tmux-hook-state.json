@@ -1,0 +1,16 @@
+{
+  "total_injections": 4,
+  "pane_counts": {
+    "%9": 4
+  },
+  "session_counts": {},
+  "recent_keys": {
+    "90168c3f2606166687685b3a79c7099b8a03312760c8986370b8dbc2a283dbb7": 1774979772457,
+    "48d39db93f1a5b868c5fbceced2df1fd10068e29329261076e695effadb45ee7": 1774979841095,
+    "2b573c37241db2ab9192e16fa6dca44035a233164ddfe6db05059168f4730dba": 1774979897133,
+    "1dfb85c44df0b759daceed70466049bc7bcbcc4b9da055fd9a476bf7ada1f527": 1774979949184
+  },
+  "last_injection_ts": 1774979949184,
+  "last_reason": "mode_not_allowed",
+  "last_event_at": "2026-04-01T00:38:13.711Z"
+}

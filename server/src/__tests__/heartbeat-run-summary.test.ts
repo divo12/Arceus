@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeHeartbeatRunResultJson } from "../services/heartbeat-run-summary.js";
+import { summarizeHeartbeatRunResultJson } from "../services/heartbeat/run-summary.js";
 
 describe("summarizeHeartbeatRunResultJson", () => {
   it("truncates text fields and preserves cost aliases", () => {

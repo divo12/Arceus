@@ -1,0 +1,22 @@
+# Ralph Context Snapshot
+- task statement: Understand this repository and find all fixes that have to be done.
+- desired outcome: A repo-grounded audit of concrete fixes, gaps, failures, and risks, prioritized with evidence.
+- known facts/evidence:
+  - Repo is Paperclip, a control plane for AI-agent companies.
+  - V1 contract is documented in doc/SPEC-implementation.md.
+  - Repo contains server, ui, packages/db, packages/shared, cli, tests, docs.
+  - Working tree already has unrelated local changes in .claude-flow/agents/store.json, opencode, server/AGENTS.md, and untracked .omx/ plus docs paths.
+  - doc/docs shared/agent-tiers.md was not found.
+- constraints:
+  - Respect existing user changes; do not overwrite unrelated work.
+  - Need evidence-backed findings, not guesses.
+  - Follow Ralph workflow with verification and concise reporting.
+- unknowns/open questions:
+  - Current typecheck/test/build status.
+  - Which V1 features are incomplete vs spec.
+  - Whether docs and implementation are in sync.
+  - Where failing tests, TODOs, or disabled paths indicate required fixes.
+- likely codebase touchpoints:
+  - doc/*.md, README.md
+  - server/, ui/, packages/db/, packages/shared/, cli/, tests/
+  - package.json and workspace scripts
