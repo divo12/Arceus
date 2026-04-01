@@ -15,7 +15,6 @@ if str(RUNTIME_SRC) not in sys.path:
 import arceus.core.hippocampus.hippocampus as hippocampus_module
 
 from .support.fakes.dict_cache import DictCacheStore
-from .support.fakes.in_memory_graph import InMemoryGraphStoreBackend
 from .support.fakes.in_memory_vector import InMemoryVectorStore
 from .support.fakes.mock_embedding import MockEmbeddingEngine
 from .support.fakes.noop_llm import NoopLLMEngine
@@ -44,7 +43,6 @@ def patch_fake_hippocampus_runtime(
             str(tmp_path / "hippocampus.db")
         )
         resolved_cache = cache_backend or DictCacheStore()
-        resolved_graph = graph_backend or InMemoryGraphStoreBackend()
         resolved_embedding = embedding_engine or MockEmbeddingEngine(
             dimensions=embedding_dimensions
         )
@@ -58,11 +56,6 @@ def patch_fake_hippocampus_runtime(
             hippocampus_module,
             "create_vector_store",
             lambda backend, config: resolved_vector,
-        )
-        monkeypatch.setattr(
-            hippocampus_module,
-            "create_graph_store",
-            lambda backend, config: resolved_graph,
         )
         monkeypatch.setattr(
             hippocampus_module,
@@ -89,7 +82,6 @@ def patch_fake_hippocampus_runtime(
             vector_store=resolved_vector,
             relational_store=resolved_relational,
             cache_backend=resolved_cache,
-            graph_backend=resolved_graph,
             embedding_engine=resolved_embedding,
             llm_engine=llm_engine,
         )

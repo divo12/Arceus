@@ -2,8 +2,6 @@ import { initializeMemoryServices, resetMemoryServices } from "./memory-services
 import type { DelegationStyle } from "@paperclipai/shared";
 import type {
   ExtractResult,
-  GraphEdge,
-  GraphNode,
   HabitItem,
   HealthResult,
   HippocampusBridge,
@@ -113,10 +111,6 @@ class DisabledHippocampusBridge implements ManagedHippocampusBridge {
   }
   async getSummary(): Promise<MemorySummary> { return this.fail(); }
   async listMemories(): Promise<{ items: MemoryListItem[]; total: number }> { return this.fail(); }
-  async graphSearch(): Promise<{ nodes: GraphNode[] }> { return this.fail(); }
-  async graphNeighbors(): Promise<{ nodes: GraphNode[] }> { return this.fail(); }
-  async graphEdges(): Promise<{ edges: GraphEdge[] }> { return this.fail(); }
-  async graphVersionHistory(): Promise<{ versions: GraphNode[] }> { return this.fail(); }
   async runGC(): Promise<{ expired: number; decayed: number; demoted: number }> { return this.fail(); }
   async runPromotions(): Promise<{ promotions: PromotionItem[] }> { return this.fail(); }
   async close(): Promise<void> { return; }
@@ -158,7 +152,6 @@ export class EmbeddedHippocampusBridge implements ManagedHippocampusBridge {
       query,
       container,
       top_k: topK,
-      include_graph: true,
     });
   }
 
@@ -215,37 +208,6 @@ export class EmbeddedHippocampusBridge implements ManagedHippocampusBridge {
       memory_type: memoryType,
       container,
       limit,
-    });
-  }
-
-  async graphSearch(agentId: string, query: string, container = "default", topK = 10) {
-    return this.runtime.call("graphSearch", {
-      agent_id: agentId,
-      query,
-      container,
-      top_k: topK,
-    });
-  }
-
-  async graphNeighbors(agentId: string, nodeId: string, maxHops = 2) {
-    return this.runtime.call("graphNeighbors", {
-      agent_id: agentId,
-      node_id: nodeId,
-      max_hops: maxHops,
-    });
-  }
-
-  async graphEdges(agentId: string, nodeId: string) {
-    return this.runtime.call("graphEdges", {
-      agent_id: agentId,
-      node_id: nodeId,
-    });
-  }
-
-  async graphVersionHistory(agentId: string, memoryId: string) {
-    return this.runtime.call("graphVersionHistory", {
-      agent_id: agentId,
-      memory_id: memoryId,
     });
   }
 

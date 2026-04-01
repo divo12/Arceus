@@ -28,15 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-type MemoryTab = "overview" | "analytics" | "explorer" | "graph" | "profile" | "activity";
-
-const MemoryGraphExplorer = lazy(async () => ({
-  default: (await import("./MemoryGraphExplorer")).MemoryGraphExplorer,
-}));
-
-const MemoryVersionTimeline = lazy(async () => ({
-  default: (await import("./MemoryVersionTimeline")).MemoryVersionTimeline,
-}));
+type MemoryTab = "overview" | "analytics" | "explorer" | "profile" | "activity";
 
 const PromotionFeed = lazy(async () => ({
   default: (await import("./PromotionFeed")).PromotionFeed,
@@ -58,7 +50,6 @@ const memoryTabItems = [
   { value: "overview", label: "Overview" },
   { value: "analytics", label: "Analytics" },
   { value: "explorer", label: "Explorer" },
-  { value: "graph", label: "Graph" },
   { value: "profile", label: "Profile" },
   { value: "activity", label: "Activity" },
 ] as const;
@@ -223,11 +214,10 @@ function SummaryCards({ agentId }: { agentId: string }) {
     { label: "Static Memories", value: summary.total_static, icon: Shield, color: "text-[var(--memory-static)]" },
     { label: "Dynamic Memories", value: summary.total_dynamic, icon: Zap, color: "text-[var(--memory-dynamic)]" },
     { label: "Active Habits", value: summary.active_habits.length, icon: Database, color: "text-[var(--memory-procedural)]" },
-    { label: "Graph Nodes", value: summary.graph_node_count, icon: Brain, color: "text-[var(--memory-priming)]" },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       {cards.map((card) => {
         const Icon = card.icon;
         return (
@@ -360,12 +350,8 @@ function HabitsSection({ agentId }: { agentId: string }) {
 
 function MemoryRow({
   memory,
-  agentId,
-  showVersionHistory = false,
 }: {
   memory: MemoryListItem;
-  agentId?: string;
-  showVersionHistory?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -437,11 +423,6 @@ function MemoryRow({
               </div>
             </div>
           </div>
-          {showVersionHistory && agentId ? (
-            <Suspense fallback={<PanelSkeleton rows={3} className="border-dashed bg-muted/20" />}>
-              <MemoryVersionTimeline agentId={agentId} memory={memory} open={expanded} />
-            </Suspense>
-          ) : null}
         </div>
       ) : null}
     </div>
@@ -843,8 +824,6 @@ function ExplorerTab({
               <MemoryRow
                 key={memory.id}
                 memory={memory}
-                agentId={agentId}
-                showVersionHistory
               />
             ))}
             {data && data.total > filteredItems.length ? (
@@ -963,15 +942,6 @@ export function AgentMemoryTab({
           startupId={effectiveStartupId}
           employeeId={effectiveEmployeeId}
         />
-      </TabsContent>
-
-      <TabsContent value="graph">
-        <Suspense fallback={<PanelSkeleton rows={1} className="min-h-[460px]" />}>
-          <MemoryGraphExplorer
-            agentId={agentId}
-            container={defaultContainer}
-          />
-        </Suspense>
       </TabsContent>
 
       <TabsContent value="profile">

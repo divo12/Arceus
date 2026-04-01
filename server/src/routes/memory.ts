@@ -13,10 +13,8 @@ import { type MemoryVisibility, MemoryScopeService } from "../services/memory-sc
 import { ProfileService } from "../services/profile-service.js";
 import {
   DelegateSchema,
-  GraphQuerySchema,
   InternalizeDelegationSchema,
   MemoryExplorerQuerySchema,
-  MemoryHistoryParamsSchema,
   MeetingExtractSchema,
   ProfileQuerySchema,
   PromotionLogQuerySchema,
@@ -102,8 +100,6 @@ function resolveProjectionService(): MemoryProjectionService {
   if (
     registered &&
     typeof registered === "object" &&
-    "getGraphView" in registered &&
-    "getVersionHistory" in registered &&
     "getPromotionLog" in registered &&
     "getMemoryExplorer" in registered
   ) {
@@ -411,24 +407,6 @@ export function memoryRoutes(options: {
     }
   });
 
-  /** GET /api/agents/:agentId/memory/graph */
-  router.get("/agents/:agentId/memory/graph", async (req, res) => {
-    assertBoard(req);
-    if (!ensureEnabled(res)) return;
-    try {
-      const params = GraphQuerySchema.parse(req.query);
-      const view = await resolveProjectionService().getGraphView(
-        req.params.agentId,
-        params.query,
-        params.container,
-        params.depth,
-      );
-      res.json(view);
-    } catch (error) {
-      handleMemoryError(res, error);
-    }
-  });
-
   /** GET /api/agents/:agentId/memory/explorer */
   router.get("/agents/:agentId/memory/explorer", async (req, res) => {
     assertBoard(req);
@@ -458,22 +436,6 @@ export function memoryRoutes(options: {
         params.limit,
       );
       res.json(events);
-    } catch (error) {
-      handleMemoryError(res, error);
-    }
-  });
-
-  /** GET /api/agents/:agentId/memory/:memoryId/history */
-  router.get("/agents/:agentId/memory/:memoryId/history", async (req, res) => {
-    assertBoard(req);
-    if (!ensureEnabled(res)) return;
-    try {
-      const params = MemoryHistoryParamsSchema.parse(req.params);
-      const items = await resolveProjectionService().getVersionHistory(
-        req.params.agentId,
-        params.memoryId,
-      );
-      res.json(items);
     } catch (error) {
       handleMemoryError(res, error);
     }

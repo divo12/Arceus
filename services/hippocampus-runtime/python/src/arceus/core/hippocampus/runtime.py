@@ -17,7 +17,6 @@ import arceus.core.hippocampus.hippocampus as hippocampus_module
 from arceus.core.hippocampus.hippocampus import Hippocampus
 from arceus.core.hippocampus.types import (
     ExtractionMode,
-    GraphEntity,
     MemoryAction,
     MemoryPromotionEvent,
     MemorySummaryProjection,
@@ -48,10 +47,6 @@ SUPPORTED_METHODS = {
     "getHabits",
     "getSummary",
     "listMemories",
-    "graphSearch",
-    "graphNeighbors",
-    "graphEdges",
-    "graphVersionHistory",
     "runGC",
     "runPromotions",
     "shutdown",
@@ -126,9 +121,6 @@ def _build_runtime_config(profile: str) -> HippocampusConfig:
         return HippocampusConfig(
             postgres_url="sqlite-test-profile-unused",
             redis_url="dict-test-profile-unused",
-            neo4j_uri="neo4j-test-profile-unused",
-            neo4j_username="test",
-            neo4j_password="test",
             embedding_model="mock-test-profile",
             embedding_dimensions=dimensions,
             extraction_model="noop-test-profile",
@@ -141,10 +133,6 @@ def _build_runtime_config(profile: str) -> HippocampusConfig:
         redis_url=settings.hippocampus_redis_url or settings.redis_url,
         vector_index_type=settings.hippocampus_vector_index_type,
         vector_top_k_fetch_multiplier=settings.hippocampus_vector_top_k_fetch_multiplier,
-        neo4j_uri=settings.neo4j_uri,
-        neo4j_username=settings.neo4j_username,
-        neo4j_password=settings.neo4j_password.get_secret_value(),
-        neo4j_database=settings.neo4j_database,
         azure_openai_endpoint=settings.azure_openai_endpoint,
         azure_openai_api_version=settings.azure_openai_api_version,
     )
@@ -173,11 +161,9 @@ def _enable_test_profile() -> None:
     vector_store = InMemoryVectorStore()
     relational_store = SQLiteRelationalStore(str(test_dir / "hippocampus-runtime.db"))
     cache_backend = DictCacheStore()
-    graph_backend = InMemoryGraphStoreBackend()
     embedding_engine = MockEmbeddingEngine(dimensions=embedding_dimensions)
 
     hippocampus_module.create_vector_store = lambda backend, config: vector_store
-    hippocampus_module.create_graph_store = lambda backend, config: graph_backend
     hippocampus_module.create_cache = lambda backend, config: cache_backend
     hippocampus_module.create_relational = lambda backend, config: relational_store
     hippocampus_module.create_embedding_engine = (
@@ -298,14 +284,6 @@ class HippocampusRuntimeServer:
             return await self._get_summary(hippocampus, params)
         if method == "listMemories":
             return await self._list_memories(hippocampus, agent_id, params)
-        if method == "graphSearch":
-            return await self._graph_search(hippocampus, params)
-        if method == "graphNeighbors":
-            return await self._graph_neighbors(hippocampus, params)
-        if method == "graphEdges":
-            return await self._graph_edges(hippocampus, params)
-        if method == "graphVersionHistory":
-            return await self._graph_version_history(hippocampus, params)
         if method == "runGC":
             return await self._run_gc(hippocampus)
         if method == "runPromotions":
@@ -339,34 +317,19 @@ class HippocampusRuntimeServer:
             query=self._required_string(params, "query"),
             container=str(params.get("container", "default")),
             top_k=int(params.get("top_k", 10)),
-            include_graph=bool(params.get("include_graph", True)),
         )
         items: list[dict[str, Any]] = []
         for result in results:
-            if isinstance(result, MemoryUnit):
-                items.append(
-                    {
-                        "id": result.id,
-                        "content": result.content,
-                        "memory_type": result.memory_type.value,
-                        "confidence": result.confidence,
-                        "relevance_score": result.relevance_score,
-                        "kind": "memory",
-                    }
-                )
-                continue
-
-            if isinstance(result, GraphEntity):
-                items.append(
-                    {
-                        "id": result.id,
-                        "content": result.name,
-                        "memory_type": None,
-                        "confidence": None,
-                        "relevance_score": None,
-                        "kind": "graph_entity",
-                    }
-                )
+            items.append(
+                {
+                    "id": result.id,
+                    "content": result.content,
+                    "memory_type": result.memory_type.value,
+                    "confidence": result.confidence,
+                    "relevance_score": result.relevance_score,
+                    "kind": "memory",
+                }
+            )
         return {"items": items}
 
     async def _extract(self, hippocampus: Hippocampus, params: dict[str, Any]) -> dict[str, Any]:
@@ -445,7 +408,6 @@ class HippocampusRuntimeServer:
     async def _get_summary(self, hippocampus: Hippocampus, params: dict[str, Any]) -> dict[str, Any]:
         container = str(params.get("container", ""))
         summary = await hippocampus.get_summary(container=container)
-        graph_node_count = self._graph_node_count(hippocampus, summary)
         return {
             "total_static": summary.static_fact_count,
             "total_dynamic": summary.dynamic_fact_count,
@@ -453,7 +415,6 @@ class HippocampusRuntimeServer:
             # Keep the response shape stable without forcing an extra LLM-backed
             # priming generation during the default summary load path.
             "priming_prompt": "",
-            "graph_node_count": graph_node_count,
             "top_patterns": _json_default(summary.top_patterns),
             "current_state": _json_default(summary.current_state),
             "recent_learnings": _json_default(summary.recent_learnings),
@@ -507,49 +468,6 @@ class HippocampusRuntimeServer:
             "promotions_fired": result.promotions_fired,
         }
 
-    async def _graph_search(
-        self,
-        hippocampus: Hippocampus,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        nodes = await hippocampus.graph_store.search(
-            query=self._required_string(params, "query"),
-            container=str(params.get("container", "default")),
-            top_k=int(params.get("top_k", 10)),
-        )
-        return {"nodes": [self._serialize_graph_node(node) for node in nodes]}
-
-    async def _graph_neighbors(
-        self,
-        hippocampus: Hippocampus,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        nodes = await hippocampus.graph_store.get_neighbors(
-            node_id=self._required_string(params, "node_id"),
-            max_hops=int(params.get("max_hops", 2)),
-        )
-        return {"nodes": [self._serialize_graph_node(node) for node in nodes]}
-
-    async def _graph_edges(
-        self,
-        hippocampus: Hippocampus,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        edges = await hippocampus.graph_store.get_edges(
-            self._required_string(params, "node_id")
-        )
-        return {"edges": [self._serialize_graph_edge(edge) for edge in edges]}
-
-    async def _graph_version_history(
-        self,
-        hippocampus: Hippocampus,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        versions = await hippocampus.graph_store.get_version_history(
-            self._required_string(params, "memory_id")
-        )
-        return {"versions": [self._serialize_graph_node(version) for version in versions]}
-
     async def _run_promotions(self, hippocampus: Hippocampus) -> dict[str, Any]:
         promotions = await hippocampus.run_promotions()
         return {
@@ -557,40 +475,6 @@ class HippocampusRuntimeServer:
                 self._serialize_promotion(event)
                 for event in promotions
             ]
-        }
-
-    def _graph_node_count(
-        self,
-        hippocampus: Hippocampus,
-        summary: MemorySummaryProjection,
-    ) -> int:
-        del summary
-        backend = getattr(hippocampus.graph_store, "_backend", None)
-        list_nodes = getattr(backend, "list_nodes", None)
-        if callable(list_nodes):
-            return len(list_nodes())
-        return 0
-
-    def _serialize_graph_node(self, node: GraphEntity) -> dict[str, Any]:
-        return {
-            "id": node.id,
-            "name": node.name,
-            "entity_type": node.entity_type,
-            "mention_count": node.mention_count,
-            "container": node.container,
-            "created_at": node.created_at.isoformat(),
-        }
-
-    def _serialize_graph_edge(self, edge: Any) -> dict[str, Any]:
-        return {
-            "source_id": edge.source_id,
-            "target_id": edge.target_id,
-            "relation_type": (
-                edge.relation_type.value
-                if isinstance(edge.relation_type, Enum)
-                else str(edge.relation_type)
-            ),
-            "weight": edge.weight,
         }
 
     def _serialize_promotion(self, event: MemoryPromotionEvent) -> dict[str, Any]:

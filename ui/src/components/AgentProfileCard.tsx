@@ -110,6 +110,9 @@ export function AgentProfileCard({
 }: AgentProfileCardProps) {
   const [knowledgeExpanded, setKnowledgeExpanded] = useState(false);
   const [contextExpanded, setContextExpanded] = useState(false);
+  const primingPrompt = typeof profile?.state?.priming_prompt === "string"
+    ? profile.state.priming_prompt
+    : "";
 
   const healthItems = useMemo(() => {
     const items = [
@@ -132,8 +135,8 @@ export function AgentProfileCard({
         icon: Database,
       },
       {
-        label: "Graph",
-        value: summary?.graph_node_count ?? 0,
+        label: "Priming",
+        value: primingPrompt ? 1 : 0,
         color: "--memory-priming",
         icon: Brain,
       },
@@ -141,7 +144,7 @@ export function AgentProfileCard({
 
     const maxValue = Math.max(1, ...items.map((item) => item.value));
     return { items, maxValue };
-  }, [profile?.core_knowledge.length, profile?.current_context.length, profile?.habits.length, summary?.active_habits.length, summary?.graph_node_count, summary?.total_dynamic, summary?.total_static]);
+  }, [primingPrompt, profile?.core_knowledge.length, profile?.current_context.length, profile?.habits.length, summary?.active_habits.length, summary?.total_dynamic, summary?.total_static]);
 
   const displayedKnowledge = knowledgeExpanded
     ? profile?.core_knowledge ?? []
@@ -152,9 +155,6 @@ export function AgentProfileCard({
   const remainingKnowledge = Math.max(0, (profile?.core_knowledge.length ?? 0) - displayedKnowledge.length);
   const remainingContext = Math.max(0, (profile?.current_context.length ?? 0) - displayedContext.length);
   const partial = Boolean(profile?.state?.partial);
-  const primingPrompt = typeof profile?.state?.priming_prompt === "string"
-    ? profile.state.priming_prompt
-    : "";
   const hasContent = Boolean(
     profile &&
     (
@@ -162,7 +162,6 @@ export function AgentProfileCard({
       profile.current_context.length ||
       profile.habits.length ||
       primingPrompt ||
-      summary?.graph_node_count ||
       summary?.total_static ||
       summary?.total_dynamic
     ),

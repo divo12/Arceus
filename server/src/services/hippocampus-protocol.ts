@@ -1,7 +1,5 @@
 import type {
   ExtractResult,
-  GraphEdge,
-  GraphNode,
   HabitItem,
   MemoryItem,
   MemoryListItem,
@@ -47,7 +45,6 @@ export interface HippocampusRpcMethodMap {
       query: string;
       container: string;
       top_k: number;
-      include_graph: boolean;
     };
     result: { items: MemoryItem[] };
   };
@@ -96,37 +93,6 @@ export interface HippocampusRpcMethodMap {
       limit: number;
     };
     result: { items: MemoryListItem[]; total: number };
-  };
-  graphSearch: {
-    params: {
-      agent_id: string;
-      query: string;
-      container: string;
-      top_k: number;
-    };
-    result: { nodes: GraphNode[] };
-  };
-  graphNeighbors: {
-    params: {
-      agent_id: string;
-      node_id: string;
-      max_hops: number;
-    };
-    result: { nodes: GraphNode[] };
-  };
-  graphEdges: {
-    params: {
-      agent_id: string;
-      node_id: string;
-    };
-    result: { edges: GraphEdge[] };
-  };
-  graphVersionHistory: {
-    params: {
-      agent_id: string;
-      memory_id: string;
-    };
-    result: { versions: GraphNode[] };
   };
   runGC: {
     params: { agent_id: string };

@@ -16,7 +16,6 @@ export interface MemorySummary {
   total_dynamic: number;
   active_habits: Array<{ trigger: string; action: string; confidence: number }>;
   priming_prompt: string;
-  graph_node_count: number;
   top_patterns?: Array<Record<string, unknown>>;
   current_state?: Record<string, unknown>;
   recent_learnings?: string[];
@@ -35,29 +34,6 @@ export interface MemoryListItem {
   created_at: string | null;
   updated_at: string | null;
   access_count: number;
-}
-
-export interface GraphNode {
-  id: string;
-  name: string;
-  entity_type: string;
-  mention_count: number;
-  container?: string;
-  created_at?: string;
-}
-
-export interface GraphEdge {
-  source_id: string;
-  target_id: string;
-  relation_type: string;
-  weight: number;
-}
-
-export interface GraphMemoryView {
-  center_node: GraphNode | null;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  depth: number;
 }
 
 export interface ExtractResult {
@@ -172,19 +148,6 @@ export interface HippocampusBridge {
     container?: string,
     limit?: number,
   ): Promise<{ items: MemoryListItem[]; total: number }>;
-  graphSearch(
-    agentId: string,
-    query: string,
-    container?: string,
-    topK?: number,
-  ): Promise<{ nodes: GraphNode[] }>;
-  graphNeighbors(
-    agentId: string,
-    nodeId: string,
-    maxHops?: number,
-  ): Promise<{ nodes: GraphNode[] }>;
-  graphEdges(agentId: string, nodeId: string): Promise<{ edges: GraphEdge[] }>;
-  graphVersionHistory(agentId: string, memoryId: string): Promise<{ versions: GraphNode[] }>;
   runGC(agentId: string): Promise<{ expired: number; decayed: number; demoted: number }>;
   runPromotions(agentId: string): Promise<{ promotions: PromotionItem[] }>;
   close(): Promise<void>;

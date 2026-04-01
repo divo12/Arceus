@@ -16,12 +16,10 @@ from arceus.core.hippocampus.types import (
     ExtractedFact,
     ExtractionMode,
     ExtractionResult,
-    GraphEntity,
     Habit,
     HabitFormation,
     MemoryAction,
     MemoryType,
-    RelationType,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,9 +77,6 @@ class MemoryExtractor:
                     await self._hippocampus.soft_delete(action[1], reason=action[2] or fact.text)
                 case MemoryAction.NONE:
                     pass
-
-            if fact.entities or fact.relationships:
-                await self._update_graph(fact, container)
 
         return ExtractionResult(
             facts=tuple(facts),
@@ -161,53 +156,6 @@ class MemoryExtractor:
 
         await self._hippocampus.soft_delete(target_id, reason=f"updated: {fact.text}")
         return await self._add_to_tier(fact, agent_id=agent_id, container=container)
-
-    async def _update_graph(self, fact: ExtractedFact, container: str) -> None:
-        for entity_name in fact.entities:
-            embedding = await self._embedding.embed(entity_name)
-            entity = GraphEntity(
-                name=entity_name,
-                entity_type="auto",
-                embedding=embedding,
-                container=container,
-            )
-            existing = await self._hippocampus.graph_store.find_similar_node(
-                embedding,
-                threshold=0.7,
-                container=container,
-            )
-            if existing is None:
-                await self._hippocampus.graph_store.create_node(entity)
-            else:
-                await self._hippocampus.graph_store.merge_node(existing, entity)
-
-        for source, relation, target in fact.relationships:
-            relation_type = await self._classify_relation(source, target, relation)
-            await self._hippocampus.graph_store.create_edge_by_name(
-                source,
-                target,
-                relation_type,
-                container=container,
-            )
-
-    async def _classify_relation(
-        self,
-        source: str,
-        target: str,
-        relation_text: str,
-    ) -> RelationType:
-        result = await self._llm_light.classify(
-            prompt=RELATIONSHIP_CLASSIFICATION_PROMPT.format(
-                source=source,
-                target=target,
-                relation_text=relation_text,
-            ),
-            options=[relation_type.value for relation_type in RelationType],
-        )
-        try:
-            return RelationType(result.strip().lower())
-        except ValueError:
-            return RelationType.RELATED_TO
 
     def _get_prompt(self, mode: ExtractionMode) -> str:
         return {

@@ -351,7 +351,7 @@ export function MemoryAnalytics({
       countPromotionsTo(promotionItems, ["dynamic"]) -
       countPromotionsFrom(promotionItems, ["dynamic"]),
     habits: countPromotionsTo(promotionItems, ["procedural", "habit"]),
-    nodes: activeSummary?.recent_learnings?.length ?? Math.min(topEntities.length, 5),
+    priming: activeSummary?.recent_learnings?.length ?? Math.min(topEntities.length, 5),
   }), [activeSummary?.recent_learnings?.length, promotionItems, topEntities.length]);
 
   const cards = [
@@ -378,9 +378,9 @@ export function MemoryAnalytics({
     },
     {
       icon: Brain,
-      value: activeSummary?.graph_node_count ?? 0,
-      label: "Nodes",
-      delta: { value: metricDeltas.nodes, label: "recent signals" },
+      value: activeSummary?.priming_prompt ? 1 : 0,
+      label: "Priming",
+      delta: { value: metricDeltas.priming, label: "recent signals" },
       description: activeHealth?.status === "ok" ? "runtime healthy" : "runtime unavailable",
     },
   ];

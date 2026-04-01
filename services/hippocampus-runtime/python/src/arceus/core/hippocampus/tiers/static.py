@@ -7,12 +7,8 @@ from arceus.core.hippocampus.types import (
     ExtractedFact,
     MemoryType,
     MemoryUnit,
-    RelationType,
 )
 from arceus.core.hippocampus.utils.time import utc_now
-
-if TYPE_CHECKING:
-    from arceus.core.hippocampus.engines.graph_store import GraphStore
 
 
 class StaticMemory:
@@ -23,12 +19,10 @@ class StaticMemory:
         agent_id: str,
         vector_store: VectorStore,
         embedding_engine: EmbeddingEngine,
-        graph_store: GraphStore | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._vector_store = vector_store
         self._embedding = embedding_engine
-        self._graph_store = graph_store
 
     async def add(self, fact: ExtractedFact, container: str) -> MemoryUnit:
         embedding = await self._embedding.embed(fact.text)
@@ -44,8 +38,6 @@ class StaticMemory:
             updated_at=utc_now(),
         )
         await self._vector_store.upsert(unit)
-        if self._graph_store is not None:
-            await self._graph_store.ensure_memory_node(unit)
         return unit
 
     async def search(self, query: str, container: str, top_k: int = 10) -> list[MemoryUnit]:
@@ -86,11 +78,6 @@ class StaticMemory:
         )
         await self._vector_store.upsert(updated)
         await self._vector_store.soft_delete(existing.id, reason="superseded_by_update")
-        if self._graph_store is not None:
-            await self._graph_store.ensure_memory_node(existing)
-            await self._graph_store.ensure_memory_node(updated)
-            await self._graph_store._backend.update_node(existing.id, {"is_latest": False})
-            await self._graph_store.create_edge(updated.id, existing.id, RelationType.UPDATES)
         return updated
 
     async def get_all(self, container: str) -> list[MemoryUnit]:

@@ -49,19 +49,6 @@ class ExtractionMode(Enum):
     MEETING = "meeting"
 
 
-class RelationType(Enum):
-    UPDATES = "updates"
-    EXTENDS = "extends"
-    DERIVES = "derives"
-    USES = "uses"
-    OWNS = "owns"
-    DEPENDS_ON = "depends_on"
-    RELATED_TO = "related_to"
-    PART_OF = "part_of"
-    DECIDED_IN = "decided_in"
-    PROMOTED_FROM = "promoted_from"
-
-
 @dataclass(frozen=True)
 class MemoryUnit:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -153,30 +140,6 @@ class Trajectory:
 
 
 @dataclass(frozen=True)
-class GraphEntity:
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
-    entity_type: str = ""
-    embedding: list[float] | None = None
-    mention_count: int = 1
-    container: str = ""
-    metadata: dict = field(default_factory=dict)
-    is_latest: bool = True
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class GraphRelationship:
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    source_id: str = ""
-    target_id: str = ""
-    relation_type: RelationType = RelationType.RELATED_TO
-    weight: float = 1.0
-    metadata: dict = field(default_factory=dict)
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
 class ExtractionResult:
     facts: tuple[ExtractedFact, ...] = ()
     actions: tuple[tuple[MemoryAction, str, str], ...] = ()
@@ -256,14 +219,6 @@ class MemorySummaryProjection:
     recent_learnings: list = field(default_factory=list)
     recent_promotions: list = field(default_factory=list)
     generated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class GraphMemoryView:
-    center_node: GraphEntity | None = None
-    nodes: list = field(default_factory=list)
-    edges: list = field(default_factory=list)
-    depth: int = 2
 
 
 @dataclass(frozen=True)

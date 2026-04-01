@@ -5,7 +5,6 @@ from dataclasses import dataclass
 class HippocampusConfig:
     # Backends
     vector_store_backend: str = "pgvector"
-    graph_store_backend: str = "neo4j"
     cache_backend: str = "redis"
     relational_backend: str = "postgresql"
     postgres_url: str = ""
@@ -13,10 +12,6 @@ class HippocampusConfig:
     redis_url: str = ""
     vector_index_type: str = "hnsw"
     vector_top_k_fetch_multiplier: int = 3
-    neo4j_uri: str = ""
-    neo4j_username: str = ""
-    neo4j_password: str = ""
-    neo4j_database: str = "neo4j"
 
     # Memory tuning
     dynamic_memory_half_life_days: float = 30.0

@@ -7,9 +7,6 @@ from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, VectorSt
 from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit
 from arceus.core.hippocampus.utils.time import utc_now
 
-if TYPE_CHECKING:
-    from arceus.core.hippocampus.engines.graph_store import GraphStore
-
 
 class DynamicMemory:
     """Tier 3 time-decaying contextual memory."""
@@ -21,7 +18,6 @@ class DynamicMemory:
         embedding_engine: EmbeddingEngine,
         half_life_days: float = 30.0,
         decay_threshold: float = 0.1,
-        graph_store: GraphStore | None = None,
     ) -> None:
         if half_life_days <= 0:
             raise ValueError("half_life_days must be greater than 0")
@@ -30,7 +26,6 @@ class DynamicMemory:
         self._embedding = embedding_engine
         self._half_life_days = half_life_days
         self._decay_threshold = decay_threshold
-        self._graph_store = graph_store
 
     async def add(self, fact: ExtractedFact, container: str) -> MemoryUnit:
         embedding = await self._embedding.embed(fact.text)
@@ -47,8 +42,6 @@ class DynamicMemory:
             updated_at=utc_now(),
         )
         await self._vector_store.upsert(unit)
-        if self._graph_store is not None:
-            await self._graph_store.ensure_memory_node(unit)
         return unit
 
     async def search(self, query: str, container: str, top_k: int = 10) -> list[MemoryUnit]:

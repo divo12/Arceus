@@ -91,7 +91,6 @@ rl.on("line", (line) => {
         total_dynamic: 2,
         active_habits: [],
         priming_prompt: "",
-        graph_node_count: 3,
       });
       return;
     case "listMemories":

@@ -2,15 +2,10 @@ from arceus.core.hippocampus.backends.llm_engine import (
     AzureOpenAILLMEngine,
     has_azure_openai_credentials,
 )
-from arceus.core.hippocampus.backends.neo4j_graph import (
-    Neo4jGraphStoreBackend,
-    has_neo4j_credentials,
-)
 from arceus.core.hippocampus.backends.pgvector_store import PGVectorStore
 from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelationalStore
 from arceus.core.hippocampus.backends.protocols import (
     EmbeddingEngine,
-    GraphStoreBackend,
     LLMEngine,
     RelationalStore,
     VectorStore,
@@ -48,26 +43,6 @@ def create_relational(backend: str, config: HippocampusConfig) -> RelationalStor
             schema=config.postgres_schema,
         )
     raise ValueError(f"Unsupported relational backend: {backend}")
-
-
-def create_graph_store(backend: str, config: HippocampusConfig) -> GraphStoreBackend:
-    if backend == "neo4j":
-        if not has_neo4j_credentials(
-            uri=config.neo4j_uri,
-            username=config.neo4j_username,
-            password=config.neo4j_password,
-        ):
-            raise ValueError(
-                "Neo4j backend requires credentials. Set NEO4J_URI, "
-                "NEO4J_USERNAME, and NEO4J_PASSWORD or override HippocampusConfig."
-            )
-        return Neo4jGraphStoreBackend(
-            uri=config.neo4j_uri,
-            username=config.neo4j_username,
-            password=config.neo4j_password,
-            database=config.neo4j_database,
-        )
-    raise ValueError(f"Unsupported graph backend: {backend}")
 
 
 def create_embedding_engine(

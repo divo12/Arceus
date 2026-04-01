@@ -5,7 +5,6 @@ from arceus.core.hippocampus.backends.postgres_relational import PostgreSQLRelat
 from arceus.core.hippocampus.backends.redis_cache import RedisCacheStore
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
-from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.engines.pattern_learner import (
     PatternLearner,
     PatternLearnerConfig,
@@ -28,9 +27,6 @@ from arceus.core.hippocampus.types import (
     ExtractionMode,
     ExtractionResult,
     GCResult,
-    GraphEntity,
-    GraphMemoryView,
-    GraphRelationship,
     Habit,
     HabitFormation,
     MemoryAction,
@@ -41,7 +37,6 @@ from arceus.core.hippocampus.types import (
     MemoryVisibility,
     Pattern,
     PatternStatus,
-    RelationType,
     RetrievalResult,
     Trajectory,
     TrajectoryStep,
@@ -55,10 +50,6 @@ __all__ = [
     "ExtractionMode",
     "ExtractionResult",
     "GCResult",
-    "GraphEntity",
-    "GraphMemoryView",
-    "GraphRelationship",
-    "GraphStore",
     "Habit",
     "HabitFormation",
     "Hippocampus",
@@ -81,7 +72,6 @@ __all__ = [
     "ProceduralMemory",
     "PromotionEngine",
     "RelationalPatternStore",
-    "RelationType",
     "RedisCacheStore",
     "RetrievalResult",
     "ReasoningBank",

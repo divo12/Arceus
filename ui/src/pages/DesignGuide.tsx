@@ -205,7 +205,6 @@ const demoProfileSummary: MemorySummary = {
   total_dynamic: 18,
   active_habits: demoProfile.habits,
   priming_prompt: "Bias toward resilient rollout plans, explicit ownership, and observable system behavior.",
-  graph_node_count: 27,
   recent_learnings: [
     "Token revocation should remain bounded by jti + TTL.",
     "PKCE is required for browser and native OAuth clients.",

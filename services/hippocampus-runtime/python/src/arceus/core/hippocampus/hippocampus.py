@@ -2,7 +2,7 @@
 
 Tiers:
     1. Working   — ephemeral cache for in-flight task context (TTL-based)
-    2. Static    — permanent facts with version chains and graph provenance
+    2. Static    — permanent facts with version chains
     3. Dynamic   — time-decaying contextual memory (half-life + relevance)
     4. Procedural— learned habits from repeated successful patterns
     5. Priming   — agent disposition/mood state updated by task outcomes
@@ -16,7 +16,7 @@ Engines:
 
 Orchestration:
     - remember()                  — manual write to Static or Dynamic
-    - recall()                    — MMR-ranked retrieval across tiers + graph
+    - recall()                    — MMR-ranked retrieval across tiers
     - extract_from_conversation() — LLM extraction pipeline
     - process_trajectory()        — Flow A steps 6-11 (judge -> distill -> pattern -> habit -> priming)
     - run_promotions()            — batch promotion cycle
@@ -30,7 +30,6 @@ from datetime import datetime
 from arceus.core.hippocampus.backends.factory import (
     create_cache,
     create_embedding_engine,
-    create_graph_store,
     create_llm_engine,
     create_relational,
     create_vector_store,
@@ -45,7 +44,6 @@ from arceus.core.hippocampus.backends.protocols import (
 from arceus.core.hippocampus.config import HippocampusConfig
 from arceus.core.hippocampus.engines.extractor import MemoryExtractor
 from arceus.core.hippocampus.engines.gc import MemoryGarbageCollector
-from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.engines.pattern_learner import (
     PatternLearner,
     PatternLearnerConfig,
@@ -69,7 +67,6 @@ from arceus.core.hippocampus.types import (
     ExtractionMode,
     ExtractionResult,
     GCResult,
-    GraphEntity,
     Habit,
     MemoryPromotionEvent,
     MemorySummaryProjection,
@@ -104,7 +101,6 @@ class Hippocampus:
         working_memory: WorkingMemory,
         static_memory: StaticMemory,
         dynamic_memory: DynamicMemory,
-        graph_store: GraphStore,
         memory_extractor: MemoryExtractor | None,
         backends: HippocampusBackends,
         promotion_engine: PromotionEngine | None = None,
@@ -119,7 +115,6 @@ class Hippocampus:
         self.working_memory = working_memory
         self.static_memory = static_memory
         self.dynamic_memory = dynamic_memory
-        self.graph_store = graph_store
         self.memory_extractor = memory_extractor
         self.promotion_engine = promotion_engine
         self.procedural_memory = procedural_memory
@@ -140,7 +135,6 @@ class Hippocampus:
         initialize_vector = getattr(vector_store, "initialize", None)
         if callable(initialize_vector):
             await initialize_vector()
-        graph_backend = create_graph_store(config.graph_store_backend, config)
         cache_backend = create_cache(config.cache_backend, config)
         relational_store = create_relational(config.relational_backend, config)
         await relational_store.initialize()
@@ -171,11 +165,9 @@ class Hippocampus:
         )
 
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
-        graph_store = GraphStore(graph_backend, embedding_engine)
         promotion_engine = PromotionEngine(
             agent_id=agent_id,
             vector_store=vector_store,
-            graph_store=graph_store,
             embedding_engine=embedding_engine,
             llm_light=llm_light,
         )
@@ -212,7 +204,6 @@ class Hippocampus:
             agent_id=agent_id,
             vector_store=vector_store,
             embedding_engine=embedding_engine,
-            graph_store=graph_store,
         )
         dynamic_memory = DynamicMemory(
             agent_id=agent_id,
@@ -220,7 +211,6 @@ class Hippocampus:
             embedding_engine=embedding_engine,
             half_life_days=config.dynamic_memory_half_life_days,
             decay_threshold=config.decay_threshold,
-            graph_store=graph_store,
         )
 
         instance = cls(
@@ -229,7 +219,6 @@ class Hippocampus:
             working_memory=working_memory,
             static_memory=static_memory,
             dynamic_memory=dynamic_memory,
-            graph_store=graph_store,
             memory_extractor=None,
             backends=backends,
             promotion_engine=promotion_engine,
@@ -248,7 +237,6 @@ class Hippocampus:
         return instance
 
     async def close(self) -> None:
-        await self.graph_store.close()
         await self._relational_store.close()
         close_vector = getattr(self._vector_store, "close", None)
         if callable(close_vector):
@@ -288,8 +276,7 @@ class Hippocampus:
         query: str,
         container: str,
         top_k: int = 10,
-        include_graph: bool = True,
-    ) -> list[MemoryUnit | GraphEntity]:
+    ) -> list[MemoryUnit]:
         query_embedding = await self._embedding.embed(query)
         static_results = await self.static_memory.search(
             query,
@@ -303,10 +290,7 @@ class Hippocampus:
         )
 
         candidates = static_results + dynamic_results
-        graph_results: list[GraphEntity] = []
-        if include_graph:
-            graph_results = await self.graph_store.search(query, container, top_k=top_k)
-        if not candidates and not graph_results:
+        if not candidates:
             return []
 
         selected: list[MemoryUnit] = []
@@ -346,17 +330,7 @@ class Hippocampus:
 
         selected = await self._usage_tracker.record_access(selected)
 
-        final_results: list[MemoryUnit | GraphEntity] = list(selected)
-        seen_ids = {item.id for item in selected}
-        for node in graph_results:
-            if node.id in seen_ids:
-                continue
-            final_results.append(node)
-            seen_ids.add(node.id)
-            if len(final_results) >= top_k:
-                break
-
-        return final_results
+        return list(selected)
 
     async def search(
         self,

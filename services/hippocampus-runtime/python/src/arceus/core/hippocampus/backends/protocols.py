@@ -4,8 +4,6 @@ from datetime import datetime
 from typing import Protocol
 
 from arceus.core.hippocampus.types import (
-    GraphEntity,
-    GraphRelationship,
     Habit,
     MemoryType,
     MemoryUnit,
@@ -102,36 +100,6 @@ class PatternStore(Protocol):
     async def list_all(self) -> list[Pattern]: ...
 
     async def update_status(self, pattern_id: str, status: PatternStatus) -> None: ...
-
-
-class GraphStoreBackend(Protocol):
-    async def close(self) -> None: ...
-
-    async def create_node(self, entity: GraphEntity) -> str: ...
-
-    async def get_node(self, node_id: str) -> GraphEntity | None: ...
-
-    async def update_node(self, node_id: str, updates: dict) -> None: ...
-
-    async def create_edge(self, rel: GraphRelationship) -> str: ...
-
-    async def vector_search(
-        self,
-        embedding: list[float],
-        container: str,
-        top_k: int,
-    ) -> list[GraphEntity]: ...
-
-    async def get_neighbors(
-        self,
-        node_id: str,
-        max_hops: int,
-        relation_types: list[str] | None = None,
-    ) -> list[GraphEntity]: ...
-
-    async def get_edges(self, node_id: str) -> list[GraphRelationship]: ...
-
-    async def cypher_query(self, query: str, params: dict) -> list[GraphEntity]: ...
 
 
 class LLMEngine(Protocol):

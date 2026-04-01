@@ -95,7 +95,6 @@ describe("HippocampusRuntimeManager", () => {
         query: "why",
         container: "default",
         top_k: 10,
-        include_graph: true,
       }),
     ).rejects.toThrow("timed out");
   });
@@ -111,7 +110,6 @@ describe("HippocampusRuntimeManager", () => {
         query: "boom",
         container: "default",
         top_k: 10,
-        include_graph: true,
       }),
     ).rejects.toThrow("fixture crash on recall");
 

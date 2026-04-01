@@ -14,17 +14,14 @@ from arceus.core.hippocampus.backends.protocols import (
     LLMEngine,
     VectorStore,
 )
-from arceus.core.hippocampus.engines.graph_store import GraphStore
 from arceus.core.hippocampus.prompts import (
     CONTRADICTION_CHECK_PROMPT,
     PROMOTION_REASON_PROMPT,
 )
 from arceus.core.hippocampus.types import (
-    GraphRelationship,
     MemoryPromotionEvent,
     MemoryType,
     MemoryUnit,
-    RelationType,
 )
 from arceus.core.hippocampus.utils.similarity import cosine_similarity
 from arceus.core.hippocampus.utils.time import parse_utc_iso, utc_now
@@ -42,13 +39,11 @@ class PromotionEngine:
         self,
         agent_id: str,
         vector_store: VectorStore,
-        graph_store: GraphStore,
         embedding_engine: EmbeddingEngine,
         llm_light: LLMEngine,
     ) -> None:
         self._agent_id = agent_id
         self._vector_store = vector_store
-        self._graph_store = graph_store
         self._embedding = embedding_engine
         self._llm = llm_light
         self._event_log: deque[MemoryPromotionEvent] = deque(maxlen=200)
@@ -136,15 +131,6 @@ class PromotionEngine:
         )
         await self._vector_store.upsert(promoted)
         await self._vector_store.soft_delete(mem.id, reason="promoted_to_static")
-        await self._graph_store.ensure_memory_node(mem)
-        await self._graph_store.ensure_memory_node(promoted)
-
-        edge = GraphRelationship(
-            source_id=promoted.id,
-            target_id=mem.id,
-            relation_type=RelationType.PROMOTED_FROM,
-        )
-        await self._graph_store.add_relationship(edge)
 
         return MemoryPromotionEvent(
             agent_id=self._agent_id,

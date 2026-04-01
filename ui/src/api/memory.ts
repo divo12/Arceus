@@ -5,7 +5,6 @@ export interface MemorySummary {
   total_dynamic: number;
   active_habits: Array<{ trigger: string; action: string; confidence: number }>;
   priming_prompt: string;
-  graph_node_count: number;
   top_patterns?: Array<Record<string, unknown>>;
   current_state?: Record<string, unknown>;
   recent_learnings?: string[];
@@ -24,30 +23,6 @@ export interface MemoryListItem {
   created_at: string | null;
   updated_at: string | null;
   access_count: number;
-}
-
-export interface GraphNode {
-  id: string;
-  name: string;
-  entity_type: string;
-  mention_count: number;
-  created_at?: string;
-  content?: string;
-  confidence?: number | null;
-}
-
-export interface GraphEdge {
-  source_id: string;
-  target_id: string;
-  relation_type: string;
-  weight: number;
-}
-
-export interface GraphMemoryView {
-  center_node: GraphNode | null;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  depth: number;
 }
 
 export interface PromotionEvent {
@@ -151,55 +126,6 @@ function buildQuery(params: Record<string, string | number | undefined>) {
     query.set(key, String(value));
   }
   return query.toString();
-}
-
-function normalizeGraphNode(input: unknown): GraphNode {
-  const value = (input ?? {}) as Record<string, unknown>;
-  return {
-    id: String(value.id ?? ""),
-    name: String(value.name ?? value.content ?? value.id ?? "Unknown"),
-    entity_type: String(value.entity_type ?? value.entityType ?? "memory"),
-    mention_count:
-      typeof value.mention_count === "number"
-        ? value.mention_count
-        : typeof value.mentionCount === "number"
-          ? value.mentionCount
-          : 1,
-    created_at:
-      typeof value.created_at === "string"
-        ? value.created_at
-        : typeof value.createdAt === "string"
-          ? value.createdAt
-          : undefined,
-    content: typeof value.content === "string" ? value.content : undefined,
-    confidence: typeof value.confidence === "number" ? value.confidence : null,
-  };
-}
-
-function normalizeGraphEdge(input: unknown): GraphEdge {
-  const value = (input ?? {}) as Record<string, unknown>;
-  return {
-    source_id: String(value.source_id ?? value.sourceId ?? ""),
-    target_id: String(value.target_id ?? value.targetId ?? ""),
-    relation_type: String(value.relation_type ?? value.relationType ?? "related_to"),
-    weight:
-      typeof value.weight === "number"
-        ? value.weight
-        : typeof value.score === "number"
-          ? value.score
-          : 1,
-  };
-}
-
-function normalizeGraphView(input: unknown): GraphMemoryView {
-  const value = (input ?? {}) as Record<string, unknown>;
-  const nodes = Array.isArray(value.nodes) ? value.nodes.map(normalizeGraphNode) : [];
-  return {
-    center_node: value.center_node ? normalizeGraphNode(value.center_node) : null,
-    nodes,
-    edges: Array.isArray(value.edges) ? value.edges.map(normalizeGraphEdge) : [],
-    depth: typeof value.depth === "number" ? value.depth : 2,
-  };
 }
 
 function normalizePromotionEvent(
@@ -318,22 +244,6 @@ export const memoryApi = {
         quality: params.quality,
       },
     ),
-
-  graphView: async (agentId: string, query: string, container?: string, depth = 2) => {
-    const params = buildQuery({ query, container, depth });
-    const result = await api.get<unknown>(`/agents/${agentId}/memory/graph?${params}`);
-    return normalizeGraphView(result);
-  },
-
-  versionHistory: async (agentId: string, memoryId: string) => {
-    const result = await api.get<unknown>(`/agents/${agentId}/memory/${memoryId}/history`);
-    if (Array.isArray(result)) {
-      return result.map(normalizeGraphNode);
-    }
-    const payload = result as Record<string, unknown>;
-    const versions = Array.isArray(payload.versions) ? payload.versions : [];
-    return versions.map(normalizeGraphNode);
-  },
 
   promotionLog: async (agentId: string, limit = 20) => {
     const params = buildQuery({ limit });

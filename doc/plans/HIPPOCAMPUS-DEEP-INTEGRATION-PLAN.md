@@ -1,19 +1,26 @@
-# Hippocampus Deep Integration Plan (v2)
+# Hippocampus Deep Integration Plan (v3 — Codex-Ready)
 
 > **Principle**: No hippocampus = no employee = no company. Hippocampus is not a feature — it is the cognitive substrate. An agent without memory is not an employee, it's a stateless function call.
 
-## What Changes from v1
+## Codex Implementation Notes
 
-The v1 plan treated hippocampus as an enhancement with graceful degradation everywhere. This v2 treats it as **infrastructure** — like the database or the adapter runtime. You don't "gracefully degrade" when the database is down. You fix it.
+Each phase is a **self-contained task**. Give Codex one phase at a time. Each phase specifies:
+- **Files to create/edit/delete** with exact paths
+- **Pattern to follow** referencing existing codebase conventions
+- **Verification command** to run after completion
+- **Dependencies** on prior phases
 
-| v1 (Feature Mindset) | v2 (Infrastructure Mindset) |
-|---|---|
-| `if (mode === "off") return null` | Mode "off" only valid during initial setup/migration |
-| `buildMemoryContextForRun` returns null on failure → run continues | Pre-run memory hydration is a **readiness gate** — run waits or retries |
-| `extractMemoriesFromRun` is fire-and-forget (`void`) | Post-run extraction is **mandatory** with retry queue |
-| Memory is injected as optional context | Memory tools are part of the agent's action space |
-| Python runtime crash → silent degradation | Python runtime crash → agent enters "degraded" status with alert |
-| Agent created without priming state | Agent birth includes memory initialization (priming + seed memories) |
+**Codebase conventions Codex must follow:**
+- Services are factory functions: `export function xxxService(db: Db) { return { method1, method2 }; }`
+- No classes, no DI containers — composition via function arguments
+- Direct Drizzle ORM calls in service methods — no repository layer
+- Errors: `throw notFound("...")`, `throw badRequest("...")` from `server/src/errors.ts`
+- Routes: Express `Router()` with `validate(schema)` middleware
+- Schema: one `pgTable()` per file in `packages/db/src/schema/`, re-export from `index.ts`
+- Tests: Vitest with `vi.fn()` mocks, chainable DB stubs
+- Timestamps: `timestamp("...", { withTimezone: true }).notNull().defaultNow()`
+- IDs: `uuid("id").primaryKey().defaultRandom()`
+- Foreign keys: `references(() => table.id)` with arrow function
 
 ---
 
@@ -22,9 +29,9 @@ The v1 plan treated hippocampus as an enhancement with graceful degradation ever
 ### What Exists
 - **Python kernel**: 5 tiers, 6 engines, 135 passing tests — complete and battle-tested
 - **TypeScript bridge**: `hippocampus-bridge.ts`, JSON-RPC over stdio subprocess
-- **Heartbeat hooks**: `buildMemoryContextForRun` (pre-run, line 1747 of heartbeat/index.ts) and `extractMemoriesFromRun` (post-run, line 1883) — both treat memory as optional
+- **Heartbeat hooks**: `buildMemoryContextForRun` (pre-run, line 941 of heartbeat/index.ts) and `extractMemoriesFromRun` (post-run, line 1077) — both treat memory as optional
 - **Contract types**: `hippocampus-contract.ts` mirrors Python types
-- **Modularization started**: heartbeat is now `heartbeat/` folder with `helpers.ts`, `types.ts`, `sessions.ts`, `workspace.ts`, `org-context.ts` extracted
+- **Modularization complete**: heartbeat is now `heartbeat/` folder (index.ts ~1649 lines) with `types.ts`, `helpers.ts`, `org-context.ts`, `sessions.ts`, `workspace.ts`, `run-ops.ts`, `process-recovery.ts`, `wakeup.ts`, `cancellation.ts`, `run-summary.ts` extracted. Memory hooks remain in `index.ts` inside `executeRun`.
 
 ### What's Broken
 1. **No memory tables in main DB** — hippocampus uses a separate `hippocampus.*` PostgreSQL schema, invisible to Drizzle ORM
@@ -32,13 +39,13 @@ The v1 plan treated hippocampus as an enhancement with graceful degradation ever
 3. **Every memory read requires Python subprocess RPC** — even simple recall is a cross-process round-trip
 4. **DisabledHippocampusBridge is the default** — `hippocampusBridge` initializes as disabled (hippocampus-bridge.ts:271)
 5. **All memory hooks bail on `mode === "off"`** — 3 bail-out points in memory-lifecycle.ts (lines 88, 174, 248)
-6. **Post-run extraction is fire-and-forget** — `void extractMemoriesFromRun(...)` at heartbeat/index.ts:1883, failures vanish
+6. **Post-run extraction is fire-and-forget** — `void extractMemoriesFromRun(...)` at heartbeat/index.ts:1077, failures vanish
 7. **Agent creation has zero memory initialization** — no priming state, no seed memories, no readiness check
 8. **Control-plane tables from the design doc don't exist** — `memory_bindings`, `memory_operations` never built
+9. **Graph/Neo4j is dead weight** — never production-deployed, heaviest infra dependency, being removed
+10. **Redis is optional** — working memory falls back to in-process Python dicts, lost on crash
 
-### Python vs TypeScript Decision
-
-**Keep Python for intelligence. Move data plane to TypeScript.**
+### Architecture Decision: Keep Python for Intelligence, Move Data Plane to TypeScript
 
 | Python (Intelligence Engine) | TypeScript (Data Plane) |
 |---|---|
@@ -48,9 +55,8 @@ The v1 plan treated hippocampus as an enhancement with graceful degradation ever
 | `MemoryExtractor` — LLM fact extraction | Habit/pattern queries |
 | `PromotionEngine` — tier lifecycle | Memory operation audit log |
 | `GarbageCollector` — decay | API routes, control-plane |
-| `GraphStore` — Neo4j traversal | Agent memory initialization |
-
-**Why not full conversion**: `sentence-transformers` wraps PyTorch (Python-only). The LLM prompt chains in `ReasoningBank`/`PatternLearner`/`MemoryExtractor` are 1500+ lines of tested Python. Converting = weeks + high regression risk. Hybrid = days + low risk.
+| — | Agent memory initialization |
+| — | Redis working memory (ioredis) |
 
 ---
 
@@ -73,9 +79,11 @@ The v1 plan treated hippocampus as an enhancement with graceful degradation ever
 │    memory-lifecycle.ts   ← Pre/post-run hooks (readiness-gated)      │
 │    memory-readiness.ts   ← NEW: health checks, readiness gates       │
 │    memory-init.ts        ← NEW: agent birth memory initialization    │
+│    redis.ts              ← NEW: singleton ioredis client             │
+│    working-memory.ts     ← NEW: Redis working memory ops            │
 │                                                                      │
 │  Reads NEVER cross subprocess boundary.                              │
-│  Writes from TS go directly to Drizzle.                              │
+│  Writes from TS go directly to Drizzle + Redis.                      │
 │  Writes from Python intelligence go to same tables (shared schema).  │
 └──────────────────────────┬───────────────────────────────────────────┘
                            │
@@ -89,9 +97,9 @@ The v1 plan treated hippocampus as an enhancement with graceful degradation ever
 │  processTrajectory()   ← Judge/distill/pattern/habit pipeline        │
 │  runPromotions()       ← Tier lifecycle                              │
 │  runGC()               ← Decay + cleanup                             │
-│  graphSearch()         ← Neo4j traversal                             │
 │  getEmbedding()        ← Expose embedding as a service               │
 │                                                                      │
+│  Shares: same Postgres (DATABASE_URL), same Redis (REDIS_URL)        │
 │  Crash → auto-restart with backoff (existing)                        │
 │  Crash > threshold → agent status "memory_degraded" + alert          │
 │  Intelligence is async/background — never blocks the run critical    │
@@ -107,10 +115,11 @@ CRITICAL PATH (blocks run start):
   2. Get query embedding      → Python RPC (~5ms)
   3. Recall relevant memories → TypeScript (pgvector, ~3ms)
   4. Get active habits        → TypeScript (Drizzle, ~1ms)
-  Total: ~10ms
+  5. Load working memory      → TypeScript (Redis, ~1ms)
+  Total: ~11ms
 
   Fallback if Python embedding unavailable:
-    → Use cached embedding from last successful recall for same agent
+    → Use cached embedding from Redis for same agent
     → If no cache: use zero-vector recall (returns most recent memories)
     → NEVER skip memory injection entirely
 
@@ -119,103 +128,286 @@ BACKGROUND PATH (after run completes):
   2. Process trajectory           → Python RPC (LLM, ~3-8s)
   3. Write extracted memories     → TypeScript (Drizzle)
   4. Update priming state         → TypeScript (Drizzle)
+  5. Clear working memory         → TypeScript (Redis)
   Total: ~5-13s async
 
   Failure handling:
-    → Queue failed extractions for retry (max 3 attempts)
+    → Queue failed extractions for retry (max 3 attempts, exponential backoff)
     → Log to memory_operations with error
     → After 3 failures: emit "memory:extraction_failed" live event
     → NEVER silently discard — the agent's learning depends on this
+```
+
+### Infrastructure (3 required services)
+
+```
+┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐
+│  Postgres+pgvector │  │       Redis        │  │  Python Runtime    │
+│  (DATABASE_URL)    │  │    (REDIS_URL)     │  │  (stdio subprocess)│
+│                    │  │                    │  │                    │
+│  • Memory tables   │  │  • Working memory  │  │  • Embeddings      │
+│  • Habits/patterns │  │  • Conv buffers    │  │  • Extraction      │
+│  • Priming state   │  │  • Cross-run       │  │  • Promotions      │
+│  • Audit log       │  │    handoff         │  │  • GC              │
+│  • pgvector recall │  │  • Dedup windows   │  │  • Pattern learning│
+└────────────────────┘  └────────────────────┘  └────────────────────┘
+     REQUIRED               REQUIRED               REQUIRED
 ```
 
 ---
 
 ## Phases
 
+---
+
 ### Phase 0: Remove the "Off" Escape Hatch
 
-**Goal**: Eliminate `DisabledHippocampusBridge` as a valid production state. Memory is not optional.
+**Goal**: Eliminate `DisabledHippocampusBridge` as a valid production state.
 
-**Risk: Low** — behavioral change in config, not code logic.
+**Depends on**: Nothing
+**Risk**: Low
 
-#### Steps
+#### Codex Task
 
-1. **Rename `PAPERCLIP_HIPPOCAMPUS_MODE`**:
-   - `"off"` → `"setup"` (only valid during initial server setup / migration)
-   - `"embedded"` → `"active"` (normal operation)
-   - Add `"degraded"` state (Python down, TypeScript reads still work)
+**Read first** (understand before editing):
+- `server/src/config.ts` — find `PAPERCLIP_HIPPOCAMPUS_MODE` handling
+- `server/src/services/memory-lifecycle.ts` — find the 3 bail-out points (`if (hippocampusBridge.mode === "off")`)
+- `server/src/services/hippocampus-bridge.ts` — find `DisabledHippocampusBridge` class
 
-2. **Change default from `"off"` to `"active"`** in `server/src/config.ts`
+**Edit `server/src/config.ts`**:
+- Rename mode values: `"off"` → `"setup"`, `"embedded"` → `"active"`
+- Add `"degraded"` as valid mode (Python down, TS reads work)
+- Change default from `"off"` to `"active"`
+- Follow existing config pattern: `const mode = process.env.PAPERCLIP_HIPPOCAMPUS_MODE ?? "active"`
 
-3. **Add server startup check**: if mode is `"active"`, verify memory tables exist before accepting traffic. If tables missing, fail with clear migration instructions.
+**Edit `server/src/services/memory-lifecycle.ts`**:
+- Replace 3 bail-out patterns:
+  ```typescript
+  // BEFORE
+  if (hippocampusBridge.mode === "off") return null;
 
-4. **Replace bail-out patterns** in `memory-lifecycle.ts`:
-   ```typescript
-   // BEFORE (3 bail-out points)
-   if (hippocampusBridge.mode === "off") return null;
+  // AFTER — remove the bail-out entirely
+  // TypeScript reads always work. Python RPC calls have explicit fallback.
+  ```
 
-   // AFTER
-   // No bail-out. TypeScript reads always work.
-   // Python RPC calls have explicit fallback behavior.
-   ```
+**Edit `server/src/services/hippocampus-bridge.ts`**:
+- Keep `DisabledHippocampusBridge` but restrict to `"setup"` mode only
+- In `"active"` mode, TypeScript memory store handles reads — Python bridge only for intelligence
 
-5. **`DisabledHippocampusBridge`** remains but is only used during `"setup"` mode. In `"active"` mode, TypeScript memory store handles reads directly — Python bridge is only needed for intelligence operations.
-
-**Verification**: Server refuses to start in `"active"` mode without memory tables. Existing tests updated.
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
 
 ---
 
 ### Phase 1: Memory Schema in Main Drizzle DB
 
-**Goal**: 6 new tables in `packages/db/`, first-class Drizzle citizens.
+**Goal**: 6 new tables in `packages/db/`, first-class Drizzle citizens. Same database as all other Arceus tables.
 
-**Risk: Low** — additive migration.
+**Depends on**: Nothing (parallel with Phase 0)
+**Risk**: Low — additive migration
 
-#### New schema files in `packages/db/src/schema/`
+#### Codex Task
 
-**`memory_units.ts`** — Core memory table with pgvector:
-- `id`, `companyId`, `agentId`, `content`, `embedding` (vector 384)
-- `memoryType` ("static" | "dynamic" | "working")
-- `confidence`, `relevanceScore`, `container`, `visibility`
-- `metadata` (jsonb), `sourceType`, `sourceId`, `provenance`
-- `version`, `previousVersionId`, `promotionStatus`
-- `expiresAt`, `deletedAt`, `deleteReason`
-- `createdAt`, `updatedAt`
-- Indexes: HNSW on embedding, compound on (agentId, memoryType), on container, on expiresAt
+**Read first** (learn the schema pattern):
+- `packages/db/src/schema/agents.ts` — reference for table definition style
+- `packages/db/src/schema/index.ts` — see how tables are exported
+- `packages/db/package.json` — check if `drizzle-orm` already has vector support, or if `pgvector` extension is needed
 
-**`memory_habits.ts`** — Procedural habits:
-- `id`, `companyId`, `agentId`, `triggerCondition`, `action`
-- `confidence`, `usageCount`, `isActive`, `sourcePatternId`
+**Create `packages/db/src/schema/memory_units.ts`**:
+```typescript
+import { pgTable, uuid, text, timestamp, jsonb, integer, real, index, vector } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
+import { companies } from "./companies.js";
 
-**`memory_patterns.ts`** — Learned patterns:
-- `id`, `companyId`, `agentId`, `description`, `strategy`, `embedding` (vector 384)
-- `usageCount`, `successRate`, `status`, `domain`
-- Index: HNSW on embedding
-
-**`memory_priming_state.ts`** — Agent disposition (one row per agent):
-- `agentId` (PK), `companyId`, `payload` (jsonb: confidence, caution, morale, recent_events)
-- `updatedAt`
-
-**`memory_bindings.ts`** — Control-plane provider config:
-- `id`, `companyId`, `providerKey`, `config` (jsonb), `enabled`
-
-**`memory_operations.ts`** — Audit log:
-- `id`, `companyId`, `agentId`, `bindingId`, `operationType`
-- `scope` (jsonb), `sourceRef` (jsonb), `resultCount`
-- `latencyMs`, `costCents`, `inputTokens`, `outputTokens`, `embeddingTokens`
-- `success`, `error`
-
-#### Migration
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
--- 6 CREATE TABLE statements
--- HNSW indexes on memory_units.embedding and memory_patterns.embedding
+export const memoryUnits = pgTable(
+  "memory_units",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    agentId: uuid("agent_id").notNull().references(() => agents.id),
+    content: text("content").notNull(),
+    embedding: vector("embedding", { dimensions: 384 }),
+    memoryType: text("memory_type").notNull().$type<"static" | "dynamic" | "working">(),
+    confidence: real("confidence").notNull().default(0.5),
+    relevanceScore: real("relevance_score"),
+    container: text("container").notNull(),
+    visibility: text("visibility").notNull().default("private").$type<"private" | "task_scoped" | "startup_shared" | "board_visible">(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    sourceType: text("source_type"),
+    sourceId: text("source_id"),
+    provenance: text("provenance"),
+    version: integer("version").notNull().default(1),
+    previousVersionId: uuid("previous_version_id"),
+    promotionStatus: text("promotion_status").default("pending").$type<"pending" | "promoted" | "declined" | "expired">(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deleteReason: text("delete_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    agentTypeIdx: index("memory_units_agent_type_idx").on(table.agentId, table.memoryType),
+    containerIdx: index("memory_units_container_idx").on(table.container),
+    expiresIdx: index("memory_units_expires_idx").on(table.expiresAt),
+    companyIdx: index("memory_units_company_idx").on(table.companyId),
+    // HNSW index on embedding — create via raw SQL migration (Drizzle doesn't support HNSW syntax)
+  }),
+);
 ```
 
-Export all tables from `packages/db/src/schema/index.ts`.
+**Create `packages/db/src/schema/memory_habits.ts`**:
+```typescript
+import { pgTable, uuid, text, timestamp, real, integer, boolean } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
+import { companies } from "./companies.js";
 
-**Verification**: `pnpm build` passes. Migration applies. `drizzle-kit check` clean.
+export const memoryHabits = pgTable("memory_habits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id").notNull().references(() => companies.id),
+  agentId: uuid("agent_id").notNull().references(() => agents.id),
+  triggerCondition: text("trigger_condition").notNull(),
+  action: text("action").notNull(),
+  confidence: real("confidence").notNull().default(0.5),
+  usageCount: integer("usage_count").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  sourcePatternId: uuid("source_pattern_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+```
+
+**Create `packages/db/src/schema/memory_patterns.ts`**:
+```typescript
+import { pgTable, uuid, text, timestamp, real, integer, vector, index } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
+import { companies } from "./companies.js";
+
+export const memoryPatterns = pgTable(
+  "memory_patterns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    agentId: uuid("agent_id").notNull().references(() => agents.id),
+    description: text("description").notNull(),
+    strategy: text("strategy").notNull(),
+    embedding: vector("embedding", { dimensions: 384 }),
+    usageCount: integer("usage_count").notNull().default(0),
+    successRate: real("success_rate").notNull().default(0),
+    status: text("status").notNull().default("active").$type<"active" | "deprecated" | "failed">(),
+    domain: text("domain"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    agentIdx: index("memory_patterns_agent_idx").on(table.agentId),
+  }),
+);
+```
+
+**Create `packages/db/src/schema/memory_priming_state.ts`**:
+```typescript
+import { pgTable, uuid, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
+import { companies } from "./companies.js";
+
+export const memoryPrimingState = pgTable("memory_priming_state", {
+  agentId: uuid("agent_id").primaryKey().references(() => agents.id),
+  companyId: uuid("company_id").notNull().references(() => companies.id),
+  payload: jsonb("payload").$type<{
+    confidence: number;
+    caution: number;
+    morale: number;
+    recentEvents: string[];
+  }>().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+```
+
+**Create `packages/db/src/schema/memory_bindings.ts`**:
+```typescript
+import { pgTable, uuid, text, boolean, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { companies } from "./companies.js";
+
+export const memoryBindings = pgTable("memory_bindings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id").notNull().references(() => companies.id),
+  providerKey: text("provider_key").notNull(),
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+```
+
+**Create `packages/db/src/schema/memory_operations.ts`**:
+```typescript
+import { pgTable, uuid, text, integer, real, boolean, jsonb, timestamp, index } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
+import { companies } from "./companies.js";
+
+export const memoryOperations = pgTable(
+  "memory_operations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    agentId: uuid("agent_id").references(() => agents.id),
+    bindingId: uuid("binding_id"),
+    operationType: text("operation_type").notNull(),
+    scope: jsonb("scope").$type<Record<string, unknown>>(),
+    sourceRef: jsonb("source_ref").$type<Record<string, unknown>>(),
+    resultCount: integer("result_count"),
+    latencyMs: integer("latency_ms"),
+    costCents: real("cost_cents"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    embeddingTokens: integer("embedding_tokens"),
+    success: boolean("success").notNull(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    companyAgentIdx: index("memory_ops_company_agent_idx").on(table.companyId, table.agentId),
+    typeIdx: index("memory_ops_type_idx").on(table.operationType),
+  }),
+);
+```
+
+**Edit `packages/db/src/schema/index.ts`** — add exports:
+```typescript
+export { memoryUnits } from "./memory_units.js";
+export { memoryHabits } from "./memory_habits.js";
+export { memoryPatterns } from "./memory_patterns.js";
+export { memoryPrimingState } from "./memory_priming_state.js";
+export { memoryBindings } from "./memory_bindings.js";
+export { memoryOperations } from "./memory_operations.js";
+```
+
+**Create migration `packages/db/src/migrations/XXXX_memory_tables.sql`**:
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Tables are created by Drizzle push/generate
+-- HNSW indexes (not expressible in Drizzle schema):
+CREATE INDEX IF NOT EXISTS memory_units_embedding_hnsw_idx
+  ON memory_units USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX IF NOT EXISTS memory_patterns_embedding_hnsw_idx
+  ON memory_patterns USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+
+-- Self-referencing FK for version chains:
+ALTER TABLE memory_units
+  ADD CONSTRAINT memory_units_previous_version_fk
+  FOREIGN KEY (previous_version_id) REFERENCES memory_units(id);
+```
+
+**Verification**:
+```bash
+cd packages/db && pnpm build
+cd ../../server && pnpm build
+```
 
 ---
 
@@ -223,25 +415,103 @@ Export all tables from `packages/db/src/schema/index.ts`.
 
 **Goal**: Memory types importable by server, UI, CLI, adapters.
 
-**Risk: Low** — purely additive.
+**Depends on**: Nothing (parallel with Phase 0, 1)
+**Risk**: Low — purely additive
 
-#### Create `packages/shared/src/memory-types.ts`
+#### Codex Task
 
-Consolidate from `hippocampus-contract.ts`:
-- `MemoryTier`, `MemoryVisibility`, `MemoryPromotionStatus`
-- `MemoryItem`, `MemoryHabit`, `MemoryPrimingState`
-- `MemoryScope`, `MemorySourceRef`, `MemoryUsage`
-- `MemoryAdapter` interface (from control-plane plan)
+**Read first**:
+- `packages/shared/src/index.ts` — see export pattern
+- `packages/shared/src/constants.ts` — see constant pattern
+- `server/src/services/hippocampus-contract.ts` — source of types to move
 
-#### Add constants to `packages/shared/src/constants.ts`
-
+**Create `packages/shared/src/memory-types.ts`**:
 ```typescript
 export const MEMORY_TIERS = ["static", "dynamic", "working"] as const;
+export type MemoryTier = (typeof MEMORY_TIERS)[number];
+
 export const MEMORY_VISIBILITIES = ["private", "task_scoped", "startup_shared", "board_visible"] as const;
-export const INITIAL_PRIMING_STATE = { confidence: 0.5, caution: 0.5, morale: 0.7, recentEvents: [] } as const;
+export type MemoryVisibility = (typeof MEMORY_VISIBILITIES)[number];
+
+export const MEMORY_PROMOTION_STATUSES = ["pending", "promoted", "declined", "expired"] as const;
+export type MemoryPromotionStatus = (typeof MEMORY_PROMOTION_STATUSES)[number];
+
+export const INITIAL_PRIMING_STATE = {
+  confidence: 0.5,
+  caution: 0.5,
+  morale: 0.7,
+  recentEvents: [] as string[],
+} as const;
+
+export interface MemoryItem {
+  id: string;
+  agentId: string;
+  companyId: string;
+  content: string;
+  memoryType: MemoryTier;
+  confidence: number;
+  container: string;
+  visibility: MemoryVisibility;
+  sourceType: string | null;
+  sourceId: string | null;
+  version: number;
+  previousVersionId: string | null;
+  promotionStatus: MemoryPromotionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryHabit {
+  id: string;
+  agentId: string;
+  triggerCondition: string;
+  action: string;
+  confidence: number;
+  usageCount: number;
+  isActive: boolean;
+}
+
+export interface MemoryPrimingState {
+  confidence: number;
+  caution: number;
+  morale: number;
+  recentEvents: string[];
+}
+
+export interface MemoryScope {
+  companyId: string;
+  agentId?: string;
+  container?: string;
+  memoryType?: MemoryTier;
+}
+
+export interface MemoryUsage {
+  operationType: string;
+  latencyMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  embeddingTokens?: number;
+  success: boolean;
+  error?: string;
+}
 ```
 
-**Verification**: `pnpm build` across all packages.
+**Edit `packages/shared/src/index.ts`** — add export:
+```typescript
+export * from "./memory-types.js";
+```
+
+**Edit `server/src/services/hippocampus-contract.ts`** — replace local types with imports:
+```typescript
+import type { MemoryItem, MemoryHabit, MemoryPrimingState } from "@paperclipai/shared";
+// Remove duplicate type definitions, re-export if needed
+```
+
+**Verification**:
+```bash
+cd packages/shared && pnpm build
+cd ../../server && pnpm build
+```
 
 ---
 
@@ -249,25 +519,247 @@ export const INITIAL_PRIMING_STATE = { confidence: 0.5, caution: 0.5, morale: 0.
 
 **Goal**: Direct Drizzle reads/writes — hot path never crosses subprocess boundary.
 
-**Risk: Medium** — new service, core to the system.
+**Depends on**: Phase 1 (tables must exist)
+**Risk**: Medium — new service, core to the system
 
-#### Create `server/src/services/memory-store.ts`
+#### Codex Task
 
-Factory: `memoryStoreService(db: Db)` returns:
+**Read first** (learn service pattern):
+- `server/src/services/costs.ts` — reference for factory function pattern
+- `server/src/services/secrets.ts` — reference for CRUD service
+- `server/src/services/index.ts` — see how services are exported
+- `server/src/errors.ts` — error factory functions
 
-| Method | What it does | SQL |
-|--------|-------------|-----|
-| `writeMemory(input)` | Insert memory_unit | Drizzle insert |
-| `recall(input)` | pgvector cosine similarity search | Raw SQL with `<=>` operator, tier boosting, container filtering |
-| `getActiveHabits(agentId)` | List active habits | Drizzle select where isActive=true |
-| `getPrimingState(agentId)` | Get agent disposition | Drizzle select by PK |
-| `updatePrimingState(agentId, state)` | Upsert priming | Drizzle upsert |
-| `listMemories(filters)` | Paginated browse | Drizzle select with filters |
-| `softDelete(memoryId, reason)` | Soft-delete | Drizzle update deletedAt |
+**Create `server/src/services/memory-store.ts`**:
 
-#### Embedding: Add `getEmbedding()` to Python RPC
+Follow the factory pattern: `export function memoryStoreService(db: Db) { return { ... }; }`
 
-Add to `stdio_rpc.py`:
+```typescript
+import { and, eq, sql, desc, isNull, lt, gte } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import {
+  memoryUnits,
+  memoryHabits,
+  memoryPatterns,
+  memoryPrimingState,
+  memoryOperations,
+} from "@paperclipai/db";
+import { INITIAL_PRIMING_STATE } from "@paperclipai/shared";
+import { notFound } from "../errors.js";
+
+export function memoryStoreService(db: Db) {
+
+  async function writeMemory(input: {
+    companyId: string;
+    agentId: string;
+    content: string;
+    embedding: number[] | null;
+    memoryType: "static" | "dynamic" | "working";
+    container: string;
+    confidence?: number;
+    visibility?: "private" | "task_scoped" | "startup_shared" | "board_visible";
+    sourceType?: string;
+    sourceId?: string;
+    previousVersionId?: string;
+    expiresAt?: Date;
+    metadata?: Record<string, unknown>;
+  }) {
+    return db
+      .insert(memoryUnits)
+      .values({
+        companyId: input.companyId,
+        agentId: input.agentId,
+        content: input.content,
+        embedding: input.embedding,
+        memoryType: input.memoryType,
+        container: input.container,
+        confidence: input.confidence ?? 0.5,
+        visibility: input.visibility ?? "private",
+        sourceType: input.sourceType ?? null,
+        sourceId: input.sourceId ?? null,
+        previousVersionId: input.previousVersionId ?? null,
+        expiresAt: input.expiresAt ?? null,
+        metadata: input.metadata ?? {},
+      })
+      .returning()
+      .then((rows) => rows[0]);
+  }
+
+  async function recall(input: {
+    agentId: string;
+    embedding: number[];
+    topK?: number;
+    container?: string;
+    memoryTypes?: ("static" | "dynamic" | "working")[];
+  }) {
+    const { agentId, embedding, topK = 10, container, memoryTypes } = input;
+    const embeddingStr = `[${embedding.join(",")}]`;
+
+    // pgvector cosine similarity with tier boosting
+    const rows = await db.execute(sql`
+      SELECT id, content, memory_type, confidence, container, source_type,
+             1 - (embedding <=> ${embeddingStr}::vector) AS similarity,
+             CASE memory_type
+               WHEN 'static' THEN 0.15
+               WHEN 'dynamic' THEN 0.05
+               ELSE 0
+             END AS tier_boost
+      FROM memory_units
+      WHERE agent_id = ${agentId}
+        AND deleted_at IS NULL
+        AND embedding IS NOT NULL
+        ${container ? sql`AND container = ${container}` : sql``}
+        ${memoryTypes ? sql`AND memory_type = ANY(${memoryTypes})` : sql``}
+      ORDER BY (1 - (embedding <=> ${embeddingStr}::vector)) +
+               CASE memory_type WHEN 'static' THEN 0.15 WHEN 'dynamic' THEN 0.05 ELSE 0 END DESC
+      LIMIT ${topK}
+    `);
+    return rows;
+  }
+
+  async function recallByDate(input: {
+    agentId: string;
+    topK?: number;
+  }) {
+    // Fallback when no embedding available — return most recent memories
+    return db
+      .select()
+      .from(memoryUnits)
+      .where(and(
+        eq(memoryUnits.agentId, input.agentId),
+        isNull(memoryUnits.deletedAt),
+      ))
+      .orderBy(desc(memoryUnits.createdAt))
+      .limit(input.topK ?? 10);
+  }
+
+  async function getActiveHabits(agentId: string) {
+    return db
+      .select()
+      .from(memoryHabits)
+      .where(and(
+        eq(memoryHabits.agentId, agentId),
+        eq(memoryHabits.isActive, true),
+      ))
+      .orderBy(desc(memoryHabits.usageCount));
+  }
+
+  async function getPrimingState(agentId: string) {
+    return db
+      .select()
+      .from(memoryPrimingState)
+      .where(eq(memoryPrimingState.agentId, agentId))
+      .then((rows) => rows[0]?.payload ?? null);
+  }
+
+  async function updatePrimingState(agentId: string, companyId: string, state: typeof INITIAL_PRIMING_STATE) {
+    return db
+      .insert(memoryPrimingState)
+      .values({ agentId, companyId, payload: state })
+      .onConflictDoUpdate({
+        target: memoryPrimingState.agentId,
+        set: { payload: state, updatedAt: new Date() },
+      })
+      .returning()
+      .then((rows) => rows[0]);
+  }
+
+  async function listMemories(filters: {
+    agentId: string;
+    memoryType?: "static" | "dynamic" | "working";
+    container?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const conditions = [
+      eq(memoryUnits.agentId, filters.agentId),
+      isNull(memoryUnits.deletedAt),
+    ];
+    if (filters.memoryType) conditions.push(eq(memoryUnits.memoryType, filters.memoryType));
+    if (filters.container) conditions.push(eq(memoryUnits.container, filters.container));
+
+    return db
+      .select()
+      .from(memoryUnits)
+      .where(and(...conditions))
+      .orderBy(desc(memoryUnits.createdAt))
+      .limit(filters.limit ?? 50)
+      .offset(filters.offset ?? 0);
+  }
+
+  async function softDelete(memoryId: string, reason: string) {
+    return db
+      .update(memoryUnits)
+      .set({ deletedAt: new Date(), deleteReason: reason })
+      .where(eq(memoryUnits.id, memoryId))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+  }
+
+  async function getVersionHistory(memoryId: string) {
+    // Walk the previousVersionId chain
+    const versions = await db.execute(sql`
+      WITH RECURSIVE version_chain AS (
+        SELECT * FROM memory_units WHERE id = ${memoryId}
+        UNION ALL
+        SELECT mu.* FROM memory_units mu
+        JOIN version_chain vc ON mu.id = vc.previous_version_id
+      )
+      SELECT * FROM version_chain ORDER BY version DESC
+    `);
+    return versions;
+  }
+
+  async function logOperation(input: {
+    companyId: string;
+    agentId?: string;
+    operationType: string;
+    resultCount?: number;
+    latencyMs?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    embeddingTokens?: number;
+    success: boolean;
+    error?: string;
+  }) {
+    return db
+      .insert(memoryOperations)
+      .values(input)
+      .returning()
+      .then((rows) => rows[0]);
+  }
+
+  async function deleteExpiredWorking() {
+    return db
+      .delete(memoryUnits)
+      .where(and(
+        eq(memoryUnits.memoryType, "working"),
+        lt(memoryUnits.expiresAt, new Date()),
+      ));
+  }
+
+  return {
+    writeMemory,
+    recall,
+    recallByDate,
+    getActiveHabits,
+    getPrimingState,
+    updatePrimingState,
+    listMemories,
+    softDelete,
+    getVersionHistory,
+    logOperation,
+    deleteExpiredWorking,
+  };
+}
+```
+
+**Edit `server/src/services/index.ts`** — add export:
+```typescript
+export { memoryStoreService } from "./memory-store.js";
+```
+
+**Add `getEmbedding()` to Python RPC** — edit `services/hippocampus-runtime/python/src/arceus/core/hippocampus/stdio_rpc.py`:
 ```python
 @method
 async def getEmbedding(text: str) -> dict:
@@ -275,9 +767,18 @@ async def getEmbedding(text: str) -> dict:
     return {"embedding": vec.tolist()}
 ```
 
-TypeScript calls this one RPC for the query embedding, then does the pgvector search in Drizzle. If Python is down, fallback to cached embedding or zero-vector (returns most-recent memories by date).
+**Edit `server/src/services/hippocampus-bridge.ts`** — add TypeScript side of `getEmbedding`:
+```typescript
+async getEmbedding(text: string): Promise<{ embedding: number[] }> {
+  return this.rpc("getEmbedding", { text });
+}
+```
 
-**Verification**: Unit tests with test DB. Recall returns correct results.
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
 
 ---
 
@@ -285,28 +786,57 @@ TypeScript calls this one RPC for the query embedding, then does the pgvector se
 
 **Goal**: When an employee agent is created, it is born with memory infrastructure.
 
-**Risk: Medium** — modifies agent creation flow.
+**Depends on**: Phase 3 (memory-store must exist)
+**Risk**: Medium — modifies agent creation flow
 
-#### Create `server/src/services/memory-init.ts`
+#### Codex Task
+
+**Read first**:
+- `server/src/services/agents.ts` — find the agent creation method (insert into `agents` table)
+- `server/src/services/role-definitions.ts` — see how role definitions are queried
+
+**Create `server/src/services/memory-init.ts`**:
 
 ```typescript
-export function memoryInitService(db: Db) {
-  async function initializeAgentMemory(agent: { id: string; companyId: string; role: string; name: string }) {
-    // 1. Create priming state with INITIAL_PRIMING_STATE
-    await db.insert(memoryPrimingState).values({
-      agentId: agent.id,
-      companyId: agent.companyId,
-      payload: INITIAL_PRIMING_STATE,
-    }).onConflictDoNothing();
+import type { Db } from "@paperclipai/db";
+import { INITIAL_PRIMING_STATE } from "@paperclipai/shared";
+import { memoryStoreService } from "./memory-store.js";
+import { roleDefinitionService } from "./role-definitions.js";
+import { getHippocampusBridge } from "./hippocampus-bridge.js";
 
-    // 2. Seed identity memory (static, high confidence)
+export function memoryInitService(db: Db) {
+  const memoryStore = memoryStoreService(db);
+  const roleDefs = roleDefinitionService(db);
+
+  async function getEmbeddingWithFallback(text: string): Promise<number[] | null> {
+    try {
+      const bridge = getHippocampusBridge();
+      const result = await bridge.getEmbedding(text);
+      return result.embedding;
+    } catch {
+      return null; // Agent still gets created, embedding filled later
+    }
+  }
+
+  async function initializeAgentMemory(agent: {
+    id: string;
+    companyId: string;
+    role: string;
+    name: string;
+  }) {
+    const container = `company:${agent.companyId}:agent:${agent.id}`;
+
+    // 1. Create priming state
+    await memoryStore.updatePrimingState(agent.id, agent.companyId, { ...INITIAL_PRIMING_STATE });
+
+    // 2. Seed identity memory
     await memoryStore.writeMemory({
       companyId: agent.companyId,
       agentId: agent.id,
       content: `I am ${agent.name}, serving as ${agent.role} in this organization.`,
       embedding: await getEmbeddingWithFallback(`${agent.name} ${agent.role} identity`),
       memoryType: "static",
-      container: `company:${agent.companyId}:agent:${agent.id}`,
+      container,
       confidence: 1.0,
       visibility: "private",
       sourceType: "system",
@@ -314,32 +844,54 @@ export function memoryInitService(db: Db) {
     });
 
     // 3. Seed role-specific memories from role definitions
-    const roleDef = await roleDefinitionService.getForRole(agent.role);
+    const roleDef = await roleDefs.getByRole(agent.companyId, agent.role);
     if (roleDef?.responsibilities) {
       for (const resp of roleDef.responsibilities) {
         await memoryStore.writeMemory({
           companyId: agent.companyId,
           agentId: agent.id,
           content: resp,
-          // ... static, high confidence
+          embedding: await getEmbeddingWithFallback(resp),
+          memoryType: "static",
+          container,
+          confidence: 0.9,
+          visibility: "private",
+          sourceType: "system",
+          sourceId: "role_definition",
         });
       }
     }
+
+    await memoryStore.logOperation({
+      companyId: agent.companyId,
+      agentId: agent.id,
+      operationType: "agent_init",
+      success: true,
+    });
   }
 
   return { initializeAgentMemory };
 }
 ```
 
-#### Wire into agent creation
-
-In `server/src/services/agents.ts`, after agent insert:
+**Edit `server/src/services/agents.ts`** — after agent insert, call `initializeAgentMemory`:
 ```typescript
-// After creating the agent row
+// Find the agent creation method. After the db.insert(agents) call, add:
+const memoryInit = memoryInitService(db);
+// ... after creating agent row:
 await memoryInit.initializeAgentMemory(newAgent);
 ```
 
-**Verification**: Creating a new agent produces priming state + seed memories in DB.
+**Edit `server/src/services/index.ts`** — add export:
+```typescript
+export { memoryInitService } from "./memory-init.js";
+```
+
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
 
 ---
 
@@ -347,54 +899,81 @@ await memoryInit.initializeAgentMemory(newAgent);
 
 **Goal**: Pre-run memory hydration is mandatory. Post-run extraction retries on failure.
 
-**Risk: High** — modifies the critical run path. Most important phase.
+**Depends on**: Phase 3 (memory-store), Phase 0 (no "off" mode)
+**Risk**: High — modifies the critical run path. Most important phase.
 
-#### Update `memory-lifecycle.ts`
+#### Codex Task
 
-**Pre-run (`buildMemoryContextForRun`)**:
+**Read first** (critical — understand current behavior):
+- `server/src/services/memory-lifecycle.ts` — the full file, understand `buildMemoryContextForRun` and `extractMemoriesFromRun`
+- `server/src/services/heartbeat/index.ts` lines 935-960 — where `buildMemoryContextForRun` is called
+- `server/src/services/heartbeat/index.ts` lines 1070-1090 — where `extractMemoriesFromRun` is called
+
+**Edit `server/src/services/memory-lifecycle.ts`**:
+
+Rewrite `buildMemoryContextForRun` — it must NEVER return `null`:
 
 ```
 BEFORE:
   if (mode === "off") return null;          ← bail
-  if (!healthy) return null;                 ← bail
-  on any error → return null                 ← silent fail
+  if (!healthy) return null;                ← bail
+  on any error → return null                ← silent fail
 
 AFTER:
-  1. Read priming state (TypeScript, always works)
-  2. Try getEmbedding from Python
-     → Success: use embedding for recall
-     → Fail: use cached embedding for this agent (from last successful recall)
-     → No cache: use date-based recall (most recent memories, no vector search)
-  3. Recall memories (TypeScript pgvector or date-based fallback)
-  4. Get habits (TypeScript, always works)
-  5. Build markdown context
-  6. ALWAYS return a context string (even if minimal: just priming + identity)
-  7. NEVER return null — every employee runs with SOME memory context
+  1. Read priming state (Drizzle, always works)
+  2. Try getEmbedding from Python bridge
+     → Success: use embedding for pgvector recall
+     → Fail: use cached embedding from Redis for this agent
+     → No cache: use recallByDate (most recent memories, no vector search)
+  3. Recall memories via memoryStore (TypeScript, always works)
+  4. Get habits via memoryStore (TypeScript, always works)
+  5. Build markdown context string
+  6. ALWAYS return a non-empty string — at minimum: priming + identity
+  7. NEVER return null
 ```
 
-**Post-run (`extractMemoriesFromRun`)**:
+Rewrite `extractMemoriesFromRun` — add retry with exponential backoff:
 
 ```
 BEFORE:
-  void extractMemoriesFromRun(...)          ← fire-and-forget, failures vanish
+  void extractMemoriesFromRun(...)          ← fire-and-forget
 
 AFTER:
-  1. Call bridge.extract() with retry (max 3, exponential backoff)
+  1. Call bridge.extract() with retry (max 3, backoff: 1s, 2s, 4s)
   2. Call bridge.processTrajectory() with retry
-  3. Write results via memoryStore.writeMemory() (TypeScript)
-  4. Update priming state via memoryStore.updatePrimingState() (TypeScript)
-  5. Log to memory_operations table (success or failure)
-  6. On final failure: emit "memory:extraction_failed" live event
-  7. NEVER silently discard — log the failure with run context
+  3. Write results via memoryStore.writeMemory() (Drizzle)
+  4. Update priming state via memoryStore.updatePrimingState() (Drizzle)
+  5. Log to memory_operations (success or failure)
+  6. On final failure: emit "memory:extraction_failed" via publishLiveEvent
+  7. NEVER silently discard
 ```
 
-#### Update heartbeat/index.ts
-
+Use this retry helper (inline, don't create a separate utility file):
 ```typescript
-// Line 1755 — BEFORE
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, i) * 1000));
+      }
+    }
+  }
+  throw lastError;
+}
+```
+
+**Edit `server/src/services/heartbeat/index.ts`**:
+
+Line ~949 — remove the `if (memoryContext)` guard:
+```typescript
+// BEFORE
 if (memoryContext) {
   context.paperclipMemoryContext = memoryContext;
-  ...
+  // ...
 }
 
 // AFTER — memoryContext is always non-null for employees
@@ -406,18 +985,23 @@ context.paperclipSessionHandoffMarkdown = existingHandoff
 await onLog("stdout", "[paperclip] Memory context loaded.\n");
 ```
 
+Line ~1077 — replace fire-and-forget with logged catch:
 ```typescript
-// Line 1883 — BEFORE
+// BEFORE
 void extractMemoriesFromRun({...});
 
-// AFTER — tracked, retried, logged
+// AFTER
 extractMemoriesFromRun({...}).catch((err) => {
   logger.error({ err, runId: run.id, agentId: agent.id },
     "memory extraction failed after retries — agent learning lost for this run");
 });
 ```
 
-**Verification**: Runs always have memory context. Extraction failures are logged, not silent.
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
 
 ---
 
@@ -425,19 +1009,34 @@ extractMemoriesFromRun({...}).catch((err) => {
 
 **Goal**: System-level awareness of hippocampus health.
 
-**Risk: Low** — observability, non-blocking.
+**Depends on**: Phase 3 (memory-store)
+**Risk**: Low — observability
 
-#### Create `server/src/services/memory-readiness.ts`
+#### Codex Task
+
+**Read first**:
+- `server/src/routes/health.ts` — see existing health endpoint pattern
+
+**Create `server/src/services/memory-readiness.ts`**:
 
 ```typescript
+import { sql } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import { memoryPrimingState } from "@paperclipai/db";
+import { getHippocampusBridge } from "./hippocampus-bridge.js";
+import { getRedisClient } from "./redis.js";
+
 export function memoryReadinessService(db: Db) {
-  // Check if memory tables exist and are populated
+
   async function checkDataPlaneReady(): Promise<{ ready: boolean; reason?: string }> {
-    const count = await db.select({ count: sql`count(*)` }).from(memoryPrimingState);
-    return { ready: true };
+    try {
+      await db.select({ count: sql`count(*)` }).from(memoryPrimingState);
+      return { ready: true };
+    } catch (err) {
+      return { ready: false, reason: `Memory tables not accessible: ${err}` };
+    }
   }
 
-  // Check if Python intelligence engine is responsive
   async function checkIntelligenceEngineReady(): Promise<{ ready: boolean; reason?: string }> {
     try {
       const bridge = getHippocampusBridge();
@@ -448,60 +1047,85 @@ export function memoryReadinessService(db: Db) {
     }
   }
 
-  // Overall health
+  async function checkCacheReady(): Promise<{ ready: boolean; reason?: string }> {
+    try {
+      const redis = getRedisClient();
+      await redis.ping();
+      return { ready: true };
+    } catch (err) {
+      return { ready: false, reason: `Redis unreachable: ${err}` };
+    }
+  }
+
   async function getMemoryHealth() {
-    const [dataPlane, intelligence] = await Promise.all([
+    const [dataPlane, intelligence, cache] = await Promise.all([
       checkDataPlaneReady(),
       checkIntelligenceEngineReady(),
+      checkCacheReady(),
     ]);
+    const allReady = dataPlane.ready && cache.ready;
     return {
-      status: dataPlane.ready ? (intelligence.ready ? "healthy" : "degraded") : "down",
+      status: allReady ? (intelligence.ready ? "healthy" : "degraded") : "down",
       dataPlane,
       intelligence,
+      cache,
     };
   }
 
-  return { checkDataPlaneReady, checkIntelligenceEngineReady, getMemoryHealth };
+  return { checkDataPlaneReady, checkIntelligenceEngineReady, checkCacheReady, getMemoryHealth };
 }
 ```
 
-#### Expose in health endpoint
-
-Add memory health to `GET /api/health`:
-```json
-{
-  "status": "ok",
-  "memory": {
-    "status": "healthy",
-    "dataPlane": { "ready": true },
-    "intelligence": { "ready": true }
-  }
-}
+**Edit `server/src/routes/health.ts`** — add memory health to response:
+```typescript
+// In the health route handler, add:
+const memoryHealth = await memoryReadiness.getMemoryHealth();
+// Include in response: { ...existing, memory: memoryHealth }
 ```
 
-#### Agent status integration
+**Edit `server/src/services/index.ts`** — add export:
+```typescript
+export { memoryReadinessService } from "./memory-readiness.js";
+```
 
-When Python runtime is down for >5 minutes, agents that need intelligence operations (extraction, learning) should show `memoryStatus: "degraded"` in their dashboard. Reads still work (TypeScript), but learning is paused.
-
-**Verification**: Health endpoint returns memory status. Degraded state visible in agent dashboard.
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
 
 ---
 
 ### Phase 7: Data Migration — Hippocampus Schema → Main Schema
 
-**Goal**: Unify storage. One schema, one set of tables, shared by TypeScript and Python.
+**Goal**: Unify storage. One schema, one set of tables.
 
-**Risk: Medium** — data migration, but volume is small (hippocampus not yet in production use).
+**Depends on**: Phase 1 (target tables must exist)
+**Risk**: Medium — but volume is small (hippocampus not yet in production use)
 
-#### Steps
+#### Codex Task
 
-1. **Run SQL migration** to copy data from `hippocampus.*` to `public.*` tables
-2. **Update `HippocampusConfig.postgres_schema`** from `"hippocampus"` to `"public"`
-3. **Update Python backends** to use main schema
-4. **Verify Python integration tests** pass against main schema
-5. **Drop `hippocampus` schema** after verification
+**Read first**:
+- `services/hippocampus-runtime/python/src/arceus/core/hippocampus/config.py` — find `postgres_schema` setting
+- Check if `hippocampus.*` schema exists and has data
 
-**Verification**: Python reads/writes hit same tables as TypeScript. No dual-write divergence.
+**Create migration script** — only if `hippocampus` schema has data:
+```sql
+-- Copy data from hippocampus.* to public.* tables
+-- INSERT INTO public.memory_units SELECT * FROM hippocampus.memory_units;
+-- ... repeat for each table
+
+-- After verification:
+-- DROP SCHEMA hippocampus CASCADE;
+```
+
+**Edit Python config** — `config.py`:
+- Change `postgres_schema` default from `"hippocampus"` to `"public"`
+
+**Verification**:
+```bash
+cd services/hippocampus-runtime && python -m pytest
+```
 
 ---
 
@@ -509,40 +1133,73 @@ When Python runtime is down for >5 minutes, agents that need intelligence operat
 
 **Goal**: HTTP endpoints for browse, inspect, and manual memory operations.
 
-**Risk: Low** — additive.
+**Depends on**: Phase 3 (memory-store)
+**Risk**: Low — additive
 
-#### Create `server/src/routes/memory.ts`
+#### Codex Task
+
+**Read first** (learn route pattern):
+- `server/src/routes/costs.ts` — reference for Express route structure
+- `server/src/middleware/validate.ts` — see validation middleware pattern
+- `server/src/app.ts` — see how routes are registered
+
+**Edit `server/src/routes/memory.ts`** — rewrite to remove graph routes, keep memory CRUD:
+
+Follow Express Router pattern. Services instantiated at top. Each handler: validate → auth check → service call → respond.
 
 ```
-GET    /api/companies/:companyId/agents/:agentId/memory
-       → paginated list (type, container, date filters)
+Routes to implement:
 
-GET    /api/companies/:companyId/agents/:agentId/memory/recall?query=...&topK=10
-       → semantic search
+GET    /companies/:companyId/agents/:agentId/memory
+       → memoryStore.listMemories({ agentId, ...query params })
+       → 200: { data: MemoryItem[], total: number }
 
-GET    /api/companies/:companyId/agents/:agentId/memory/habits
-       → active habits
+GET    /companies/:companyId/agents/:agentId/memory/recall?query=...&topK=10
+       → get embedding from bridge → memoryStore.recall()
+       → 200: { data: MemoryItem[] }
 
-GET    /api/companies/:companyId/agents/:agentId/memory/priming
-       → current priming state
+GET    /companies/:companyId/agents/:agentId/memory/habits
+       → memoryStore.getActiveHabits(agentId)
+       → 200: { data: MemoryHabit[] }
 
-GET    /api/companies/:companyId/agents/:agentId/memory/graph?query=...&depth=2
-       → graph view (delegates to Python)
+GET    /companies/:companyId/agents/:agentId/memory/priming
+       → memoryStore.getPrimingState(agentId)
+       → 200: { data: MemoryPrimingState }
 
-POST   /api/companies/:companyId/agents/:agentId/memory
-       → manual memory write
+GET    /companies/:companyId/agents/:agentId/memory/versions/:memoryId
+       → memoryStore.getVersionHistory(memoryId)
+       → 200: { data: MemoryItem[] }
 
-DELETE /api/companies/:companyId/agents/:agentId/memory/:memoryId
-       → soft-delete
+POST   /companies/:companyId/agents/:agentId/memory
+       → validate body → memoryStore.writeMemory()
+       → 201: { data: MemoryItem }
 
-GET    /api/companies/:companyId/memory/operations
-       → audit log
+DELETE /companies/:companyId/agents/:agentId/memory/:memoryId
+       → memoryStore.softDelete(memoryId, "manual")
+       → 200: { data: MemoryItem }
 
-GET    /api/companies/:companyId/memory/health
-       → memory subsystem health
+GET    /companies/:companyId/memory/operations
+       → paginated audit log
+       → 200: { data: MemoryOperation[], total: number }
+
+GET    /companies/:companyId/memory/health
+       → memoryReadiness.getMemoryHealth()
+       → 200: { data: MemoryHealthStatus }
 ```
 
-**Verification**: Route tests pass.
+**Remove these graph routes if they exist**:
+- `GET /graph/search`
+- `GET /graph/neighbors/:nodeId`
+- `GET /graph/edges/:nodeId`
+- `GET /graph/summary`
+
+**Edit `server/src/app.ts`** — register memory routes if not already registered.
+
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
 
 ---
 
@@ -550,377 +1207,748 @@ GET    /api/companies/:companyId/memory/health
 
 **Goal**: Automated promotion, GC, consolidation on a schedule.
 
-**Risk: Low** — background, non-blocking.
+**Depends on**: Phase 6 (readiness checks)
+**Risk**: Low — background, non-blocking
 
-#### Add to scheduler
+#### Codex Task
+
+**Read first**:
+- `server/src/services/routines.ts` — see how scheduled tasks are registered
+
+**Edit `server/src/services/routines.ts`** — add memory maintenance routine:
 
 ```typescript
-// Run every 6 hours via routines service
+// Run every 6 hours
 async function runMemoryMaintenance() {
+  const memoryReadiness = memoryReadinessService(db);
+  const memoryStore = memoryStoreService(db);
   const health = await memoryReadiness.getMemoryHealth();
+
   if (health.status === "down") {
     logger.warn("Skipping memory maintenance — data plane not ready");
     return;
   }
 
+  // Always: delete expired working memories (TypeScript-only)
+  await memoryStore.deleteExpiredWorking();
+
   if (health.intelligence.ready) {
-    // Full maintenance: promotions + GC + consolidation
+    // Full maintenance via Python: promotions + GC
+    const bridge = getHippocampusBridge();
     await bridge.runPromotions();
     await bridge.runGC();
-  } else {
-    // Partial maintenance: TypeScript-only cleanup
-    // Delete expired working memories
-    await db.delete(memoryUnits)
-      .where(and(
-        eq(memoryUnits.memoryType, "working"),
-        lt(memoryUnits.expiresAt, new Date()),
-      ));
   }
 
-  await memoryOps.logOperation({ operationType: "maintenance", success: true });
+  await memoryStore.logOperation({
+    companyId: "system",
+    operationType: "maintenance",
+    success: true,
+  });
 }
 ```
 
-**Verification**: Maintenance runs. Promotions visible in memory list.
+**Verification**:
+```bash
+cd server && pnpm build
+pnpm test -- --run
+```
+
+---
+
+### Phase 10: Remove Neo4j / Graph Layer Entirely
+
+**Goal**: Strip all Neo4j and graph code. No graph database needed.
+
+**Depends on**: Nothing — can run anytime, even first
+**Risk**: Low — never production-deployed
+
+#### Codex Task
+
+**Python — Delete files**:
+- `services/hippocampus-runtime/python/src/arceus/core/hippocampus/backends/neo4j_graph.py`
+- `services/hippocampus-runtime/python/src/arceus/core/hippocampus/engines/graph_store.py`
+- `services/hippocampus-runtime/python/src/arceus/core/hippocampus/tests/support/fakes/in_memory_graph.py`
+
+**Python — Edit files** (remove graph references):
+- `backends/factory.py` — remove `create_graph_store()` function
+- `backends/protocols.py` — remove `GraphStoreBackend` protocol
+- `engines/extractor.py` — remove `_update_graph()` calls; keep entity extraction as metadata
+- `engines/promotion_engine.py` — remove `graph_store.ensure_memory_node()` calls
+- `tiers/static.py` — remove `if self._graph_store is not None` blocks
+- `tiers/dynamic.py` — remove `if self._graph_store is not None` blocks
+- `hippocampus.py` — remove `graph_store` from `Hippocampus.create()`, remove `include_graph` from recall
+- `types.py` — remove `GraphEntity`, `GraphRelationship`, `RelationType`
+- `config.py` — remove `neo4j_*` config fields, `graph_store_backend` setting
+- `pyproject.toml` — remove `neo4j>=5.28.2` dependency
+
+**TypeScript — Delete files**:
+- `server/src/services/memory-projections.ts`
+
+**TypeScript — Edit files**:
+- `server/src/services/hippocampus-contract.ts` — remove `GraphNode`, `GraphEdge`, `GraphMemoryView`
+- `server/src/services/hippocampus-bridge.ts` — remove `graphSearch()`, `getEntityNeighbors()`, `getEntityEdges()`
+- `server/src/services/hippocampus-protocol.ts` — remove graph RPC method types
+- `server/src/routes/memory.ts` — remove 5 graph routes
+
+**UI — Delete files**:
+- `ui/src/components/MemoryGraphExplorer.tsx`
+- `ui/src/cytoscape-cose-bilkent.d.ts`
+
+**UI — Edit files**:
+- `ui/src/api/memory.ts` — remove `GraphNode`, `GraphEdge`, `GraphMemoryView` types and `memoryApi.graphView()`
+- `ui/src/components/AgentMemoryTab.tsx` — remove graph tab/section
+- `ui/package.json` — remove `cytoscape`, `cytoscape-cose-bilkent`, `@types/cytoscape`
+
+**Config cleanup**:
+- `.env.example` — remove all `ARCEUS_NEO4J_*` vars
+- `server/src/config.ts` — remove Neo4j env var reads
+
+**Verification**:
+```bash
+pnpm build
+cd services/hippocampus-runtime && python -m pytest
+cd ../../ui && pnpm build
+```
+
+---
+
+### Phase 11: Redis — Compulsory Working Memory (TS + Python)
+
+**Goal**: Redis is required infrastructure. Both TS (ioredis) and Python (redis-py) access the same Redis directly.
+
+**Depends on**: Phase 6 (readiness checks)
+**Risk**: Medium — new hard dependency
+
+#### Codex Task
+
+**Install dependency**:
+```bash
+cd server && pnpm add ioredis && pnpm add -D @types/ioredis
+```
+
+**Create `server/src/services/redis.ts`**:
+```typescript
+import Redis from "ioredis";
+
+let client: Redis | null = null;
+
+export function getRedisClient(): Redis {
+  if (!client) {
+    const url = process.env.REDIS_URL;
+    if (!url) throw new Error("REDIS_URL is required — Redis is compulsory infrastructure");
+    client = new Redis(url, {
+      maxRetriesPerRequest: 3,
+      lazyConnect: true,
+      keyPrefix: "arceus:",
+    });
+  }
+  return client;
+}
+
+export async function closeRedis(): Promise<void> {
+  if (client) {
+    await client.quit();
+    client = null;
+  }
+}
+```
+
+**Create `server/src/services/working-memory.ts`**:
+```typescript
+import { getRedisClient } from "./redis.js";
+
+export function workingMemoryService() {
+  const redis = getRedisClient();
+
+  function wmKey(agentId: string, key: string) {
+    return `${agentId}:wm:${key}`;
+  }
+
+  return {
+    async get(agentId: string, key: string): Promise<string | null> {
+      return redis.get(wmKey(agentId, key));
+    },
+
+    async set(agentId: string, key: string, value: string, ttlSeconds: number): Promise<void> {
+      await redis.set(wmKey(agentId, key), value, "EX", ttlSeconds);
+    },
+
+    async loadConversationBuffer(agentId: string): Promise<string[]> {
+      return redis.lrange(wmKey(agentId, "conv_buffer"), 0, -1);
+    },
+
+    async appendConversationBuffer(agentId: string, entry: string, ttlSeconds: number): Promise<void> {
+      const key = wmKey(agentId, "conv_buffer");
+      await redis.rpush(key, entry);
+      await redis.expire(key, ttlSeconds);
+    },
+
+    async cacheEmbedding(agentId: string, embedding: number[], ttlSeconds = 3600): Promise<void> {
+      await redis.set(wmKey(agentId, "last_embedding"), JSON.stringify(embedding), "EX", ttlSeconds);
+    },
+
+    async getCachedEmbedding(agentId: string): Promise<number[] | null> {
+      const raw = await redis.get(wmKey(agentId, "last_embedding"));
+      return raw ? JSON.parse(raw) : null;
+    },
+
+    async clearAgent(agentId: string): Promise<void> {
+      const pattern = `arceus:${agentId}:wm:*`;
+      const keys = await redis.keys(pattern);
+      if (keys.length > 0) await redis.del(...keys);
+    },
+  };
+}
+```
+
+**Edit `server/src/services/heartbeat/index.ts`** — wire working memory into `executeRun`:
+```typescript
+// Pre-run (~line 940, before memory context injection):
+const workingMem = workingMemoryService();
+const conversationBuffer = await workingMem.loadConversationBuffer(agent.id);
+if (conversationBuffer.length > 0) {
+  context.paperclipConversationBuffer = conversationBuffer.join("\n");
+}
+
+// Post-run (~line 1090, after extraction):
+await workingMem.clearAgent(agent.id);
+```
+
+**Edit `server/src/config.ts`** — add Redis as required:
+```typescript
+// Add to loadConfig():
+assertEnv("REDIS_URL"); // Required — fail hard if missing
+```
+
+Find the existing `assertEnv` pattern or create one:
+```typescript
+function assertEnv(key: string): string {
+  const value = process.env[key];
+  if (!value) throw new Error(`${key} environment variable is required`);
+  return value;
+}
+```
+
+**Edit Python config** — `config.py`: ensure `redis_url` reads from `REDIS_URL` env var (same as TS).
+**Edit Python `RedisCacheStore`** — ensure key prefix is `arceus:` to match TS namespace.
+
+**Edit `server/src/services/index.ts`** — add exports:
+```typescript
+export { getRedisClient, closeRedis } from "./redis.js";
+export { workingMemoryService } from "./working-memory.js";
+```
+
+**Verification**:
+```bash
+cd server && pnpm build
+REDIS_URL=redis://localhost:6379/0 pnpm test -- --run
+```
+
+---
+
+### Phase 12: Unified Docker — Dockerfile + Compose + OpenCode Server
+
+**Goal**: One `Dockerfile` and one `docker-compose.yml` that builds and runs the **entire** Arceus system: Postgres+pgvector, Redis, OpenCode server, Python hippocampus runtime, and the Node.js server. `docker compose up` → everything works.
+
+**Depends on**: Phase 10 (no Neo4j), Phase 11 (Redis required)
+**Risk**: Medium — Dockerfile rewrite, but no application logic changes
+
+#### How Arceus Actually Runs
+
+Understanding the full runtime topology is critical for getting Docker right:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Arceus Server (Node.js :3100)                    │
+│                                                                         │
+│  ┌──────────────────┐   ┌──────────────────┐   ┌─────────────────────┐ │
+│  │  Express App      │   │  Heartbeat       │   │  Hippocampus Bridge │ │
+│  │  (API + UI)       │   │  (agent runs)    │   │  (JSON-RPC stdio)   │ │
+│  └────────┬─────────┘   └────────┬─────────┘   └─────────┬───────────┘ │
+│           │                      │                        │             │
+│           │              ┌───────┴────────┐       ┌───────┴───────────┐ │
+│           │              │  Adapter calls  │       │  Python subprocess│ │
+│           │              │  (per agent)    │       │  hippocampus      │ │
+│           │              └───────┬────────┘       │  (stdio_rpc.py)   │ │
+│           │                      │                └───────────────────┘ │
+│           │          ┌───────────┼──────────────┐                       │
+│           │          │           │              │                       │
+│           │     ┌────┴────┐ ┌───┴──────┐ ┌─────┴──────┐                │
+│           │     │claude   │ │opencode  │ │codex       │                │
+│           │     │(CLI)    │ │_local    │ │(CLI)       │                │
+│           │     └─────────┘ │(CLI)     │ └────────────┘                │
+│           │                 └───┬──────┘                                │
+│           │                     │ spawns opencode CLI                   │
+│           │                     │                                       │
+│           │           ┌─────────┴──────────┐                            │
+│           │           │   arceus adapter    │                            │
+│           │           │  (HTTP → OpenCode)  │                            │
+│           │           │  :4098              │                            │
+│           │           └─────────┬──────────┘                            │
+└───────────┼─────────────────────┼───────────────────────────────────────┘
+            │                     │
+            │                     ▼
+            │           ┌──────────────────┐
+            │           │  OpenCode Server  │
+            │           │  (port 4098)      │
+            │           │  Must be running  │
+            │           │  for arceus       │
+            │           │  adapter to work  │
+            │           └──────────────────┘
+            │
+    ┌───────┼──────────────────────────────┐
+    │       │                              │
+    ▼       ▼                              ▼
+┌────────┐ ┌─────────────────┐     ┌────────────┐
+│ Redis  │ │ Postgres+pgvector│     │  AI APIs   │
+│ :6379  │ │ :5432            │     │ (external) │
+└────────┘ └─────────────────┘     └────────────┘
+```
+
+**Key insight**: The `arceus` adapter (server/src/adapters/arceus/) makes HTTP calls to `OPENCODE_URL` (default `http://127.0.0.1:4098`). OpenCode must be running as a server for this adapter to work. The current Dockerfile installs `opencode-ai` globally but never starts it as a server.
+
+#### Codex Task
+
+**Read first**:
+- `Dockerfile` — current multi-stage build
+- `docker-compose.yml` — current setup
+- `server/src/adapters/arceus/execute.ts` — see `OPENCODE_URL` at line 24, HTTP calls to OpenCode
+- `server/src/adapters/arceus/test.ts` — see environment test: "Start the OpenCode server: opencode server --port 4098"
+- `server/src/services/hippocampus-runtime-manager.ts` — Python subprocess spawn (lines 79-102)
+- `services/hippocampus-runtime/python/pyproject.toml` — Python deps (requires-python >= 3.12)
+
+**Rewrite `Dockerfile`**:
+
+```dockerfile
+# =============================================================================
+# Stage 1: Base — shared OS layer for all stages
+# =============================================================================
+FROM node:22-trixie-slim AS base
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates curl git \
+    python3 python3-pip python3-venv \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable
+
+# =============================================================================
+# Stage 2: Node dependencies — pnpm install (cached layer)
+# =============================================================================
+FROM base AS deps
+WORKDIR /app
+
+# Copy only package manifests for cache-friendly install
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY cli/package.json cli/
+COPY server/package.json server/
+COPY ui/package.json ui/
+COPY packages/shared/package.json packages/shared/
+COPY packages/db/package.json packages/db/
+COPY packages/adapter-utils/package.json packages/adapter-utils/
+COPY packages/adapters/claude-local/package.json packages/adapters/claude-local/
+COPY packages/adapters/codex-local/package.json packages/adapters/codex-local/
+COPY packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
+COPY packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
+COPY packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
+COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
+COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
+
+RUN pnpm install --frozen-lockfile
+
+# =============================================================================
+# Stage 3: Python dependencies — venv for hippocampus (cached layer)
+# =============================================================================
+FROM base AS python-deps
+WORKDIR /app/services/hippocampus-runtime/python
+
+COPY services/hippocampus-runtime/python/pyproject.toml ./
+
+# Create venv and install deps (heavy layer — cached unless pyproject.toml changes)
+RUN python3 -m venv .venv \
+  && .venv/bin/pip install --no-cache-dir --upgrade pip \
+  && .venv/bin/pip install --no-cache-dir .
+
+# =============================================================================
+# Stage 4: Build — compile TypeScript (UI + server)
+# =============================================================================
+FROM base AS build
+WORKDIR /app
+
+COPY --from=deps /app /app
+COPY . .
+
+# Build monorepo packages in dependency order
+RUN pnpm --filter @paperclipai/ui build \
+  && pnpm --filter @paperclipai/server build \
+  && test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
+
+# =============================================================================
+# Stage 5: Production — minimal runtime image
+# =============================================================================
+FROM base AS production
+WORKDIR /app
+
+# Copy built Node.js app
+COPY --chown=node:node --from=build /app /app
+
+# Copy Python venv (pre-built, no pip install at runtime)
+COPY --chown=node:node --from=python-deps /app/services/hippocampus-runtime/python/.venv \
+  /app/services/hippocampus-runtime/python/.venv
+
+# Copy Python source (needed at runtime for stdio_rpc)
+COPY --chown=node:node services/hippocampus-runtime/python/src \
+  /app/services/hippocampus-runtime/python/src
+
+# Install global CLI tools (adapter runtimes)
+# These are the actual AI CLI tools that adapters spawn as child processes
+RUN npm install --global --omit=dev \
+  @anthropic-ai/claude-code@latest \
+  @openai/codex@latest \
+  opencode-ai \
+  && mkdir -p /paperclip \
+  && chown node:node /paperclip
+
+# Startup script: launches OpenCode server + Arceus server
+COPY --chown=node:node docker/entrypoint.sh /app/docker/entrypoint.sh
+RUN chmod +x /app/docker/entrypoint.sh
+
+ENV NODE_ENV=production \
+  HOME=/paperclip \
+  HOST=0.0.0.0 \
+  PORT=3100 \
+  SERVE_UI=true \
+  PAPERCLIP_HOME=/paperclip \
+  PAPERCLIP_INSTANCE_ID=default \
+  PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \
+  PAPERCLIP_DEPLOYMENT_MODE=authenticated \
+  PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
+  PAPERCLIP_HIPPOCAMPUS_MODE=active \
+  PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN=/app/services/hippocampus-runtime/python/.venv/bin/python \
+  OPENCODE_URL=http://127.0.0.1:4098
+
+VOLUME ["/paperclip"]
+EXPOSE 3100 4098
+
+USER node
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:3100/api/health || exit 1
+
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
+```
+
+**Create `docker/entrypoint.sh`**:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Start OpenCode server in background ──
+# Required for the arceus adapter (HTTP client at OPENCODE_URL)
+# The arceus adapter connects to OpenCode to create sessions and send prompts
+echo "[entrypoint] Starting OpenCode server on port 4098..."
+opencode server --port 4098 &
+OPENCODE_PID=$!
+
+# Wait for OpenCode to be ready (max 15 seconds)
+for i in $(seq 1 30); do
+  if curl -sf http://127.0.0.1:4098/config > /dev/null 2>&1; then
+    echo "[entrypoint] OpenCode server ready"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo "[entrypoint] WARNING: OpenCode server not responding after 15s — arceus adapter will fail"
+  fi
+  sleep 0.5
+done
+
+# ── Start Arceus server (foreground) ──
+echo "[entrypoint] Starting Arceus server on port ${PORT:-3100}..."
+exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js
+```
+
+**Rewrite `docker-compose.yml`**:
+
+```yaml
+services:
+  # ── Core Database (pgvector for memory recall) ──
+  db:
+    image: pgvector/pgvector:pg17
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER:-arceus}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-arceus}
+      POSTGRES_DB: ${DB_NAME:-arceus}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-arceus}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Working Memory Cache (compulsory) ──
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # ── Arceus Server (Node.js + Python hippocampus + OpenCode server) ──
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-3100}:3100"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-arceus}:${DB_PASSWORD:-arceus}@db:5432/${DB_NAME:-arceus}
+      - REDIS_URL=redis://redis:6379/0
+      - PAPERCLIP_HIPPOCAMPUS_MODE=active
+      - PAPERCLIP_DEPLOYMENT_MODE=${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}
+      - PAPERCLIP_DEPLOYMENT_EXPOSURE=${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}
+      - PAPERCLIP_PUBLIC_URL=${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
+      - HOST=0.0.0.0
+      - PORT=3100
+      - SERVE_UI=true
+      # AI provider keys (pass through from host)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+    volumes:
+      - paperclip_data:/paperclip
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redis_data:
+  paperclip_data:
+```
+
+**Key design decisions**:
+
+1. **`pgvector/pgvector:pg17`** — pgvector baked in, not installed as extension at runtime. Required for memory recall.
+
+2. **Python venv built in separate stage** — `sentence-transformers` pulls PyTorch (~2GB). Built once in `python-deps` stage, cached unless `pyproject.toml` changes. Copied as pre-built venv into production image.
+
+3. **`PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN`** points to the venv Python — the hippocampus runtime manager spawns `python -m arceus.core.hippocampus.stdio_rpc` as a child process (see `hippocampus-runtime-manager.ts:91-92`). This env var tells it where to find the venv Python with all deps installed.
+
+4. **OpenCode server started in entrypoint** — the `arceus` adapter (`server/src/adapters/arceus/execute.ts:24`) connects to `OPENCODE_URL` (default `http://127.0.0.1:4098`) via HTTP. Without OpenCode running, the arceus adapter returns `opencode_server_unreachable` error. The entrypoint starts it in background and waits for readiness before launching the main server.
+
+5. **`HEALTHCHECK` added** — Docker will mark the container as unhealthy if `/api/health` fails, which includes memory readiness checks.
+
+6. **AI provider keys passed through** — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_*` are forwarded from host `.env` so adapters can call their respective APIs.
+
+7. **`restart: unless-stopped`** — server auto-restarts on crash (not on manual `docker compose stop`).
+
+**Update `.env.example`**:
+```env
+# ── Database ──
+DATABASE_URL=postgresql://arceus:arceus@localhost:5432/arceus
+DB_USER=arceus
+DB_PASSWORD=arceus
+DB_NAME=arceus
+DB_PORT=5432
+
+# ── Redis (compulsory) ──
+REDIS_URL=redis://localhost:6379/0
+REDIS_PORT=6379
+
+# ── Auth ──
+BETTER_AUTH_SECRET=change-me-to-a-random-string
+PAPERCLIP_DEPLOYMENT_MODE=authenticated
+PAPERCLIP_DEPLOYMENT_EXPOSURE=private
+PAPERCLIP_PUBLIC_URL=http://localhost:3100
+
+# ── Server ──
+HOST=0.0.0.0
+PORT=3100
+SERVE_UI=true
+
+# ── AI Provider Keys (at least one required for agents to work) ──
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_ENDPOINT=
+
+# ── Hippocampus ──
+PAPERCLIP_HIPPOCAMPUS_MODE=active
+```
+
+Remove all `ARCEUS_NEO4J_*` and `ARCEUS_HIPPOCAMPUS_REDIS_URL` vars (replaced by `REDIS_URL`).
+
+**Update `docker-compose.quickstart.yml`**:
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  paperclip:
+    build: .
+    ports:
+      - "${PAPERCLIP_PORT:-3100}:3100"
+    depends_on:
+      redis: { condition: service_healthy }
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-quickstart-secret}
+    volumes:
+      - ${PAPERCLIP_DATA_DIR:-./data/docker-paperclip}:/paperclip
+```
+
+**Delete** (if they exist):
+- `_arceus-ref/backend/docker-compose.hippocampus.yml`
+- `_arceus-ref/backend-prod-ref/docker-compose.hippocampus.yml`
+
+**`.dockerignore`** — create or update:
+```
+node_modules
+.git
+.env
+.env.*
+dist
+coverage
+*.log
+.next
+.cache
+.venv
+__pycache__
+*.pyc
+docker-compose*.yml
+Dockerfile*
+README.md
+tests/
+_arceus-ref/
+.omx/
+doc/
+```
+
+**Verification**:
+```bash
+docker compose config                     # validates syntax
+docker compose build                      # build all stages
+docker compose up -d                      # start all services
+docker compose ps                         # all services healthy
+docker compose logs server | head -20     # verify OpenCode server started
+curl http://localhost:3100/api/health      # memory + redis + db health
+docker compose exec server curl -sf http://127.0.0.1:4098/config  # OpenCode server responds inside container
+docker compose down
+```
+
+#### Build optimization notes for Codex
+
+The Dockerfile is designed for **fast rebuilds**:
+
+```
+Layer cache hit scenarios:
+
+1. Only TS source changed       → python-deps cached, deps cached, only build+production rebuild
+2. Only Python source changed   → deps cached, python-deps cached (pyproject.toml unchanged), only production rebuild
+3. pyproject.toml changed       → python-deps rebuilds (~5min for PyTorch), everything else cached
+4. package.json/pnpm-lock changed → deps rebuilds (~2min), python-deps cached
+5. Dockerfile changed           → full rebuild
+
+Typical rebuild (source change only): ~30-60 seconds
+```
 
 ---
 
 ## Phase Execution Order
 
 ```
-Phase 0: Remove "off" default          ─┐
-Phase 1: DB schema in Drizzle          ─┼─ Foundation (parallel)
-Phase 2: Shared types                  ─┘
+Phase 10: Remove graph entirely        ──┐ (independent, run first or parallel)
                                          │
-Phase 3: TypeScript memory store       ──┤ (depends on 1)
+Phase 0: Remove "off" default          ─┐│
+Phase 1: DB schema in Drizzle          ─┼┤ Foundation (parallel)
+Phase 2: Shared types                  ─┘│
+                                         │
+Phase 3: TypeScript memory store       ──┤ (depends on 1, 2)
 Phase 4: Agent memory initialization   ──┤ (depends on 3)
-Phase 5: Rewire memory lifecycle       ──┤ (depends on 3, CRITICAL)
-                                         │
-Phase 6: Readiness & health            ──┤ (depends on 3)
-Phase 7: Data migration                ──┤ (depends on 1)
-Phase 8: API routes                    ──┤ (depends on 3)
-Phase 9: Background maintenance        ──┘ (depends on 6)
-```
-
-Phases 0, 1, 2 are parallel. Phase 5 is the highest-risk, highest-value phase.
-
-## Files Changed Summary
-
-| Package | New Files | Modified Files |
-|---------|-----------|----------------|
-| `packages/db/src/schema/` | `memory_units.ts`, `memory_habits.ts`, `memory_patterns.ts`, `memory_priming_state.ts`, `memory_bindings.ts`, `memory_operations.ts` | `index.ts` |
-| `packages/db/src/migrations/` | `0047_memory_tables.sql` | — |
-| `packages/shared/src/` | `memory-types.ts` | `index.ts`, `constants.ts` |
-| `server/src/services/` | `memory-store.ts`, `memory-readiness.ts`, `memory-init.ts` | `memory-lifecycle.ts`, `hippocampus-bridge.ts`, `agents.ts` |
-| `server/src/services/heartbeat/` | — | `index.ts` (remove null-check on memoryContext) |
-| `server/src/routes/` | `memory.ts` | `health.ts` |
-| `server/src/` | — | `config.ts` (default mode change) |
-| `services/hippocampus-runtime/python/` | — | `stdio_rpc.py` (+getEmbedding), `config.py` (schema change) |
-
----
-
-### Phase 10: Redis — Working Memory Cache Layer
-
-**Goal**: Deploy Redis as Tier 1 Working Memory backend. Working memory is ephemeral, high-frequency state that lives minutes to hours — conversation buffers, in-flight task scratchpads, intermediate reasoning results. PostgreSQL is too heavy for this: these items have TTLs measured in minutes, are read/written dozens of times per run, and are discarded when the run ends.
-
-**Risk: Medium** — new infrastructure dependency, but isolated to working memory tier only.
-
-#### Why Redis Exists in Hippocampus
-
-The `RedisCacheStore` (`backends/redis_cache.py`) implements the `WorkingMemoryBackend` protocol:
-- `get(key)` / `set(key, value, ttl)` / `append(key, item)` / `delete(key)` — sub-millisecond ephemeral K/V
-- `scan(prefix)` / `clear(prefix)` — namespace-scoped cleanup
-- All keys auto-expire via TTL — no GC needed for working memory
-
-**Use cases in agent runs:**
-1. **Conversation buffer**: Multi-turn context within a single run (too transient for Postgres)
-2. **Task scratchpad**: Intermediate results, partial computations, tool call history
-3. **Cross-run handoff**: Short-lived state passed from one run to the next (TTL: 30 min)
-4. **Deduplication window**: Recent memory IDs to avoid re-extracting the same facts
-
-Without Redis, working memory falls back to in-process Python dicts — lost on crash, not shared across replicas.
-
-#### Steps
-
-1. **Add Redis to `docker-compose.yml`**:
-   ```yaml
-   services:
-     redis:
-       image: redis:7-alpine
-       ports:
-         - "6379:6379"
-       command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-       volumes:
-         - redis_data:/data
-       healthcheck:
-         test: ["CMD", "redis-cli", "ping"]
-         interval: 10s
-         timeout: 3s
-         retries: 3
-
-   volumes:
-     redis_data:
-   ```
-
-2. **Add environment variables**:
-   - `HIPPOCAMPUS_REDIS_URL` — e.g. `redis://localhost:6379/0`
-   - Pass through to Python runtime via `HippocampusConfig.redis_url`
-   - Update `server/src/config.ts` to read and validate this env var
-
-3. **Wire into Python runtime startup**:
-   ```python
-   # In runtime.py — production profile
-   if config.redis_url:
-       cache_backend = create_cache("redis", config)
-   else:
-       cache_backend = InMemoryWorkingMemoryBackend()  # dev fallback
-   ```
-
-4. **Add working memory operations to TypeScript bridge** (new RPC methods):
-   ```typescript
-   // In hippocampus-bridge.ts — expose working memory to heartbeat
-   async setWorkingMemory(agentId: string, key: string, value: string, ttlSeconds: number): Promise<void>
-   async getWorkingMemory(agentId: string, key: string): Promise<string | null>
-   async clearWorkingMemory(agentId: string): Promise<void>
-   ```
-
-5. **Integrate into heartbeat run lifecycle**:
-   - **Pre-run**: Load conversation buffer from Redis (if continuing a multi-turn session)
-   - **During run**: Store tool call results and intermediate state in Redis
-   - **Post-run**: Persist important working memory to static/dynamic tiers, then clear Redis keys
-
-6. **Add Redis health to memory readiness** (Phase 6 integration):
-   ```typescript
-   async function checkCacheReady(): Promise<{ ready: boolean; reason?: string }> {
-     // Redis is optional-but-recommended
-     // Without it: working memory falls back to in-process (single replica only)
-   }
-   ```
-
-**Deployment notes**:
-- **Production**: Managed Redis (AWS ElastiCache, GCP Memorystore, or Upstash)
-- **Development**: Docker Compose container or skip (in-process fallback)
-- **Sizing**: 256MB is plenty — working memory is small and TTL-driven
-
-**Verification**: Working memory survives Python runtime restart. Conversation buffer persists across sequential runs within TTL window.
-
----
-
-### Phase 11: Neo4j — Knowledge Graph Layer
-
-**Goal**: Deploy Neo4j as the entity-relationship knowledge graph for the `GraphStore` engine. The knowledge graph is what turns flat memory lists into connected, traversable understanding — entities, relationships, contradictions, version chains, and multi-hop reasoning.
-
-**Risk: Medium** — new infrastructure dependency, but confined to Python intelligence engine. Never on the TypeScript critical path.
-
-#### Why Neo4j Exists in Hippocampus
-
-The `Neo4jGraphStoreBackend` (`backends/neo4j_graph.py`) implements the `GraphStoreBackend` protocol:
-- `create_node(id, labels, properties, embedding)` — entity nodes with vector embeddings
-- `create_edge(source, target, type, properties)` — typed relationships (MENTIONS, UPDATES, CONTRADICTS, RELATES_TO)
-- `get_neighbors(node_id, depth)` — multi-hop traversal (e.g., find everything connected to "Project Alpha" within 3 hops)
-- `vector_search(embedding, threshold, limit)` — entity deduplication by semantic similarity
-- `cypher_query(query, params)` — raw Cypher for complex graph analytics
-
-**Use cases in agent cognition:**
-1. **Entity extraction**: `MemoryExtractor` identifies entities (people, projects, decisions), deduplicates against existing graph nodes by embedding similarity, creates new nodes or links to existing ones
-2. **Version chains**: When a fact updates an older fact, `UPDATES` edge links old → new (e.g., "Q1 budget is $500K" → `UPDATES` → "Q1 budget revised to $450K"). This is memory versioning.
-3. **Contradiction detection**: `CONTRADICTS` edges flag conflicting information for resolution
-4. **Multi-hop reasoning**: "What do I know about Project Alpha?" traverses entity → MENTIONS → memories → RELATES_TO → other entities — returns a connected subgraph, not just a flat list
-5. **Knowledge graph UI**: The `/memory/graph` API route (Phase 8) delegates to Python for graph visualization data
-
-Without Neo4j, the `GraphStore` engine is inert — entity extraction stores nothing, no version chains, no contradiction detection, no multi-hop traversal. Agents can still recall flat memories via pgvector, but they lose the ability to understand *relationships between* memories.
-
-#### Steps
-
-1. **Add Neo4j to `docker-compose.yml`**:
-   ```yaml
-   services:
-     neo4j:
-       image: neo4j:5-community
-       ports:
-         - "7474:7474"   # Browser UI
-         - "7687:7687"   # Bolt protocol
-       environment:
-         NEO4J_AUTH: neo4j/arceus_dev_password
-         NEO4J_PLUGINS: '["apoc"]'
-         NEO4J_dbms_memory_heap_max__size: 512m
-         NEO4J_dbms_memory_pagecache_size: 256m
-       volumes:
-         - neo4j_data:/data
-       healthcheck:
-         test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "arceus_dev_password", "RETURN 1"]
-         interval: 10s
-         timeout: 5s
-         retries: 5
-
-   volumes:
-     neo4j_data:
-   ```
-
-2. **Add environment variables**:
-   - `NEO4J_URI` — e.g. `bolt://localhost:7687`
-   - `NEO4J_USERNAME` — e.g. `neo4j`
-   - `NEO4J_PASSWORD` — e.g. `<secret>`
-   - `NEO4J_DATABASE` — e.g. `neo4j` (default)
-   - Pass through to Python runtime via `HippocampusConfig`
-   - Update `server/src/config.ts` to read these
-
-3. **Wire into Python runtime startup**:
-   ```python
-   # In runtime.py — production profile
-   if has_neo4j_credentials(config.neo4j_uri, config.neo4j_username, config.neo4j_password):
-       graph_backend = create_graph_store("neo4j", config)
-   else:
-       graph_backend = NullGraphStoreBackend()  # dev fallback — graph ops are no-ops
-   ```
-
-4. **Initialize graph schema on first connect**:
-   ```cypher
-   -- Run via Neo4jGraphStoreBackend.ensure_schema() on startup
-   CREATE CONSTRAINT hippocampus_graph_entity_id IF NOT EXISTS
-     FOR (n:Entity) REQUIRE n.entity_id IS UNIQUE;
-   CREATE VECTOR INDEX hippocampus_entity_embedding IF NOT EXISTS
-     FOR (n:Entity) ON (n.embedding)
-     OPTIONS { indexConfig: { `vector.dimensions`: 384, `vector.similarity_function`: 'cosine' } };
-   ```
-
-5. **Enable GraphStore engine in Python runtime**:
-   - `GraphStore` engine currently constructed but receives `NullGraphStoreBackend` when credentials are missing
-   - With Neo4j deployed, it receives `Neo4jGraphStoreBackend` → entity extraction, version chains, and contradiction detection all activate
-
-6. **Expose graph operations through TypeScript bridge** (extension of Phase 3):
-   ```typescript
-   // In hippocampus-bridge.ts — graph operations always go through Python
-   async graphSearch(query: string, depth: number): Promise<GraphSubgraph>
-   async getEntityNeighbors(entityId: string, depth: number): Promise<GraphNode[]>
-   async getEntityEdges(entityId: string): Promise<GraphEdge[]>
-   ```
-
-7. **Wire graph API route** (Phase 8 enhancement):
-   ```
-   GET /api/companies/:companyId/agents/:agentId/memory/graph?query=...&depth=2
-     → Python RPC → Neo4j Cypher → return nodes + edges for visualization
-   ```
-
-8. **Add Neo4j health to memory readiness** (Phase 6 integration):
-   ```typescript
-   // In memory-readiness.ts
-   async function checkGraphReady(): Promise<{ ready: boolean; reason?: string }> {
-     // Neo4j is optional-but-recommended
-     // Without it: flat memory recall works, but no entity relationships or graph traversal
-   }
-   ```
-
-**Deployment notes**:
-- **Production**: Neo4j AuraDB (managed) or self-hosted community edition
-- **Development**: Docker Compose container or skip (null backend fallback)
-- **Sizing**: Community edition handles millions of nodes/edges — more than enough for agent memory graphs
-
-**Verification**: Entity extraction creates graph nodes. `get_neighbors` returns multi-hop results. Version chains form `UPDATES` edges. Graph API route returns visualization data.
-
----
-
-### Phase 12: Infrastructure Orchestration
-
-**Goal**: Single-command local dev setup and production deployment configuration for the full stack (Postgres + pgvector + Redis + Neo4j + Python runtime).
-
-**Risk: Low** — DevOps, non-functional.
-
-#### Steps
-
-1. **Unified `docker-compose.yml`** with all services:
-   ```yaml
-   services:
-     postgres:
-       # existing
-     redis:
-       # Phase 10
-     neo4j:
-       # Phase 11
-     hippocampus-runtime:
-       build: ./services/hippocampus-runtime
-       depends_on:
-         postgres: { condition: service_healthy }
-         redis: { condition: service_healthy }
-         neo4j: { condition: service_healthy }
-       environment:
-         - HIPPOCAMPUS_POSTGRES_URL=postgresql://...
-         - HIPPOCAMPUS_REDIS_URL=redis://redis:6379/0
-         - NEO4J_URI=bolt://neo4j:7687
-         - NEO4J_USERNAME=neo4j
-         - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-   ```
-
-2. **`.env.example`** updated with all memory infra vars:
-   ```env
-   # Hippocampus Infrastructure
-   HIPPOCAMPUS_REDIS_URL=redis://localhost:6379/0
-   NEO4J_URI=bolt://localhost:7687
-   NEO4J_USERNAME=neo4j
-   NEO4J_PASSWORD=changeme
-   NEO4J_DATABASE=neo4j
-   ```
-
-3. **Startup validation** in `server/src/config.ts`:
-   ```typescript
-   // Active mode requires at minimum: Postgres + pgvector
-   // Redis and Neo4j are optional-but-recommended with warnings
-   if (mode === "active") {
-     assertEnv("DATABASE_URL");                    // Required
-     warnIfMissing("HIPPOCAMPUS_REDIS_URL");       // Warns: "Working memory will use in-process fallback"
-     warnIfMissing("NEO4J_URI");                   // Warns: "Knowledge graph disabled — no entity relationships"
-   }
-   ```
-
-4. **Health endpoint returns full infrastructure status**:
-   ```json
-   {
-     "memory": {
-       "status": "healthy",
-       "dataPlane": { "ready": true },
-       "intelligence": { "ready": true },
-       "cache": { "ready": true, "backend": "redis" },
-       "graph": { "ready": true, "backend": "neo4j" }
-     }
-   }
-   ```
-
-**Verification**: `docker compose up` brings up full stack. Health endpoint shows all green. Missing Redis/Neo4j shows warnings, not errors.
-
----
-
-## Updated Phase Execution Order
-
-```
-Phase 0: Remove "off" default          ─┐
-Phase 1: DB schema in Drizzle          ─┼─ Foundation (parallel)
-Phase 2: Shared types                  ─┘
-                                         │
-Phase 3: TypeScript memory store       ──┤ (depends on 1)
-Phase 4: Agent memory initialization   ──┤ (depends on 3)
-Phase 5: Rewire memory lifecycle       ──┤ (depends on 3, CRITICAL)
+Phase 5: Rewire memory lifecycle       ──┤ (depends on 0, 3, CRITICAL)
                                          │
 Phase 6: Readiness & health            ──┤ (depends on 3)
 Phase 7: Data migration                ──┤ (depends on 1)
 Phase 8: API routes                    ──┤ (depends on 3)
 Phase 9: Background maintenance        ──┤ (depends on 6)
                                          │
-Phase 10: Redis working memory         ──┤ (depends on 6, INFRA)
-Phase 11: Neo4j knowledge graph        ──┤ (depends on 6, INFRA)
-Phase 12: Infrastructure orchestration ──┘ (depends on 10, 11)
+Phase 11: Redis compulsory (TS+Python) ──┤ (depends on 6)
+Phase 12: Unified Docker Compose       ──┘ (depends on 10, 11)
 ```
 
-Phases 10-12 can run in parallel with Phases 7-9. They are infrastructure additions, not behavioral changes to the core data plane.
+**Recommended Codex execution order** (serial, one phase per task):
+1. Phase 10 (graph removal — cleans the codebase first)
+2. Phase 1 (schema — foundation)
+3. Phase 2 (shared types — foundation)
+4. Phase 0 (remove off mode)
+5. Phase 3 (memory store — core service)
+6. Phase 4 (agent init)
+7. Phase 5 (lifecycle rewrite — CRITICAL)
+8. Phase 6 (readiness)
+9. Phase 11 (Redis)
+10. Phase 8 (API routes)
+11. Phase 9 (maintenance)
+12. Phase 7 (data migration)
+13. Phase 12 (Docker)
+
+---
+
+## Files Changed Summary
+
+| Phase | New Files | Edit Files | Delete Files |
+|-------|-----------|------------|--------------|
+| 0 | — | `config.ts`, `memory-lifecycle.ts`, `hippocampus-bridge.ts` | — |
+| 1 | `memory_units.ts`, `memory_habits.ts`, `memory_patterns.ts`, `memory_priming_state.ts`, `memory_bindings.ts`, `memory_operations.ts`, migration SQL | `packages/db/src/schema/index.ts` | — |
+| 2 | `packages/shared/src/memory-types.ts` | `packages/shared/src/index.ts`, `hippocampus-contract.ts` | — |
+| 3 | `server/src/services/memory-store.ts` | `server/src/services/index.ts`, `hippocampus-bridge.ts`, `stdio_rpc.py` | — |
+| 4 | `server/src/services/memory-init.ts` | `server/src/services/agents.ts`, `server/src/services/index.ts` | — |
+| 5 | — | `memory-lifecycle.ts`, `heartbeat/index.ts` | — |
+| 6 | `server/src/services/memory-readiness.ts` | `server/src/routes/health.ts`, `server/src/services/index.ts` | — |
+| 7 | migration script | `config.py` (Python) | — |
+| 8 | — | `server/src/routes/memory.ts`, `server/src/app.ts` | — |
+| 9 | — | `server/src/services/routines.ts` | — |
+| 10 | — | See Phase 10 detail | `neo4j_graph.py`, `graph_store.py`, `in_memory_graph.py`, `memory-projections.ts`, `MemoryGraphExplorer.tsx`, `cytoscape-cose-bilkent.d.ts` |
+| 11 | `server/src/services/redis.ts`, `server/src/services/working-memory.ts` | `config.ts`, `heartbeat/index.ts`, `config.py` (Python), `server/src/services/index.ts` | — |
+| 12 | — | `docker-compose.yml`, `docker-compose.quickstart.yml`, `.env.example` | `docker-compose.hippocampus.yml` (ref files) |
+
+---
 
 ## What We Do NOT Do
 
 - **Do not rewrite Python intelligence engines** — 4,000+ lines of ML/LLM code stays in Python
 - **Do not remove the Python runtime** — it's the intelligence engine, not going away
 - **Do not change the 5-tier model** — it's architecturally sound
-- **Do not put Redis or Neo4j on the TypeScript critical path** — they are Python-side infrastructure; TypeScript hot path uses pgvector + Drizzle only
-- **Do not make Redis or Neo4j hard requirements** — the system works (degraded) without them; they unlock full capability
+- **Do not use Neo4j or any graph database** — version chains use `previousVersionId` FK in Postgres; entity relationships use tagged memory units + pgvector similarity
+- **Do not make Redis optional** — it is compulsory infrastructure like Postgres
+- **Do not route Redis through Python RPC** — both TS and Python access Redis directly (same pattern as Postgres)
 - **Do not make intelligence operations blocking** — extraction/learning are async with retry, never block the run
 - **Do not allow silent memory failures** — every failure is logged, tracked, and visible
+- **Do not maintain separate Docker configs for hippocampus** — one system, one `docker-compose.yml`
+- **Do not create classes or DI containers** — follow existing factory function pattern
+- **Do not create a repository layer** — direct Drizzle calls in service methods (existing pattern)
+- **Do not add `any` types** — use `unknown` and narrow, or proper generics
 
 ## End State
 
@@ -934,3 +1962,17 @@ After all phases, Hippocampus is to an employee what a brain is to a person:
 6. **Resilient**: Python intelligence down → reads still work, learning queued for retry
 7. **First-class schema**: 6 tables in main Drizzle ORM, shared types in `@paperclipai/shared`
 8. **Never "off"**: No `DisabledHippocampusBridge` in production — setup mode only
+9. **Three backends, all required**: Postgres (pgvector) + Redis (working memory) + Python (intelligence)
+
+## Infrastructure Summary
+
+```
+BEFORE (fragmented):                    AFTER (unified):
+  docker-compose.yml         (db+server)   docker-compose.yml    (db+redis+server)
+  docker-compose.quickstart.yml            docker-compose.quickstart.yml (updated)
+  docker-compose.hippocampus.yml (separate) ← DELETED
+  Neo4j container                          ← REMOVED
+  Redis optional                           Redis REQUIRED
+  Separate hippocampus Postgres (port 5433) ← MERGED into main DB
+  4 env var groups                         2 env var groups (DB + Redis)
+```

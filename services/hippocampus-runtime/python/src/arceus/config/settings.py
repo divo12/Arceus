@@ -29,10 +29,5 @@ class Settings(BaseSettings):
     azure_openai_api_key: SecretStr = SecretStr("")
     azure_openai_api_version: str = "2025-03-01-preview"
 
-    neo4j_uri: str = ""
-    neo4j_username: str = ""
-    neo4j_password: SecretStr = SecretStr("")
-    neo4j_database: str = "neo4j"
-
 
 settings = Settings()
