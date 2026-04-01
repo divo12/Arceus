@@ -42,6 +42,7 @@ export function createCancellationOps(db: Db, deps: {
     setRunStatus,
     setWakeupStatus,
     appendRunEvent,
+    nextRunEventSeq,
     finalizeAgentStatus,
     releaseIssueExecutionAndPromote,
     startNextQueuedRunForAgent,
@@ -175,7 +176,7 @@ export function createCancellationOps(db: Db, deps: {
     });
 
     if (cancelled) {
-      await appendRunEvent(cancelled, 1, {
+      await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
         eventType: "lifecycle",
         stream: "system",
         level: "warn",

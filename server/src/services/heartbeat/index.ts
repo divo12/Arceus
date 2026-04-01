@@ -225,6 +225,7 @@ export function heartbeatService(db: Db) {
     setRunStatus,
     setWakeupStatus,
     appendRunEvent,
+    nextRunEventSeq,
     finalizeAgentStatus,
     releaseIssueExecutionAndPromote,
     startNextQueuedRunForAgent,
