@@ -50,6 +50,7 @@ import { buildMemoryContextForRun, extractMemoriesFromRun } from "../memory-life
 import { roleDefinitionService } from "../role-definitions.js";
 import { spawnGovernanceService } from "../spawn-governance.js";
 import { buildMeetingContextForRun } from "../meeting-context.js";
+import { workingMemoryService } from "../working-memory.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -937,8 +938,19 @@ export function heartbeatService(db: Db) {
         });
       };
 
+      const workingMem = workingMemoryService();
+      const conversationBuffer = await workingMem.loadConversationBuffer(agent.id).catch((err) => {
+        logger.warn({ err, agentId: agent.id, runId: run.id }, "failed to load working memory conversation buffer");
+        return [];
+      });
+      if (conversationBuffer.length > 0) {
+        context.paperclipConversationBuffer = conversationBuffer.join("\n");
+      }
+
       // ── Hippocampus: inject memory context before adapter run ──
       const memoryContext = await buildMemoryContextForRun({
+        db,
+        companyId: agent.companyId,
         agentId: agent.id,
         issueTitle: issueContext?.title ?? null,
         issueId: issueId ?? null,
@@ -946,15 +958,13 @@ export function heartbeatService(db: Db) {
         delegationStyle: delegationRunContext.delegationStyle,
         delegatorAgentId: delegationRunContext.delegatorAgentId,
       });
-      if (memoryContext) {
-        context.paperclipMemoryContext = memoryContext;
-        // Also append to the session handoff so adapters that read it get the memory
-        const existingHandoff = readNonEmptyString(context.paperclipSessionHandoffMarkdown) ?? "";
-        context.paperclipSessionHandoffMarkdown = existingHandoff
-          ? `${existingHandoff}\n\n${memoryContext}`
-          : memoryContext;
-        await onLog("stdout", "[paperclip] Hippocampus memory context injected into run.\n");
-      }
+      context.paperclipMemoryContext = memoryContext;
+      // Also append to the session handoff so adapters that read it get the memory
+      const existingHandoff = readNonEmptyString(context.paperclipSessionHandoffMarkdown) ?? "";
+      context.paperclipSessionHandoffMarkdown = existingHandoff
+        ? `${existingHandoff}\n\n${memoryContext}`
+        : memoryContext;
+      await onLog("stdout", "[paperclip] Hippocampus memory context injected into run.\n");
 
       // ── Meeting context: inject if run was triggered by a meeting ──
       const meetingContextMarkdown = await buildMeetingContextForRun(db, context);
@@ -1073,8 +1083,10 @@ export function heartbeatService(db: Db) {
         outcome = "failed";
       }
 
-      // ── Hippocampus: extract memories from run output (best-effort, non-blocking) ──
+      // ── Hippocampus: extract memories from run output with retries and tracked failure ──
       void extractMemoriesFromRun({
+        db,
+        companyId: agent.companyId,
         agentId: agent.id,
         runId: run.id,
         issueId: issueId ?? null,
@@ -1082,6 +1094,18 @@ export function heartbeatService(db: Db) {
         outcome,
         stdoutExcerpt,
         stderrExcerpt,
+      }).catch((err) => {
+        logger.error(
+          { err, runId: run.id, agentId: agent.id },
+          "memory extraction failed after retries — agent learning lost for this run",
+        );
+      }).finally(() => {
+        void workingMem.clearAgent(agent.id).catch((err) => {
+          logger.warn(
+            { err, runId: run.id, agentId: agent.id },
+            "failed to clear working memory after run completion",
+          );
+        });
       });
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;

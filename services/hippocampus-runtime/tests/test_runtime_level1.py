@@ -23,21 +23,21 @@ from arceus.core.hippocampus.utils.time import parse_utc_iso, utc_now
 
 def test_settings_support_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA", "paperclip_memory")
-    monkeypatch.setenv("ARCEUS_NEO4J_PASSWORD", "secret-pass")
+    monkeypatch.setenv("REDIS_URL", "redis://cache.internal:6379/9")
 
     settings = Settings()
 
     assert settings.hippocampus_postgres_schema == "paperclip_memory"
-    assert settings.neo4j_password.get_secret_value() == "secret-pass"
+    assert settings.redis_url == "redis://cache.internal:6379/9"
 
 
 def test_hippocampus_config_defaults_match_embedded_prod_shape() -> None:
     config = HippocampusConfig()
 
     assert config.vector_store_backend == "pgvector"
-    assert config.graph_store_backend == "neo4j"
     assert config.cache_backend == "redis"
     assert config.relational_backend == "postgresql"
+    assert config.postgres_schema == "public"
     assert config.embedding_dimensions == 384
 
 

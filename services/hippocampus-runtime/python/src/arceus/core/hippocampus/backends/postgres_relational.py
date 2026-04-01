@@ -25,7 +25,7 @@ class PostgreSQLRelationalStore:
     def __init__(
         self,
         url: str = "",
-        schema: str = "hippocampus",
+        schema: str = "public",
     ) -> None:
         resolved_url = url or settings.hippocampus_postgres_url or settings.database_url
         if resolved_url and not resolved_url.startswith("postgresql"):

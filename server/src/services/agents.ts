@@ -17,6 +17,7 @@ import { isEmployeeRole, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/s
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
+import { memoryInitService } from "./memory-init.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -184,6 +185,8 @@ export function deduplicateAgentName(
 }
 
 export function agentService(db: Db) {
+  const memoryInit = memoryInitService(db);
+
   function currentUtcMonthWindow(now = new Date()) {
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth();
@@ -441,22 +444,26 @@ export function agentService(db: Db) {
       const role = requestedRole;
       const resolvedRoleDefinition = await resolveRoleDefinitionLink(companyId, role, data.roleDefinitionId);
       const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
-      const created = await db
-        .insert(agents)
-        .values({
-          ...data,
-          name: uniqueName,
-          companyId,
-          role,
-          roleDefinitionId: resolvedRoleDefinition?.id ?? data.roleDefinitionId ?? null,
-          delegationStyle: data.delegationStyle ?? resolvedRoleDefinition?.delegationStyle ?? "collaborative",
-          kind: requestedKind,
-          reportsTo: requestedKind === "spawned" ? null : (data.reportsTo ?? null),
-          spawnedByAgentId: requestedKind === "spawned" ? data.spawnedByAgentId ?? null : null,
-          permissions: normalizedPermissions,
-        })
-        .returning()
-        .then((rows) => rows[0]);
+      const created = await db.transaction(async (tx) => {
+        const [createdRow] = await tx
+          .insert(agents)
+          .values({
+            ...data,
+            name: uniqueName,
+            companyId,
+            role,
+            roleDefinitionId: resolvedRoleDefinition?.id ?? data.roleDefinitionId ?? null,
+            delegationStyle: data.delegationStyle ?? resolvedRoleDefinition?.delegationStyle ?? "collaborative",
+            kind: requestedKind,
+            reportsTo: requestedKind === "spawned" ? null : (data.reportsTo ?? null),
+            spawnedByAgentId: requestedKind === "spawned" ? data.spawnedByAgentId ?? null : null,
+            permissions: normalizedPermissions,
+          })
+          .returning();
+
+        await memoryInitService(tx as unknown as Db).initializeAgentMemory(createdRow);
+        return createdRow;
+      });
 
       return normalizeAgentRow(created);
     },

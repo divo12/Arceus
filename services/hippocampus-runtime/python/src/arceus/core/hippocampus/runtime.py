@@ -39,6 +39,7 @@ INTERNAL_ERROR = -32603
 TEST_PROFILE = "test_fakes"
 SUPPORTED_METHODS = {
     "health",
+    "getEmbedding",
     "remember",
     "recall",
     "extract",
@@ -258,6 +259,8 @@ class HippocampusRuntimeServer:
                 "agents_loaded": len(self._instances),
                 "debug": settings.debug,
             }
+        if method == "getEmbedding":
+            return await self._get_embedding(params)
         if method == "shutdown":
             self._stopping = True
             return {
@@ -290,6 +293,12 @@ class HippocampusRuntimeServer:
             return await self._run_promotions(hippocampus)
 
         raise KeyError(f"Unknown method: {method}")
+
+    async def _get_embedding(self, params: dict[str, Any]) -> dict[str, Any]:
+        text = self._required_string(params, "text")
+        hippocampus = await self._get_instance("__embedding__")
+        vector = await hippocampus._embedding.embed(text)
+        return {"embedding": vector}
 
     async def _get_instance(self, agent_id: str) -> Hippocampus:
         instance = self._instances.get(agent_id)

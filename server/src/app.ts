@@ -165,6 +165,7 @@ export async function createApp(
   api.use(chatRoutes(db));
   const agentsSvc = agentService(db);
   api.use(memoryRoutes({
+    db,
     resolveAgentCompanyId: async (agentId) => {
       const agent = await agentsSvc.getById(agentId);
       return agent?.companyId;

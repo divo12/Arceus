@@ -26,7 +26,7 @@ import { createApp } from "./app.js";
 import { loadConfig, type Config } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
-import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
+import { closeRedis, heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -91,7 +91,7 @@ export async function startHippocampusRuntimeForConfig(
 export async function stopHippocampusRuntimeForConfig(
   config: Pick<Config, "hippocampusMode">,
 ): Promise<void> {
-  if (config.hippocampusMode === "off") return;
+  if (config.hippocampusMode === "setup") return;
   const mod = await loadHippocampusBridgeModule();
   await mod.shutdownHippocampusBridge();
 }
@@ -533,6 +533,10 @@ export async function startServer(): Promise<StartedServer> {
   process.env.PAPERCLIP_LISTEN_HOST = runtimeListenHost;
   process.env.PAPERCLIP_LISTEN_PORT = String(listenPort);
   process.env.PAPERCLIP_API_URL = `http://${runtimeApiHost}:${listenPort}`;
+  process.env.REDIS_URL = config.redisUrl;
+  if (process.env.ARCEUS_REDIS_URL === undefined) {
+    process.env.ARCEUS_REDIS_URL = config.redisUrl;
+  }
   if (process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_URL === undefined) {
     if (activeDatabaseConnectionString?.includes(":6543")) {
       logger.warn(
@@ -598,6 +602,17 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "routine scheduler tick failed");
+        });
+
+      void routines
+        .runMemoryMaintenance(new Date())
+        .then((result) => {
+          if (!result.skipped) {
+            logger.info({ ...result }, "memory maintenance completed");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "memory maintenance tick failed");
         });
   
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
@@ -719,7 +734,7 @@ export async function startServer(): Promise<StartedServer> {
     });
   });
   
-  if (config.hippocampusMode === "embedded" || (embeddedPostgres && embeddedPostgresStartedByThisProcess)) {
+  if (config.hippocampusMode !== "setup" || (embeddedPostgres && embeddedPostgresStartedByThisProcess)) {
     let shuttingDown = false;
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
       if (shuttingDown) return;
@@ -742,6 +757,11 @@ export async function startServer(): Promise<StartedServer> {
         } catch (err) {
           logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
         }
+      }
+      try {
+        await closeRedis();
+      } catch (err) {
+        logger.error({ err }, "Failed to close Redis cleanly");
       }
       process.exit(0);
     };

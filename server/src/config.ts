@@ -37,7 +37,7 @@ if (!isSameFile && existsSync(CWD_ENV_PATH)) {
 }
 
 type DatabaseMode = "embedded-postgres" | "postgres";
-export type HippocampusMode = "off" | "embedded";
+export type HippocampusMode = "setup" | "active" | "degraded";
 
 export interface Config {
   deploymentMode: DeploymentMode;
@@ -74,6 +74,7 @@ export interface Config {
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
+  redisUrl: string;
   hippocampusMode: HippocampusMode;
   hippocampusPythonBin: string;
   hippocampusStartupTimeoutMs: number;
@@ -82,10 +83,18 @@ export interface Config {
 
 export function resolveHippocampusMode(): HippocampusMode {
   const configured = process.env.PAPERCLIP_HIPPOCAMPUS_MODE?.trim().toLowerCase();
-  if (configured === "off" || configured === "embedded") {
+  if (configured === "setup" || configured === "active" || configured === "degraded") {
     return configured;
   }
-  return "off";
+  return "active";
+}
+
+function assertEnv(key: string): string {
+  const value = process.env[key]?.trim();
+  if (!value) {
+    throw new Error(`${key} environment variable is required`);
+  }
+  return value;
 }
 
 export function loadConfig(): Config {
@@ -278,6 +287,7 @@ export function loadConfig(): Config {
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
+    redisUrl: assertEnv("REDIS_URL"),
     hippocampusMode,
     hippocampusPythonBin: process.env.PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN?.trim() || "python3",
     hippocampusStartupTimeoutMs: Math.max(

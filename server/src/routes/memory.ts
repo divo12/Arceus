@@ -2,15 +2,20 @@ import { DelegationMemoryService } from "../services/delegation-memory.js";
 import { Router, type Request } from "express";
 import { ZodError } from "zod";
 import { z } from "zod";
+import type { Db } from "@paperclipai/db";
+import { INITIAL_PRIMING_STATE } from "@paperclipai/shared";
 import { loadConfig, type HippocampusMode } from "../config.js";
 import { HippocampusDisabledError, type HippocampusBridge } from "../services/hippocampus-contract.js";
 import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
 import { MemoryServiceError } from "../services/hippocampus-errors.js";
 import { publishLiveEvent } from "../services/live-events.js";
+import { memoryReadinessService } from "../services/memory-readiness.js";
 import { getMemoryServices } from "../services/memory-services.js";
+import { memoryStoreService } from "../services/memory-store.js";
 import { MemoryProjectionService } from "../services/memory-projections.js";
 import { type MemoryVisibility, MemoryScopeService } from "../services/memory-scope.js";
 import { ProfileService } from "../services/profile-service.js";
+import { workingMemoryService } from "../services/working-memory.js";
 import {
   DelegateSchema,
   InternalizeDelegationSchema,
@@ -28,7 +33,7 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
  */
 type HippocampusBridgeSurface = Pick<
   HippocampusBridge,
-  "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "extract" | "runGC" | "runPromotions" | "health" | "diagnostics"
+  "getEmbedding" | "getSummary" | "listMemories" | "getPriming" | "getHabits" | "remember" | "recall" | "extract" | "runGC" | "runPromotions" | "health" | "diagnostics"
 >;
 
 function resolveHippocampusMode(modeOverride?: HippocampusMode): HippocampusMode {
@@ -76,6 +81,67 @@ export function handleMemoryError(
 
 function resolveBridge(): HippocampusBridgeSurface {
   return getHippocampusBridge() as HippocampusBridgeSurface;
+}
+
+function buildPrimingPrompt(state: unknown): string {
+  const current = state && typeof state === "object"
+    ? state as Record<string, unknown>
+    : {};
+  const confidence = typeof current.confidence === "number" ? current.confidence : INITIAL_PRIMING_STATE.confidence;
+  const caution = typeof current.caution === "number" ? current.caution : INITIAL_PRIMING_STATE.caution;
+  const morale = typeof current.morale === "number" ? current.morale : INITIAL_PRIMING_STATE.morale;
+  const recentEvents = Array.isArray(current.recentEvents)
+    ? current.recentEvents.filter((value): value is string => typeof value === "string")
+    : [];
+
+  const lines = [
+    `Confidence: ${(confidence * 100).toFixed(0)}%`,
+    `Caution: ${(caution * 100).toFixed(0)}%`,
+    `Morale: ${(morale * 100).toFixed(0)}%`,
+  ];
+  if (recentEvents.length > 0) {
+    lines.push("Recent signals:");
+    for (const event of recentEvents.slice(0, 5)) {
+      lines.push(`- ${event}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function toListItem(memory: Record<string, unknown>) {
+  return {
+    id: String(memory.id ?? ""),
+    content: String(memory.content ?? ""),
+    memory_type: typeof memory.memoryType === "string" ? memory.memoryType : null,
+    confidence: typeof memory.confidence === "number" ? memory.confidence : 0,
+    relevance_score: typeof memory.relevanceScore === "number" ? memory.relevanceScore : 0,
+    container: typeof memory.container === "string" ? memory.container : "default",
+    visibility: typeof memory.visibility === "string" ? memory.visibility : null,
+    created_at:
+      memory.createdAt instanceof Date
+        ? memory.createdAt.toISOString()
+        : typeof memory.createdAt === "string"
+          ? memory.createdAt
+          : null,
+    updated_at:
+      memory.updatedAt instanceof Date
+        ? memory.updatedAt.toISOString()
+        : typeof memory.updatedAt === "string"
+          ? memory.updatedAt
+          : null,
+    access_count: 0,
+  };
+}
+
+function toRecallItem(memory: Record<string, unknown>) {
+  return {
+    id: String(memory.id ?? ""),
+    content: String(memory.content ?? ""),
+    memory_type: typeof memory.memoryType === "string" ? memory.memoryType : null,
+    confidence: typeof memory.confidence === "number" ? memory.confidence : null,
+    relevance_score: typeof memory.relevanceScore === "number" ? memory.relevanceScore : null,
+    kind: typeof memory.memoryType === "string" ? memory.memoryType : "memory",
+  };
 }
 
 function readCompanyId(value: unknown): string | undefined {
@@ -134,16 +200,21 @@ function resolveDelegationService(): DelegationMemoryService {
 }
 
 export function memoryRoutes(options: {
+  db?: Db;
   hippocampusMode?: HippocampusMode;
   resolveAgentCompanyId?: (agentId: string) => Promise<string | undefined>;
 } = {}) {
   const router = Router();
   const hippocampusMode = resolveHippocampusMode(options.hippocampusMode);
+  const bridge = resolveBridge();
+  const memoryStore = options.db ? memoryStoreService(options.db) : null;
+  const memoryReadiness = options.db ? memoryReadinessService(options.db) : null;
+  const workingMemory = options.db ? workingMemoryService() : null;
 
   function ensureEnabled(res: {
     status(code: number): { json(body: unknown): unknown };
   }): boolean {
-    if (hippocampusMode !== "off") return true;
+    if (hippocampusMode !== "setup") return true;
     res.status(503).json({ error: "Hippocampus is disabled" });
     return false;
   }
@@ -171,13 +242,53 @@ export function memoryRoutes(options: {
     return resolvedCompanyId;
   }
 
+  async function resolveEmbeddingForQuery(agentId: string, query: string): Promise<number[] | null> {
+    if (!memoryStore || !workingMemory || !query.trim()) return null;
+    try {
+      if (!bridge.getEmbedding) {
+        return await workingMemory.getCachedEmbedding(agentId);
+      }
+      const result = await bridge.getEmbedding(query);
+      await workingMemory.cacheEmbedding(agentId, result.embedding);
+      return result.embedding;
+    } catch {
+      return await workingMemory.getCachedEmbedding(agentId);
+    }
+  }
+
   /** GET /api/agents/:agentId/memory/summary */
   router.get("/agents/:agentId/memory/summary", async (req, res) => {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const hippocampusBridge = resolveBridge();
-      const summary = await hippocampusBridge.getSummary(req.params.agentId);
+      if (memoryStore) {
+        const [totalStatic, totalDynamic, habits, primingState] = await Promise.all([
+          memoryStore.countMemories({ agentId: req.params.agentId, memoryType: "static" }),
+          memoryStore.countMemories({ agentId: req.params.agentId, memoryType: "dynamic" }),
+          memoryStore.getActiveHabits(req.params.agentId),
+          memoryStore.getPrimingState(req.params.agentId),
+        ]);
+        res.json({
+          total_static: totalStatic,
+          total_dynamic: totalDynamic,
+          active_habits: habits.slice(0, 10).map((habit) => ({
+            trigger: habit.triggerCondition,
+            action: habit.action,
+            confidence: habit.confidence,
+          })),
+          priming_prompt: buildPrimingPrompt(primingState),
+          current_state: primingState ?? { ...INITIAL_PRIMING_STATE },
+          recent_learnings: Array.isArray((primingState as Record<string, unknown> | null)?.recentEvents)
+            ? ((primingState as Record<string, unknown>).recentEvents as string[]).slice(0, 5)
+            : [],
+          recent_promotions: [],
+          generated_at: new Date().toISOString(),
+        });
+        return;
+      }
+      const summary = bridge.getSummary
+        ? await bridge.getSummary(req.params.agentId)
+        : await resolveBridge().getSummary(req.params.agentId);
       res.json(summary);
     } catch (err) {
       sendBridgeError(res, err);
@@ -189,9 +300,18 @@ export function memoryRoutes(options: {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const hippocampusBridge = resolveBridge();
       const { memory_type, container, limit } = req.query;
-      const result = await hippocampusBridge.listMemories(
+      if (memoryStore) {
+        const items = await memoryStore.listMemories({
+          agentId: req.params.agentId,
+          memoryType: typeof memory_type === "string" ? memory_type as "static" | "dynamic" | "working" : undefined,
+          container: typeof container === "string" ? container : undefined,
+          limit: limit ? Number(limit) : 50,
+        });
+        res.json({ items: items.map((item) => toListItem(item as unknown as Record<string, unknown>)), total: items.length });
+        return;
+      }
+      const result = await resolveBridge().listMemories(
         req.params.agentId,
         memory_type as string | undefined,
         container as string | undefined,
@@ -208,8 +328,15 @@ export function memoryRoutes(options: {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const hippocampusBridge = resolveBridge();
-      const result = await hippocampusBridge.getPriming(req.params.agentId);
+      if (memoryStore) {
+        const state = await memoryStore.getPrimingState(req.params.agentId);
+        res.json({
+          prompt: buildPrimingPrompt(state),
+          state: state ?? { ...INITIAL_PRIMING_STATE },
+        });
+        return;
+      }
+      const result = await resolveBridge().getPriming(req.params.agentId);
       res.json(result);
     } catch (err) {
       sendBridgeError(res, err);
@@ -221,9 +348,19 @@ export function memoryRoutes(options: {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const hippocampusBridge = resolveBridge();
+      if (memoryStore) {
+        const habits = await memoryStore.getActiveHabits(req.params.agentId);
+        res.json({
+          habits: habits.map((habit) => ({
+            trigger: habit.triggerCondition,
+            action: habit.action,
+            confidence: habit.confidence,
+          })),
+        });
+        return;
+      }
       const context = (req.query.context as string) ?? "";
-      const result = await hippocampusBridge.getHabits(req.params.agentId, context);
+      const result = await resolveBridge().getHabits(req.params.agentId, context);
       res.json(result);
     } catch (err) {
       sendBridgeError(res, err);
@@ -235,17 +372,44 @@ export function memoryRoutes(options: {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const hippocampusBridge = resolveBridge();
       const { content, container, memory_type } = req.body;
-      const result = await hippocampusBridge.remember(
+      if (memoryStore) {
+        const companyId = await resolveEventCompanyId(req, req.params.agentId);
+        if (!companyId) {
+          throw new MemoryServiceError("Could not resolve company for memory write", 400, "MEMORY_COMPANY_REQUIRED");
+        }
+        const embedding = typeof content === "string"
+          ? await resolveEmbeddingForQuery(req.params.agentId, content)
+          : null;
+        const result = await memoryStore.writeMemory({
+          companyId,
+          agentId: req.params.agentId,
+          content: String(content ?? ""),
+          embedding,
+          memoryType: (memory_type ?? "dynamic") as "static" | "dynamic" | "working",
+          container: typeof container === "string" ? container : "default",
+          confidence: 0.8,
+          visibility: "private",
+          sourceType: "manual",
+          sourceId: "api_remember",
+        });
+        res.json({
+          id: result.id,
+          content: result.content,
+          memory_type: result.memoryType,
+          confidence: result.confidence,
+        });
+        return;
+      }
+      const result = await resolveBridge().remember(
         req.params.agentId,
         content,
         container ?? "default",
         memory_type ?? "dynamic",
       );
       res.json(result);
-    } catch (err) {
-      sendBridgeError(res, err);
+    } catch (error) {
+      handleMemoryError(res, error);
     }
   });
 
@@ -254,17 +418,32 @@ export function memoryRoutes(options: {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const hippocampusBridge = resolveBridge();
       const { query, container, top_k } = req.body;
-      const result = await hippocampusBridge.recall(
+      if (memoryStore) {
+        const embedding = await resolveEmbeddingForQuery(req.params.agentId, String(query ?? ""));
+        const items = embedding
+          ? await memoryStore.recall({
+            agentId: req.params.agentId,
+            embedding,
+            topK: Number(top_k ?? 10),
+            container: typeof container === "string" ? container : undefined,
+          })
+          : await memoryStore.recallByDate({
+            agentId: req.params.agentId,
+            topK: Number(top_k ?? 10),
+          });
+        res.json({ items: items.map((item) => toRecallItem(item as unknown as Record<string, unknown>)) });
+        return;
+      }
+      const result = await resolveBridge().recall(
         req.params.agentId,
         query,
         container ?? "default",
         top_k ?? 10,
       );
       res.json(result);
-    } catch (err) {
-      sendBridgeError(res, err);
+    } catch (error) {
+      handleMemoryError(res, error);
     }
   });
 
@@ -413,6 +592,16 @@ export function memoryRoutes(options: {
     if (!ensureEnabled(res)) return;
     try {
       const params = MemoryExplorerQuerySchema.parse(req.query);
+      if (memoryStore) {
+        const items = await memoryStore.listMemories({
+          agentId: req.params.agentId,
+          memoryType: params.memory_type as "static" | "dynamic" | "working" | undefined,
+          container: params.container,
+          limit: params.limit,
+        });
+        res.json({ items: items.map((item) => toListItem(item as unknown as Record<string, unknown>)), total: items.length });
+        return;
+      }
       const result = await resolveProjectionService().getMemoryExplorer(
         req.params.agentId,
         params.container,
@@ -436,6 +625,215 @@ export function memoryRoutes(options: {
         params.limit,
       );
       res.json(events);
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/agents/:agentId/memory */
+  router.get("/companies/:companyId/agents/:agentId/memory", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const params = z.object({
+        memory_type: z.enum(["static", "dynamic", "working"]).optional(),
+        container: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+      }).parse(req.query);
+      const items = await memoryStore.listMemories({
+        agentId: req.params.agentId,
+        memoryType: params.memory_type,
+        container: params.container,
+        limit: params.limit,
+        offset: params.offset,
+      });
+      res.json({ data: items.map((item) => toListItem(item as unknown as Record<string, unknown>)), total: items.length });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/agents/:agentId/memory/recall */
+  router.get("/companies/:companyId/agents/:agentId/memory/recall", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const params = z.object({
+        query: z.string().min(1),
+        topK: z.coerce.number().int().min(1).max(100).default(10),
+        container: z.string().optional(),
+      }).parse(req.query);
+      const embedding = await resolveEmbeddingForQuery(req.params.agentId, params.query);
+      const items = embedding
+        ? await memoryStore.recall({
+          agentId: req.params.agentId,
+          embedding,
+          topK: params.topK,
+          container: params.container,
+        })
+        : await memoryStore.recallByDate({
+          agentId: req.params.agentId,
+          topK: params.topK,
+        });
+      res.json({ data: items.map((item) => toRecallItem(item as unknown as Record<string, unknown>)) });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/agents/:agentId/memory/habits */
+  router.get("/companies/:companyId/agents/:agentId/memory/habits", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const habits = await memoryStore.getActiveHabits(req.params.agentId);
+      res.json({
+        data: habits.map((habit) => ({
+          id: habit.id,
+          triggerCondition: habit.triggerCondition,
+          action: habit.action,
+          confidence: habit.confidence,
+          usageCount: habit.usageCount,
+          isActive: habit.isActive,
+        })),
+      });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/agents/:agentId/memory/priming */
+  router.get("/companies/:companyId/agents/:agentId/memory/priming", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const state = await memoryStore.getPrimingState(req.params.agentId);
+      res.json({ data: state ?? { ...INITIAL_PRIMING_STATE } });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/agents/:agentId/memory/versions/:memoryId */
+  router.get("/companies/:companyId/agents/:agentId/memory/versions/:memoryId", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const versions = await memoryStore.getVersionHistory(req.params.memoryId);
+      res.json({ data: versions.map((item) => toListItem(item as unknown as Record<string, unknown>)) });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** POST /api/companies/:companyId/agents/:agentId/memory */
+  router.post("/companies/:companyId/agents/:agentId/memory", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const body = z.object({
+        content: z.string().min(1),
+        container: z.string().default("default"),
+        memoryType: z.enum(["static", "dynamic", "working"]).default("dynamic"),
+        visibility: z.enum(["private", "task_scoped", "startup_shared", "board_visible"]).default("private"),
+        confidence: z.number().min(0).max(1).optional(),
+      }).parse(req.body);
+      const embedding = await resolveEmbeddingForQuery(req.params.agentId, body.content);
+      const memory = await memoryStore.writeMemory({
+        companyId: req.params.companyId,
+        agentId: req.params.agentId,
+        content: body.content,
+        embedding,
+        memoryType: body.memoryType,
+        container: body.container,
+        visibility: body.visibility,
+        confidence: body.confidence,
+        sourceType: "manual",
+        sourceId: "company_memory_route",
+      });
+      res.status(201).json({ data: toListItem(memory as unknown as Record<string, unknown>) });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** DELETE /api/companies/:companyId/agents/:agentId/memory/:memoryId */
+  router.delete("/companies/:companyId/agents/:agentId/memory/:memoryId", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const deleted = await memoryStore.softDelete(req.params.memoryId, "manual");
+      res.json({ data: deleted ? toListItem(deleted as unknown as Record<string, unknown>) : null });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/memory/operations */
+  router.get("/companies/:companyId/memory/operations", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryStore) {
+        throw new MemoryServiceError("Memory store unavailable", 503, "MEMORY_STORE_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      const params = z.object({
+        agentId: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+      }).parse(req.query);
+      const operations = await memoryStore.listOperations({
+        companyId: req.params.companyId,
+        agentId: params.agentId,
+        limit: params.limit,
+        offset: params.offset,
+      });
+      res.json({ data: operations, total: operations.length });
+    } catch (error) {
+      handleMemoryError(res, error);
+    }
+  });
+
+  /** GET /api/companies/:companyId/memory/health */
+  router.get("/companies/:companyId/memory/health", async (req, res) => {
+    assertBoard(req);
+    if (!ensureEnabled(res)) return;
+    try {
+      if (!memoryReadiness) {
+        throw new MemoryServiceError("Memory readiness unavailable", 503, "MEMORY_READINESS_UNAVAILABLE");
+      }
+      assertCompanyAccess(req, req.params.companyId);
+      res.json({ data: await memoryReadiness.getMemoryHealth() });
     } catch (error) {
       handleMemoryError(res, error);
     }

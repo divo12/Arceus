@@ -14,12 +14,20 @@ class RedisCacheStore:
     def __init__(self, redis_url: str = "", client: Any | None = None) -> None:
         self._redis_url = redis_url or settings.hippocampus_redis_url or settings.redis_url
         self._client = client
+        self._key_prefix = "arceus:"
+
+    def _qualify_key(self, key: str) -> str:
+        return key if key.startswith(self._key_prefix) else f"{self._key_prefix}{key}"
+
+    def _qualify_pattern(self, pattern: str) -> str:
+        return pattern if pattern.startswith(self._key_prefix) else f"{self._key_prefix}{pattern}"
 
     async def get(self, key: str) -> str | None:
         client = await self._get_client()
-        key_type = await self._key_type(client, key)
+        qualified_key = self._qualify_key(key)
+        key_type = await self._key_type(client, qualified_key)
         if key_type == "list":
-            items = await client.lrange(key, 0, -1)
+            items = await client.lrange(qualified_key, 0, -1)
             if not items:
                 return None
             payload: list[object] = []
@@ -34,7 +42,7 @@ class RedisCacheStore:
                 else:
                     payload.append(item)
             return json.dumps(payload, default=str)
-        value = await client.get(key)
+        value = await client.get(qualified_key)
         if value is None:
             return None
         if isinstance(value, bytes):
@@ -43,25 +51,27 @@ class RedisCacheStore:
 
     async def set(self, key: str, value: str, ttl_seconds: int = 3600) -> None:
         client = await self._get_client()
+        qualified_key = self._qualify_key(key)
         if ttl_seconds > 0:
-            await client.set(key, value, ex=ttl_seconds)
+            await client.set(qualified_key, value, ex=ttl_seconds)
             return
-        await client.set(key, value)
+        await client.set(qualified_key, value)
 
     async def append(self, key: str, value: str, ttl_seconds: int = 3600) -> None:
         client = await self._get_client()
-        await client.rpush(key, value)
+        qualified_key = self._qualify_key(key)
+        await client.rpush(qualified_key, value)
         if ttl_seconds > 0:
-            await client.expire(key, ttl_seconds)
+            await client.expire(qualified_key, ttl_seconds)
 
     async def delete(self, key: str) -> None:
         client = await self._get_client()
-        await client.delete(key)
+        await client.delete(self._qualify_key(key))
 
     async def get_all(self, prefix: str) -> dict[str, str]:
         client = await self._get_client()
         values: dict[str, str] = {}
-        async for key in self._scan_keys(client, f"{prefix}*"):
+        async for key in self._scan_keys(client, self._qualify_pattern(f"{prefix}*")):
             value = await self.get(key)
             if value is not None:
                 values[key] = value
@@ -69,7 +79,7 @@ class RedisCacheStore:
 
     async def clear(self, prefix: str) -> None:
         client = await self._get_client()
-        keys = [key async for key in self._scan_keys(client, f"{prefix}*")]
+        keys = [key async for key in self._scan_keys(client, self._qualify_pattern(f"{prefix}*"))]
         if keys:
             await client.delete(*keys)
 

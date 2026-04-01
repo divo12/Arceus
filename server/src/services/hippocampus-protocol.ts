@@ -35,6 +35,10 @@ export interface HippocampusRpcMethodMap {
     params: Record<string, never>;
     result: { status: string; agents_loaded: number; debug: boolean };
   };
+  getEmbedding: {
+    params: { text: string };
+    result: { embedding: number[] };
+  };
   remember: {
     params: { agent_id: string; content: string; container: string; memory_type: string };
     result: { id: string; content: string; memory_type: string; confidence: number };

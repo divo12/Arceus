@@ -592,7 +592,7 @@ describe("agent skill routes", () => {
     expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
   });
 
-  it("seeds the role definition system prompt into static memory for hired agents", async () => {
+  it("delegates hired agent creation to the agent service without route-level memory seeding", async () => {
     const createdAgent = {
       ...makeAgent("claude_local"),
       role: "engineer",
@@ -611,16 +611,17 @@ describe("agent skill routes", () => {
         role: "engineer",
         adapterType: "claude_local",
         adapterConfig: {},
-      });
+    });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(mockStoreStaticMemory).toHaveBeenCalledWith(
-      "11111111-1111-4111-8111-111111111111",
-      {
-        kind: "identity",
-        content: "You own delivery quality.",
-        source: "role_definition_seed",
-      },
+    expect(mockAgentService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        name: "QA Agent",
+        role: "engineer",
+        adapterType: "claude_local",
+      }),
     );
+    expect(mockStoreStaticMemory).not.toHaveBeenCalled();
   });
 });

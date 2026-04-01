@@ -16,13 +16,13 @@ describe("hippocampus runtime lifecycle helpers", () => {
     const { startHippocampusRuntimeForConfig } = await import("../index.js");
 
     await startHippocampusRuntimeForConfig({
-      hippocampusMode: "off",
+      hippocampusMode: "setup",
       hippocampusPythonBin: "python3",
       hippocampusStartupTimeoutMs: 1000,
       hippocampusRequestTimeoutMs: 1000,
     });
     await startHippocampusRuntimeForConfig({
-      hippocampusMode: "embedded",
+      hippocampusMode: "active",
       hippocampusPythonBin: "python3",
       hippocampusStartupTimeoutMs: 1000,
       hippocampusRequestTimeoutMs: 1000,
@@ -40,8 +40,8 @@ describe("hippocampus runtime lifecycle helpers", () => {
 
     const { stopHippocampusRuntimeForConfig } = await import("../index.js");
 
-    await stopHippocampusRuntimeForConfig({ hippocampusMode: "off" });
-    await stopHippocampusRuntimeForConfig({ hippocampusMode: "embedded" });
+    await stopHippocampusRuntimeForConfig({ hippocampusMode: "setup" });
+    await stopHippocampusRuntimeForConfig({ hippocampusMode: "active" });
 
     expect(shutdown).toHaveBeenCalledTimes(1);
   });

@@ -64,9 +64,6 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
-import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
-import { logger } from "../middleware/logger.js";
-import { roleDefinitionService } from "../services/role-definitions.js";
 
 export function agentRoutes(db: Db) {
   const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
@@ -94,7 +91,6 @@ export function agentRoutes(db: Db) {
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
   const instanceSettings = instanceSettingsService(db);
-  const roleDefs = roleDefinitionService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function getCurrentUserRedactionOptions() {
@@ -206,40 +202,6 @@ export function agentRoutes(db: Db) {
 
   async function assertCanReadConfigurations(req: Request, companyId: string) {
     return assertCanCreateAgentsForCompany(req, companyId);
-  }
-
-  async function seedRoleDefinitionMemory(
-    agent: { id: string; roleDefinitionId?: string | null },
-  ): Promise<void> {
-    const roleDefinitionId =
-      typeof agent.roleDefinitionId === "string" && agent.roleDefinitionId.trim().length > 0
-        ? agent.roleDefinitionId
-        : null;
-    if (!roleDefinitionId) return;
-
-    let roleDef: Awaited<ReturnType<typeof roleDefs.getById>> | null = null;
-    try {
-      roleDef = await roleDefs.getById(roleDefinitionId);
-    } catch {
-      return;
-    }
-
-    const systemPrompt = roleDef.systemPrompt.trim();
-    if (!systemPrompt) return;
-
-    const hippocampus = getHippocampusBridge();
-    if (hippocampus.mode === "off") return;
-
-    await hippocampus.storeStaticMemory(agent.id, {
-      kind: "identity",
-      content: systemPrompt,
-      source: "role_definition_seed",
-    }).catch((err) => {
-      logger.warn(
-        { err, agentId: agent.id, roleDefinitionId },
-        "failed to seed role definition prompt into hippocampus",
-      );
-    });
   }
 
   async function resolveActorAgentForCompany(req: Request, companyId: string) {
@@ -1303,7 +1265,6 @@ export function agentRoutes(db: Db) {
       lastHeartbeatAt: null,
     });
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent);
-    await seedRoleDefinitionMemory(agent);
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
     const actor = getActorInfo(req);
@@ -1462,7 +1423,6 @@ export function agentRoutes(db: Db) {
       lastHeartbeatAt: null,
     });
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent);
-    await seedRoleDefinitionMemory(agent);
 
     const actor = getActorInfo(req);
     await logActivity(db, {

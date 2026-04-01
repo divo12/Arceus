@@ -357,6 +357,7 @@ export const LIVE_EVENT_TYPES = [
   "activity.logged",
   "memory:promotion",
   "memory:gc",
+  "memory:extraction_failed",
   "plugin.ui.updated",
   "plugin.worker.crashed",
   "plugin.worker.restarted",

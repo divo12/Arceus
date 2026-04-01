@@ -8,7 +8,7 @@ class HippocampusConfig:
     cache_backend: str = "redis"
     relational_backend: str = "postgresql"
     postgres_url: str = ""
-    postgres_schema: str = "hippocampus"
+    postgres_schema: str = "public"
     redis_url: str = ""
     vector_index_type: str = "hnsw"
     vector_top_k_fetch_multiplier: int = 3

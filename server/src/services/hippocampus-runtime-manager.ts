@@ -151,7 +151,7 @@ export class HippocampusRuntimeManager {
 
   diagnostics(): HippocampusRuntimeDiagnostics {
     return {
-      mode: "embedded",
+      mode: "active",
       status: this.status,
       pid: this.child?.pid ?? null,
       pendingRequests: this.pending.size,

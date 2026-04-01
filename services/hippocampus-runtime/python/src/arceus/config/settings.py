@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings
 
 _ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
@@ -18,10 +18,20 @@ class Settings(BaseSettings):
     debug: bool = False
     database_url: str = ""
 
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias=AliasChoices("ARCEUS_REDIS_URL", "REDIS_URL"),
+    )
     hippocampus_postgres_url: str = ""
-    hippocampus_postgres_schema: str = "hippocampus"
-    hippocampus_redis_url: str = ""
+    hippocampus_postgres_schema: str = "public"
+    hippocampus_redis_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ARCEUS_HIPPOCAMPUS_REDIS_URL",
+            "ARCEUS_REDIS_URL",
+            "REDIS_URL",
+        ),
+    )
     hippocampus_vector_index_type: str = "hnsw"
     hippocampus_vector_top_k_fetch_multiplier: int = 3
 

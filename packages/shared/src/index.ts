@@ -159,6 +159,8 @@ export {
   type PluginBridgeErrorCode,
 } from "./constants.js";
 
+export * from "./memory-types.js";
+
 export type {
   Company,
   CompanySkillSourceType,

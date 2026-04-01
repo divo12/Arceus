@@ -53,7 +53,7 @@ class PGVectorStore:
     def __init__(
         self,
         url: str = "",
-        schema: str = "hippocampus",
+        schema: str = "public",
         vector_index_type: str = "hnsw",
         top_k_fetch_multiplier: int = 3,
         dimensions: int = 384,

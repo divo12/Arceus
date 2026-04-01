@@ -34,7 +34,7 @@ function getRouteHandler(router: Router, method: "get" | "post", path: string): 
 async function invokeRoute(options: {
   actor?: { type: string; userId?: string; source?: string };
   body?: Record<string, unknown>;
-  hippocampusMode: "off" | "embedded";
+  hippocampusMode: "setup" | "active" | "embedded";
   method: "get" | "post";
   params?: Record<string, unknown>;
   path: string;
@@ -83,11 +83,11 @@ describe("memory routes", () => {
     vi.clearAllMocks();
   });
 
-  it("returns 503 when hippocampus mode is off", async () => {
-    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "off";
+  it("returns 503 when hippocampus mode is in setup", async () => {
+    process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "setup";
 
     const res = await invokeRoute({
-      hippocampusMode: "off",
+      hippocampusMode: "setup",
       method: "get",
       path: "/agents/:agentId/memory/summary",
     });

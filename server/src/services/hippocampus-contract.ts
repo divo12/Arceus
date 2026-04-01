@@ -1,6 +1,11 @@
 import type { DelegationStyle } from "@paperclipai/shared";
+import type {
+  MemoryItem as SharedMemoryItem,
+  MemoryHabit as SharedMemoryHabit,
+  MemoryPrimingState,
+} from "@paperclipai/shared";
 
-export type HippocampusMode = "off" | "embedded";
+export type HippocampusMode = "setup" | "active" | "degraded";
 
 export interface MemoryItem {
   id: string;
@@ -10,6 +15,12 @@ export interface MemoryItem {
   relevance_score: number | null;
   kind: string;
 }
+
+// Bridge DTOs still use snake_case today, but shared memory types now exist in
+// @paperclipai/shared for the upcoming TypeScript-native data plane phases.
+export type SharedMemoryItemShape = SharedMemoryItem;
+export type SharedMemoryHabitShape = SharedMemoryHabit;
+export type SharedMemoryPrimingStateShape = MemoryPrimingState;
 
 export interface MemorySummary {
   total_static: number;
@@ -100,6 +111,7 @@ export interface HippocampusBridge {
   start?(): Promise<void>;
   stop?(): Promise<void>;
   health(): Promise<HealthResult>;
+  getEmbedding?(text: string): Promise<{ embedding: number[] }>;
   remember(agentId: string, content: string, container?: string, memoryType?: string): Promise<{
     id: string;
     content: string;

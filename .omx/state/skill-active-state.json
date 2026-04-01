@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "active": false,
+  "active": true,
   "skill": "analyze",
   "keyword": "Analyze",
-  "phase": "completing",
+  "phase": "reviewing",
   "activated_at": "2026-04-01T09:21:29.151Z",
-  "updated_at": "2026-04-01T10:42:01.259Z",
+  "updated_at": "2026-04-01T14:54:46.545Z",
   "source": "keyword-detector",
   "input_lock": null
 }

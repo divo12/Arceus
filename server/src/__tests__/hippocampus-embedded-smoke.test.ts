@@ -110,6 +110,7 @@ describe("embedded hippocampus server smoke", () => {
         "PAPERCLIP_MIGRATION_PROMPT",
         "PAPERCLIP_UI_DEV_MIDDLEWARE",
         "PORT",
+        "REDIS_URL",
         "SERVE_UI",
         "ARCEUS_HIPPOCAMPUS_PROFILE",
         "ARCEUS_HIPPOCAMPUS_TEST_DIR",
@@ -133,8 +134,9 @@ describe("embedded hippocampus server smoke", () => {
       process.env.PAPERCLIP_DB_BACKUP_ENABLED = "false";
       process.env.PAPERCLIP_MIGRATION_PROMPT = "never";
       process.env.PAPERCLIP_MIGRATION_AUTO_APPLY = "true";
-      process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
+      process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "active";
       process.env.PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN = runtimePythonBin;
+      process.env.REDIS_URL = "redis://127.0.0.1:6379/0";
       process.env.ARCEUS_HIPPOCAMPUS_PROFILE = "test_fakes";
       process.env.ARCEUS_HIPPOCAMPUS_TEST_DIR = runtimeDataDir;
       process.env.ARCEUS_HIPPOCAMPUS_TEST_EMBEDDING_DIMENSIONS = "32";
@@ -153,7 +155,7 @@ describe("embedded hippocampus server smoke", () => {
           status: "ok",
           agents_loaded: 0,
           diagnostics: {
-            mode: "embedded",
+            mode: "active",
             status: "running",
           },
         });
@@ -194,7 +196,7 @@ describe("embedded hippocampus server smoke", () => {
           status: "ok",
           agents_loaded: 1,
           diagnostics: {
-            mode: "embedded",
+            mode: "active",
             status: "running",
           },
         });
@@ -208,7 +210,7 @@ describe("embedded hippocampus server smoke", () => {
             });
           });
         }
-        await stopHippocampusRuntimeForConfig({ hippocampusMode: "embedded" });
+        await stopHippocampusRuntimeForConfig({ hippocampusMode: "active" });
         await startedDb.instance.stop();
         restoreEnv(envSnapshot);
       }

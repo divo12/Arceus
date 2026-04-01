@@ -21,4 +21,4 @@ def test_runtime_exports_import() -> None:
 def test_runtime_settings_shim_loads() -> None:
     from arceus.config.settings import settings
 
-    assert settings.hippocampus_postgres_schema == "hippocampus"
+    assert settings.hippocampus_postgres_schema == "public"

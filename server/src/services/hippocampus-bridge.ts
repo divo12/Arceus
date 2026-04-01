@@ -75,7 +75,7 @@ async function buildDelegationContext(
 }
 
 class DisabledHippocampusBridge implements ManagedHippocampusBridge {
-  readonly mode = "off" as const;
+  readonly mode = "setup" as const;
 
   private fail(): never {
     throw new HippocampusDisabledError();
@@ -94,6 +94,7 @@ class DisabledHippocampusBridge implements ManagedHippocampusBridge {
   }
 
   async health(): Promise<HealthResult> { return this.fail(); }
+  async getEmbedding(): Promise<{ embedding: number[] }> { return this.fail(); }
   async remember(): Promise<{ id: string; content: string; memory_type: string; confidence: number }> { return this.fail(); }
   async recall(): Promise<{ items: MemoryItem[] }> { return this.fail(); }
   async extract(): Promise<ExtractResult> { return this.fail(); }
@@ -117,7 +118,7 @@ class DisabledHippocampusBridge implements ManagedHippocampusBridge {
 }
 
 export class EmbeddedHippocampusBridge implements ManagedHippocampusBridge {
-  readonly mode = "embedded" as const;
+  readonly mode = "active" as const;
 
   constructor(private readonly runtime: Pick<HippocampusRuntimeManager, "start" | "stop" | "call" | "diagnostics">) {}
 
@@ -135,6 +136,10 @@ export class EmbeddedHippocampusBridge implements ManagedHippocampusBridge {
 
   async health() {
     return this.runtime.call("health", {});
+  }
+
+  async getEmbedding(text: string) {
+    return this.runtime.call("getEmbedding", { text });
   }
 
   async remember(agentId: string, content: string, container = "default", memoryType = "dynamic") {
@@ -239,7 +244,7 @@ export function getHippocampusBridge(): ManagedHippocampusBridge {
 export async function initializeHippocampusBridge(config: HippocampusBridgeConfig): Promise<ManagedHippocampusBridge> {
   await shutdownHippocampusBridge();
 
-  if (config.mode === "off") {
+  if (config.mode === "setup") {
     hippocampusBridge = new DisabledHippocampusBridge();
     resetMemoryServices();
     return hippocampusBridge;

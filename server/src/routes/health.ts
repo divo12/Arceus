@@ -5,6 +5,7 @@ import { heartbeatRuns, instanceUserRoles, invites } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-server-status.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { memoryReadinessService } from "../services/memory-readiness.js";
 import { serverVersion } from "../version.js";
 
 export function healthRoutes(
@@ -28,6 +29,9 @@ export function healthRoutes(
       res.json({ status: "ok", version: serverVersion });
       return;
     }
+
+    const memoryReadiness = memoryReadinessService(db);
+    const memory = await memoryReadiness.getMemoryHealth();
 
     let bootstrapStatus: "ready" | "bootstrap_pending" = "ready";
     let bootstrapInviteActive = false;
@@ -82,6 +86,7 @@ export function healthRoutes(
       authReady: opts.authReady,
       bootstrapStatus,
       bootstrapInviteActive,
+      memory,
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },

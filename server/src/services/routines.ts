@@ -7,6 +7,7 @@ import {
   goals,
   heartbeatRuns,
   issues,
+  memoryPrimingState,
   projects,
   routineRuns,
   routines,
@@ -33,11 +34,15 @@ import { parseCron, validateCron } from "./cron.js";
 import { heartbeatService } from "./heartbeat.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
+import { getHippocampusBridge } from "./hippocampus-bridge.js";
+import { memoryReadinessService } from "./memory-readiness.js";
+import { memoryStoreService } from "./memory-store.js";
 
 const OPEN_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"];
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running"];
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const MAX_CATCH_UP_RUNS = 25;
+const MEMORY_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -142,6 +147,9 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
   const issueSvc = issueService(db);
   const secretsSvc = secretService(db);
   const heartbeat = deps.heartbeat ?? heartbeatService(db);
+  const memoryReadiness = memoryReadinessService(db);
+  const memoryStore = memoryStoreService(db);
+  let lastMemoryMaintenanceAt = 0;
 
   async function getRoutineById(id: string) {
     return db
@@ -477,6 +485,51 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
       .where(eq(routineRuns.id, runId))
       .returning()
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function runMemoryMaintenance(now: Date = new Date()) {
+    if (now.getTime() - lastMemoryMaintenanceAt < MEMORY_MAINTENANCE_INTERVAL_MS) {
+      return { skipped: true as const, reason: "interval_not_elapsed" as const };
+    }
+
+    const health = await memoryReadiness.getMemoryHealth();
+    if (health.status === "down") {
+      logger.warn({ health }, "Skipping memory maintenance — data plane not ready");
+      return { skipped: true as const, reason: "data_plane_down" as const };
+    }
+
+    const deletedExpiredWorking = await memoryStore.deleteExpiredWorking();
+    let maintainedAgents = 0;
+
+    if (health.intelligence.ready) {
+      const bridge = getHippocampusBridge();
+      const agentsWithMemory = await db
+        .selectDistinct({
+          agentId: memoryPrimingState.agentId,
+          companyId: memoryPrimingState.companyId,
+        })
+        .from(memoryPrimingState);
+
+      for (const entry of agentsWithMemory) {
+        await bridge.runPromotions(entry.agentId);
+        await bridge.runGC(entry.agentId);
+        maintainedAgents += 1;
+        await memoryStore.logOperation({
+          companyId: entry.companyId,
+          agentId: entry.agentId,
+          operationType: "maintenance",
+          success: true,
+        });
+      }
+    }
+
+    lastMemoryMaintenanceAt = now.getTime();
+    return {
+      skipped: false as const,
+      deletedExpiredWorking,
+      maintainedAgents,
+      status: health.status,
+    };
   }
 
   async function createWebhookSecret(
@@ -1236,6 +1289,8 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
 
       return { triggered };
     },
+
+    runMemoryMaintenance,
 
     syncRunStatusForIssue: async (issueId: string) => {
       const issue = await db
