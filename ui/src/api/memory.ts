@@ -56,7 +56,7 @@ export interface ScopedRecallParams {
 
 export interface ShareableMemoryParams {
   startupId: string;
-  visibility?: Array<"shared" | "board" | "private" | "task_scoped">;
+  visibility?: Array<"private" | "task_scoped" | "startup_shared" | "board_visible">;
 }
 
 export interface DelegateMemoryParams {

@@ -35,10 +35,10 @@ Hippocampus is the memory kernel that gives every Arceus AI agent persistent, ev
    │                  │      │                  │      │   (protocols)    │
    │ 1. Working       │      │ Extractor        │      │ VectorStore      │
    │ 2. Static        │      │ PromotionEngine  │      │ RelationalStore  │
-   │ 3. Dynamic       │      │ ReasoningBank    │      │ GraphStoreBackend│
+   │ 3. Dynamic       │      │ ReasoningBank    │      │ EmbeddingEngine  │
    │ 4. Procedural    │      │ PatternLearner   │      │ EmbeddingEngine  │
    │ 5. Priming       │      │ GarbageCollector │      │ LLMEngine        │
-   │                  │      │ GraphStore       │      │ WorkingMemoryBknd│
+   │                  │      │                  │      │ WorkingMemoryBknd│
    └──────────────────┘      └──────────────────┘      │ PatternStore     │
                                                        └──────────────────┘
 ```
@@ -62,10 +62,10 @@ Short-lived context for the task currently in progress. Think of it as the agent
 
 Permanent, high-confidence facts. These are things the agent "knows for sure" — they don't decay.
 
-- **Storage**: vector store with graph provenance
+- **Storage**: vector store with version/provenance metadata
 - **Lifetime**: indefinite (version chains track changes)
 - **Use case**: "The company uses microservices", "Jane is the CTO", architectural decisions
-- **Behavior**: updates create a new version and soft-delete the old one, maintaining a version chain in the graph
+- **Behavior**: updates create a new version and soft-delete the old one, maintaining a version chain in relational metadata
 - **Key methods**: `add()`, `update()`, `search()`
 
 ### Tier 3: Dynamic Memory (`tiers/dynamic.py`)
@@ -112,12 +112,11 @@ LLM-driven fact extraction from conversations and meetings.
 Messages → [LLM: extract facts] → For each fact:
     → [LLM: decide ADD/UPDATE/DELETE/NONE vs existing memories]
     → Route to correct tier (Static / Dynamic / Procedural)
-    → Extract entities + relationships → Graph
 ```
 
 - Uses full LLM (gpt-4.1) for extraction, lightweight LLM (gpt-4.1-mini) for classification
 - Supports modes: `AGENT`, `SUB_AGENT`, `CONVERSATION`, `MEETING`
-- Creates graph entities and edges for extracted relationships
+- Persists extracted facts into the tiered memory system
 
 ### ReasoningBank (`engines/reasoning_bank.py`)
 
@@ -147,16 +146,6 @@ Discovers behavioral patterns from successful trajectories:
 - **Consolidation**: merge similar patterns, prune low-performers (bottom 20th percentile)
 - **Clustering**: assigns patterns to clusters (production: k-means)
 
-### GraphStore (`engines/graph_store.py`)
-
-Knowledge graph facade over the graph backend:
-
-- **Entity matching**: embedding-based similarity search (threshold 0.7)
-- **Node merging**: increment mention count, merge metadata
-- **Edge creation**: by ID or by name (embedding lookup)
-- **Version chains**: `UPDATES` edges link old → new memory versions
-- **Graph search**: vector seed → neighbor expansion (configurable hops) → cosine ranking
-
 ### GarbageCollector (`engines/gc.py`)
 
 Periodic cleanup:
@@ -176,7 +165,6 @@ All storage is accessed through Python `Protocol` classes (`backends/protocols.p
 |----------|-------------------|-----------------|
 | `VectorStore` | `tests.hippocampus.support.fakes.InMemoryVectorStore` | `PGVectorStore` |
 | `RelationalStore` | `tests.hippocampus.support.fakes.SQLiteRelationalStore` | `PostgreSQLRelationalStore` |
-| `GraphStoreBackend` | `tests.hippocampus.support.fakes.InMemoryGraphStoreBackend` | `Neo4jGraphStoreBackend` |
 | `WorkingMemoryBackend` | `tests.hippocampus.support.fakes.DictCacheStore` | `RedisCacheStore` |
 | `EmbeddingEngine` | `tests.hippocampus.support.fakes.MockEmbeddingEngine` | `SentenceTransformerEmbeddingEngine` |
 | `LLMEngine` | `tests.hippocampus.support.fakes.NoopLLMEngine` | `AzureOpenAILLMEngine` |
@@ -192,9 +180,8 @@ Sprint 3/4 formalizes the following production targets:
 - `VectorStore`: Same PostgreSQL instance with `pgvector` for cosine-aware search, driven by `vector_store_backend="pgvector"`.
 - `WorkingMemoryBackend`: Redis (prefix- and TTL-safe replacements for the dict cache).
 - `EmbeddingEngine`: `SentenceTransformerEmbeddingEngine` with explicit model, device, strict-mode, and optional startup warmup.
-- `GraphStoreBackend`: Neo4j (existing production backend remains unchanged, now treated as the default production graph profile).
 
-Local validation is provided via `docker-compose -f docker-compose.hippocampus.yml up -d`, which launches PostgreSQL (pgvector), Redis, and Neo4j. Consult the production config block in [config.py](/Users/divyansh/Arceus/services/hippocampus-runtime/python/src/arceus/core/hippocampus/config.py) for the values you must set before starting Hippocampus in this profile.
+Local validation is provided via PostgreSQL (pgvector) plus Redis. Consult the production config block in [config.py](/Users/divyansh/Arceus/services/hippocampus-runtime/python/src/arceus/core/hippocampus/config.py) for the values you must set before starting Hippocampus in this profile.
 
 Fast tests remain on the lightweight scaffolding stack. Production-stack verification is opt-in:
 
@@ -267,7 +254,6 @@ Dashboard-oriented views of agent memory:
    a. LLM extracts structured facts
    b. For each fact: search existing → LLM decides action
    c. ADD/UPDATE/DELETE routed to correct tier
-   d. Entities + relationships → GraphStore
 ```
 
 ### Flow C: Agent Needs Context
@@ -330,7 +316,6 @@ All tuning knobs live in `HippocampusConfig` (`config.py`):
 config = HippocampusConfig(
     # Backends
     vector_store_backend="pgvector",
-    graph_store_backend="neo4j",
     cache_backend="redis",
     relational_backend="postgresql",
 
@@ -366,10 +351,6 @@ config = HippocampusConfig(
     vector_store_backend="pgvector",
     cache_backend="redis",
     redis_url="redis://localhost:6379/0",
-    graph_store_backend="neo4j",
-    neo4j_uri="bolt://localhost:7687",
-    neo4j_username="neo4j",
-    neo4j_password="password",
     embedding_model="all-MiniLM-L6-v2",
     embedding_dimensions=384,
     embedding_device="cpu",
@@ -382,7 +363,7 @@ config = HippocampusConfig(
 
 Cutover checklist:
 
-1. Start PostgreSQL with `pgvector`, Redis, and Neo4j.
+1. Start PostgreSQL with `pgvector` and Redis.
 2. Point `HippocampusConfig` at the production selectors and URLs.
 3. Enable `embedding_warmup=True` and `embedding_strict=True` if you want model-load failures to stop startup immediately.
 4. Boot Hippocampus once to run schema/bootstrap initialization.
@@ -391,7 +372,7 @@ Cutover checklist:
 Rollback is operational:
 
 1. Redeploy the previous validated release image and configuration.
-2. Keep PostgreSQL/Redis/Neo4j data intact for investigation.
+2. Keep PostgreSQL/Redis data intact for investigation.
 3. Re-run the integration suite before restoring write traffic.
 
 ---
@@ -408,10 +389,6 @@ config = HippocampusConfig(
     vector_store_backend="pgvector",
     cache_backend="redis",
     redis_url="redis://127.0.0.1:6379/0",
-    graph_store_backend="neo4j",
-    neo4j_uri="bolt://127.0.0.1:7687",
-    neo4j_username="neo4j",
-    neo4j_password="password",
     embedding_model="all-MiniLM-L6-v2",
     embedding_dimensions=384,
     extraction_model="gpt-4.1",
@@ -460,13 +437,11 @@ arceus/core/hippocampus/
 │   ├── reasoning_bank.py    # Retrieve/Judge/Distill/Consolidate
 │   ├── promotion_engine.py  # Dynamic→Static lifecycle
 │   ├── pattern_learner.py   # Pattern discovery + habit formation
-│   ├── graph_store.py       # Knowledge graph facade
 │   └── gc.py                # Garbage collection
 │
 ├── backends/                # Swappable storage implementations
 │   ├── protocols.py         # Protocol definitions (7 protocols)
 │   ├── factory.py           # Backend creation from config
-│   ├── neo4j_graph.py       # Neo4j graph backend
 │   ├── llm_engine.py        # Azure OpenAI LLM backend
 │   ├── sentence_transformers_embedding.py  # Local embeddings
 │   ├── pgvector_store.py    # pgvector-backed vector store

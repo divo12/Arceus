@@ -3,17 +3,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from arceus.core.hippocampus.types import (
-    GraphEntity,
-    GraphRelationship,
     Habit,
     HabitFormation,
     MemoryType,
     MemoryUnit,
     MemoryVisibility,
-    RelationType,
 )
 from ..support.fakes.dict_cache import DictCacheStore
-from ..support.fakes.in_memory_graph import InMemoryGraphStoreBackend
 from ..support.fakes.in_memory_vector import InMemoryVectorStore
 from ..support.fakes.mock_embedding import MockEmbeddingEngine
 from ..support.fakes.sqlite_relational import SQLiteRelationalStore
@@ -228,27 +224,3 @@ def test_mock_embedding_engine_logs_production_warning(caplog: pytest.LogCapture
 
     assert engine is not None
     assert "not suitable for production use" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_in_memory_graph_backend_rejects_unknown_update_fields() -> None:
-    backend = InMemoryGraphStoreBackend()
-    node = GraphEntity(name="JWT", entity_type="technology", embedding=[1.0], container="scope")
-    await backend.create_node(node)
-
-    with pytest.raises(ValueError, match="Invalid GraphEntity fields"):
-        await backend.update_node(node.id, {"unknown_field": 123})
-
-
-@pytest.mark.asyncio
-async def test_in_memory_graph_backend_create_edge_requires_existing_nodes() -> None:
-    backend = InMemoryGraphStoreBackend()
-
-    with pytest.raises(KeyError, match="Cannot create edge"):
-        await backend.create_edge(
-            GraphRelationship(
-                source_id="missing-source",
-                target_id="missing-target",
-                relation_type=RelationType.RELATED_TO,
-            )
-        )

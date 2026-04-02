@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   memoryHabits,
@@ -71,7 +71,11 @@ export function memoryStoreService(db: Db) {
     memoryTypes?: ("static" | "dynamic" | "working")[];
   }) {
     const { agentId, embedding, topK = 10, container, memoryTypes } = input;
-    const embeddingVector = `[${embedding.join(",")}]`;
+    const safeEmbedding = embedding.map((value) => {
+      if (!Number.isFinite(value)) throw new Error("Invalid embedding value");
+      return value;
+    });
+    const embeddingVector = `[${safeEmbedding.join(",")}]`;
     const similarityExpr = sql<number>`1 - (${memoryUnits.embedding} <=> ${embeddingVector}::vector)`;
     const tierBoostExpr = sql<number>`
       CASE ${memoryUnits.memoryType}
@@ -88,7 +92,7 @@ export function memoryStoreService(db: Db) {
     ];
     if (container) conditions.push(eq(memoryUnits.container, container));
     if (memoryTypes?.length) {
-      conditions.push(sql`${memoryUnits.memoryType} = ANY(${memoryTypes})`);
+      conditions.push(inArray(memoryUnits.memoryType, memoryTypes));
     }
 
     return db
@@ -318,11 +322,15 @@ export function memoryStoreService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
-  async function getVersionHistory(memoryId: string) {
+  async function getVersionHistory(memoryId: string, maxDepth = 50) {
     const versions: Array<typeof memoryUnits.$inferSelect> = [];
+    const seen = new Set<string>();
     let currentId: string | null = memoryId;
 
-    while (currentId) {
+    while (currentId && versions.length < maxDepth) {
+      if (seen.has(currentId)) break;
+      seen.add(currentId);
+
       const row: typeof memoryUnits.$inferSelect | null = await db
         .select()
         .from(memoryUnits)

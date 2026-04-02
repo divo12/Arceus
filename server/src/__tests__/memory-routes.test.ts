@@ -181,7 +181,7 @@ describe("memory routes", () => {
               confidence: 0.9,
               relevance_score: 0.7,
               container: "default",
-              visibility: "shared",
+              visibility: "startup_shared",
               created_at: "2026-03-24T00:00:00Z",
               updated_at: "2026-03-24T00:00:00Z",
               access_count: 2,
@@ -208,7 +208,7 @@ describe("memory routes", () => {
           confidence: 0.9,
           relevance_score: 0.7,
           container: "default",
-          visibility: "shared",
+          visibility: "startup_shared",
           created_at: "2026-03-24T00:00:00Z",
           updated_at: "2026-03-24T00:00:00Z",
           access_count: 2,
@@ -646,7 +646,7 @@ describe("memory routes", () => {
           confidence: 0.95,
           relevance_score: 0.7,
           container: "startup:startup-1",
-          visibility: "shared",
+          visibility: "startup_shared",
           created_at: "2026-03-24T00:00:00Z",
           updated_at: "2026-03-24T00:00:00Z",
           access_count: 2,
@@ -658,7 +658,7 @@ describe("memory routes", () => {
           confidence: 0.88,
           relevance_score: 0.6,
           container: "startup:startup-1",
-          visibility: "board",
+          visibility: "board_visible",
           created_at: "2026-03-24T00:00:00Z",
           updated_at: "2026-03-24T00:00:00Z",
           access_count: 1,
@@ -698,7 +698,7 @@ describe("memory routes", () => {
       path: "/agents/:agentId/memory/shareable",
       query: {
         startupId: "startup-1",
-        visibility: "shared,board",
+        visibility: "startup_shared,board_visible",
       },
     });
 
@@ -706,8 +706,8 @@ describe("memory routes", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({
       items: [
-        expect.objectContaining({ id: "shared-1", visibility: "shared" }),
-        expect.objectContaining({ id: "board-1", visibility: "board" }),
+        expect.objectContaining({ id: "shared-1", visibility: "startup_shared" }),
+        expect.objectContaining({ id: "board-1", visibility: "board_visible" }),
       ],
       total: 2,
     });
@@ -1237,10 +1237,10 @@ describe("memory routes", () => {
     process.env.PAPERCLIP_HIPPOCAMPUS_MODE = "embedded";
     const { MemoryServiceError: MSE } = await import("../services/hippocampus-errors.js");
     const serviceError = new MSE(
-      "Graph store is not available",
+      "Projection service is not available",
       503,
-      "GRAPH_UNAVAILABLE",
-      { backend: "neo4j" },
+      "PROJECTION_UNAVAILABLE",
+      { backend: "projection" },
     );
     vi.doMock("../services/memory-services.js", () => ({
       getMemoryServices: () => ({
@@ -1269,9 +1269,9 @@ describe("memory routes", () => {
 
     expect(res.statusCode).toBe(503);
     expect(res.body).toEqual({
-      error: "Graph store is not available",
-      code: "GRAPH_UNAVAILABLE",
-      details: { backend: "neo4j" },
+      error: "Projection service is not available",
+      code: "PROJECTION_UNAVAILABLE",
+      details: { backend: "projection" },
     });
   });
 

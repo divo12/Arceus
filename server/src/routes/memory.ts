@@ -9,6 +9,7 @@ import { HippocampusDisabledError, type HippocampusBridge } from "../services/hi
 import { getHippocampusBridge } from "../services/hippocampus-bridge.js";
 import { MemoryServiceError } from "../services/hippocampus-errors.js";
 import { publishLiveEvent } from "../services/live-events.js";
+import { logger } from "../middleware/logger.js";
 import { memoryReadinessService } from "../services/memory-readiness.js";
 import { getMemoryServices } from "../services/memory-services.js";
 import { memoryStoreService } from "../services/memory-store.js";
@@ -75,7 +76,7 @@ export function handleMemoryError(
     });
     return;
   }
-  console.error("[memory-route] unexpected error:", error);
+  logger.error({ err: error }, "[memory-route] unexpected error");
   res.status(500).json({ error: "Internal server error" });
 }
 
@@ -300,13 +301,14 @@ export function memoryRoutes(options: {
     assertBoard(req);
     if (!ensureEnabled(res)) return;
     try {
-      const { memory_type, container, limit } = req.query;
+      const { memory_type, container, limit: rawLimit } = req.query;
+      const limit = Math.min(Math.max(1, Number(rawLimit) || 50), 100);
       if (memoryStore) {
         const items = await memoryStore.listMemories({
           agentId: req.params.agentId,
           memoryType: typeof memory_type === "string" ? memory_type as "static" | "dynamic" | "working" : undefined,
           container: typeof container === "string" ? container : undefined,
-          limit: limit ? Number(limit) : 50,
+          limit,
         });
         res.json({ items: items.map((item) => toListItem(item as unknown as Record<string, unknown>)), total: items.length });
         return;
@@ -315,7 +317,7 @@ export function memoryRoutes(options: {
         req.params.agentId,
         memory_type as string | undefined,
         container as string | undefined,
-        limit ? Number(limit) : 50,
+        limit,
       );
       res.json(result);
     } catch (err) {
@@ -419,18 +421,19 @@ export function memoryRoutes(options: {
     if (!ensureEnabled(res)) return;
     try {
       const { query, container, top_k } = req.body;
+      const topK = Math.min(Math.max(1, Number(top_k) || 10), 100);
       if (memoryStore) {
         const embedding = await resolveEmbeddingForQuery(req.params.agentId, String(query ?? ""));
         const items = embedding
           ? await memoryStore.recall({
             agentId: req.params.agentId,
             embedding,
-            topK: Number(top_k ?? 10),
+            topK,
             container: typeof container === "string" ? container : undefined,
           })
           : await memoryStore.recallByDate({
             agentId: req.params.agentId,
-            topK: Number(top_k ?? 10),
+            topK,
           });
         res.json({ items: items.map((item) => toRecallItem(item as unknown as Record<string, unknown>)) });
         return;
@@ -439,7 +442,7 @@ export function memoryRoutes(options: {
         req.params.agentId,
         query,
         container ?? "default",
-        top_k ?? 10,
+        topK,
       );
       res.json(result);
     } catch (error) {

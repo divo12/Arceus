@@ -104,7 +104,7 @@ BEGIN
     source_ref jsonb,
     result_count integer,
     latency_ms integer,
-    cost_cents real,
+    cost_cents integer,
     input_tokens integer,
     output_tokens integer,
     embedding_tokens integer,
@@ -128,6 +128,15 @@ CREATE INDEX IF NOT EXISTS memory_units_company_idx
 
 CREATE INDEX IF NOT EXISTS memory_patterns_agent_idx
   ON public.memory_patterns (agent_id);
+
+CREATE INDEX IF NOT EXISTS memory_habits_agent_active_idx
+  ON public.memory_habits (agent_id, is_active);
+
+CREATE INDEX IF NOT EXISTS memory_habits_company_idx
+  ON public.memory_habits (company_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS memory_bindings_company_provider_idx
+  ON public.memory_bindings (company_id, provider_key);
 
 CREATE INDEX IF NOT EXISTS memory_ops_company_agent_idx
   ON public.memory_operations (company_id, agent_id);

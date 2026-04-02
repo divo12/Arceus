@@ -34,7 +34,6 @@ def patch_fake_hippocampus_runtime(
         vector_store=None,
         relational_store=None,
         cache_backend=None,
-        graph_backend=None,
         embedding_engine=None,
         llm_engine=None,
     ) -> SimpleNamespace:

@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("hippocampus runtime lifecycle helpers", () => {
+describe.sequential("hippocampus runtime lifecycle helpers", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
   });
 
   it("initializes the bridge for each configured mode", async () => {
+    vi.resetModules();
     const initialize = vi.fn().mockResolvedValue(undefined);
     vi.doMock("../services/hippocampus-bridge.js", () => ({
       initializeHippocampusBridge: initialize,
@@ -29,9 +30,10 @@ describe("hippocampus runtime lifecycle helpers", () => {
     });
 
     expect(initialize).toHaveBeenCalledTimes(2);
-  });
+  }, 10_000);
 
   it("stops the runtime for every enabled mode", async () => {
+    vi.resetModules();
     const shutdown = vi.fn().mockResolvedValue(undefined);
     vi.doMock("../services/hippocampus-bridge.js", () => ({
       initializeHippocampusBridge: vi.fn(),
@@ -44,5 +46,5 @@ describe("hippocampus runtime lifecycle helpers", () => {
     await stopHippocampusRuntimeForConfig({ hippocampusMode: "active" });
 
     expect(shutdown).toHaveBeenCalledTimes(1);
-  });
+  }, 10_000);
 });

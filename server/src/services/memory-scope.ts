@@ -1,4 +1,5 @@
 import type { HippocampusBridge, MemoryItem, MemoryListItem } from "./hippocampus-contract.js";
+import { logger } from "../middleware/logger.js";
 
 export const MemoryContainers = {
   startup: (startupId: string) => `startup:${startupId}`,
@@ -8,7 +9,7 @@ export const MemoryContainers = {
     `startup:${startupId}:task:${taskId}:sub:${agentId}`,
 } as const;
 
-export type MemoryVisibility = "private" | "task_scoped" | "shared" | "board";
+export type MemoryVisibility = "private" | "task_scoped" | "startup_shared" | "board_visible";
 
 const MEMORY_PRIORITY: Record<string, number> = {
   static: 3,
@@ -17,13 +18,7 @@ const MEMORY_PRIORITY: Record<string, number> = {
 };
 
 function logMemoryOp(op: string, agentId: string, extra?: Record<string, unknown>) {
-  console.log(JSON.stringify({
-    ts: new Date().toISOString(),
-    svc: "memory",
-    op,
-    agentId,
-    ...extra,
-  }));
+  logger.info({ svc: "memory", op, agentId, ...extra }, "memory scope operation");
 }
 
 export class MemoryScopeService {
@@ -74,7 +69,7 @@ export class MemoryScopeService {
   async getShareableMemories(
     agentId: string,
     startupId: string,
-    visibility: MemoryVisibility[] = ["shared", "board"],
+    visibility: MemoryVisibility[] = ["startup_shared", "board_visible"],
   ): Promise<MemoryListItem[]> {
     const all = await this.bridge.listMemories(agentId, undefined, MemoryContainers.startup(startupId));
     const filtered = all.items.filter((item) => visibility.includes((item.visibility ?? "private") as MemoryVisibility));

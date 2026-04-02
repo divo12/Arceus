@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
 
 export type MemoryScopeOption = "all" | "startup" | "employee" | "task";
 export type MemoryTierOption = "static" | "dynamic" | "working";
-export type MemoryVisibilityOption = "private" | "shared" | "board";
+export type MemoryVisibilityOption = "private" | "task_scoped" | "startup_shared" | "board_visible";
 
 interface ScopeFilterBarProps {
   scope: MemoryScopeOption;
@@ -33,8 +33,9 @@ const tierOptions: Array<{ value: MemoryTierOption; label: string }> = [
 
 const visibilityOptions: Array<{ value: MemoryVisibilityOption; label: string }> = [
   { value: "private", label: "Private" },
-  { value: "shared", label: "Shared" },
-  { value: "board", label: "Board" },
+  { value: "task_scoped", label: "Task Scoped" },
+  { value: "startup_shared", label: "Shared" },
+  { value: "board_visible", label: "Board" },
 ];
 
 export function ScopeFilterBar({

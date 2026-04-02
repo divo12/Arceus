@@ -145,7 +145,6 @@ def _enable_test_profile() -> None:
         sys.path.insert(0, str(runtime_root))
 
     from tests.support.fakes.dict_cache import DictCacheStore
-    from tests.support.fakes.in_memory_graph import InMemoryGraphStoreBackend
     from tests.support.fakes.in_memory_vector import InMemoryVectorStore
     from tests.support.fakes.mock_embedding import MockEmbeddingEngine
     from tests.support.fakes.noop_llm import NoopLLMEngine
