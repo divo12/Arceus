@@ -82,36 +82,47 @@ COPY --chown=node:node --from=build /app/server/node_modules ./server/node_modul
 # Workspace packages — source (resolved by tsx at runtime) and manifests
 COPY --chown=node:node --from=build /app/packages/adapter-utils/package.json ./packages/adapter-utils/
 COPY --chown=node:node --from=build /app/packages/adapter-utils/src ./packages/adapter-utils/src
+COPY --chown=node:node --from=build /app/packages/adapter-utils/node_modules ./packages/adapter-utils/node_modules
 
 COPY --chown=node:node --from=build /app/packages/db/package.json ./packages/db/
 COPY --chown=node:node --from=build /app/packages/db/src ./packages/db/src
+COPY --chown=node:node --from=build /app/packages/db/node_modules ./packages/db/node_modules
 
 COPY --chown=node:node --from=build /app/packages/shared/package.json ./packages/shared/
 COPY --chown=node:node --from=build /app/packages/shared/src ./packages/shared/src
+COPY --chown=node:node --from=build /app/packages/shared/node_modules ./packages/shared/node_modules
 
 COPY --chown=node:node --from=build /app/packages/plugins/sdk/package.json ./packages/plugins/sdk/
 COPY --chown=node:node --from=build /app/packages/plugins/sdk/dist ./packages/plugins/sdk/dist
+COPY --chown=node:node --from=build /app/packages/plugins/sdk/node_modules ./packages/plugins/sdk/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/claude-local/package.json ./packages/adapters/claude-local/
 COPY --chown=node:node --from=build /app/packages/adapters/claude-local/src ./packages/adapters/claude-local/src
+COPY --chown=node:node --from=build /app/packages/adapters/claude-local/node_modules ./packages/adapters/claude-local/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/codex-local/package.json ./packages/adapters/codex-local/
 COPY --chown=node:node --from=build /app/packages/adapters/codex-local/src ./packages/adapters/codex-local/src
+COPY --chown=node:node --from=build /app/packages/adapters/codex-local/node_modules ./packages/adapters/codex-local/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/cursor-local/package.json ./packages/adapters/cursor-local/
 COPY --chown=node:node --from=build /app/packages/adapters/cursor-local/src ./packages/adapters/cursor-local/src
+COPY --chown=node:node --from=build /app/packages/adapters/cursor-local/node_modules ./packages/adapters/cursor-local/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/gemini-local/package.json ./packages/adapters/gemini-local/
 COPY --chown=node:node --from=build /app/packages/adapters/gemini-local/src ./packages/adapters/gemini-local/src
+COPY --chown=node:node --from=build /app/packages/adapters/gemini-local/node_modules ./packages/adapters/gemini-local/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/openclaw-gateway/package.json ./packages/adapters/openclaw-gateway/
 COPY --chown=node:node --from=build /app/packages/adapters/openclaw-gateway/src ./packages/adapters/openclaw-gateway/src
+COPY --chown=node:node --from=build /app/packages/adapters/openclaw-gateway/node_modules ./packages/adapters/openclaw-gateway/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/opencode-local/package.json ./packages/adapters/opencode-local/
 COPY --chown=node:node --from=build /app/packages/adapters/opencode-local/src ./packages/adapters/opencode-local/src
+COPY --chown=node:node --from=build /app/packages/adapters/opencode-local/node_modules ./packages/adapters/opencode-local/node_modules
 
 COPY --chown=node:node --from=build /app/packages/adapters/pi-local/package.json ./packages/adapters/pi-local/
 COPY --chown=node:node --from=build /app/packages/adapters/pi-local/src ./packages/adapters/pi-local/src
+COPY --chown=node:node --from=build /app/packages/adapters/pi-local/node_modules ./packages/adapters/pi-local/node_modules
 
 # Python venv (CPU-only torch + sentence-transformers)
 COPY --chown=node:node --from=python-deps /app/services/hippocampus-runtime/python/.venv /app/services/hippocampus-runtime/python/.venv
