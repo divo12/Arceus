@@ -85,7 +85,6 @@ ENV NODE_ENV=production \
   PAPERCLIP_HIPPOCAMPUS_PYTHON_BIN=/app/services/hippocampus-runtime/python/.venv/bin/python \
   OPENCODE_URL=http://127.0.0.1:4098
 
-VOLUME ["/paperclip"]
 EXPOSE 3100 4098
 
 USER node
