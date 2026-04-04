@@ -53,6 +53,7 @@ COPY --from=deps /app /app
 COPY . .
 
 RUN test -f server/ui-dist/index.html \
+  && pnpm --filter @paperclipai/plugin-sdk build \
   && pnpm --filter @paperclipai/server build \
   && test -f server/dist/index.js
 
