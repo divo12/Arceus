@@ -7,6 +7,7 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
+import { apiCorsMiddleware } from "./middleware/api-cors.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { healthRoutes } from "./routes/health.js";
@@ -78,6 +79,7 @@ export async function createApp(
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
+    corsAllowedOrigins?: string[];
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
   },
@@ -103,6 +105,7 @@ export async function createApp(
       bindHost: opts.bindHost,
     }),
   );
+  app.use("/api", apiCorsMiddleware(opts.corsAllowedOrigins ?? []));
   app.use(
     actorMiddleware(db, {
       deploymentMode: opts.deploymentMode,

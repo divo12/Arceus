@@ -459,6 +459,7 @@ export async function startServer(): Promise<StartedServer> {
   let resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
     | undefined;
+  let effectiveTrustedOrigins: string[] = [];
   if (config.deploymentMode === "local_trusted") {
     await ensureLocalTrustedBoardPrincipal(db as any);
   }
@@ -482,7 +483,7 @@ export async function startServer(): Promise<StartedServer> {
       .split(",")
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
-    const effectiveTrustedOrigins = Array.from(new Set([...derivedTrustedOrigins, ...envTrustedOrigins]));
+    effectiveTrustedOrigins = Array.from(new Set([...derivedTrustedOrigins, ...envTrustedOrigins]));
     logger.info(
       {
         authBaseUrlMode: config.authBaseUrlMode,
@@ -516,6 +517,7 @@ export async function startServer(): Promise<StartedServer> {
     bindHost: config.host,
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
+    corsAllowedOrigins: effectiveTrustedOrigins,
     betterAuthHandler,
     resolveSession,
   });
