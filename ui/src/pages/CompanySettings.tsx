@@ -6,6 +6,7 @@ import { useToast } from "../context/ToastContext";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { assetsApi } from "../api/assets";
+import { buildApiUrl } from "../lib/api-origin";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Settings, Check, Download, Upload } from "lucide-react";
@@ -118,7 +119,7 @@ function CompanySettingsPanel({
       const onboardingTextLink =
         invite.onboardingTextUrl ??
         invite.onboardingTextPath ??
-        `/api/invites/${invite.token}/onboarding.txt`;
+        buildApiUrl(`/invites/${invite.token}/onboarding.txt`);
       const absoluteUrl = onboardingTextLink.startsWith("http")
         ? onboardingTextLink
         : `${base}${onboardingTextLink}`;

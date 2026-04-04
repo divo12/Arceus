@@ -1,8 +1,6 @@
 import type { ChatMessage } from "@paperclipai/shared";
 import { api } from "./client";
 
-const BASE = "/api";
-
 export const chatApi = {
   messages: (companyId: string, limit = 50, before?: string) => {
     const params = new URLSearchParams({ limit: String(limit) });

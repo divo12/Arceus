@@ -34,6 +34,7 @@ import type {
 } from "@paperclipai/shared";
 import { pluginsApi } from "@/api/plugins";
 import { ApiError } from "@/api/client";
+import { buildApiUrl } from "@/lib/api-origin";
 import { useToast, type ToastInput } from "@/context/ToastContext";
 
 // ---------------------------------------------------------------------------
@@ -421,7 +422,7 @@ export function usePluginStream<T = unknown>(
 
     const params = new URLSearchParams({ companyId: effectiveCompanyId });
     const source = new EventSource(
-      `/api/plugins/${encodeURIComponent(pluginId)}/bridge/stream/${encodeURIComponent(channel)}?${params.toString()}`,
+      buildApiUrl(`/plugins/${encodeURIComponent(pluginId)}/bridge/stream/${encodeURIComponent(channel)}?${params.toString()}`),
       { withCredentials: true },
     );
     sourceRef.current = source;

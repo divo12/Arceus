@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { chatApi } from "../api/chat";
 import { useCompany } from "../context/CompanyContext";
+import { buildApiUrl } from "../lib/api-origin";
 import { queryKeys } from "../lib/queryKeys";
 import type { ChatMessage } from "@paperclipai/shared";
 
@@ -72,7 +73,7 @@ export function useChat() {
       abortRef.current = abort;
 
       try {
-        const res = await fetch(`/api/companies/${companyId}/chat`, {
+        const res = await fetch(buildApiUrl(`/companies/${companyId}/chat`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
