@@ -72,6 +72,22 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins?
 
   const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
+  const requiresCrossSiteCookies =
+    config.deploymentMode === "authenticated" &&
+    config.deploymentExposure === "public" &&
+    !isHttpOnly;
+
+  const advanced = {
+    ...(isHttpOnly ? { useSecureCookies: false } : {}),
+    ...(requiresCrossSiteCookies
+      ? {
+          defaultCookieAttributes: {
+            sameSite: "none" as const,
+            secure: true,
+          },
+        }
+      : {}),
+  };
 
   const authConfig = {
     baseURL: baseUrl,
@@ -91,7 +107,7 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins?
       requireEmailVerification: false,
       disableSignUp: config.authDisableSignUp,
     },
-    ...(isHttpOnly ? { advanced: { useSecureCookies: false } } : {}),
+    ...(Object.keys(advanced).length > 0 ? { advanced } : {}),
   };
 
   if (!baseUrl) {
