@@ -219,7 +219,7 @@ export type MeetingEventKind = (typeof MEETING_EVENT_KINDS)[number];
 export const CHAT_ROLES = ["user", "assistant", "system"] as const;
 export type ChatRole = (typeof CHAT_ROLES)[number];
 
-export const CHAT_CARD_TYPES = ["task_proposal", "org_plan", "issue", "budget_request", "status_report", "escalation"] as const;
+export const CHAT_CARD_TYPES = ["task_proposal", "org_plan", "issue", "budget_request", "status_report", "escalation", "hire_proposal", "decomposition_plan"] as const;
 export type ChatCardType = (typeof CHAT_CARD_TYPES)[number];
 
 export const CARD_ACTION_TYPES = ["approved", "rejected", "edited", "dismissed"] as const;

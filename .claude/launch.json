@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "arceus",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "const http=require('http');const httpProxy=require('http-proxy');const proxy=httpProxy.createProxyServer({target:'http://localhost:3100',changeOrigin:true});const s=http.createServer((q,r)=>proxy.web(q,r));s.on('upgrade',(q,s2,h)=>proxy.ws(q,s2,h));s.listen(process.env.PORT||3101,()=>console.log('proxy on '+s.address().port))"],
+      "port": 3101
+    }
+  ]
+}

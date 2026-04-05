@@ -24,7 +24,7 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const OPENCODE_URL = process.env.OPENCODE_URL || "http://127.0.0.1:4098";
 const OPENCODE_DIR = process.env.OPENCODE_DIR || process.cwd();
 
-function ocRequest(method: string, urlPath: string, body?: unknown): Promise<unknown> {
+function ocRequest(method: string, urlPath: string, body?: unknown, directory?: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const parsed = new URL(urlPath, OPENCODE_URL);
@@ -35,7 +35,7 @@ function ocRequest(method: string, urlPath: string, body?: unknown): Promise<unk
       method,
       headers: {
         "Content-Type": "application/json",
-        "x-opencode-directory": encodeURIComponent(OPENCODE_DIR),
+        "x-opencode-directory": encodeURIComponent(directory ?? OPENCODE_DIR),
       },
     };
     if (data) {
@@ -54,7 +54,7 @@ function ocRequest(method: string, urlPath: string, body?: unknown): Promise<unk
       });
     });
     req.on("error", reject);
-    req.setTimeout(300_000, () => {
+    req.setTimeout(600_000, () => {
       req.destroy();
       reject(new Error("OpenCode request timeout"));
     });
@@ -235,70 +235,67 @@ async function writeAgentsMd(
   agent: AdapterExecutionContext["agent"],
   context: Record<string, unknown>,
   env: Record<string, string>,
+  targetDir?: string,
 ): Promise<void> {
-  const envLines = Object.entries(env)
-    .map(([k, v]) => `export ${k}="${v}"`)
-    .join("\n");
-
-  const handoff = asString(context.paperclipSessionHandoffMarkdown as string, "");
-  const memCtx = asString(context.paperclipMemoryContext as string, "");
+  const wakeReason = asString(context.wakeReason as string, "");
+  const isTaskExecution = wakeReason === "task_assigned" || wakeReason === "issue_assigned";
   const roleBlock = buildRoleContextBlock(context);
-  const meetingCtx = asString(context.paperclipMeetingContext as string, "");
 
-  const md = [
-    `# ${agent.name} — Paperclip Agent`,
-    "",
-    `You are **${agent.name}**, an AI agent in a Paperclip-managed company.`,
-    "",
-    "## Environment Variables (CRITICAL)",
-    "",
-    "Your bash environment does NOT have Paperclip variables pre-set.",
-    "You MUST run these exports at the start of every bash invocation:",
-    "",
-    "```bash",
-    envLines,
-    "```",
-    "",
-    "**Example API call:**",
-    "```bash",
-    `curl -s -H "Authorization: Bearer ${env.PAPERCLIP_API_KEY || ""}" \\`,
-    `  -H "X-Paperclip-Run-Id: ${env.PAPERCLIP_RUN_ID || ""}" \\`,
-    `  "${env.PAPERCLIP_API_URL}/api/agents/me"`,
-    "```",
-    "",
-    "## Quick Reference",
-    `- Agent ID: \`${env.PAPERCLIP_AGENT_ID}\``,
-    `- Company ID: \`${env.PAPERCLIP_COMPANY_ID}\``,
-    `- API URL: \`${env.PAPERCLIP_API_URL}\``,
-    `- Run ID: \`${env.PAPERCLIP_RUN_ID}\``,
-    "",
-    ...(roleBlock ? [roleBlock, ""] : []),
-    "## Hiring Agents",
-    "",
-    "To hire a new agent, use the Paperclip API — **never** the OpenClaw invite flow:",
-    "",
-    "```bash",
-    `curl -s -X POST -H "Authorization: Bearer ${env.PAPERCLIP_API_KEY || ""}" \\`,
-    `  -H "Content-Type: application/json" \\`,
-    `  -H "X-Paperclip-Run-Id: ${env.PAPERCLIP_RUN_ID || ""}" \\`,
-    `  "${env.PAPERCLIP_API_URL}/api/companies/${env.PAPERCLIP_COMPANY_ID}/agent-hires" \\`,
-    `  -d '{"name":"<name>","role":"<ceo|cto|pm|engineer|designer|general>","title":"<title>","adapterType":"opencode_local","adapterConfig":{"model":"azure/gpt-4.1"},"delegationStyle":"collaborative","runtimeConfig":{"heartbeat":{"enabled":true,"intervalSec":300,"wakeOnDemand":true,"cooldownSec":10,"maxConcurrentRuns":1}}}'`,
-    "```",
-    "",
-    "Onboarding assets (SOUL.md, HEARTBEAT.md, AGENTS.md) are auto-materialized based on the role.",
-    "Do **not** use `/openclaw/invite-prompt` — that is for external gateway agents only.",
-    "",
-    "## Instructions",
-    "",
-    "Use the **paperclip** skill (load it via the skill tool) for the full heartbeat procedure,",
-    "API reference, and all critical rules. Always load the paperclip skill before taking any action.",
-    "",
-    ...(handoff ? ["## Session Handoff\n", handoff, ""] : []),
-    ...(memCtx ? ["## Memory Context\n", memCtx, ""] : []),
-    ...(meetingCtx ? ["## Meeting Context\n", meetingCtx, ""] : []),
-  ].join("\n");
+  let md: string;
 
-  const agentsMdPath = path.join(OPENCODE_DIR, "AGENTS.md");
+  if (isTaskExecution) {
+    // Slim AGENTS.md for task execution — agent doesn't need API docs or hiring instructions
+    md = [
+      `# ${agent.name} — Agent`,
+      "",
+      ...(roleBlock ? [roleBlock, ""] : []),
+    ].join("\n");
+  } else {
+    // Full AGENTS.md for heartbeat / leadership / chat
+    const envLines = Object.entries(env)
+      .map(([k, v]) => `export ${k}="${v}"`)
+      .join("\n");
+    const handoff = asString(context.paperclipSessionHandoffMarkdown as string, "");
+    const memCtx = asString(context.paperclipMemoryContext as string, "");
+    const meetingCtx = asString(context.paperclipMeetingContext as string, "");
+
+    md = [
+      `# ${agent.name} — Paperclip Agent`,
+      "",
+      `You are **${agent.name}**, an AI agent in a Paperclip-managed company.`,
+      "",
+      "## Environment Variables (CRITICAL)",
+      "",
+      "You MUST run these exports at the start of every bash invocation:",
+      "",
+      "```bash",
+      envLines,
+      "```",
+      "",
+      "## Quick Reference",
+      `- Agent ID: \`${env.PAPERCLIP_AGENT_ID}\``,
+      `- Company ID: \`${env.PAPERCLIP_COMPANY_ID}\``,
+      `- API URL: \`${env.PAPERCLIP_API_URL}\``,
+      `- Run ID: \`${env.PAPERCLIP_RUN_ID}\``,
+      "",
+      ...(roleBlock ? [roleBlock, ""] : []),
+      "## API Quick Reference",
+      `All calls need: \`-H "Authorization: Bearer ${env.PAPERCLIP_API_KEY || ""}" -H "X-Paperclip-Run-Id: ${env.PAPERCLIP_RUN_ID || ""}"\``,
+      `- Agent status: \`GET ${env.PAPERCLIP_API_URL}/api/agents/me\``,
+      `- Inbox: \`GET ${env.PAPERCLIP_API_URL}/api/agents/me/inbox-lite\``,
+      `- Update task: \`PATCH ${env.PAPERCLIP_API_URL}/api/companies/${env.PAPERCLIP_COMPANY_ID}/issues/{id}\` with \`{"status":"done"}\``,
+      `- Create task: \`POST ${env.PAPERCLIP_API_URL}/api/companies/${env.PAPERCLIP_COMPANY_ID}/issues\``,
+      `- Hire: \`POST ${env.PAPERCLIP_API_URL}/api/companies/${env.PAPERCLIP_COMPANY_ID}/agent-hires\``,
+      "",
+      ...(handoff ? ["## Session Handoff\n", handoff, ""] : []),
+      ...(memCtx ? ["## Memory Context\n", memCtx, ""] : []),
+      ...(meetingCtx ? ["## Meeting Context\n", meetingCtx, ""] : []),
+    ].join("\n");
+  }
+
+  const dir = targetDir ?? OPENCODE_DIR;
+  await fsP.mkdir(dir, { recursive: true });
+  const agentsMdPath = path.join(dir, "AGENTS.md");
   await fsP.writeFile(agentsMdPath, md, "utf8");
 }
 
@@ -351,12 +348,57 @@ export async function execute(
   const meetingType = asString(context.meetingType as string, "");
   if (meetingType) paperclipEnv.PAPERCLIP_MEETING_TYPE = meetingType;
 
-  // 1. Inject Paperclip skills into ~/.claude/skills/ (OpenCode reads them)
-  await ensureSkillsInjected(onLog, config);
+  // 0. Create per-run directory for AGENTS.md isolation
+  const runDir = path.join(OPENCODE_DIR, ".runs", runId);
+  await fsP.mkdir(runDir, { recursive: true });
 
-  // 2. Write AGENTS.md with per-run context
-  await writeAgentsMd(agent, context, paperclipEnv);
-  await onLog("stdout", `[arceus] Wrote AGENTS.md with agent context\n`);
+  try {
+
+  // 1. Inject role-specific skill (not the full paperclip skill)
+  const agentRole = asString(context.paperclipAgentRole as string, "");
+  const roleSkillMap: Record<string, string> = {
+    ceo: "arceus-ceo",
+    cto: "arceus-cto",
+    pm: "arceus-pm",
+    engineer: "arceus-engineer",
+    designer: "arceus-designer",
+  };
+  const roleSkillName = roleSkillMap[agentRole];
+  if (roleSkillName) {
+    // Symlink only the role-specific skill into ~/.claude/skills/
+    // Skills are at /app/skills/ in the container, or relative to repo root in dev
+    const skillSource = path.resolve(__moduleDir, "..", "..", "..", "..", "skills", roleSkillName);
+    const skillTarget = path.join(skillsHome(), roleSkillName);
+    try {
+      await fsP.mkdir(skillsHome(), { recursive: true });
+      const stat = await fsP.lstat(skillTarget).catch(() => null);
+      if (!stat) {
+        await fsP.symlink(skillSource, skillTarget, "dir");
+        await onLog("stdout", `[arceus] Injected role skill "${roleSkillName}"\n`);
+      }
+    } catch (err) {
+      await onLog("stderr", `[arceus] Failed to inject role skill: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  } else {
+    // Fallback: inject generic paperclip skills
+    await ensureSkillsInjected(onLog, config);
+  }
+
+  // 2. Write AGENTS.md to per-run directory (isolated from concurrent runs)
+  try {
+    await writeAgentsMd(agent, context, paperclipEnv, runDir);
+    await onLog("stdout", `[arceus] Wrote AGENTS.md with agent context\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await onLog("stderr", `[arceus] Failed to write AGENTS.md: ${msg}\n`);
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorMessage: `Failed to write AGENTS.md: ${msg}`,
+      errorCode: "agents_md_write_failed",
+    };
+  }
 
   // Build user prompt
   const userPrompt = buildUserPrompt(context);
@@ -376,10 +418,10 @@ export async function execute(
     `[arceus] Creating OpenCode session (${providerID}/${modelID})...\n`,
   );
 
-  // 3. Create session
+  // 3. Create session (using per-run directory)
   let session: Record<string, unknown>;
   try {
-    session = (await ocRequest("POST", "/session", {})) as Record<
+    session = (await ocRequest("POST", "/session", {}, runDir)) as Record<
       string,
       unknown
     >;
@@ -407,13 +449,13 @@ export async function execute(
   await onLog("stdout", `[arceus] Session: ${sessionId}\n`);
   await onLog("stdout", `[arceus] Sending prompt...\n`);
 
-  // 4. Send prompt to OpenCode
+  // 4. Send prompt to OpenCode (using per-run directory)
   let result: Record<string, unknown>;
   try {
     result = (await ocRequest("POST", `/session/${sessionId}/message`, {
       parts: [{ type: "text", text: userPrompt }],
       model: { providerID, modelID },
-    })) as Record<string, unknown>;
+    }, runDir)) as Record<string, unknown>;
   } catch (err) {
     return {
       exitCode: 1,
@@ -477,6 +519,8 @@ export async function execute(
     model: `${providerID}/${modelID}`,
     provider: "opencode",
     billingType: "api",
+    sessionParams: { sessionId },
+    sessionDisplayId: sessionId,
     usage: {
       inputTokens: tokens.input || 0,
       outputTokens: tokens.output || 0,
@@ -484,6 +528,15 @@ export async function execute(
     resultJson: { response: finalContent, model: modelID, sessionId, toolCount },
     summary: finalContent.slice(0, 500),
   };
+
+  } finally {
+    // Cleanup per-run directory
+    try {
+      await fsP.rm(runDir, { recursive: true, force: true });
+    } catch {
+      // Non-fatal — stale dirs cleaned up on next run
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -492,10 +545,153 @@ export async function execute(
 
 function buildUserPrompt(context: Record<string, unknown>): string {
   const wakeReason = asString(context.wakeReason as string, "heartbeat");
+  const source = asString(context.source as string, "");
+
+  // Chat messages get a direct conversational prompt instead of heartbeat
+  if (source === "chat" || wakeReason === "chat_message") {
+    const handoff = asString(context.paperclipSessionHandoffMarkdown as string, "");
+    return [
+      "You are in a LIVE CHAT with the Board of Directors.",
+      "Read the Session Handoff section in AGENTS.md for conversation history.",
+      "Respond directly and naturally to the Board's latest message.",
+      "Do NOT run a heartbeat procedure. Just respond to the conversation.",
+      "",
+      ...(handoff ? ["## Conversation Context", "", handoff] : []),
+    ].join("\n");
+  }
+
+  const role = asString(context.paperclipAgentRole as string, "");
+  const taskId = asString(context.taskId as string, "") || asString(context.issueId as string, "");
+  const isLeadership = role === "ceo" || role === "cto";
+
+  // Task-assigned wake: pre-digested task prompt (zero exploration needed)
+  if (wakeReason === "task_assigned" || wakeReason === "issue_assigned") {
+    const taskDetails = asRecord(context.paperclipTaskDetails);
+    const taskTitle = asString(taskDetails?.title, "Assigned task");
+    const taskDesc = asString(taskDetails?.description, "");
+    const taskIdentifier = asString(taskDetails?.identifier, "");
+    const taskPriority = asString(taskDetails?.priority, "medium");
+
+    const roleApproach: Record<string, string[]> = {
+      ceo: [
+        "You are the CEO. Break this task into sub-tasks and delegate.",
+        "Do NOT write code. Create sub-issues via the API for your reports.",
+      ],
+      cto: [
+        "You are the CTO. Focus on ARCHITECTURE and TECHNICAL DESIGN.",
+        "Write: architecture docs, API contracts, system diagrams (mermaid in markdown), tech decisions.",
+        "Create real files in the workspace. Do NOT write implementation code — that's for Engineers.",
+      ],
+      pm: [
+        "You are the PM. Focus on PRODUCT SPECIFICATIONS.",
+        "Write: requirements docs, user stories with acceptance criteria, user flows, definition-of-done.",
+        "Create real files in the workspace. Do NOT write code.",
+      ],
+      engineer: [
+        "You are an Engineer. WRITE CODE.",
+        "Create real source files using bash. Write production-quality code + tests. Run them to verify.",
+        "Use: `mkdir -p dir && cat > file.ext << 'EOF'` to create files. Actually BUILD it, don't describe it.",
+      ],
+      designer: [
+        "You are a Designer. Write UX/UI DESIGN SPECS.",
+        "Create: wireframes (markdown), component hierarchy, style guide, interaction states, responsive layout.",
+        "Output specs detailed enough for Engineers to implement.",
+      ],
+    };
+
+    const approach = roleApproach[role] ?? ["Execute the task directly using your expertise."];
+
+    return [
+      `## YOUR TASK [${taskIdentifier}]`,
+      `**${taskTitle}** (priority: ${taskPriority})`,
+      ...(taskDesc ? ["", taskDesc] : []),
+      "",
+      ...approach,
+      "",
+      "START WORKING IMMEDIATELY. Do not check inbox or call any APIs.",
+      "The system will automatically mark the task complete when you finish.",
+      "Write a clear summary of what you did at the end.",
+    ].join("\n");
+  }
+
+  // Leadership roles (CEO, CTO) get proactive instructions
+  if (isLeadership) {
+    const companyContext = asString(context.paperclipCompanyContext as string, "");
+    const taskId = asString(context.taskId as string, "") || asString(context.issueId as string, "");
+    return [
+      `Wake reason: ${wakeReason}`,
+      "",
+      "Run the environment export block from AGENTS.md before any bash commands.",
+      "",
+      "## Your Responsibilities",
+      "",
+      role === "ceo"
+        ? "As CEO, you are PROACTIVE. You do NOT wait for assignments. You:"
+        : "As CTO, you are PROACTIVE on technical matters. You:",
+      "1. Check company status and open tasks via the Paperclip API",
+      "2. Identify what needs to be done next to advance the company",
+      "3. Create new tasks, delegate work to other agents, or execute work yourself",
+      "4. Hire new agents if the team needs more capacity",
+      "5. Report progress back to the Board",
+      "",
+      "**CRITICAL**: Do NOT exit if you have no assigned tasks. You are a leader — find work, create work, delegate work.",
+      "",
+      ...(taskId ? [`Your current focus task: ${taskId}`, ""] : []),
+      ...(companyContext ? ["## Company Context", "", companyContext, ""] : []),
+      "## Procedure",
+      "",
+      "1. Export environment variables from AGENTS.md",
+      "2. Call `GET /api/agents/me` to check your status",
+      "3. Call `GET /api/agents/me/inbox-lite` to check assigned work",
+      `4. Call \`GET /api/companies/\${PAPERCLIP_COMPANY_ID}/issues?status=todo\` to see all open tasks`,
+      `5. Call \`GET /api/companies/\${PAPERCLIP_COMPANY_ID}/goals\` to see company goals`,
+      "6. Decide what to work on — execute, delegate, or create new tasks",
+      "7. Take action and report results",
+      "",
+      "## API Quick Reference",
+      "All calls need: `-H \"Authorization: Bearer $PAPERCLIP_API_KEY\" -H \"X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID\"`",
+      "- List tasks: `GET $PAPERCLIP_API_URL/api/agents/me/inbox-lite`",
+      "- Get task: `GET $PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/{issueId}`",
+      "- Update task: `PATCH $PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/{issueId}` with `{\"status\":\"done\"}`",
+      "- Add comment: `POST $PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/{issueId}/comments` with `{\"body\":\"...\"}`",
+      "- Create task: `POST $PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues` with `{\"title\":\"...\",\"description\":\"...\",\"priority\":\"medium\"}`",
+    ].join("\n");
+  }
+
+  // Role-specific heartbeat for non-leadership agents
+  const roleHeartbeat: Record<string, string[]> = {
+    pm: [
+      "You are a Product Manager. Check your inbox for assigned tasks.",
+      "For each task: write detailed product specs, user stories, and acceptance criteria.",
+      "If no tasks are assigned, review existing tasks and add spec comments where needed.",
+    ],
+    engineer: [
+      "You are a Software Engineer. Check your inbox for assigned tasks.",
+      "For each task: write code, tests, and documentation in the workspace.",
+      "Use bash to create real files and run real commands. Build things, don't just describe them.",
+    ],
+    designer: [
+      "You are a Designer. Check your inbox for assigned tasks.",
+      "For each task: write UI/UX design specs, component hierarchies, and style guides.",
+      "Output detailed design documents that Engineers can implement from.",
+    ],
+  };
+
+  const roleLines = roleHeartbeat[role] ?? [
+    "Check your inbox for assigned tasks and execute them per your role.",
+  ];
+
   return [
     `Wake reason: ${wakeReason}`,
     "",
-    "Begin your heartbeat. First load the **paperclip** skill, then follow the heartbeat procedure.",
     "Run the environment export block from AGENTS.md before any bash commands.",
+    "",
+    ...roleLines,
+    "",
+    "## Procedure",
+    "1. Export env vars from AGENTS.md",
+    "2. Check inbox: `curl -s -H \"Authorization: Bearer $PAPERCLIP_API_KEY\" -H \"X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID\" $PAPERCLIP_API_URL/api/agents/me/inbox-lite`",
+    "3. Execute your assigned tasks per your role",
+    "4. Mark completed tasks: `PATCH /api/companies/$PAPERCLIP_COMPANY_ID/issues/{id}` with `{\"status\":\"done\"}`",
   ].join("\n");
 }

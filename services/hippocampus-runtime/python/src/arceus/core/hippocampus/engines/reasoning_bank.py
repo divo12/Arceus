@@ -243,7 +243,7 @@ class ReasoningBank:
                 merged_embedding = await self._embedding.embed(merged_text)
                 merged_memory = MemoryUnit(
                     agent_id=primary.agent_id,
-                    startup_id=primary.startup_id,
+                    company_id=primary.company_id,
                     content=merged_text,
                     embedding=merged_embedding,
                     memory_type=primary.memory_type,

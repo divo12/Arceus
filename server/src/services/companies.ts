@@ -28,6 +28,8 @@ import {
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { roleDefinitionService } from "./role-definitions.js";
+import { agentService } from "./agents.js";
+import { chatMessages } from "@paperclipai/db";
 
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
@@ -167,6 +169,40 @@ export function companyService(db: Db) {
     create: async (data: typeof companies.$inferInsert) => {
       const created = await createCompanyWithUniquePrefix(data);
       await roleDefinitions.seedForCompany(created.id);
+
+      // Auto-create CEO agent (skip if one already exists)
+      try {
+        const existingCeoCount = await db.select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.companyId, created.id), eq(agents.role, "ceo")));
+
+        if (existingCeoCount.length === 0) {
+          const agentSvc = agentService(db);
+          const ceo = await agentSvc.create(created.id, {
+            name: "CEO",
+            role: "ceo",
+            title: "Chief Executive Officer",
+            adapterType: "arceus",
+            adapterConfig: {},
+            delegationStyle: "collaborative",
+            status: "idle",
+            runtimeConfig: {
+              heartbeat: { enabled: true, intervalSec: 3600, wakeOnDemand: true, cooldownSec: 10, maxConcurrentRuns: 1 },
+            },
+          });
+          if (ceo) {
+            await db.insert(chatMessages).values({
+              companyId: created.id,
+              role: "assistant",
+              agentId: ceo.id,
+              content: `Welcome to **${created.name}**! I'm your CEO.\n\nWhat problem are we solving? Tell me about your vision — the more context you give me, the better I can plan our team and approach.`,
+            });
+          }
+        }
+      } catch {
+        // Non-fatal — company created even if CEO auto-creation fails
+      }
+
       const row = await getCompanyQuery(db)
         .where(eq(companies.id, created.id))
         .then((rows) => rows[0] ?? null);

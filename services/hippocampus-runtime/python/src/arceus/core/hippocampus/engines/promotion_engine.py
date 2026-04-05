@@ -110,7 +110,7 @@ class PromotionEngine:
 
         promoted = MemoryUnit(
             agent_id=mem.agent_id,
-            startup_id=mem.startup_id,
+            company_id=mem.company_id,
             content=mem.content,
             embedding=mem.embedding,
             memory_type=MemoryType.STATIC,
@@ -158,7 +158,7 @@ class PromotionEngine:
             return None
         demoted = MemoryUnit(
             agent_id=mem.agent_id,
-            startup_id=mem.startup_id,
+            company_id=mem.company_id,
             content=mem.content,
             embedding=mem.embedding,
             memory_type=MemoryType.DYNAMIC,

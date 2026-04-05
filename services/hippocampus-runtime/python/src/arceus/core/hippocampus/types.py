@@ -53,7 +53,7 @@ class ExtractionMode(Enum):
 class MemoryUnit:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     agent_id: str = ""
-    startup_id: str = ""
+    company_id: str = ""
     content: str = ""
     embedding: list[float] | None = None
     memory_type: MemoryType = MemoryType.DYNAMIC
@@ -71,6 +71,23 @@ class MemoryUnit:
     version: int = 1
     previous_version_id: str | None = None
     promotion_status: str | None = None
+
+    def __post_init__(self) -> None:
+        # Auto-extract company_id from container string if not explicitly set.
+        # Container format: "company:<UUID>:agent:<UUID>"
+        if not self.company_id and self.container.startswith("company:"):
+            parts = self.container.split(":")
+            if len(parts) >= 2 and len(parts[1]) >= 32:
+                object.__setattr__(self, "company_id", parts[1])
+
+
+def extract_company_id(container: str) -> str:
+    """Extract company UUID from container string 'company:<UUID>:agent:<UUID>'."""
+    if container.startswith("company:"):
+        parts = container.split(":")
+        if len(parts) >= 2 and len(parts[1]) >= 32:
+            return parts[1]
+    return ""
 
 
 @dataclass(frozen=True)

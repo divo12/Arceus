@@ -86,7 +86,7 @@ class PGVectorStore:
             if self._initialized and self._pool is not None:
                 return
 
-            self._pool = await asyncpg.create_pool(self._url)
+            self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=3)
             async with self._pool.acquire() as connection:
                 await connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 await connection.execute(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
@@ -95,7 +95,7 @@ class PGVectorStore:
                     CREATE TABLE IF NOT EXISTS "{self._schema}".memory_units (
                         id TEXT PRIMARY KEY,
                         agent_id TEXT NOT NULL,
-                        startup_id TEXT NOT NULL DEFAULT '',
+                        company_id TEXT NOT NULL DEFAULT '',
                         content TEXT NOT NULL,
                         embedding vector({self._dimensions}),
                         memory_type TEXT NOT NULL,
@@ -182,7 +182,7 @@ class PGVectorStore:
             await connection.execute(
                 f"""
                 INSERT INTO "{self._schema}".memory_units (
-                    id, agent_id, startup_id, content, embedding, memory_type,
+                    id, agent_id, company_id, content, embedding, memory_type,
                     confidence, relevance_score, container, visibility, metadata,
                     source_type, source_id, provenance, created_at, updated_at,
                     expires_at, version, previous_version_id, promotion_status,
@@ -194,7 +194,7 @@ class PGVectorStore:
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     agent_id = EXCLUDED.agent_id,
-                    startup_id = EXCLUDED.startup_id,
+                    company_id = EXCLUDED.company_id,
                     content = EXCLUDED.content,
                     embedding = EXCLUDED.embedding,
                     memory_type = EXCLUDED.memory_type,
@@ -217,7 +217,7 @@ class PGVectorStore:
                 """,
                 unit.id,
                 unit.agent_id,
-                unit.startup_id,
+                unit.company_id,
                 unit.content,
                 vector_value,
                 unit.memory_type.value,
@@ -394,7 +394,7 @@ class PGVectorStore:
         return MemoryUnit(
             id=row["id"],
             agent_id=row["agent_id"],
-            startup_id=row["startup_id"],
+            company_id=row["company_id"],
             content=row["content"],
             embedding=_parse_embedding(row["embedding"]),
             memory_type=MemoryType(row["memory_type"]),

@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from arceus.core.hippocampus.backends.protocols import EmbeddingEngine, VectorStore
-from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit
+from arceus.core.hippocampus.types import ExtractedFact, MemoryType, MemoryUnit, extract_company_id
 from arceus.core.hippocampus.utils.time import utc_now
 
 
@@ -31,6 +31,7 @@ class DynamicMemory:
         embedding = await self._embedding.embed(fact.text)
         unit = MemoryUnit(
             agent_id=self._agent_id,
+            company_id=extract_company_id(container),
             content=fact.text,
             embedding=embedding,
             memory_type=MemoryType.DYNAMIC,

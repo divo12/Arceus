@@ -331,6 +331,8 @@ export type {
   BudgetRequestCardData,
   StatusReportCardData,
   EscalationCardData,
+  DecompositionPlanCardData,
+  HireProposalCardData,
   ChatCardData,
   ChatCardState,
   ChatMessageMetadata,

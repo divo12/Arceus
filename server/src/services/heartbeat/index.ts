@@ -399,6 +399,9 @@ export function heartbeatService(db: Db) {
             id: issues.id,
             identifier: issues.identifier,
             title: issues.title,
+            description: issues.description,
+            priority: issues.priority,
+            status: issues.status,
             projectId: issues.projectId,
             projectWorkspaceId: issues.projectWorkspaceId,
             executionWorkspaceId: issues.executionWorkspaceId,
@@ -725,6 +728,85 @@ export function heartbeatService(db: Db) {
     if (executionWorkspace.projectId && !readNonEmptyString(context.projectId)) {
       context.projectId = executionWorkspace.projectId;
     }
+
+    // Inject agent role for adapter prompt routing
+    context.paperclipAgentRole = agent.role;
+
+    // For leadership roles, inject company-wide context
+    if (agent.role === "ceo" || agent.role === "cto") {
+      try {
+        const { goals, issues: issuesTable } = await import("@paperclipai/db");
+        const { eq: eqOp, and: andOp } = await import("drizzle-orm");
+        const [companyGoals, openTasks] = await Promise.all([
+          db.select({ title: goals.title, status: goals.status })
+            .from(goals)
+            .where(eqOp(goals.companyId, agent.companyId))
+            .limit(5),
+          db.select({
+            identifier: issuesTable.identifier,
+            title: issuesTable.title,
+            status: issuesTable.status,
+            priority: issuesTable.priority,
+            assigneeAgentId: issuesTable.assigneeAgentId,
+          })
+            .from(issuesTable)
+            .where(andOp(
+              eqOp(issuesTable.companyId, agent.companyId),
+              eqOp(issuesTable.status, "todo"),
+            ))
+            .limit(20),
+        ]);
+        const ctxLines: string[] = [];
+        if (companyGoals.length > 0) {
+          ctxLines.push("### Company Goals");
+          for (const g of companyGoals) ctxLines.push(`- ${g.title} (${g.status})`);
+          ctxLines.push("");
+        }
+        if (openTasks.length > 0) {
+          ctxLines.push("### Open Tasks (todo)");
+          for (const t of openTasks) {
+            const assigned = t.assigneeAgentId ? `assigned:${t.assigneeAgentId.slice(0, 8)}` : "unassigned";
+            ctxLines.push(`- [${t.identifier}] ${t.title} (priority: ${t.priority}, ${assigned})`);
+          }
+          ctxLines.push("");
+        }
+        // Fix 5: Inject recent completed run summaries from other agents
+        try {
+          const recentRuns = await db
+            .select({
+              agentName: agents.name,
+              agentRole: agents.role,
+              summary: heartbeatRuns.stdoutExcerpt,
+              resultJson: heartbeatRuns.resultJson,
+              finishedAt: heartbeatRuns.finishedAt,
+            })
+            .from(heartbeatRuns)
+            .innerJoin(agents, eqOp(agents.id, heartbeatRuns.agentId))
+            .where(andOp(
+              eqOp(heartbeatRuns.companyId, agent.companyId),
+              eqOp(heartbeatRuns.status, "succeeded"),
+            ))
+            .orderBy(desc(heartbeatRuns.finishedAt))
+            .limit(3);
+          if (recentRuns.length > 0) {
+            ctxLines.push("### Recent Team Activity");
+            for (const r of recentRuns) {
+              const result = r.resultJson as Record<string, unknown> | null;
+              const summary = (result?.response as string)?.slice(0, 200) || "(no summary)";
+              ctxLines.push(`- **${r.agentName}** (${r.agentRole}): ${summary}`);
+            }
+            ctxLines.push("");
+          }
+        } catch { /* non-fatal */ }
+
+        if (ctxLines.length > 0) {
+          context.paperclipCompanyContext = ctxLines.join("\n");
+        }
+      } catch {
+        // Non-fatal — continue without company context
+      }
+    }
+
     const runtimeSessionFallback = taskKey || resetTaskSession ? null : runtime.sessionId;
     let previousSessionDisplayId = truncateDisplayId(
       taskSessionForRun?.sessionDisplayId ??
@@ -966,6 +1048,18 @@ export function heartbeatService(db: Db) {
         : memoryContext;
       await onLog("stdout", "[paperclip] Hippocampus memory context injected into run.\n");
 
+      // ── Task details: inject full task info so agent doesn't need to curl inbox ──
+      if (issueContext) {
+        context.paperclipTaskDetails = {
+          id: issueContext.id,
+          identifier: issueContext.identifier,
+          title: issueContext.title,
+          description: issueContext.description,
+          priority: issueContext.priority,
+          status: issueContext.status,
+        };
+      }
+
       // ── Meeting context: inject if run was triggered by a meeting ──
       const meetingContextMarkdown = await buildMeetingContextForRun(db, context);
       if (meetingContextMarkdown) {
@@ -977,6 +1071,14 @@ export function heartbeatService(db: Db) {
           ? `${existingHandoff}\n\n${meetingContextMarkdown}`
           : meetingContextMarkdown;
         await onLog("stdout", "[paperclip] Meeting context injected into run.\n");
+      }
+
+      // ── Fix 1: Auto-update task to in_progress when run starts ──
+      if (issueContext?.id && issueContext.assigneeAgentId === agent.id) {
+        await db.update(issues)
+          .set({ status: "in_progress", startedAt: new Date() })
+          .where(and(eq(issues.id, issueContext.id), eq(issues.status, "todo")))
+          .catch((err) => logger.warn({ err, issueId: issueContext.id }, "failed to auto-set issue in_progress"));
       }
 
       const adapter = getServerAdapter(agent.adapterType);
@@ -1221,6 +1323,70 @@ export function heartbeatService(db: Db) {
           }
         }
       }
+      // ── Fix 4: Auto-detect task completion from successful run output ──
+      if (outcome === "succeeded" && issueContext?.id) {
+        const responseText = (adapterResult.summary ?? "") + " " + (stdoutExcerpt ?? "");
+        const completionSignals = /task.*(complete|done|finished)|completed.*task|marked.*done|status.*done|\[x\].*all|all.*checked/i;
+        if (completionSignals.test(responseText)) {
+          await db.update(issues)
+            .set({ status: "done", completedAt: new Date() })
+            .where(and(eq(issues.id, issueContext.id), inArray(issues.status, ["todo", "in_progress"])))
+            .catch((err) => logger.warn({ err, issueId: issueContext.id }, "failed to auto-complete issue"));
+          logger.info({ issueId: issueContext.id, title: issueContext.title }, "Auto-completed task based on run output");
+        }
+      }
+
+      // ── Post run output as issue comment (makes work visible) ──
+      if (issueContext?.id && (outcome === "succeeded" || outcome === "failed")) {
+        void (async () => {
+          try {
+            const { issueComments } = await import("@paperclipai/db");
+            const resultObj = adapterResult.resultJson as Record<string, unknown> | null;
+            const response = (resultObj?.response as string) ?? adapterResult.summary ?? "";
+            const statusEmoji = outcome === "succeeded" ? "✅" : "❌";
+            const body = [
+              `${statusEmoji} **${agent.name}** (${agent.role}) — run ${outcome}`,
+              "",
+              response.slice(0, 2000) || "(no output)",
+            ].join("\n");
+            await db.insert(issueComments).values({
+              issueId: issueContext.id,
+              companyId: agent.companyId,
+              authorAgentId: agent.id,
+              body,
+            });
+          } catch (commentErr) {
+            logger.warn({ err: commentErr, runId }, "failed to post run output as issue comment");
+          }
+        })();
+      }
+
+      // ── CEO proactive update: push chat message when a non-CEO agent run completes ──
+      if (outcome === "succeeded" && agent.role !== "ceo") {
+        void (async () => {
+          try {
+            const { chatMessages: chatMsgs } = await import("@paperclipai/db");
+            const ceo = await db.select({ id: agents.id })
+              .from(agents)
+              .where(and(eq(agents.companyId, agent.companyId), eq(agents.role, "ceo")))
+              .then(r => r[0] ?? null);
+            if (!ceo) return;
+
+            const resultObj = adapterResult.resultJson as Record<string, unknown> | null;
+            const response = (resultObj?.response as string)?.slice(0, 500) ?? adapterResult.summary?.slice(0, 300) ?? "Task work completed.";
+            const taskInfo = issueContext?.title ? ` on **${issueContext.title}**` : "";
+            await db.insert(chatMsgs).values({
+              companyId: agent.companyId,
+              role: "assistant",
+              agentId: ceo.id,
+              content: `**Update from ${agent.name} (${agent.role})**: Completed a run${taskInfo}.\n\n${response}`,
+            });
+          } catch (ceoUpdateErr) {
+            logger.warn({ err: ceoUpdateErr, runId }, "failed to push CEO proactive update");
+          }
+        })();
+      }
+
       await finalizeAgentStatus(agent.id, outcome);
     } catch (err) {
       const message = redactCurrentUserText(
@@ -1616,6 +1782,18 @@ export function heartbeatService(db: Db) {
 
     tickTimers: async (now = new Date()) => {
       const allAgents = await db.select().from(agents);
+
+      // Fix 2: Pre-compute which agents have assigned tasks (avoid waking idle non-CEO agents)
+      const agentTaskCounts = new Map<string, number>();
+      const taskRows = await db
+        .select({ agentId: issues.assigneeAgentId, cnt: sql<number>`count(*)::int` })
+        .from(issues)
+        .where(inArray(issues.status, ["todo", "in_progress"]))
+        .groupBy(issues.assigneeAgentId);
+      for (const row of taskRows) {
+        if (row.agentId) agentTaskCounts.set(row.agentId, row.cnt);
+      }
+
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;
@@ -1624,6 +1802,10 @@ export function heartbeatService(db: Db) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
         const policy = parseHeartbeatPolicy(agent);
         if (!policy.enabled || policy.intervalSec <= 0) continue;
+
+        // Fix 2: Skip non-CEO agents with no tasks assigned
+        const hasTasks = (agentTaskCounts.get(agent.id) ?? 0) > 0;
+        if (agent.role !== "ceo" && !hasTasks) continue;
 
         checked += 1;
         const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();

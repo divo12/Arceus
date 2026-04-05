@@ -90,7 +90,8 @@ export function useChat() {
         const decoder = new TextDecoder();
         let buffer = "";
 
-        while (true) {
+        let streamEnded = false;
+        while (!streamEnded) {
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -98,31 +99,22 @@ export function useChat() {
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
 
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const eventLine = lines[lines.indexOf(line) - 1];
-              const eventName = eventLine?.startsWith("event: ") ? eventLine.slice(7) : "";
+          let currentEvent = "";
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
               try {
                 const data = JSON.parse(line.slice(6));
-                handleSSEEvent(eventName, data);
+                handleSSEEvent(currentEvent, data);
+                if (currentEvent === "done") {
+                  streamEnded = true;
+                }
               } catch {
                 // ignore parse errors
               }
-            }
-          }
-        }
-
-        // Parse any remaining buffer
-        if (buffer.trim()) {
-          const remaining = buffer.split("\n");
-          for (const line of remaining) {
-            if (line.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                handleSSEEvent("", data);
-              } catch {
-                // ignore
-              }
+              currentEvent = "";
             }
           }
         }

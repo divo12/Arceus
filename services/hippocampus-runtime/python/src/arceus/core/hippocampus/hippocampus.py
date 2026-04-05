@@ -130,39 +130,53 @@ class Hippocampus:
         self._usage_tracker = UsageTracker(backends.vector_store)
 
     @classmethod
-    async def create(cls, agent_id: str, config: HippocampusConfig) -> Hippocampus:
-        vector_store = create_vector_store(config.vector_store_backend, config)
-        initialize_vector = getattr(vector_store, "initialize", None)
-        if callable(initialize_vector):
-            await initialize_vector()
-        cache_backend = create_cache(config.cache_backend, config)
-        relational_store = create_relational(config.relational_backend, config)
-        await relational_store.initialize()
-        strict_embeddings = config.embedding_strict or (
-            config.vector_store_backend == "pgvector"
-            or config.relational_backend == "postgresql"
-            or config.cache_backend == "redis"
-        )
-        embedding_engine = create_embedding_engine(
-            config.embedding_model,
-            config.embedding_dimensions,
-            device=config.embedding_device,
-            strict=strict_embeddings,
-        )
-        warmup_embedding = getattr(embedding_engine, "warmup", None)
-        if callable(warmup_embedding) and (config.embedding_warmup or strict_embeddings):
-            await warmup_embedding()
-        llm_engine = create_llm_engine(config.extraction_model, config)
-        llm_light = create_llm_engine(config.lightweight_model, config)
+    async def create(
+        cls,
+        agent_id: str,
+        config: HippocampusConfig,
+        shared_backends: "HippocampusBackends | None" = None,
+    ) -> Hippocampus:
+        if shared_backends is not None:
+            vector_store = shared_backends.vector_store
+            cache_backend = shared_backends.cache
+            relational_store = shared_backends.relational_store
+            embedding_engine = shared_backends.embedding
+            llm_engine = shared_backends.llm
+            llm_light = shared_backends.llm_light
+            backends = shared_backends
+        else:
+            vector_store = create_vector_store(config.vector_store_backend, config)
+            initialize_vector = getattr(vector_store, "initialize", None)
+            if callable(initialize_vector):
+                await initialize_vector()
+            cache_backend = create_cache(config.cache_backend, config)
+            relational_store = create_relational(config.relational_backend, config)
+            await relational_store.initialize()
+            strict_embeddings = config.embedding_strict or (
+                config.vector_store_backend == "pgvector"
+                or config.relational_backend == "postgresql"
+                or config.cache_backend == "redis"
+            )
+            embedding_engine = create_embedding_engine(
+                config.embedding_model,
+                config.embedding_dimensions,
+                device=config.embedding_device,
+                strict=strict_embeddings,
+            )
+            warmup_embedding = getattr(embedding_engine, "warmup", None)
+            if callable(warmup_embedding) and (config.embedding_warmup or strict_embeddings):
+                await warmup_embedding()
+            llm_engine = create_llm_engine(config.extraction_model, config)
+            llm_light = create_llm_engine(config.lightweight_model, config)
 
-        backends = HippocampusBackends(
-            embedding=embedding_engine,
-            llm=llm_engine,
-            llm_light=llm_light,
-            cache=cache_backend,
-            vector_store=vector_store,
-            relational_store=relational_store,
-        )
+            backends = HippocampusBackends(
+                embedding=embedding_engine,
+                llm=llm_engine,
+                llm_light=llm_light,
+                cache=cache_backend,
+                vector_store=vector_store,
+                relational_store=relational_store,
+            )
 
         working_memory = WorkingMemory(agent_id=agent_id, backend=cache_backend)
         promotion_engine = PromotionEngine(

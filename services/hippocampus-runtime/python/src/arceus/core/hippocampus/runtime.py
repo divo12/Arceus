@@ -184,6 +184,7 @@ class HippocampusRuntimeServer:
 
         self._config = _build_runtime_config(self._profile)
         self._instances: dict[str, Hippocampus] = {}
+        self._shared_backends: "HippocampusBackends | None" = None
         self._stopping = False
 
     async def serve(self) -> int:
@@ -302,7 +303,17 @@ class HippocampusRuntimeServer:
     async def _get_instance(self, agent_id: str) -> Hippocampus:
         instance = self._instances.get(agent_id)
         if instance is None:
-            instance = await Hippocampus.create(agent_id=agent_id, config=self._config)
+            # Create shared backends on first call — all agents share the same pools
+            if self._shared_backends is None:
+                first = await Hippocampus.create(agent_id=agent_id, config=self._config)
+                self._shared_backends = first._backends
+                self._instances[agent_id] = first
+                return first
+            instance = await Hippocampus.create(
+                agent_id=agent_id,
+                config=self._config,
+                shared_backends=self._shared_backends,
+            )
             self._instances[agent_id] = instance
         return instance
 

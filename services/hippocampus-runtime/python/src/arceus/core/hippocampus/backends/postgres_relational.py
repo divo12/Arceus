@@ -52,7 +52,7 @@ class PostgreSQLRelationalStore:
             if self._initialized and self._pool is not None:
                 return
 
-            self._pool = await asyncpg.create_pool(self._url)
+            self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=3)
             async with self._pool.acquire() as connection:
                 await connection.execute(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
                 await connection.execute(

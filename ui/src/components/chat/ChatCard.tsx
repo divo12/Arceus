@@ -95,6 +95,8 @@ const CARD_LABELS: Record<string, string> = {
   budget_request: "Budget Request",
   status_report: "Status Report",
   escalation: "Escalation",
+  hire_proposal: "Hire Proposal",
+  decomposition_plan: "Task Breakdown",
 };
 
 function CardBody({ cardType, data }: { cardType: string; data: Record<string, unknown> }) {
@@ -116,6 +118,34 @@ function CardBody({ cardType, data }: { cardType: string; data: Record<string, u
               <span className="text-muted-foreground">Priority:</span> {String(data.priority)}
             </p>
           )}
+        </>
+      );
+    case "decomposition_plan": {
+      const tasks = Array.isArray(data.tasks) ? (data.tasks as Array<{ title: string; description?: string; assigneeRole: string; priority: string }>) : [];
+      return (
+        <>
+          <div className="font-medium text-foreground">{tasks.length} Tasks</div>
+          <div className="space-y-2 mt-1">
+            {tasks.map((t, i) => (
+              <div key={i} className="border border-border/50 rounded-lg p-2 bg-background/50">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-foreground">{t.title}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{t.priority}</span>
+                </div>
+                {t.description && <p className="text-[11px] text-muted-foreground mt-0.5">{t.description}</p>}
+                <p className="text-[10px] text-muted-foreground mt-0.5">Assigned to: {t.assigneeRole}</p>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+    case "hire_proposal":
+      return (
+        <>
+          <div className="font-medium text-foreground">{String(data.name ?? "Agent")} — {String(data.title ?? data.role ?? "Role")}</div>
+          {data.justification && <p className="text-muted-foreground text-xs">{String(data.justification)}</p>}
+          {data.delegationStyle && <p className="text-xs"><span className="text-muted-foreground">Style:</span> {String(data.delegationStyle)}</p>}
         </>
       );
     case "org_plan":

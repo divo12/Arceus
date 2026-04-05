@@ -1,5 +1,5 @@
 import { logger } from "../middleware/logger.js";
-import type { ChatCardType, ChatCardData, StatusReportCardData, TaskProposalCardData, IssueCardData, BudgetRequestCardData, EscalationCardData, OrgPlanCardData } from "@paperclipai/shared";
+import type { ChatCardType, ChatCardData, StatusReportCardData, TaskProposalCardData, IssueCardData, BudgetRequestCardData, EscalationCardData, OrgPlanCardData, HireProposalCardData, DecompositionPlanCardData } from "@paperclipai/shared";
 
 const AZURE_ENDPOINT = process.env.ARCEUS_AZURE_OPENAI_ENDPOINT?.replace(/\/$/, "") ?? "";
 const AZURE_API_KEY = process.env.ARCEUS_AZURE_OPENAI_API_KEY ?? "";
@@ -15,6 +15,20 @@ export function isChatLlmConfigured(): boolean {
 // ---------------------------------------------------------------------------
 
 const toolDefinitions = [
+  {
+    type: "function" as const,
+    function: {
+      name: "set_company_description",
+      description: "Save or update the company's mission/problem statement after discussing with the Board. Use this when you've helped clarify what the company is building. This executes immediately — no card or approval needed.",
+      parameters: {
+        type: "object",
+        properties: {
+          description: { type: "string", description: "The refined problem statement / company mission" },
+        },
+        required: ["description"],
+      },
+    },
+  },
   {
     type: "function" as const,
     function: {
@@ -53,6 +67,51 @@ const toolDefinitions = [
           priority: { type: "string", enum: ["critical", "high", "medium", "low"], description: "Task priority" },
         },
         required: ["title"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "hire_agent",
+      description: "Propose hiring a new agent/employee for the company. Use when the Board asks to hire someone or when the team needs a new role. Available roles: ceo, cto, pm, engineer, designer, general.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Agent display name (e.g. 'Alex', 'CTO')" },
+          role: { type: "string", enum: ["ceo", "cto", "pm", "engineer", "designer", "general"], description: "Agent role" },
+          title: { type: "string", description: "Job title (e.g. 'Chief Technology Officer')" },
+          delegationStyle: { type: "string", enum: ["directive", "collaborative", "autonomous"], description: "How this agent delegates work" },
+          justification: { type: "string", description: "Why this hire is needed" },
+        },
+        required: ["name", "role"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "decompose_and_assign",
+      description: "Break down the startup vision into multiple tasks at once and assign each to the right role. Use this after the team is hired to kickstart execution. Each task becomes a separate card for Board approval.",
+      parameters: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            description: "List of tasks to create",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Task title" },
+                description: { type: "string", description: "Task description" },
+                assigneeRole: { type: "string", description: "Role to assign to (e.g. cto, engineer, designer, pm)" },
+                priority: { type: "string", enum: ["critical", "high", "medium", "low"], description: "Task priority" },
+              },
+              required: ["title", "assigneeRole"],
+            },
+          },
+        },
+        required: ["tasks"],
       },
     },
   },
@@ -143,7 +202,22 @@ export async function* streamChatCompletion(
   if (!response.ok) {
     const errText = await response.text();
     logger.error({ status: response.status, body: errText }, "Azure OpenAI API error");
-    yield { type: "token", token: `I'm having trouble connecting to my AI service (${response.status}). Please try again.` };
+
+    // Parse Azure content filter errors
+    let userMessage = `I'm having trouble connecting to my AI service (${response.status}). Please try again.`;
+    try {
+      const errJson = JSON.parse(errText);
+      if (errJson.error?.code === "content_filter") {
+        const filters = errJson.error?.innererror?.content_filter_result ?? {};
+        const triggered = Object.entries(filters)
+          .filter(([, v]) => (v as Record<string, unknown>).filtered)
+          .map(([k]) => k);
+        userMessage = `Azure's content filter flagged this conversation (triggered: ${triggered.join(", ") || "unknown"}). ` +
+          "Try rephrasing your request or changing the company description to avoid sensitive terms.";
+      }
+    } catch { /* ignore parse errors */ }
+
+    yield { type: "token", token: userMessage };
     yield { type: "done" };
     return;
   }
@@ -291,6 +365,32 @@ export function buildCardFromToolCall(
             changes: args.changes ?? [],
           } satisfies OrgPlanCardData,
         };
+      case "hire_agent":
+        return {
+          cardType: "hire_proposal",
+          cardData: {
+            name: args.name ?? "Unnamed",
+            role: args.role ?? "general",
+            title: args.title,
+            adapterType: "arceus",
+            delegationStyle: args.delegationStyle ?? "collaborative",
+            justification: args.justification,
+          } satisfies HireProposalCardData,
+        };
+      case "decompose_and_assign": {
+        const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+        return {
+          cardType: "decomposition_plan" as ChatCardType,
+          cardData: {
+            tasks: tasks.map((t: Record<string, string>) => ({
+              title: t.title ?? "Untitled",
+              description: t.description,
+              assigneeRole: t.assigneeRole ?? "general",
+              priority: t.priority ?? "medium",
+            })),
+          } satisfies DecompositionPlanCardData,
+        };
+      }
       default:
         return null;
     }

@@ -1,6 +1,6 @@
 const RAW_API_BASE =
   import.meta.env.VITE_API_BASE_URL?.trim() ||
-  "https://arceus-production.up.railway.app/api";
+  "/api";
 
 function normalizedApiBase(): string {
   const trimmed = RAW_API_BASE.trim();

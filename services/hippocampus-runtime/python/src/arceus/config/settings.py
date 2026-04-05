@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings
 
-_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
+_ENV_FILE = Path(__file__).resolve().parents[6] / ".env"
 load_dotenv(_ENV_FILE, override=False)
 
 

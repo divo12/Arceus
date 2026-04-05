@@ -7,6 +7,7 @@ from arceus.core.hippocampus.types import (
     ExtractedFact,
     MemoryType,
     MemoryUnit,
+    extract_company_id,
 )
 from arceus.core.hippocampus.utils.time import utc_now
 
@@ -28,6 +29,7 @@ class StaticMemory:
         embedding = await self._embedding.embed(fact.text)
         unit = MemoryUnit(
             agent_id=self._agent_id,
+            company_id=extract_company_id(container),
             content=fact.text,
             embedding=embedding,
             memory_type=MemoryType.STATIC,
@@ -58,7 +60,7 @@ class StaticMemory:
         new_embedding = await self._embedding.embed(new_content)
         updated = MemoryUnit(
             agent_id=existing.agent_id,
-            startup_id=existing.startup_id,
+            company_id=existing.company_id,
             content=new_content,
             embedding=new_embedding,
             memory_type=MemoryType.STATIC,

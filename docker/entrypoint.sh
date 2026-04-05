@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Reduce OpenCode system prompt size to avoid Azure content filter issues
+export OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=true
+export OPENCODE_DISABLE_AUTOCOMPACT=true
+
 echo "[entrypoint] Starting OpenCode server on port 4098..."
 opencode serve --hostname 127.0.0.1 --port 4098 &
 OPENCODE_PID=$!

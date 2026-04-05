@@ -68,13 +68,33 @@ export interface EscalationCardData {
   severity?: "low" | "medium" | "high";
 }
 
+export interface DecompositionPlanCardData {
+  tasks: Array<{
+    title: string;
+    description?: string;
+    assigneeRole: string;
+    priority: string;
+  }>;
+}
+
+export interface HireProposalCardData {
+  name: string;
+  role: string;
+  title?: string;
+  adapterType?: string;
+  delegationStyle?: string;
+  justification?: string;
+}
+
 export type ChatCardData =
   | TaskProposalCardData
   | OrgPlanCardData
   | IssueCardData
   | BudgetRequestCardData
   | StatusReportCardData
-  | EscalationCardData;
+  | EscalationCardData
+  | HireProposalCardData
+  | DecompositionPlanCardData;
 
 export interface ChatCardState {
   action: CardActionType;
