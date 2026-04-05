@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  min-height: 100vh;
+  background-color: rgb(248 250 252);
+  color: rgb(2 6 23);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-image: radial-gradient(circle at top, rgba(148, 163, 184, 0.14), transparent 28%);
+}
+
+.board-shell {
+  min-height: 100vh;
+  overflow-y: auto;
+}
+
+.board-grid {
+  min-height: 0;
+}
+
+@media (min-width: 1280px) and (min-height: 900px) {
+  .board-shell {
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .board-grid {
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+  color: rgb(15 23 42);
+}
+
+.markdown-content h1 { font-size: 1.5rem; }
+.markdown-content h2 { font-size: 1.25rem; }
+.markdown-content h3 { font-size: 1.05rem; }
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content pre,
+.markdown-content blockquote {
+  margin-bottom: 0.85rem;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-content ul { list-style: disc; }
+.markdown-content ol { list-style: decimal; }
+
+.markdown-content code {
+  border-radius: 0.375rem;
+  background: rgb(241 245 249);
+  padding: 0.1rem 0.35rem;
+  font-size: 0.875em;
+}
+
+.markdown-content pre {
+  overflow-x: auto;
+  border-radius: 0.75rem;
+  background: rgb(15 23 42);
+  color: rgb(226 232 240);
+  padding: 1rem;
+}
+
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.markdown-content blockquote {
+  border-left: 3px solid rgb(148 163 184);
+  padding-left: 0.75rem;
+  color: rgb(71 85 105);
+}
+

@@ -1,0 +1,21 @@
+{
+  "name": "arceus",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @arceus/web",
+    "dev:api": "npm run dev --workspace @arceus/api",
+    "run:ui": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-ui.ps1",
+    "rebuild:run": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/rebuild-and-run.ps1",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "^5.8.3"
+  }
+}
