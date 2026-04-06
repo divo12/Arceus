@@ -1,13 +1,16 @@
 import type {
   Approval,
   AgentIdentity,
+  ChatMessage,
   CompanySnapshot,
   EventEnvelope,
+  FeedbackRound,
   HierarchyNode,
   Meeting,
   MemorySummary,
   SessionBinding,
-  Task
+  Task,
+  Transition
 } from "@arceus/contracts";
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
 import type { StrategyOutput } from "./ceo";
@@ -66,6 +69,15 @@ export function resetCompany() {
   snapshot = createEmptyCompanySnapshot();
   events = [];
   return snapshot;
+}
+
+export function appendChatMessage(message: ChatMessage) {
+  snapshot = {
+    ...snapshot,
+    chatMessages: [...snapshot.chatMessages, message],
+  };
+
+  return message;
 }
 
 export function replaceTasks(tasks: Task[]) {
@@ -164,6 +176,28 @@ export function updateAgentMemory(agentId: string, updater: (memory: MemorySumma
     memories,
   };
   return snapshot.memories.find((memory) => memory.agentId === agentId) ?? null;
+}
+
+export function appendTransition(transition: Transition) {
+  snapshot = {
+    ...snapshot,
+    transitions: [...(snapshot.transitions ?? []), transition],
+  };
+  return transition;
+}
+
+export function updateTransition(transitionId: string, updater: (t: Transition) => Transition) {
+  const transitions = (snapshot.transitions ?? []).map((t) => (t.id === transitionId ? updater(t) : t));
+  snapshot = { ...snapshot, transitions };
+  return transitions.find((t) => t.id === transitionId) ?? null;
+}
+
+export function appendFeedbackRound(round: FeedbackRound) {
+  snapshot = {
+    ...snapshot,
+    feedbackRounds: [...(snapshot.feedbackRounds ?? []), round],
+  };
+  return round;
 }
 
 export function bootstrapCompany(input: BootstrapInput) {

@@ -1,0 +1,312 @@
+/**
+ * LLM-Powered Orchestration Router
+ *
+ * Replaces the hardcoded 7-phase pipeline with dynamic, LLM-decided transitions.
+ * After every task completion or status change, the Router decides what happens next
+ * by proposing typed transitions — which are validated, recorded, and executed.
+ */
+
+import { routerConfig } from "./config/index";
+import { structuredCompletion } from "./azure-openai";
+import { routerDecisionSchema, type CompanySnapshot, type RouterDecision, type Task, type Transition, type TransitionProposal, type FeedbackRound } from "@arceus/contracts";
+import { appendTransition, updateTransition, appendFeedbackRound, updateTask, getSnapshot } from "./store";
+
+/* ---------- valid task status transitions ---------- */
+
+const VALID_STATUS_TRANSITIONS: Record<Task["status"], Set<Task["status"]>> = {
+  created:    new Set(["planned", "cancelled"]),
+  planned:    new Set(["in_progress", "cancelled"]),
+  in_progress: new Set(["verifying", "completed", "failed", "blocked", "cancelled"]),
+  verifying:  new Set(["completed", "in_progress", "failed", "blocked"]),
+  blocked:    new Set(["in_progress", "cancelled", "failed"]),
+  completed:  new Set(["in_progress"]),  // re-open for feedback loops
+  failed:     new Set(["in_progress", "cancelled"]),
+  cancelled:  new Set([]),
+};
+
+/* ---------- helpers ---------- */
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function summarizeTask(task: Task): string {
+  return `[${task.id}] ${task.kind} (${task.status}) assigned=${task.assignedRole} priority=${task.priority} iter=${task.iterationCount ?? 0}/${task.maxIterations ?? 3} deps=[${task.dependsOnTaskIds.join(",")}]`;
+}
+
+function summarizeTransition(t: Transition): string {
+  return `${t.fromTaskId ?? "—"}→${t.toTaskId} status=${t.toStatus} by=${t.triggeredByRole} reason="${t.reason.slice(0, 80)}"`;
+}
+
+function areDependenciesMet(task: Task, snapshot: CompanySnapshot): boolean {
+  if (task.dependsOnTaskIds.length === 0) return true;
+  return task.dependsOnTaskIds.every((depId) => {
+    const dep = snapshot.tasks.find((t) => t.id === depId);
+    return dep?.status === "completed";
+  });
+}
+
+/* ---------- transition validation ---------- */
+
+export function validateTransition(
+  proposal: TransitionProposal,
+  snapshot: CompanySnapshot
+): { valid: boolean; reason: string } {
+  const task = snapshot.tasks.find((t) => t.id === proposal.toTaskId);
+  if (!task) {
+    return { valid: false, reason: `Task ${proposal.toTaskId} not found` };
+  }
+
+  if (task.status === "cancelled") {
+    return { valid: false, reason: `Task ${proposal.toTaskId} is cancelled and cannot transition` };
+  }
+
+  const allowed = VALID_STATUS_TRANSITIONS[task.status];
+  if (!allowed?.has(proposal.toStatus)) {
+    return { valid: false, reason: `Invalid status transition: ${task.status} → ${proposal.toStatus}` };
+  }
+
+  // dependency check for moving to in_progress
+  if (proposal.toStatus === "in_progress" && !areDependenciesMet(task, snapshot)) {
+    return { valid: false, reason: `Dependencies not met for ${proposal.toTaskId}` };
+  }
+
+  // feedback loop iteration guard
+  if (proposal.toStatus === "in_progress" && task.status === "completed") {
+    const iterations = task.iterationCount ?? 0;
+    const maxIterations = task.maxIterations ?? routerConfig.maxFeedbackIterations;
+    if (iterations >= maxIterations) {
+      return { valid: false, reason: `Task ${proposal.toTaskId} exceeded max iterations (${maxIterations})` };
+    }
+  }
+
+  return { valid: true, reason: "ok" };
+}
+
+/* ---------- transition execution ---------- */
+
+export function executeTransition(
+  proposal: TransitionProposal,
+  snapshot: CompanySnapshot,
+  executionStatus: string
+): Transition {
+  const transitionId = `transition_${crypto.randomUUID()}`;
+  const task = snapshot.tasks.find((t) => t.id === proposal.toTaskId)!;
+
+  const transition: Transition = {
+    id: transitionId,
+    companyId: snapshot.company.id,
+    fromTaskId: proposal.fromTaskId,
+    toTaskId: proposal.toTaskId,
+    fromStatus: task.status,
+    toStatus: proposal.toStatus,
+    triggeredByRole: proposal.triggeredByRole,
+    reason: proposal.reason,
+    artifactIds: proposal.artifactIds,
+    status: "executed",
+    executionStatus: executionStatus as Transition["executionStatus"],
+    createdAt: nowIso(),
+    executedAt: nowIso(),
+  };
+
+  // record transition
+  appendTransition(transition);
+
+  // apply task status change
+  const isReopen = task.status === "completed" && proposal.toStatus === "in_progress";
+  updateTask(proposal.toTaskId, (t) => ({
+    ...t,
+    status: proposal.toStatus,
+    iterationCount: isReopen ? (t.iterationCount ?? 0) + 1 : (t.iterationCount ?? 0),
+    incomingArtifactIds: proposal.artifactIds.length > 0
+      ? [...(t.incomingArtifactIds ?? []), ...proposal.artifactIds]
+      : (t.incomingArtifactIds ?? []),
+    startedAt: proposal.toStatus === "in_progress" && !t.startedAt ? nowIso() : t.startedAt,
+    completedAt: proposal.toStatus === "completed" ? nowIso() : (proposal.toStatus === "in_progress" ? null : t.completedAt),
+  }));
+
+  // if it's a feedback loop re-open, also create a FeedbackRound record
+  if (isReopen) {
+    const round: FeedbackRound = {
+      id: `feedback_${crypto.randomUUID()}`,
+      companyId: snapshot.company.id,
+      taskId: proposal.toTaskId,
+      iteration: (task.iterationCount ?? 0) + 1,
+      fromRole: proposal.triggeredByRole,
+      toRole: task.assignedRole,
+      verdict: "revise",
+      feedback: proposal.reason,
+      artifactIds: proposal.artifactIds,
+      createdAt: nowIso(),
+    };
+    appendFeedbackRound(round);
+  }
+
+  return transition;
+}
+
+/* ---------- LLM Router: propose next transitions ---------- */
+
+function buildRouterUserPrompt(snapshot: CompanySnapshot, executionStatus: string, recentEvent: string): string {
+  const taskSummary = snapshot.tasks
+    .filter((t) => t.status !== "cancelled")
+    .map(summarizeTask)
+    .join("\n");
+
+  const transitions = snapshot.transitions ?? [];
+  const recent = transitions.slice(-10);
+  const recentTransitions = recent.length > 0
+    ? recent.map(summarizeTransition).join("\n")
+    : "(none yet)";
+
+  const rounds = snapshot.feedbackRounds ?? [];
+  const feedbackSummary = rounds.length > 0
+    ? rounds.slice(-5).map((r) => `iter=${r.iteration} ${r.fromRole}→${r.toRole}: ${r.verdict} "${r.feedback.slice(0, 80)}"`).join("\n")
+    : "(no feedback yet)";
+
+  return routerConfig.prompts.userTemplate
+    .replace("{{executionStatus}}", executionStatus)
+    .replace("{{recentEvent}}", recentEvent)
+    .replace("{{taskSummary}}", taskSummary)
+    .replace("{{recentTransitions}}", recentTransitions)
+    .replace("{{feedbackSummary}}", feedbackSummary);
+}
+
+export async function proposeNextTransitions(
+  snapshot: CompanySnapshot,
+  executionStatus: string,
+  recentEvent: string
+): Promise<RouterDecision> {
+  const userPrompt = buildRouterUserPrompt(snapshot, executionStatus, recentEvent);
+
+  const decision = await structuredCompletion(
+    "workerDeployment",
+    [
+      { role: "system", content: routerConfig.prompts.system },
+      { role: "user", content: userPrompt },
+    ],
+    routerDecisionSchema,
+    "router_decision",
+    { temperature: 0.4 }
+  );
+
+  return decision;
+}
+
+/* ---------- Router Loop: the main autonomous engine ---------- */
+
+export type RouterLoopResult = {
+  transitionsExecuted: Transition[];
+  paused: boolean;
+  pauseReason: string | null;
+  cycleCount: number;
+};
+
+/**
+ * The core autonomous loop. Keeps asking the LLM Router "what next?" and
+ * executing valid transitions until:
+ *   - Router says shouldPause=true (board input needed)
+ *   - All tasks are completed/cancelled
+ *   - Max transitions per cycle reached (safety valve)
+ *   - No valid transitions proposed (stuck)
+ */
+export async function runRouterLoop(
+  executionStatus: string,
+  triggerEvent: string,
+  onTransition?: (transition: Transition, snapshot: CompanySnapshot) => void | Promise<void>,
+  shouldYield?: (task: Task, proposal: TransitionProposal) => boolean
+): Promise<RouterLoopResult> {
+  const result: RouterLoopResult = {
+    transitionsExecuted: [],
+    paused: false,
+    pauseReason: null,
+    cycleCount: 0,
+  };
+
+  let currentEvent = triggerEvent;
+
+  for (let cycle = 0; cycle < routerConfig.maxTransitionsPerCycle; cycle++) {
+    result.cycleCount = cycle + 1;
+    const snapshot = getSnapshot();
+
+    // check if all tasks are done
+    const activeTasks = snapshot.tasks.filter((t) => !["completed", "cancelled", "failed"].includes(t.status));
+    if (activeTasks.length === 0) {
+      result.pauseReason = "All tasks completed";
+      break;
+    }
+
+    // ask the LLM Router
+    const decision = await proposeNextTransitions(snapshot, executionStatus, currentEvent);
+
+    if (decision.shouldPause) {
+      result.paused = true;
+      result.pauseReason = decision.pauseReason;
+      break;
+    }
+
+    let anyExecuted = false;
+
+    for (const proposal of decision.transitions) {
+      const freshSnapshot = getSnapshot();
+      const validation = validateTransition(proposal, freshSnapshot);
+
+      if (!validation.valid) {
+        console.warn(`[Router] Rejected transition: ${validation.reason}`);
+        continue;
+      }
+
+      // check if this transition needs to yield for async work (e.g., developer session)
+      const task = freshSnapshot.tasks.find((t) => t.id === proposal.toTaskId);
+      if (task && shouldYield?.(task, proposal)) {
+        // execute the status change but return so the orchestrator can handle the async work
+        const transition = executeTransition(proposal, freshSnapshot, executionStatus);
+        result.transitionsExecuted.push(transition);
+        if (onTransition) await onTransition(transition, getSnapshot());
+        anyExecuted = true;
+        // yield control — the caller will re-enter the router loop after async work completes
+        result.paused = true;
+        result.pauseReason = `Yielding for async work on task ${task.id} (${task.kind})`;
+        return result;
+      }
+
+      // if low confidence, mark as requiring approval
+      if (proposal.confidence < routerConfig.confidenceThreshold) {
+        console.warn(`[Router] Low confidence (${proposal.confidence}) on transition to ${proposal.toTaskId}, requiring approval`);
+        const transition: Transition = {
+          id: `transition_${crypto.randomUUID()}`,
+          companyId: freshSnapshot.company.id,
+          fromTaskId: proposal.fromTaskId,
+          toTaskId: proposal.toTaskId,
+          fromStatus: freshSnapshot.tasks.find((t) => t.id === proposal.toTaskId)?.status ?? null,
+          toStatus: proposal.toStatus,
+          triggeredByRole: proposal.triggeredByRole,
+          reason: proposal.reason,
+          artifactIds: proposal.artifactIds,
+          status: "proposed",
+          executionStatus: executionStatus as Transition["executionStatus"],
+          createdAt: nowIso(),
+          executedAt: null,
+        };
+        appendTransition(transition);
+        result.transitionsExecuted.push(transition);
+        continue;
+      }
+
+      const transition = executeTransition(proposal, freshSnapshot, executionStatus);
+      result.transitionsExecuted.push(transition);
+      anyExecuted = true;
+
+      if (onTransition) await onTransition(transition, getSnapshot());
+
+      currentEvent = `Executed transition: ${proposal.toTaskId} → ${proposal.toStatus} (${proposal.reason.slice(0, 60)})`;
+    }
+
+    if (!anyExecuted) {
+      result.pauseReason = "No valid transitions could be executed";
+      break;
+    }
+  }
+
+  return result;
+}

@@ -1,11 +1,13 @@
 import { z } from "zod";
-import type { CompanySnapshot } from "@arceus/contracts";
+import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { structuredCompletion } from "./azure-openai";
 
 const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
 const coreStrategyRoles = ["ceo", "cto", "pm", "developer"] as const;
 const ceoMeetingTypeSchema = z.enum(["ad_hoc", "sync", "escalation"]);
+export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution"]);
+
 const ceoTaskDeltaSchema = z.object({
   action: z.enum(["create", "reprioritize", "reassign", "cancel"]),
   title: z.string(),
@@ -14,6 +16,7 @@ const ceoTaskDeltaSchema = z.object({
   priority: z.enum(["critical", "high", "medium", "low"]),
   target_task_hint: z.string().nullable(),
 });
+
 const ceoMeetingIntentSchema = z.object({
   create: z.boolean(),
   type: ceoMeetingTypeSchema.nullable(),
@@ -53,6 +56,7 @@ function validateStrategyRoles(
       });
       return;
     }
+
     seen.add(entry.role);
 
     if (entry.role === "ceo" && entry.parent_role !== null) {
@@ -82,11 +86,6 @@ function validateStrategyRoles(
   });
 }
 
-// ── Zod schema (single source of truth) ──────────────────
-// The JSON Schema sent to Azure OpenAI is derived from this
-// automatically by structuredCompletion via zod-to-json-schema.
-// No hand-written JSON schema. No "return JSON" prompt hacking.
-
 export const strategyOutputSchema = z.object({
   strategy_title: z.string(),
   summary: z.string(),
@@ -98,20 +97,13 @@ export const strategyOutputSchema = z.object({
       role: strategyRoleSchema,
       title: z.string(),
       parent_role: strategyRoleSchema.nullable(),
-      capabilities: z.array(z.string())
-    })
-  ).min(4).max(8).superRefine(validateStrategyRoles)
+      capabilities: z.array(z.string()),
+    }),
+  ).min(4).max(8).superRefine(validateStrategyRoles),
 });
 
 export type StrategyOutput = z.infer<typeof strategyOutputSchema>;
-
-// ── LLM-driven card classification schema ────────────────
-// The CEO's free-text response gets classified into a card
-// type by a second structured output call. The LLM picks the
-// card type and fills the relevant structured fields.
-//
-// With strict: true all fields must be present. Fields that
-// don't apply to the selected card_type will be empty/default.
+export type CeoStage = z.infer<typeof ceoStageSchema>;
 
 const roleSchema = z.object({
   role: strategyRoleSchema,
@@ -120,72 +112,236 @@ const roleSchema = z.object({
   capabilities: z.array(z.string()),
 });
 
+const welcomeBriefSchema = z.object({
+  headline: z.string(),
+  next_steps: z.array(z.string()).min(2).max(5),
+  suggested_prompts: z.array(z.string()).min(3).max(6),
+});
+
+const missionBriefSchema = z.object({
+  mission_statement: z.string(),
+  target_user: z.string(),
+  problem: z.string(),
+  differentiators: z.array(z.string()).min(2).max(5),
+  assumptions: z.array(z.string()).max(5),
+  unknowns: z.array(z.string()).max(5),
+  suggested_replies: z.array(z.string()).min(2).max(5),
+});
+
+const questionBlockSchema = z.object({
+  prompt: z.string(),
+  options: z.array(z.string()).min(2).max(5),
+  why_now: z.string(),
+});
+
+const strategyBlockSchema = z.object({
+  first_release: z.string(),
+  scope_boundary: z.array(z.string()),
+  role_rationale: z.array(z.string()),
+  roles: z.array(roleSchema).min(4).max(8).superRefine(validateStrategyRoles),
+  execution_sequence: z.array(z.string()).min(3).max(6),
+  board_checkpoints: z.array(z.string()).min(2).max(5),
+  key_risks: z.array(z.string()).min(2).max(5),
+});
+
+const statusBlockSchema = z.object({
+  headline: z.string(),
+  current_focus: z.array(z.string()).min(1).max(5),
+  blockers: z.array(z.string()).max(4),
+  next_actions: z.array(z.string()).min(1).max(5),
+  board_requests: z.array(z.string()).max(4),
+});
+
 export const ceoCardSchema = z.object({
-  card_type: z.enum(["strategy_proposal", "clarifying_question", "status_update"]),
+  card_type: z.enum(["welcome_brief", "mission_brief", "clarifying_question", "strategy_proposal", "status_update"]),
+  stage: ceoStageSchema,
   title: z.string(),
   summary: z.string(),
-  strategy: z
-    .object({
-      first_release: z.string(),
-      scope_boundary: z.array(z.string()),
-      role_rationale: z.array(z.string()),
-      roles: z.array(roleSchema).min(4).max(8).superRefine(validateStrategyRoles),
-    })
-    .nullable(),
-  question: z
-    .object({
-      prompt: z.string(),
-      options: z.array(z.string()),
-    })
-    .nullable(),
+  welcome: welcomeBriefSchema.nullable(),
+  mission: missionBriefSchema.nullable(),
+  strategy: strategyBlockSchema.nullable(),
+  question: questionBlockSchema.nullable(),
+  status: statusBlockSchema.nullable(),
   meeting: ceoMeetingIntentSchema,
 });
 
 export type CeoCard = z.infer<typeof ceoCardSchema>;
 
-// ── Classify a CEO free-text response into a card ────────
+function summarizeChatMessages(messages: ChatMessage[]) {
+  if (messages.length === 0) {
+    return "No prior CEO-board chat yet.";
+  }
+
+  return messages.slice(-8).map((message) => {
+    const speaker = message.role === "board"
+      ? "Board"
+      : message.role === "ceo"
+        ? "CEO"
+        : message.role === "agent"
+          ? "Agent"
+          : "System";
+    const card = message.cardType ? ` [${message.cardType}]` : "";
+    return `- ${speaker}${card}: ${message.content}`;
+  }).join("\n");
+}
+
+function summarizeAgents(snapshot: CompanySnapshot) {
+  if (snapshot.agents.length === 0) {
+    return "No team hired yet.";
+  }
+
+  return snapshot.agents.map((agent) => `${agent.name} (${agent.role}) — ${agent.title}`).join("; ");
+}
+
+function summarizeHierarchy(snapshot: CompanySnapshot) {
+  if (snapshot.hierarchy.length === 0) {
+    return "No org chart defined yet.";
+  }
+
+  return snapshot.hierarchy.map((node) => `${node.role} -> ${node.parentNodeId ? "managed" : "top-level"}`).join("; ");
+}
+
+function summarizeTasks(snapshot: CompanySnapshot) {
+  if (snapshot.tasks.length === 0) {
+    return "No tasks created yet.";
+  }
+
+  return snapshot.tasks.slice(0, 8).map((task) => `${task.title} [${task.status}] (${task.assignedRole})`).join("; ");
+}
+
+function summarizeApprovals(snapshot: CompanySnapshot) {
+  const pending = snapshot.approvals.filter((approval) => approval.status === "pending");
+  if (pending.length === 0) {
+    return "No pending approvals.";
+  }
+
+  return pending.map((approval) => `${approval.type}: ${approval.title}`).join("; ");
+}
+
+function summarizeMeetings(snapshot: CompanySnapshot) {
+  if (snapshot.meetings.length === 0) {
+    return "No meetings recorded yet.";
+  }
+
+  return snapshot.meetings.slice(0, 4).map((meeting) => `${meeting.type}: ${meeting.summary}`).join("; ");
+}
+
+export function inferCeoStage(snapshot: CompanySnapshot): CeoStage {
+  if (snapshot.company.id === "company_pending") {
+    return "welcome";
+  }
+
+  if (snapshot.agents.length > 0 || snapshot.hierarchy.length > 0 || snapshot.tasks.length > 0 || snapshot.approvals.length > 0) {
+    return "execution";
+  }
+
+  const recentCardTypes = snapshot.chatMessages
+    .filter((message) => message.role === "ceo")
+    .slice(-4)
+    .map((message) => message.cardType);
+
+  if (recentCardTypes.includes("strategy_proposal")) {
+    return "kickoff";
+  }
+
+  if (snapshot.chatMessages.length >= 5) {
+    return "team_design";
+  }
+
+  if (snapshot.chatMessages.length >= 2 || Boolean(snapshot.idea.currentDirection)) {
+    return "idea_refinement";
+  }
+
+  return "welcome";
+}
+
+function buildSnapshotContext(snapshot: CompanySnapshot) {
+  return [
+    `Stage: ${inferCeoStage(snapshot)}`,
+    `Company name: ${snapshot.company.name}`,
+    `Company status: ${snapshot.company.status}`,
+    `Board goal: ${snapshot.company.goal || "Not captured yet"}`,
+    `Core idea: ${snapshot.idea.coreIdea || "Not captured yet"}`,
+    `Direction: ${snapshot.idea.currentDirection || "Not refined yet"}`,
+    `Strategy title: ${snapshot.strategy.title}`,
+    `Strategy summary: ${snapshot.strategy.summary}`,
+    `Current sprint: ${snapshot.company.currentSprintNumber ?? "none"}`,
+    `Hierarchy: ${summarizeHierarchy(snapshot)}`,
+    `Agents: ${summarizeAgents(snapshot)}`,
+    `Tasks: ${summarizeTasks(snapshot)}`,
+    `Approvals: ${summarizeApprovals(snapshot)}`,
+    `Recent meetings: ${summarizeMeetings(snapshot)}`,
+    "Recent boardroom chat:",
+    summarizeChatMessages(snapshot.chatMessages),
+  ].join("\n");
+}
+
+export function buildCeoOperatingPrompt(snapshot: CompanySnapshot) {
+  const ceoSoul = getRoleSoul("ceo");
+
+  return [
+    ceoSoul.systemPrompt,
+    "",
+    "Operate like a strong founder-CEO with full visibility into company state, team shape, backlog posture, approvals, meetings, and recent board conversation.",
+    "You do not answer like a plain chatbot. You guide the board through staged decisions and package decisions as crisp, interactive cards.",
+    "Conversation rules:",
+    "- Welcome stage: orient the board quickly and help them express the product clearly.",
+    "- Idea refinement: synthesize the mission, identify assumptions, and ask only the highest-leverage question.",
+    "- Team design: pressure-test scope and the minimum org needed to ship.",
+    "- Kickoff: propose the first release, team shape, execution sequence, risks, and board checkpoints.",
+    "- Execution: report like an operator. Reference real team, tasks, approvals, meetings, and blockers.",
+    "- Avoid generic filler. Be concise, opinionated, and operationally sharp.",
+    "- Prefer tradeoffs and recommendations over vague brainstorming.",
+    "- Never invent implementation details that are not grounded in company state.",
+    "",
+    "Current company intelligence:",
+    buildSnapshotContext(snapshot),
+  ].join("\n");
+}
 
 export async function classifyCeoResponse(
   ceoText: string,
   snapshot: CompanySnapshot,
 ): Promise<CeoCard> {
+  const stage = inferCeoStage(snapshot);
   const systemPrompt = [
-    "You are the CEO's structured output classifier.",
-    "Given the CEO's free-text message and the company state, classify the response into one card type and fill its structured data.",
+    "You are the CEO's structured boardroom formatter.",
+    "Convert the CEO's free-text message into the single best interactive card for the board.",
+    "The board should understand company state, next decisions, and execution implications within seconds.",
     "",
-    "Card types:",
-    "- strategy_proposal: The CEO is proposing a strategy, scope, team, or first release. Fill the strategy block with concrete data.",
-    "- clarifying_question: The CEO is asking the board a question to narrow scope. Fill the question block.",
-    "- status_update: The CEO is giving an update or acknowledgment. Only title + summary matter.",
+    "Available card types:",
+    "- welcome_brief: opening orientation with suggested prompts.",
+    "- mission_brief: synthesized mission, assumptions, unknowns, and suggested replies.",
+    "- clarifying_question: one high-leverage question with concrete options and why it matters now.",
+    "- strategy_proposal: first release, team shape, execution sequence, risks, and board checkpoints.",
+    "- status_update: current focus, blockers, next actions, and any requests back to the board.",
     "",
-    "Rules:",
-    "- Pick exactly ONE card_type.",
-    "- Return a top-level object with title, summary, strategy, question, and meeting.",
-    "- If strategy does not apply, set strategy to null.",
-    "- If question does not apply, set question to null.",
-    "- The meeting block determines whether this CEO response should create a durable meeting and typed task deltas.",
+    "Global rules:",
+    "- Pick exactly one card_type.",
+    "- Always set stage to the current stage or the next stage the CEO is guiding toward.",
+    "- Keep title and summary executive-grade, not fluffy.",
+    "- If a block does not apply, set it to null.",
+    "- When the board can act immediately, provide suggested prompts, suggested replies, or concrete option buttons.",
+    "- For welcome_brief: welcome must be filled.",
+    "- For mission_brief: mission must be filled.",
+    "- For clarifying_question: question must be filled and why_now must explain the decision leverage.",
+    "- For strategy_proposal: strategy must include execution_sequence, board_checkpoints, and key_risks.",
+    "- For status_update: status must include current_focus, blockers, next_actions, and board_requests.",
     "- For strategy_proposal: roles must contain the four core entries ceo, cto, pm, and developer exactly once.",
-    "- You may also add tester, ui_designer, marketing, and skills_lead when they materially improve delivery quality, launch readiness, or reusable operational leverage.",
+    "- You may add tester, ui_designer, marketing, and skills_lead when they materially improve delivery quality, launch readiness, or reusable leverage.",
     "- No duplicate roles. ceo has parent_role null. Every other role must have a valid parent_role.",
     "- Prefer this reporting shape unless there is a strong reason not to: ceo manages cto and marketing; cto manages pm, developer, tester, ui_designer, and skills_lead; pm may manage developer, tester, or ui_designer when product coordination is the point.",
-    "- For strategy_proposal: set meeting.create to true, use type ad_hoc, and propose up to 4 typed task_deltas when the strategy clearly implies backlog changes. Prefer action=create unless an existing task is obviously being changed.",
-    "- For clarifying_question: create a meeting when the question changes strategy, scope, ownership, or highlights a blocker. Use ad_hoc for planning questions and escalation for blockers.",
-    "- For status_update: only create a meeting when the update carries a blocker, material decision, or reprioritization. Routine updates should keep meeting.create false.",
-    "- task_deltas must be concrete, action-oriented, and assigned to a real role. Use target_task_hint only when referring to an existing task by title, kind, or purpose.",
-    "- For clarifying_question: options should have 2-5 concrete choices.",
-    "- For status_update: summary should capture the key info.",
+    "- For strategy_proposal: set meeting.create to true, use type ad_hoc, and propose up to 4 typed task_deltas when the strategy clearly implies backlog changes.",
+    "- For clarifying_question: create a meeting when the question changes strategy, scope, ownership, or exposes a blocker.",
+    "- For welcome_brief and mission_brief: avoid creating a meeting unless the CEO is explicitly escalating a decision.",
+    `Current stage hint: ${stage}`,
   ].join("\n");
 
   const userPrompt = [
-    "## Company state",
-    `Name: ${snapshot.company.name}`,
-    `Goal: ${snapshot.company.goal}`,
-    `Idea: ${snapshot.idea.coreIdea}`,
-    `Direction: ${snapshot.idea.currentDirection || "Not refined yet"}`,
-    `Status: ${snapshot.company.status}`,
-    `Has agents: ${snapshot.agents.length > 0 ? "yes" : "no"}`,
+    "## Company intelligence",
+    buildSnapshotContext(snapshot),
     "",
-    "## CEO's message to classify",
+    "## CEO message",
     ceoText,
   ].join("\n");
 
@@ -201,31 +357,23 @@ export async function classifyCeoResponse(
   );
 }
 
-// ── Strategy generation via structured output ────────────
-
 export async function generateStrategy(snapshot: CompanySnapshot): Promise<StrategyOutput> {
-  const ceoSoul = getRoleSoul("ceo");
-
   const userPrompt = [
-    `Company name: ${snapshot.company.name}`,
-    `Board goal: ${snapshot.company.goal}`,
-    `Core idea: ${snapshot.idea.coreIdea}`,
-    `Current direction: ${snapshot.idea.currentDirection || "Not yet refined"}`,
-    `Budget cents: ${snapshot.company.budgetCents}`,
+    buildSnapshotContext(snapshot),
     "",
     "Produce a narrow strategy for a demoable first release.",
     "Propose a hierarchy with the four core roles: one ceo, one cto, one pm, and one developer.",
     "You may add any of these specialist roles if they are justified for the first release: tester, ui_designer, marketing, skills_lead.",
     "Use the smallest org that can still ship the first release with quality, launch readiness, and reusable operating leverage.",
     "No duplicate roles.",
-    "Each role must have a parent_role except the ceo (which must be null).",
+    "Each role must have a parent_role except the ceo, which must be null.",
     "Preferred hierarchy: ceo manages cto and marketing. cto manages pm, developer, tester, ui_designer, and skills_lead. pm may manage developer, tester, or ui_designer when useful for delivery control.",
   ].join("\n");
 
   return structuredCompletion(
     "ceoDeployment",
     [
-      { role: "system", content: ceoSoul.systemPrompt },
+      { role: "system", content: buildCeoOperatingPrompt(snapshot) },
       { role: "user", content: userPrompt },
     ],
     strategyOutputSchema,

@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
-import { ensureDeployment, runtimeConfig } from "./config";
+import { ensureDeployment, runtimeConfig } from "./config/index";
 
 type OpencodeInstance = {
   server: { url: string; close(): void };

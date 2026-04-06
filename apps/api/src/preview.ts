@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { basename, extname, join, normalize, relative } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { previewConfig } from "./config/index";
 
 type PreviewStatus = "idle" | "starting" | "ready" | "error";
 type PreviewTargetKind = "browser" | "service";
@@ -43,7 +44,7 @@ const previewState: LocalPreviewState = {
   framework: null,
   command: null,
   targetPath: null,
-  port: 3210,
+  port: previewConfig.port,
   lastError: null,
   startedAt: null,
 };
@@ -70,6 +71,10 @@ type LaunchCommand = {
   framework: string | null;
 };
 
+type CandidatePreference = {
+  preferredTargetPath?: string | null;
+};
+
 const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -92,7 +97,7 @@ type CandidateWorkspace = {
   depth: number;
 };
 
-const ignoredDirectories = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
+const ignoredDirectories = new Set(previewConfig.ignoredDirectories);
 
 function detectNodePreviewProfile(parsed: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }) {
   const packages = new Set([
@@ -138,14 +143,44 @@ function detectNodePreviewProfile(parsed: { dependencies?: Record<string, string
   };
 }
 
-async function detectPythonLaunchCommand(productDir: string): Promise<LaunchCommand | null> {
-  const candidates = await collectCandidateWorkspaces(productDir);
+function scoreCandidatePreference(targetPath: string, preference?: CandidatePreference) {
+  const preferred = preference?.preferredTargetPath?.trim().replace(/\\/g, "/").replace(/^\.\//, "") ?? null;
+  if (!preferred) {
+    return 0;
+  }
+
+  if (targetPath === preferred) {
+    return previewConfig.exactPathPreferenceScore;
+  }
+
+  if (targetPath.startsWith(`${preferred}/`) || preferred.startsWith(`${targetPath}/`)) {
+    return previewConfig.relatedPathPreferenceScore;
+  }
+
+  return 0;
+}
+
+function sortCandidates(candidates: CandidateWorkspace[], rootDir: string, preference?: CandidatePreference) {
   candidates.sort((left, right) => {
+    const leftTargetPath = relative(rootDir, left.dir).replace(/\\/g, "/") || ".";
+    const rightTargetPath = relative(rootDir, right.dir).replace(/\\/g, "/") || ".";
+    const preferenceDelta = scoreCandidatePreference(rightTargetPath, preference) - scoreCandidatePreference(leftTargetPath, preference);
+
+    if (preferenceDelta !== 0) {
+      return preferenceDelta;
+    }
+
     if (right.modifiedAtMs !== left.modifiedAtMs) {
       return right.modifiedAtMs - left.modifiedAtMs;
     }
+
     return left.depth - right.depth;
   });
+}
+
+async function detectPythonLaunchCommand(productDir: string, preference?: CandidatePreference): Promise<LaunchCommand | null> {
+  const candidates = await collectCandidateWorkspaces(productDir);
+  sortCandidates(candidates, productDir, preference);
 
   for (const candidate of candidates) {
     const requirementsPath = join(candidate.dir, "requirements.txt");
@@ -168,7 +203,7 @@ async function detectPythonLaunchCommand(productDir: string): Promise<LaunchComm
 
       return {
         command: "python",
-        args: ["-m", "uvicorn", `${moduleName}:app`, "--port", String(previewState.port), "--host", "127.0.0.1"],
+        args: ["-m", "uvicorn", `${moduleName}:app`, "--port", String(previewState.port), "--host", previewConfig.host],
         kind: "python-uvicorn",
         cwd: candidate.dir,
         targetPath: relative(productDir, candidate.dir) || ".",
@@ -185,7 +220,7 @@ async function detectPythonLaunchCommand(productDir: string): Promise<LaunchComm
 }
 
 async function collectCandidateWorkspaces(rootDir: string, currentDir = rootDir, depth = 0): Promise<CandidateWorkspace[]> {
-  if (depth > 4) {
+  if (depth > previewConfig.maxWorkspaceDepth) {
     return [];
   }
 
@@ -220,14 +255,9 @@ async function collectCandidateWorkspaces(rootDir: string, currentDir = rootDir,
   return results;
 }
 
-async function detectLaunchCommand(productDir: string): Promise<LaunchCommand | null> {
+async function detectLaunchCommand(productDir: string, preference?: CandidatePreference): Promise<LaunchCommand | null> {
   const candidates = await collectCandidateWorkspaces(productDir);
-  candidates.sort((left, right) => {
-    if (right.modifiedAtMs !== left.modifiedAtMs) {
-      return right.modifiedAtMs - left.modifiedAtMs;
-    }
-    return left.depth - right.depth;
-  });
+  sortCandidates(candidates, productDir, preference);
 
   for (const candidate of candidates) {
     const packageJsonPath = join(candidate.dir, "package.json");
@@ -241,7 +271,7 @@ async function detectLaunchCommand(productDir: string): Promise<LaunchCommand | 
       const scripts = parsed.scripts ?? {};
       const profile = detectNodePreviewProfile(parsed);
 
-      const npmScriptArgs = ["--", "--port", String(previewState.port), "--host", "127.0.0.1"];
+      const npmScriptArgs = ["--", "--port", String(previewState.port), "--host", previewConfig.host];
       const targetPath = relative(productDir, candidate.dir) || ".";
 
       if (scripts.preview) return { command: "npm", args: ["run", "preview", ...npmScriptArgs], kind: "npm-preview", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
@@ -266,11 +296,11 @@ async function detectLaunchCommand(productDir: string): Promise<LaunchCommand | 
     }
   }
 
-  return detectPythonLaunchCommand(productDir);
+  return detectPythonLaunchCommand(productDir, preference);
 }
 
-export async function hasLocalPreviewCandidate(productDir: string) {
-  return (await detectLaunchCommand(productDir)) !== null;
+export async function hasLocalPreviewCandidate(productDir: string, preferredTargetPath?: string | null) {
+  return (await detectLaunchCommand(productDir, { preferredTargetPath })) !== null;
 }
 
 async function waitForUrl(url: string, timeoutMs: number) {
@@ -284,7 +314,7 @@ async function waitForUrl(url: string, timeoutMs: number) {
       /* retry */
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, previewConfig.probeIntervalMs));
   }
 
   return false;
@@ -298,7 +328,7 @@ function normalizePreviewUrl(url: string) {
     }
 
     if (parsed.hostname === "0.0.0.0") {
-      parsed.hostname = "127.0.0.1";
+      parsed.hostname = previewConfig.publicHost;
     }
 
     return parsed.toString();
@@ -307,7 +337,7 @@ function normalizePreviewUrl(url: string) {
   }
 }
 
-async function applyReportedPreviewCandidate(timeoutMs = 5000) {
+async function applyReportedPreviewCandidate(timeoutMs = previewConfig.reportedCandidateTimeoutMs) {
   if (!reportedPreviewCandidate) {
     return null;
   }
@@ -370,23 +400,43 @@ export function getLocalPreviewState() {
   return previewState;
 }
 
+async function terminatePreviewProcessTree(childProcess: ChildProcess) {
+  const processId = childProcess.pid;
+  if (!processId) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => resolve(), 5000);
+      const killer = spawn("taskkill", ["/PID", String(processId), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+
+      killer.once("exit", () => { clearTimeout(timeout); resolve(); });
+      killer.once("error", () => { clearTimeout(timeout); resolve(); });
+    });
+    return;
+  }
+
+  childProcess.kill("SIGTERM");
+}
+
 export async function stopLocalPreview() {
   if (previewProcess) {
-    previewProcess.kill();
+    await terminatePreviewProcessTree(previewProcess);
     previewProcess = null;
   }
 
   if (previewStaticServer) {
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => resolve(), 3000);
       previewStaticServer?.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
+        clearTimeout(timeout);
         resolve();
       });
-    }).catch(() => undefined);
+    });
     previewStaticServer = null;
   }
 
@@ -407,7 +457,7 @@ export async function stopLocalPreview() {
 async function startStaticPreviewServer(rootDir: string) {
   const server = createServer(async (request, response) => {
     try {
-      const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? previewConfig.publicHost}`);
       const requestPath = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
       const relativePath = normalize(requestPath).replace(/^([\\/])+/, "");
       const filePath = join(rootDir, relativePath);
@@ -430,13 +480,13 @@ async function startStaticPreviewServer(rootDir: string) {
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(previewState.port, "127.0.0.1", () => resolve());
+    server.listen(previewState.port, previewConfig.host, () => resolve());
   });
 
   previewStaticServer = server;
 }
 
-export async function startLocalPreview(productDir: string) {
+export async function startLocalPreview(productDir: string, preferredTargetPath?: string | null) {
   await stopLocalPreview();
 
   const reportedPreview = await applyReportedPreviewCandidate();
@@ -444,7 +494,7 @@ export async function startLocalPreview(productDir: string) {
     return reportedPreview;
   }
 
-  const launch = await detectLaunchCommand(productDir);
+  const launch = await detectLaunchCommand(productDir, { preferredTargetPath });
   if (!launch) {
     previewState.status = "error";
     previewState.lastError = "No preview command detected in workspace.";
@@ -459,7 +509,7 @@ export async function startLocalPreview(productDir: string) {
   previewState.targetKind = launch.targetKind;
   previewState.runtime = launch.runtime;
   previewState.framework = launch.framework;
-  previewState.url = `http://127.0.0.1:${previewState.port}`;
+  previewState.url = `http://${previewConfig.publicHost}:${previewState.port}`;
   previewState.entryUrl = launch.targetKind === "browser"
     ? (launch.entryPath ? `${previewState.url}/${launch.entryPath}` : previewState.url)
     : null;
@@ -481,7 +531,7 @@ export async function startLocalPreview(productDir: string) {
       env: {
         ...process.env,
         PORT: String(previewState.port),
-        HOST: "127.0.0.1",
+        HOST: previewConfig.host,
         BROWSER: "none",
       },
     });
@@ -494,7 +544,7 @@ export async function startLocalPreview(productDir: string) {
     });
   }
 
-  const ready = await waitForUrl(previewState.validationUrl ?? previewState.entryUrl ?? previewState.url, 45000);
+  const ready = await waitForUrl(previewState.validationUrl ?? previewState.entryUrl ?? previewState.url, previewConfig.launchTimeoutMs);
   if (!ready) {
     previewState.status = "error";
     previewState.lastError = `Preview validation URL did not become reachable in time${previewState.validationUrl ? `: ${previewState.validationUrl}` : "."}`;

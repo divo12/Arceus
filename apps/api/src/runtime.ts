@@ -1,4 +1,4 @@
-import { runtimeConfig } from "./config";
+import { runtimeConfig } from "./config/index";
 
 export function getRuntimeStatus() {
   const missing: string[] = [];
