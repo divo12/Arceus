@@ -17,6 +17,8 @@ export function createEmptyCompanySnapshot(): CompanySnapshot {
       spentCents: 0,
       status: "ideation",
       currentStrategyId: "strategy_pending",
+      currentSprintId: null,
+      currentSprintNumber: null,
       createdAt
     },
     idea: {
@@ -38,13 +40,21 @@ export function createEmptyCompanySnapshot(): CompanySnapshot {
       createdByAgentId: "agent_ceo",
       createdAt
     },
+    sprints: [],
     hierarchy: [],
     agents: [],
     sessions: [],
     tasks: [],
+    artifacts: [],
+    chatMessages: [],
     meetings: [],
     approvals: [],
-    memories: []
+    memories: [],
+    memoryUnits: [],
+    habits: [],
+    priming: [],
+    transitions: [],
+    feedbackRounds: []
   };
 }
 

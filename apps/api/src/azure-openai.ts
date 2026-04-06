@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
 import zodToJsonSchema from "zod-to-json-schema";
-import { runtimeConfig, ensureDeployment } from "./config";
+import { runtimeConfig, ensureDeployment } from "./config/index";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 

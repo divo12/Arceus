@@ -2,13 +2,14 @@ import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, postOpencodeJson } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
-import { ensureDeployment } from "./config";
+import { ensureDeployment, orchestratorConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
 import { getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateMeeting, updateTask, upsertApproval, upsertMeeting, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Task } from "@arceus/contracts";
+import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
+import { runRouterLoop, type RouterLoopResult } from "./router";
 
 type AgentSessionState = {
   role: string;
@@ -17,6 +18,22 @@ type AgentSessionState = {
   name: string;
   status: "idle" | "working" | "done" | "error";
   lastEventAt: string | null;
+  lastEventType: string | null;
+  lastEventSummary: string | null;
+  lastToolName: string | null;
+  lastToolStatus: "invoked" | "completed" | null;
+  lastToolAt: string | null;
+  lastProgressAt: string | null;
+  lastWorkspaceChangeAt: string | null;
+  awaiting: string | null;
+  activeTaskId: string | null;
+  promptStartedAt: string | null;
+  promptCompletedAt: string | null;
+  eventCount: number;
+  toolInvocationCount: number;
+  fileEditCount: number;
+  shellCommandCount: number;
+  stallReason: string | null;
 };
 
 type Artifact = {
@@ -42,14 +59,8 @@ type ExecutionContext = {
   reviewStarted: boolean;
 };
 
-const CORE_EXECUTION_TASK_KINDS = new Set<Task["kind"]>([
-  "technical_plan",
-  "acceptance_spec",
-  "implementation",
-  "local_preview",
-  "board_handoff",
-]);
-const AUTONOMOUS_READY_TASK_ROLES = new Set<AgentIdentity["role"]>(["cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
+const CORE_EXECUTION_TASK_KINDS = new Set<Task["kind"]>(orchestratorConfig.coreExecutionTaskKinds);
+const AUTONOMOUS_READY_TASK_ROLES = new Set<AgentIdentity["role"]>(orchestratorConfig.autonomousReadyTaskRoles);
 
 const agentSessions = new Map<string, AgentSessionState>();
 const artifacts: Artifact[] = [];
@@ -61,13 +72,43 @@ let developerWorkspaceMonitor: NodeJS.Timeout | null = null;
 let developerWorkspaceSnapshot = new Map<string, number>();
 const workspaceRoot = resolve(process.cwd(), "..", "..");
 const productDir = resolve(workspaceRoot, "workspace");
-const DEVELOPER_STALL_TIMEOUT_MINUTES = 12;
+const DEVELOPER_STALL_TIMEOUT_MINUTES = orchestratorConfig.developer.stallTimeoutMinutes;
 const DEVELOPER_STALL_TIMEOUT_MS = DEVELOPER_STALL_TIMEOUT_MINUTES * 60 * 1000;
-const WORKSPACE_MONITOR_INTERVAL_MS = 4000;
-const WORKSPACE_MONITOR_IGNORE = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
+const WORKSPACE_MONITOR_INTERVAL_MS = orchestratorConfig.developer.workspaceMonitorIntervalMs;
+const WORKSPACE_MONITOR_IGNORE = new Set(orchestratorConfig.developer.workspaceMonitorIgnore);
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function truncateTelemetry(value: string | null | undefined, limit = 220) {
+  if (!value) return null;
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, limit - 3)}...`;
+}
+
+function updateAgentSessionState(role: string, patch: Partial<AgentSessionState>) {
+  const session = agentSessions.get(role);
+  if (!session) return;
+
+  Object.assign(session, patch);
+}
+
+function summarizeDeveloperStall(session: AgentSessionState) {
+  const details = [
+    session.awaiting ? `Awaiting: ${session.awaiting}.` : null,
+    session.lastToolName ? `Last tool: ${session.lastToolName}${session.lastToolStatus ? ` (${session.lastToolStatus})` : ""}.` : null,
+    session.lastEventSummary ? `Last session update: ${session.lastEventSummary}` : null,
+    session.lastWorkspaceChangeAt ? `Last workspace change: ${session.lastWorkspaceChangeAt}.` : null,
+    session.lastProgressAt ? `Last recorded progress: ${session.lastProgressAt}.` : null,
+  ].filter(Boolean);
+
+  return details.join(" ");
 }
 
 function clearDeveloperWatchdog() {
@@ -112,9 +153,17 @@ async function failDeveloperStall(sessionId: string) {
   const message = lastEvent
     ? `Developer session stalled after ${DEVELOPER_STALL_TIMEOUT_MINUTES} minutes without activity or workspace changes. Last activity: ${lastEvent}.`
     : `Developer session stalled after ${DEVELOPER_STALL_TIMEOUT_MINUTES} minutes without any observable activity or workspace changes.`;
+  const detail = summarizeDeveloperStall(developerSession);
+  const diagnosticMessage = detail ? `${message} ${detail}` : message;
+
+  updateAgentSessionState("developer", {
+    awaiting: "leadership review after stall",
+    stallReason: diagnosticMessage,
+    lastEventSummary: diagnosticMessage,
+  });
 
   executionStatus = "error";
-  setTaskStatus(activeExecution.buildTaskId, "failed", message);
+  setTaskStatus(activeExecution.buildTaskId, "failed", diagnosticMessage);
 
   recordMeeting({
     type: "escalation",
@@ -125,7 +174,7 @@ async function failDeveloperStall(sessionId: string) {
       {
         topic: "Developer stall",
         type: "blocker",
-        content: message,
+          content: diagnosticMessage,
         raisedByRole: "developer",
         relatedTaskId: activeExecution.buildTaskId,
       },
@@ -139,7 +188,7 @@ async function failDeveloperStall(sessionId: string) {
     ],
   });
 
-  emitEmployeeActivity("developer", "error", message, {
+  emitEmployeeActivity("developer", "error", diagnosticMessage, {
     taskId: activeExecution.buildTaskId,
   });
   emitEmployeeActivity("system", "error", "Execution halted because the developer session stopped reporting progress.", {
@@ -204,6 +253,13 @@ async function pollDeveloperWorkspaceChanges() {
   }
 
   touchAgentSession("developer");
+  updateAgentSessionState("developer", {
+    lastWorkspaceChangeAt: nowIso(),
+    lastProgressAt: nowIso(),
+    lastEventSummary: `Workspace changed: ${changedFiles[0]}${changedFiles.length > 1 ? ` (+${changedFiles.length - 1} more)` : ""}`,
+    awaiting: "processing workspace changes",
+    stallReason: null,
+  });
   scheduleDeveloperWatchdog();
 
   for (const filePath of changedFiles) {
@@ -238,7 +294,8 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     return;
   }
 
-  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(productDir);
+  const preferredTargetPath = changedFiles[0]?.split("/")[0] ?? null;
+  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(productDir, preferredTargetPath);
   if (!hasCandidate) {
     return;
   }
@@ -247,7 +304,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     taskId: activeExecution.buildTaskId,
   });
 
-  const preview = await startLocalPreview(productDir);
+  const preview = await startLocalPreview(productDir, preferredTargetPath);
   const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
   if (preview.status !== "ready" || !previewUrl) {
     emitEmployeeActivity("developer", "info", preview.lastError ?? "Live preview attempt did not become reachable yet.", {
@@ -364,6 +421,9 @@ function createWorkflowTask(
     executorState: emptyExecutorState(),
     verifierState: emptyVerifierState(),
     costCents: 0,
+    iterationCount: 0,
+    maxIterations: 3,
+    incomingArtifactIds: [],
   };
 }
 
@@ -920,15 +980,47 @@ function taskSortWeight(task: Task) {
   return 3;
 }
 
-function isTaskReadyForAutonomousExecution(task: Task, snapshot: CompanySnapshot) {
-  if (!AUTONOMOUS_READY_TASK_ROLES.has(task.assignedRole)) return false;
-  if (CORE_EXECUTION_TASK_KINDS.has(task.kind)) return false;
+function specialistRoleWeight(role: AgentIdentity["role"]) {
+  return orchestratorConfig.specialistRoleWeights[role] ?? 7;
+}
+
+function isTaskReady(task: Task, snapshot: CompanySnapshot) {
   if (!["created", "planned"].includes(task.status)) return false;
 
   return task.dependsOnTaskIds.every((dependencyId) => {
     const dependency = snapshot.tasks.find((entry) => entry.id === dependencyId);
     return dependency?.status === "completed";
   });
+}
+
+function getTaskById(taskId: string | null | undefined, snapshot: CompanySnapshot) {
+  if (!taskId) return null;
+  return snapshot.tasks.find((task) => task.id === taskId) ?? null;
+}
+
+function getPreferredPreviewTargetPathFromTask(task: Task | null | undefined) {
+  if (!task) return null;
+
+  const editedResult = [...task.executorState.results]
+    .reverse()
+    .find((entry) => entry.startsWith("edited:"));
+
+  if (!editedResult) {
+    return null;
+  }
+
+  const relativePath = editedResult.slice("edited:".length).replace(/\\/g, "/");
+  if (!relativePath || relativePath.startsWith(".")) {
+    return null;
+  }
+
+  return relativePath.split("/")[0] ?? null;
+}
+
+function isTaskReadyForAutonomousExecution(task: Task, snapshot: CompanySnapshot) {
+  if (!AUTONOMOUS_READY_TASK_ROLES.has(task.assignedRole)) return false;
+  if (CORE_EXECUTION_TASK_KINDS.has(task.kind)) return false;
+  return isTaskReady(task, snapshot);
 }
 
 function buildSpecialistTaskPrompt(task: Task) {
@@ -1488,11 +1580,18 @@ async function executeSpecialistTask(taskId: string) {
 async function runAutonomousReadyTasks(checkpoint: string) {
   let pass = 0;
 
-  while (pass < 8) {
+  while (pass < orchestratorConfig.execution.autonomousReadyPassLimit) {
     const snapshot = getSnapshot();
     const readyTasks = snapshot.tasks
       .filter((task) => isTaskReadyForAutonomousExecution(task, snapshot))
-      .sort((left, right) => taskSortWeight(left) - taskSortWeight(right));
+      .sort((left, right) => {
+        const roleDelta = specialistRoleWeight(left.assignedRole) - specialistRoleWeight(right.assignedRole);
+        if (roleDelta !== 0) {
+          return roleDelta;
+        }
+
+        return taskSortWeight(left) - taskSortWeight(right);
+      });
 
     if (readyTasks.length === 0) {
       if (pass === 0) {
@@ -1655,6 +1754,115 @@ async function reconcilePostReviewExecution() {
   completeExecutionCycle("Autonomous execution completed without requiring additional board review.");
 }
 
+async function continueExecutionFromCurrentState(checkpoint: string) {
+  if (!activeExecution) {
+    return;
+  }
+
+  // Phase-aware Router loop: delegates "what next?" decisions to the LLM Router
+  // while keeping the existing phase functions for actual work execution.
+  const result = await runRouterLoop(
+    executionStatus,
+    checkpoint,
+    async (transition, snapshot) => {
+      // After each transition, execute the actual phase work
+      await executeTransitionWork(transition, snapshot);
+    },
+    (task, proposal) => {
+      // Yield for async work: developer session and specialist tasks that need LLM sessions
+      if (task.kind === "implementation" && proposal.toStatus === "in_progress") return true;
+      return false;
+    }
+  );
+
+  if (result.paused && result.pauseReason?.startsWith("Yielding for async work")) {
+    // The router yielded because a task needs async work (e.g., developer session)
+    // The async work (developer session) will eventually fire events that re-enter this function
+    const snapshot = getSnapshot();
+    const buildTask = getTaskById(activeExecution.buildTaskId, snapshot);
+    if (buildTask && buildTask.status === "in_progress" && buildTask.kind === "implementation") {
+      await startDeveloperPhase(snapshot);
+      return;
+    }
+  }
+
+  if (result.paused) {
+    if (result.pauseReason?.includes("board")) {
+      pauseForBoardReview(result.pauseReason ?? "Router requested board review");
+    }
+    emitEmployeeActivity("system", "info", `Router paused: ${result.pauseReason}`);
+    return;
+  }
+
+  // Check if execution is complete
+  const finalSnapshot = getSnapshot();
+  const allDone = finalSnapshot.tasks.every((t) =>
+    ["completed", "cancelled", "failed"].includes(t.status)
+  );
+  if (allDone) {
+    completeExecutionCycle("All tasks completed via dynamic routing.");
+  }
+}
+
+/**
+ * Executes the actual work for a transition — maps transition targets to existing
+ * phase functions (planning, acceptance, dev, preview, specialist, review).
+ */
+async function executeTransitionWork(transition: Transition, snapshot: CompanySnapshot) {
+  if (!activeExecution) return;
+
+  const task = snapshot.tasks.find((t) => t.id === transition.toTaskId);
+  if (!task) return;
+
+  // Only execute work when a task moves to an active state
+  if (transition.toStatus !== "in_progress" && transition.toStatus !== "verifying") return;
+
+  try {
+    switch (task.kind) {
+      case "technical_plan":
+        if (transition.toStatus === "in_progress") {
+          await runPlanningPhase(snapshot);
+        }
+        break;
+
+      case "acceptance_spec":
+        if (transition.toStatus === "in_progress") {
+          await runAcceptancePhase(snapshot);
+        }
+        break;
+
+      case "implementation":
+        // Developer phase is async — handled via yield in shouldYield
+        break;
+
+      case "local_preview":
+        if (transition.toStatus === "in_progress" || transition.toStatus === "verifying") {
+          await startPreviewPhase();
+        }
+        break;
+
+      case "board_handoff":
+        if (transition.toStatus === "in_progress") {
+          await startReviewPhase();
+        }
+        break;
+
+      default:
+        // Specialist tasks (tester, ui_designer, marketing, skills_lead, etc.)
+        if (transition.toStatus === "in_progress" && isTaskReadyForAutonomousExecution(task, snapshot)) {
+          await executeSpecialistTask(task.id);
+        }
+        break;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Phase execution failed";
+    console.error(`[Router] executeTransitionWork failed for ${task.id} (${task.kind}):`, message);
+    emitEmployeeActivity("system", "error", `Transition work failed for ${task.kind}: ${message}`, {
+      taskId: task.id,
+    });
+  }
+}
+
 async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
   const soul = getRoleSoul(agent.role as AgentIdentity["role"]);
   if (!soul) throw new Error(`No SOUL policy for role: ${agent.role}`);
@@ -1673,6 +1881,22 @@ async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionSta
     name: agent.name,
     status: "idle",
     lastEventAt: nowIso(),
+    lastEventType: "session.created",
+    lastEventSummary: `Session created for ${agent.name} (${agent.title})`,
+    lastToolName: null,
+    lastToolStatus: null,
+    lastToolAt: null,
+    lastProgressAt: null,
+    lastWorkspaceChangeAt: null,
+    awaiting: "idle",
+    activeTaskId: null,
+    promptStartedAt: null,
+    promptCompletedAt: null,
+    eventCount: 0,
+    toolInvocationCount: 0,
+    fileEditCount: 0,
+    shellCommandCount: 0,
+    stallReason: null,
   };
 
   agentSessions.set(agent.role, state);
@@ -1693,6 +1917,13 @@ async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity
 async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string) {
   const deployment = ensureDeployment("workerDeployment");
   const opencode = await getOpencode();
+  updateAgentSessionState(role, {
+    promptStartedAt: nowIso(),
+    promptCompletedAt: null,
+    awaiting: "waiting for Opencode response",
+    lastEventSummary: truncateTelemetry(text, 140),
+    stallReason: null,
+  });
   const result = await opencode.client.session.prompt({
     path: { id: sessionId },
     body: {
@@ -1703,13 +1934,22 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
     },
   });
 
-  return (
+  const output = (
     (result.data?.parts as Array<{ type: string; text?: string }>)
       ?.filter((part) => part.type === "text" && part.text)
       .map((part) => part.text ?? "")
       .join("\n")
       .trim() || ""
   );
+
+  updateAgentSessionState(role, {
+    promptCompletedAt: nowIso(),
+    lastProgressAt: nowIso(),
+    lastEventSummary: truncateTelemetry(output || "Prompt completed with no text output."),
+    awaiting: "idle",
+  });
+
+  return output;
 }
 
 async function runPlanningPhase(snapshot: CompanySnapshot) {
@@ -1718,6 +1958,11 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
   const ctoSession = await ensureAgentSession(snapshot, "cto");
   const ctoSoul = getRoleSoul("cto");
   ctoSession.status = "working";
+  updateAgentSessionState("cto", {
+    activeTaskId: activeExecution.planTaskId,
+    awaiting: "writing technical plan",
+    stallReason: null,
+  });
   updateRoleMemory("cto", ["Write technical implementation plan", `Workspace root: ${workspaceRoot}`, `Company workspace: ${productDir}`]);
   setTaskStatus(activeExecution.planTaskId, "in_progress");
   emitEmployeeActivity("cto", "working", "Producing technical implementation plan…", { taskId: activeExecution.planTaskId });
@@ -1750,6 +1995,12 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
   );
 
   ctoSession.status = "idle";
+  updateAgentSessionState("cto", {
+    activeTaskId: null,
+    awaiting: "idle",
+    lastProgressAt: nowIso(),
+    lastEventSummary: "Technical implementation plan completed.",
+  });
   if (!ctoPlan) throw new Error("CTO produced empty plan");
 
   activeExecution.planText = ctoPlan;
@@ -1892,8 +2143,6 @@ async function runAcceptancePhase(snapshot: CompanySnapshot) {
     taskId: activeExecution.acceptanceTaskId,
     meetingId: implementationHandoff.id,
   });
-
-  await runAutonomousReadyTasks("post-acceptance");
 }
 
 async function startDeveloperPhase(snapshot: CompanySnapshot) {
@@ -1910,6 +2159,14 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
 
   executionStatus = "executing";
   touchAgentSession("developer", "working");
+  updateAgentSessionState("developer", {
+    activeTaskId: activeExecution.buildTaskId,
+    promptStartedAt: nowIso(),
+    promptCompletedAt: null,
+    awaiting: "waiting for first Opencode response",
+    lastEventSummary: "Developer prompt submitted to Opencode.",
+    stallReason: null,
+  });
   updateRoleMemory("developer", ["Implement approved spec", `Company workspace: ${productDir}`, `Read docs/files under ${productDir} before editing`]);
   setTaskStatus(activeExecution.buildTaskId, "in_progress");
   emitEmployeeActivity("developer", "working", "Implementing the delivery spec in the company workspace…", { taskId: activeExecution.buildTaskId });
@@ -1958,10 +2215,17 @@ async function startPreviewPhase() {
   stopDeveloperWorkspaceMonitor();
 
   executionStatus = "verifying";
+  updateAgentSessionState("developer", {
+    activeTaskId: activeExecution.previewTaskId,
+    awaiting: "preview validation",
+    lastEventSummary: "Implementation complete. Starting preview validation.",
+  });
   setTaskStatus(activeExecution.previewTaskId, "in_progress");
   emitEmployeeActivity("developer", "working", "Launching local preview and running smoke checks…", { taskId: activeExecution.previewTaskId });
 
-  const preview = await startLocalPreview(productDir);
+  const buildTask = getSnapshot().tasks.find((task) => task.id === activeExecution?.buildTaskId) ?? null;
+  const preferredTargetPath = getPreferredPreviewTargetPathFromTask(buildTask);
+  const preview = await startLocalPreview(productDir, preferredTargetPath);
   const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
   if (preview.status !== "ready" || !previewUrl) {
     setTaskStatus(activeExecution.previewTaskId, "failed", preview.lastError ?? "Preview launch failed.");
@@ -2058,8 +2322,6 @@ async function startPreviewPhase() {
     taskId: activeExecution.previewTaskId,
     meetingId: previewReviewMeeting.id,
   });
-
-  await runAutonomousReadyTasks("post-preview");
 }
 
 async function startReviewPhase() {
@@ -2160,7 +2422,15 @@ export function getArtifacts() {
   return artifacts;
 }
 
-export function resetOrchestratorState() {
+export function getTransitions() {
+  return getSnapshot().transitions ?? [];
+}
+
+export function getFeedbackRounds() {
+  return getSnapshot().feedbackRounds ?? [];
+}
+
+export async function resetOrchestratorState() {
   clearDeveloperWatchdog();
   clearReportedPreviewCandidate();
   stopDeveloperWorkspaceMonitor();
@@ -2169,7 +2439,7 @@ export function resetOrchestratorState() {
   executionStatus = "idle";
   eventBridgeStarted = false;
   activeExecution = null;
-  void stopLocalPreview();
+  await stopLocalPreview();
 }
 
 export function getAgentSessions() {
@@ -2574,7 +2844,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
 
       const resolvedDependencies = node.depends_on
         .map((dependencyId) => graphNodeTaskIdByNodeId.get(dependencyId))
-        .filter((value): value is string => Boolean(value));
+        .filter((value): value is string => Boolean(value && value !== specialistTaskId))
 
       if (resolvedDependencies.length > 0) {
         updateTask(specialistTaskId, (task) => ({
@@ -2585,6 +2855,29 @@ export async function beginExecution(snapshot: CompanySnapshot) {
         for (const dependencyId of resolvedDependencies) {
           attachChildTask(dependencyId, specialistTaskId);
         }
+      }
+    }
+
+    for (const node of taskPlan.task_graph.filter((entry) => entry.stage_key)) {
+      const mappedTaskId = graphNodeTaskIdByNodeId.get(node.id);
+      if (!mappedTaskId) continue;
+
+      const resolvedDependencies = node.depends_on
+        .map((dependencyId) => graphNodeTaskIdByNodeId.get(dependencyId))
+        .filter((value): value is string => Boolean(value && value !== mappedTaskId));
+
+      if (resolvedDependencies.length === 0) {
+        continue;
+      }
+
+      updateTask(mappedTaskId, (task) => ({
+        ...task,
+        parentTaskId: resolvedDependencies[0] ?? task.parentTaskId,
+        dependsOnTaskIds: uniqueStrings(resolvedDependencies, 8),
+      }));
+
+      for (const dependencyId of resolvedDependencies) {
+        attachChildTask(dependencyId, mappedTaskId);
       }
     }
 
@@ -2617,8 +2910,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
       meetingId: kickoffMeeting.id,
     });
     await runPlanningPhase(snapshot);
-    await runAcceptancePhase(snapshot);
-    await startDeveloperPhase(snapshot);
+    await continueExecutionFromCurrentState("post-planning");
   } catch (err) {
     executionStatus = "error";
     const msg = err instanceof Error ? err.message : "Unknown error";
@@ -2708,6 +3000,12 @@ async function processEvent(event: { type: string; properties?: Record<string, a
 
   const agentState = agentSessions.get(role);
   if (agentState) {
+    updateAgentSessionState(role, {
+      lastEventAt: nowIso(),
+      lastEventType: event.type,
+      eventCount: agentState.eventCount + 1,
+      stallReason: null,
+    });
     touchAgentSession(role);
     if (role === "developer" && agentState.status === "working") {
       scheduleDeveloperWatchdog();
@@ -2719,6 +3017,13 @@ async function processEvent(event: { type: string; properties?: Record<string, a
 
     if (part.type === "text") {
       const textContent = String(part.text ?? part.content ?? part.delta ?? "");
+      if (textContent) {
+        updateAgentSessionState(role, {
+          lastProgressAt: nowIso(),
+          lastEventSummary: truncateTelemetry(textContent),
+          awaiting: role === "developer" ? "executing requested work" : "streaming response",
+        });
+      }
       if (role === "developer" && textContent) {
         for (const previewUrl of extractPreviewUrls(textContent)) {
           const registered = await registerReportedPreviewUrl(previewUrl);
@@ -2736,9 +3041,28 @@ async function processEvent(event: { type: string; properties?: Record<string, a
     if (part.type === "tool-invocation" || part.type === "tool-result") {
       const toolName: string = part.toolInvocation?.toolName ?? part.name ?? "";
       const args: Record<string, any> = part.toolInvocation?.args ?? {};
+      const isInvocation = part.type === "tool-invocation";
+
+      if (toolName) {
+        updateAgentSessionState(role, {
+          lastToolName: toolName,
+          lastToolStatus: isInvocation ? "invoked" : "completed",
+          lastToolAt: nowIso(),
+          lastProgressAt: nowIso(),
+          lastEventSummary: `${isInvocation ? "Running" : "Completed"} tool ${toolName}`,
+          awaiting: isInvocation ? `waiting for ${toolName} result` : "processing tool result",
+          toolInvocationCount: isInvocation ? (agentSessions.get(role)?.toolInvocationCount ?? 0) + 1 : agentSessions.get(role)?.toolInvocationCount ?? 0,
+        });
+      }
 
       if (toolName === "edit" || toolName === "write" || toolName === "patch") {
         const filePath = args.file_path || args.filePath || "file";
+        updateAgentSessionState(role, {
+          fileEditCount: (agentSessions.get(role)?.fileEditCount ?? 0) + 1,
+          lastEventSummary: `Edited ${filePath}`,
+          lastWorkspaceChangeAt: nowIso(),
+          awaiting: role === "developer" ? "editing workspace" : "continuing after file edit",
+        });
         emitEmployeeActivity(role, "file_edit", filePath, {
           taskId: role === "developer" && activeExecution ? activeExecution.buildTaskId : null,
         });
@@ -2747,6 +3071,11 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         }
       } else if (toolName === "bash") {
         const cmd = String(args.command || "").slice(0, 180);
+        updateAgentSessionState(role, {
+          shellCommandCount: (agentSessions.get(role)?.shellCommandCount ?? 0) + 1,
+          lastEventSummary: `$ ${cmd}`,
+          awaiting: isInvocation ? "waiting for shell result" : "processing shell result",
+        });
         emitEmployeeActivity(role, "shell", `$ ${cmd}`, {
           taskId: role === "developer" && activeExecution ? activeExecution.buildTaskId : null,
         });
@@ -2761,21 +3090,30 @@ async function processEvent(event: { type: string; properties?: Record<string, a
 
   if (event.type === "session.idle" && agentState) {
     touchAgentSession(role, "done");
+    updateAgentSessionState(role, {
+      awaiting: "idle",
+      promptCompletedAt: nowIso(),
+      lastProgressAt: nowIso(),
+      activeTaskId: role === "developer" ? activeExecution?.previewTaskId ?? null : null,
+      lastEventSummary: role === "developer" ? "Implementation finished. Handing off to preview validation." : "Work complete.",
+    });
     if (role === "developer") {
       clearDeveloperWatchdog();
       stopDeveloperWorkspaceMonitor();
     }
 
     if (role === "developer") {
-      emitEmployeeActivity(role, "idle", "Implementation task complete. Launching local preview.", {
+      emitEmployeeActivity(role, "idle", "Implementation task complete. Routing to next phase via dynamic orchestration.", {
         taskId: activeExecution?.buildTaskId ?? null,
       });
+      if (activeExecution?.buildTaskId) {
+        setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished. Router will decide next steps.");
+      }
       try {
-        await startPreviewPhase();
-        await startReviewPhase();
+        await continueExecutionFromCurrentState("post-developer-idle");
       } catch (error) {
         executionStatus = "error";
-        const message = error instanceof Error ? error.message : "Preview/review failed.";
+        const message = error instanceof Error ? error.message : "Post-developer routing failed.";
         if (activeExecution) {
           setTaskStatus(activeExecution.previewTaskId, "failed", message);
         }
@@ -2791,6 +3129,12 @@ async function processEvent(event: { type: string; properties?: Record<string, a
 
   if (event.type === "session.error" && agentState) {
     touchAgentSession(role, "error");
+    updateAgentSessionState(role, {
+      awaiting: "session error",
+      promptCompletedAt: nowIso(),
+      stallReason: props.error?.message ?? "Session error",
+      lastEventSummary: props.error?.message ?? "Session error",
+    });
     if (role === "developer") {
       clearDeveloperWatchdog();
       stopDeveloperWorkspaceMonitor();

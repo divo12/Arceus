@@ -1,13 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Building2, CalendarDays, CheckCircle2, Clock3, GitBranch, Lightbulb, MessageSquareQuote, Users } from "lucide-react";
+import { CheckCircle2, Clock3, GitBranch, Lightbulb, MessageSquareQuote, Users } from "lucide-react";
 import type { CompanySnapshot } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-
-const API_BASE = "/backend/api";
+import { apiUrl } from "../../lib/api";
 
 export default function MeetingsPage() {
   const [snapshot, setSnapshot] = useState<CompanySnapshot | null>(null);
@@ -16,7 +14,7 @@ export default function MeetingsPage() {
   useEffect(() => {
     async function load() {
       try {
-        const response = await fetch(`${API_BASE}/company`, { cache: "no-store" });
+        const response = await fetch(apiUrl("/company"), { cache: "no-store" });
         if (response.ok) {
           setSnapshot((await response.json()) as CompanySnapshot);
         }
@@ -50,70 +48,46 @@ export default function MeetingsPage() {
   }, [meetings, selectedMeetingId]);
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-4 md:px-8">
-      <div className="mx-auto max-w-[1400px] space-y-4">
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <Building2 className="h-4 w-4" />
-              Arceus board workspace
-            </div>
-            <div className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-              <CalendarDays className="h-5 w-5" />
-              Meetings
-            </div>
+    <main className="min-h-screen px-6 py-6">
+      <div className="mx-auto max-w-[1400px] space-y-6">
+        <header>
+          <div className="swiss-caption text-[var(--swiss-gray-300)]">04 — Meetings</div>
+          <h1 className="swiss-h1 mt-1">Company meeting flow</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Scrum, handoff, escalation, and ad-hoc meetings form the communication chain. Select any meeting to inspect agenda, decisions, and memory updates.</p>
+        </header>
+
+        <hr className="swiss-rule" />
+
+        <div className="grid grid-cols-4 gap-px border border-[var(--swiss-gray-100)]">
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Meetings</div>
+            <div className="mt-1 text-2xl font-semibold">{meetings.length}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <Link href="/" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Board</Link>
-            <Link href="/tasks" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Tasks</Link>
-            <Link href="/activity" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Activity</Link>
-            <Link href="/employees" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Employees</Link>
-            <Link href="/workspace" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Workspace</Link>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Escalations</div>
+            <div className="mt-1 text-2xl font-semibold">{meetings.filter((meeting) => meeting.type === "escalation").length}</div>
+          </div>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Handoffs</div>
+            <div className="mt-1 text-2xl font-semibold">{meetings.filter((meeting) => meeting.type === "handoff").length}</div>
+          </div>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Pending approvals</div>
+            <div className="mt-1 text-2xl font-semibold">{pendingApprovals.length}</div>
           </div>
         </div>
 
-        <Card className="overflow-hidden border-slate-200 bg-gradient-to-br from-white via-amber-50/50 to-rose-50/40">
-          <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-3 py-1 text-xs font-medium text-amber-800">
-                <CalendarDays className="h-3.5 w-3.5" />
-                Company meeting flow
-              </div>
-              <div className="text-2xl font-semibold text-slate-900">Meetings are the official handoff surface.</div>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">Scrum, handoff, escalation, and ad-hoc meetings form the communication chain across the company. Select any meeting on the left to inspect agenda, decisions, and memory updates.</p>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs sm:w-[340px]">
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Meetings</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{meetings.length}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Escalations</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{meetings.filter((meeting) => meeting.type === "escalation").length}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Handoffs</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{meetings.filter((meeting) => meeting.type === "handoff").length}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Pending approvals</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{pendingApprovals.length}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
-          <Card className="border-slate-200">
+          <Card>
             <CardHeader>
               <CardTitle className="text-base">Timeline rail</CardTitle>
               <CardDescription>Chronological flow of company meetings.</CardDescription>
             </CardHeader>
             <CardContent>
               {meetings.length === 0 ? (
-                <p className="text-sm text-slate-500">No meetings recorded yet.</p>
+                <p className="text-sm text-[var(--swiss-gray-300)]">No meetings recorded yet.</p>
               ) : (
-                <div className="relative space-y-3 before:absolute before:bottom-0 before:left-[14px] before:top-0 before:w-px before:bg-slate-200">
+                <div className="relative space-y-2 before:absolute before:bottom-0 before:left-[14px] before:top-0 before:w-px before:bg-[var(--swiss-gray-100)]">
                   {meetings.map((meeting) => {
                     const selected = meeting.id === selectedMeeting?.id;
                     return (
@@ -121,16 +95,16 @@ export default function MeetingsPage() {
                         key={meeting.id}
                         type="button"
                         onClick={() => setSelectedMeetingId(meeting.id)}
-                        className={`relative flex w-full items-start gap-3 rounded-2xl border p-3 text-left transition ${selected ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"}`}
+                        className={`relative flex w-full items-start gap-3 border p-3 text-left transition ${selected ? "border-[var(--swiss-black)] bg-[var(--swiss-black)] text-[var(--swiss-white)]" : "border-[var(--swiss-gray-100)] bg-[var(--swiss-white)] hover:border-[var(--swiss-gray-200)]"}`}
                       >
-                        <div className={`relative z-10 mt-1 h-7 w-7 rounded-full border-4 ${selected ? "border-slate-900 bg-amber-300" : "border-slate-50 bg-slate-300"}`} />
+                        <div className={`relative z-10 mt-1 h-7 w-7 border-4 ${selected ? "border-[var(--swiss-black)] bg-[var(--swiss-gray-200)]" : "border-[var(--swiss-gray-50)] bg-[var(--swiss-gray-200)]"}`} />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
-                            <div className={`text-sm font-semibold capitalize ${selected ? "text-white" : "text-slate-900"}`}>{meeting.type.replace(/_/g, " ")}</div>
+                            <div className={`text-sm font-semibold capitalize ${selected ? "text-[var(--swiss-white)]" : ""}`}>{meeting.type.replace(/_/g, " ")}</div>
                             <Badge variant={selected ? "secondary" : "outline"} className="text-[10px]">{meeting.participants.length} people</Badge>
                           </div>
-                          <div className={`mt-1 text-[11px] uppercase tracking-[0.14em] ${selected ? "text-slate-300" : "text-slate-500"}`}>{new Date(meeting.completedAt ?? meeting.scheduledAt).toLocaleString()}</div>
-                          <div className={`mt-2 line-clamp-2 text-xs leading-5 ${selected ? "text-slate-200" : "text-slate-600"}`}>{meeting.summary}</div>
+                          <div className={`mt-1 swiss-caption ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-300)]"}`}>{new Date(meeting.completedAt ?? meeting.scheduledAt).toLocaleString()}</div>
+                          <div className={`mt-2 line-clamp-2 text-xs leading-5 ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-400)]"}`}>{meeting.summary}</div>
                         </div>
                       </button>
                     );
@@ -140,7 +114,7 @@ export default function MeetingsPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-200">
+          <Card>
             <CardHeader>
               {selectedMeeting ? (
                 <>
@@ -158,7 +132,7 @@ export default function MeetingsPage() {
                     {selectedMeeting.participants.map((participantId) => {
                       const participant = agentsById.get(participantId);
                       return (
-                        <Badge key={participantId} variant="secondary" className="rounded-full px-3 py-1">
+                        <Badge key={participantId} variant="secondary">
                           {participant?.name ?? participantId} · {participant?.title ?? "employee"}
                         </Badge>
                       );
@@ -175,47 +149,47 @@ export default function MeetingsPage() {
             <CardContent>
               {selectedMeeting ? (
                 <div className="space-y-6">
-                  <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><Users className="h-4 w-4" /> Participants</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedMeeting.participants.length}</div>
+                  <div className="grid gap-px border border-[var(--swiss-gray-100)] lg:grid-cols-2 xl:grid-cols-4">
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Participants</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.participants.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><MessageSquareQuote className="h-4 w-4" /> Agenda</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedMeeting.agenda.length}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Agenda</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.agenda.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><CheckCircle2 className="h-4 w-4" /> Decisions</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedMeeting.decisions.length}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Decisions</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.decisions.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><Lightbulb className="h-4 w-4" /> Learnings</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedMeeting.learnings.length}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Learnings</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.learnings.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><GitBranch className="h-4 w-4" /> Mutations</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedMeeting.taskModifications.length + selectedMeeting.memoryModifications.length}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Mutations</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.taskModifications.length + selectedMeeting.memoryModifications.length}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><CheckCircle2 className="h-4 w-4" /> Linked approvals</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedMeetingApprovals.length}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Linked approvals</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeetingApprovals.length}</div>
                     </div>
                   </div>
 
-                  <div className="relative space-y-5 before:absolute before:bottom-0 before:left-4 before:top-0 before:w-px before:bg-slate-200">
+                  <div className="relative space-y-5 before:absolute before:bottom-0 before:left-4 before:top-0 before:w-px before:bg-[var(--swiss-gray-100)]">
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-white"><Clock3 className="h-4 w-4" /></div>
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-sm font-semibold text-slate-900">Agenda flow</div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Clock3 className="h-4 w-4" /></div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="text-sm font-semibold">Agenda flow</div>
                         <div className="mt-3 space-y-3">
                           {selectedMeeting.agenda.map((item) => (
-                            <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <div key={item.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
                               <div className="flex flex-wrap items-center gap-2">
-                                <div className="font-medium text-slate-900">{item.topic}</div>
+                                <div className="font-medium">{item.topic}</div>
                                 <Badge variant="outline">{item.type}</Badge>
                                 {item.needsBoardApproval ? <Badge variant="warning">board approval</Badge> : null}
                               </div>
-                              <div className="mt-2 text-sm leading-6 text-slate-700">{item.content}</div>
+                              <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{item.content}</div>
                             </div>
                           ))}
                         </div>
@@ -223,15 +197,15 @@ export default function MeetingsPage() {
                     </div>
 
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-white"><CheckCircle2 className="h-4 w-4" /></div>
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-sm font-semibold text-slate-900">Decisions made</div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><CheckCircle2 className="h-4 w-4" /></div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="text-sm font-semibold">Decisions made</div>
                         <div className="mt-3 space-y-3">
                           {selectedMeeting.decisions.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">No explicit decisions were recorded in this meeting.</div>
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No explicit decisions were recorded in this meeting.</div>
                           ) : (
                             selectedMeeting.decisions.map((decision) => (
-                              <div key={decision.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">{decision.description}</div>
+                              <div key={decision.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3 text-sm leading-6">{decision.description}</div>
                             ))
                           )}
                         </div>
@@ -239,19 +213,19 @@ export default function MeetingsPage() {
                     </div>
 
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-white"><Lightbulb className="h-4 w-4" /></div>
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-sm font-semibold text-slate-900">Learnings and memory updates</div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Lightbulb className="h-4 w-4" /></div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="text-sm font-semibold">Learnings and memory updates</div>
                         <div className="mt-3 space-y-3">
                           {selectedMeeting.learnings.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">No learnings were promoted into employee memory here.</div>
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No learnings were promoted into employee memory here.</div>
                           ) : (
                             selectedMeeting.learnings.map((learning) => {
                               const agent = agentsById.get(learning.agentId);
                               return (
-                                <div key={learning.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                                  <div className="text-sm font-medium text-slate-900">{agent?.name ?? learning.agentId}</div>
-                                  <div className="mt-1 text-sm leading-6 text-slate-700">{learning.content}</div>
+                                <div key={learning.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                                  <div className="text-sm font-medium">{agent?.name ?? learning.agentId}</div>
+                                  <div className="mt-1 text-sm leading-6 text-[var(--swiss-gray-400)]">{learning.content}</div>
                                 </div>
                               );
                             })
@@ -261,22 +235,22 @@ export default function MeetingsPage() {
                     </div>
 
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-sky-600 text-white"><Users className="h-4 w-4" /></div>
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-sm font-semibold text-slate-900">Memory mutations applied</div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Users className="h-4 w-4" /></div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="text-sm font-semibold">Memory mutations applied</div>
                         <div className="mt-3 space-y-3">
                           {selectedMeeting.memoryModifications.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">This meeting did not apply any explicit memory changes.</div>
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">This meeting did not apply any explicit memory changes.</div>
                           ) : (
                             selectedMeeting.memoryModifications.map((modification) => {
                               const agent = agentsById.get(modification.agentId);
                               return (
-                                <div key={modification.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                <div key={modification.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <Badge variant="outline">{modification.modificationType.replace(/_/g, " ")}</Badge>
-                                    <span className="text-xs uppercase tracking-[0.14em] text-slate-500">{agent?.name ?? modification.agentId}</span>
+                                    <span className="swiss-caption text-[var(--swiss-gray-300)]">{agent?.name ?? modification.agentId}</span>
                                   </div>
-                                  <div className="mt-2 text-sm leading-6 text-slate-700">{modification.content}</div>
+                                  <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{modification.content}</div>
                                 </div>
                               );
                             })
@@ -286,23 +260,23 @@ export default function MeetingsPage() {
                     </div>
 
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-violet-600 text-white"><GitBranch className="h-4 w-4" /></div>
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-sm font-semibold text-slate-900">Task changes</div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><GitBranch className="h-4 w-4" /></div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="text-sm font-semibold">Task changes</div>
                         <div className="mt-3 space-y-3">
                           {selectedMeeting.taskModifications.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">This meeting did not directly modify tasks.</div>
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">This meeting did not directly modify tasks.</div>
                           ) : (
                             selectedMeeting.taskModifications.map((modification) => (
-                              <div key={modification.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <div key={modification.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <Badge variant="outline">{modification.modificationType.replace(/_/g, " ")}</Badge>
-                                  <span className="text-xs uppercase tracking-[0.14em] text-slate-500">task {modification.taskId.slice(-6)}</span>
+                                  <span className="swiss-caption text-[var(--swiss-gray-300)]">task {modification.taskId.slice(-6)}</span>
                                   {modification.assignedRole ? <Badge variant="outline">{modification.assignedRole}</Badge> : null}
                                   {modification.priority ? <Badge variant="outline">{modification.priority}</Badge> : null}
                                   {modification.resultingStatus ? <Badge variant="outline">{modification.resultingStatus.replace(/_/g, " ")}</Badge> : null}
                                 </div>
-                                <div className="mt-2 text-sm leading-6 text-slate-700">{modification.details}</div>
+                                <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{modification.details}</div>
                               </div>
                             ))
                           )}
@@ -311,25 +285,25 @@ export default function MeetingsPage() {
                     </div>
 
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-amber-600 text-white"><CheckCircle2 className="h-4 w-4" /></div>
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-sm font-semibold text-slate-900">Approval requests</div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><CheckCircle2 className="h-4 w-4" /></div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="text-sm font-semibold">Approval requests</div>
                         <div className="mt-3 space-y-3">
                           {selectedMeetingApprovals.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">No approval requests were linked to this meeting.</div>
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No approval requests were linked to this meeting.</div>
                           ) : (
                             selectedMeetingApprovals.map((approval) => {
                               const requester = agentsById.get(approval.requestedByAgentId);
                               return (
-                                <div key={approval.id} className={`rounded-xl border p-3 ${approval.status === "pending" ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+                                <div key={approval.id} className={`border p-3 ${approval.status === "pending" ? "border-[var(--swiss-red)]" : "border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]"}`}>
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <div className="font-medium text-slate-900">{approval.title}</div>
+                                    <div className="font-medium">{approval.title}</div>
                                     <Badge variant={approval.status === "pending" ? "warning" : "outline"}>{approval.status}</Badge>
                                     <Badge variant="outline">{approval.type.replace(/_/g, " ")}</Badge>
                                   </div>
-                                  <div className="mt-2 text-sm leading-6 text-slate-700">{approval.description}</div>
-                                  <div className="mt-2 text-xs uppercase tracking-[0.14em] text-slate-500">Requested by {requester?.name ?? approval.requestedByAgentId}</div>
-                                  {approval.resolutionSummary ? <div className="mt-2 text-sm leading-6 text-slate-600">{approval.resolutionSummary}</div> : null}
+                                  <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{approval.description}</div>
+                                  <div className="mt-2 swiss-caption text-[var(--swiss-gray-300)]">Requested by {requester?.name ?? approval.requestedByAgentId}</div>
+                                  {approval.resolutionSummary ? <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{approval.resolutionSummary}</div> : null}
                                 </div>
                               );
                             })

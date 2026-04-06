@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Activity, AlertCircle, Building2, FileCode, LoaderCircle, Terminal, Waves } from "lucide-react";
+import { Activity, AlertCircle, FileCode, LoaderCircle, Terminal, Waves } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { apiUrl } from "../../lib/api";
 
 type EmployeeActivityEvent = {
   id: string;
@@ -16,8 +16,6 @@ type EmployeeActivityEvent = {
   taskId?: string | null;
 };
 
-const API_BASE = "/backend/api";
-
 const TYPE_ICONS: Record<EmployeeActivityEvent["type"], typeof Activity> = {
   working: LoaderCircle,
   file_edit: FileCode,
@@ -28,15 +26,15 @@ const TYPE_ICONS: Record<EmployeeActivityEvent["type"], typeof Activity> = {
 };
 
 const ROLE_COLORS: Record<string, string> = {
-  cto: "text-blue-600",
-  pm: "text-purple-600",
-  developer: "text-green-600",
-  tester: "text-amber-600",
-  ui_designer: "text-rose-600",
-  marketing: "text-cyan-600",
-  skills_lead: "text-fuchsia-600",
-  ceo: "text-slate-700",
-  system: "text-slate-500",
+  cto: "text-[var(--swiss-blue)]",
+  pm: "text-[var(--swiss-gray-500)]",
+  developer: "text-[var(--swiss-black)]",
+  tester: "text-[var(--swiss-gray-400)]",
+  ui_designer: "text-[var(--swiss-red)]",
+  marketing: "text-[var(--swiss-blue)]",
+  skills_lead: "text-[var(--swiss-gray-500)]",
+  ceo: "text-[var(--swiss-black)]",
+  system: "text-[var(--swiss-gray-300)]",
 };
 
 export default function ActivityPage() {
@@ -47,7 +45,7 @@ export default function ActivityPage() {
   useEffect(() => {
     async function load() {
       try {
-        const response = await fetch(`${API_BASE}/employee-activity`, { cache: "no-store" });
+        const response = await fetch(apiUrl("/employee-activity"), { cache: "no-store" });
         if (response.ok) {
           setEvents((await response.json()) as EmployeeActivityEvent[]);
         }
@@ -57,7 +55,7 @@ export default function ActivityPage() {
     }
 
     void load();
-    const es = new EventSource(`${API_BASE}/employee-activity/stream`);
+    const es = new EventSource(apiUrl("/employee-activity/stream"));
     es.onmessage = (event) => {
       try {
         const parsed = JSON.parse(event.data) as EmployeeActivityEvent;
@@ -80,56 +78,32 @@ export default function ActivityPage() {
   const fileEditCount = events.filter((event) => event.type === "file_edit").length;
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-4 md:px-8">
-      <div className="mx-auto max-w-[1400px] space-y-4">
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <Building2 className="h-4 w-4" />
-              Arceus board workspace
-            </div>
-            <div className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-              <Activity className="h-5 w-5" />
-              Employee activity
-            </div>
+    <main className="min-h-screen px-6 py-6">
+      <div className="mx-auto max-w-[1400px] space-y-6">
+        <header>
+          <div className="swiss-caption text-[var(--swiss-gray-300)]">05 — Activity</div>
+          <h1 className="swiss-h1 mt-1">Live operations timeline</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Filter the stream by employee or event type to follow how execution, edits, shell work, and escalations unfolded.</p>
+        </header>
+
+        <hr className="swiss-rule" />
+
+        <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Events</div>
+            <div className="mt-1 text-2xl font-semibold">{events.length}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <Link href="/" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Board</Link>
-            <Link href="/tasks" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Tasks</Link>
-            <Link href="/meetings" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Meetings</Link>
-            <Link href="/employees" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Employees</Link>
-            <Link href="/workspace" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Workspace</Link>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Errors</div>
+            <div className="mt-1 text-2xl font-semibold">{errorCount}</div>
+          </div>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">File edits</div>
+            <div className="mt-1 text-2xl font-semibold">{fileEditCount}</div>
           </div>
         </div>
 
-        <Card className="overflow-hidden border-slate-200 bg-gradient-to-br from-white via-sky-50/50 to-slate-100/70">
-          <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/80 px-3 py-1 text-xs font-medium text-sky-800">
-                <Waves className="h-3.5 w-3.5" />
-                Live operations timeline
-              </div>
-              <div className="text-2xl font-semibold text-slate-900">Company work, rendered as a live event stream.</div>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">Filter the stream by employee or event type to follow how execution, edits, shell work, and escalations unfolded.</p>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs sm:w-[360px]">
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Events</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{events.length}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Errors</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{errorCount}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">File edits</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{fileEditCount}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-slate-200">
+        <Card>
           <CardHeader>
             <CardTitle>Employee log stream</CardTitle>
             <CardDescription>Company work is visible here as employee logs instead of generic agent traces.</CardDescription>
@@ -141,7 +115,7 @@ export default function ActivityPage() {
                   key={type}
                   type="button"
                   onClick={() => setActiveType(type)}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium transition ${activeType === type ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                  className={`border px-3 py-1 text-xs font-medium transition ${activeType === type ? "border-[var(--swiss-black)] bg-[var(--swiss-black)] text-[var(--swiss-white)]" : "border-[var(--swiss-gray-100)] bg-[var(--swiss-white)] hover:border-[var(--swiss-gray-200)]"}`}
                 >
                   {type === "all" ? "All types" : type.replace(/_/g, " ")}
                 </button>
@@ -151,7 +125,7 @@ export default function ActivityPage() {
               <button
                 type="button"
                 onClick={() => setActiveEmployee("all")}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition ${activeEmployee === "all" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                className={`border px-3 py-1 text-xs font-medium transition ${activeEmployee === "all" ? "border-[var(--swiss-black)] bg-[var(--swiss-black)] text-[var(--swiss-white)]" : "border-[var(--swiss-gray-100)] bg-[var(--swiss-white)] hover:border-[var(--swiss-gray-200)]"}`}
               >
                 All employees
               </button>
@@ -160,7 +134,7 @@ export default function ActivityPage() {
                   key={employee}
                   type="button"
                   onClick={() => setActiveEmployee(employee)}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium uppercase transition ${activeEmployee === employee ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                  className={`border px-3 py-1 text-xs font-medium uppercase transition ${activeEmployee === employee ? "border-[var(--swiss-black)] bg-[var(--swiss-black)] text-[var(--swiss-white)]" : "border-[var(--swiss-gray-100)] bg-[var(--swiss-white)] hover:border-[var(--swiss-gray-200)]"}`}
                 >
                   {employee}
                 </button>
@@ -168,27 +142,27 @@ export default function ActivityPage() {
             </div>
 
             {filtered.length === 0 ? (
-              <p className="text-sm text-slate-500">No employee logs recorded for the selected filters.</p>
+              <p className="text-sm text-[var(--swiss-gray-300)]">No employee logs recorded for the selected filters.</p>
             ) : (
-              <div className="relative space-y-3 before:absolute before:bottom-0 before:left-[18px] before:top-0 before:w-px before:bg-slate-200">
+              <div className="relative space-y-2 before:absolute before:bottom-0 before:left-[18px] before:top-0 before:w-px before:bg-[var(--swiss-gray-100)]">
                 {filtered.map((eventItem) => {
                   const Icon = TYPE_ICONS[eventItem.type] ?? Activity;
-                  const roleColor = ROLE_COLORS[eventItem.employee] ?? "text-slate-600";
+                  const roleColor = ROLE_COLORS[eventItem.employee] ?? "text-[var(--swiss-gray-400)]";
                   return (
                     <div key={eventItem.id} className="relative pl-12">
-                      <div className={`absolute left-0 top-1 flex h-9 w-9 items-center justify-center rounded-full border ${eventItem.type === "error" ? "border-red-200 bg-red-50 text-red-600" : "border-slate-200 bg-white text-slate-500"}`}>
+                      <div className={`absolute left-0 top-1 flex h-9 w-9 items-center justify-center border ${eventItem.type === "error" ? "border-[var(--swiss-red)] text-[var(--swiss-red)]" : "border-[var(--swiss-gray-100)] text-[var(--swiss-gray-300)]"}`}>
                         <Icon className={`h-4 w-4 ${eventItem.type === "working" ? "animate-spin" : ""}`} />
                       </div>
-                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/40">
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`font-semibold uppercase ${roleColor}`}>{eventItem.employee}</span>
-                          <span className="text-slate-300">·</span>
-                          <span className="text-slate-500">{new Date(eventItem.timestamp).toLocaleString()}</span>
+                          <span className="text-[var(--swiss-gray-200)]">·</span>
+                          <span className="text-[var(--swiss-gray-300)]">{new Date(eventItem.timestamp).toLocaleString()}</span>
                           <Badge variant="outline">{eventItem.type.replace(/_/g, " ")}</Badge>
                           {eventItem.meetingId ? <Badge variant="outline">meeting {eventItem.meetingId.slice(-6)}</Badge> : null}
                           {eventItem.taskId ? <Badge variant="outline">task {eventItem.taskId.slice(-6)}</Badge> : null}
                         </div>
-                        <div className={`mt-2 leading-6 ${eventItem.type === "error" ? "text-red-600" : "text-slate-700"}`}>{eventItem.content}</div>
+                        <div className={`mt-2 leading-6 ${eventItem.type === "error" ? "text-[var(--swiss-red)]" : ""}`}>{eventItem.content}</div>
                       </div>
                     </div>
                   );

@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Activity, BrainCircuit, Building2, CheckCircle2, ShieldAlert, Sparkles, Users } from "lucide-react";
+import { Activity, BrainCircuit, CheckCircle2, ShieldAlert, Sparkles, Users } from "lucide-react";
 import type { AgentIdentity, MemorySummary } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { apiUrl } from "../../lib/api";
 
 type EmployeeDirectoryEntry = {
   id: string;
@@ -20,18 +20,34 @@ type EmployeeDirectoryEntry = {
     runtimeStatus: string;
     model: string;
     lastSeenAt: string;
+    sessionId: string | null;
+    lastEventAt: string | null;
+    lastEventType: string | null;
+    lastEventSummary: string | null;
+    lastToolName: string | null;
+    lastToolStatus: "invoked" | "completed" | null;
+    lastToolAt: string | null;
+    lastProgressAt: string | null;
+    lastWorkspaceChangeAt: string | null;
+    awaiting: string | null;
+    activeTaskId: string | null;
+    promptStartedAt: string | null;
+    promptCompletedAt: string | null;
+    eventCount: number;
+    toolInvocationCount: number;
+    fileEditCount: number;
+    shellCommandCount: number;
+    stallReason: string | null;
   } | null;
 };
 
-const API_BASE = "/backend/api";
-
 function renderList(items: string[], empty: string) {
   if (items.length === 0) {
-    return <div className="text-slate-500">{empty}</div>;
+    return <div className="text-[var(--swiss-gray-300)]">{empty}</div>;
   }
 
   return (
-    <div className="space-y-1 text-slate-700">
+    <div className="space-y-1">
       {items.map((item) => (
         <div key={item}>- {item}</div>
       ))}
@@ -46,7 +62,7 @@ export default function EmployeesPage() {
   useEffect(() => {
     async function load() {
       try {
-        const response = await fetch(`${API_BASE}/employees`, { cache: "no-store" });
+        const response = await fetch(apiUrl("/employees"), { cache: "no-store" });
         if (response.ok) {
           setEmployees((await response.json()) as EmployeeDirectoryEntry[]);
         }
@@ -74,64 +90,40 @@ export default function EmployeesPage() {
   const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) ?? employees[0] ?? null;
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-4 md:px-8">
-      <div className="mx-auto max-w-[1400px] space-y-4">
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <Building2 className="h-4 w-4" />
-              Arceus board workspace
-            </div>
-            <div className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-              <Users className="h-5 w-5" />
-              Employees and memory
-            </div>
+    <main className="min-h-screen px-6 py-6">
+      <div className="mx-auto max-w-[1400px] space-y-6">
+        <header>
+          <div className="swiss-caption text-[var(--swiss-gray-300)]">03 — Employees</div>
+          <h1 className="swiss-h1 mt-1">Roster, memory, and runtime health</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Select any employee to inspect their working memory, blockers, recent learnings, and runtime state.</p>
+        </header>
+
+        <hr className="swiss-rule" />
+
+        <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Employees</div>
+            <div className="mt-1 text-2xl font-semibold">{employees.length}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <Link href="/" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Board</Link>
-            <Link href="/tasks" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Tasks</Link>
-            <Link href="/activity" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Activity</Link>
-            <Link href="/meetings" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Meetings</Link>
-            <Link href="/workspace" className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Workspace</Link>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Running</div>
+            <div className="mt-1 text-2xl font-semibold">{employees.filter((employee) => employee.status === "running").length}</div>
+          </div>
+          <div className="bg-[var(--swiss-white)] p-4">
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Blockers</div>
+            <div className="mt-1 text-2xl font-semibold">{employees.reduce((count, employee) => count + (employee.memory?.openBlockers.length ?? 0), 0)}</div>
           </div>
         </div>
 
-        <Card className="overflow-hidden border-slate-200 bg-gradient-to-br from-white via-cyan-50/40 to-emerald-50/40">
-          <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-white/80 px-3 py-1 text-xs font-medium text-cyan-800">
-                <BrainCircuit className="h-3.5 w-3.5" />
-                Employee memory network
-              </div>
-              <div className="text-2xl font-semibold text-slate-900">Roster, memory, and runtime health.</div>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">Select any employee to inspect their working memory, blockers, recent learnings, and runtime state without digging through logs.</p>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs sm:w-[360px]">
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Employees</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{employees.length}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Running</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{employees.filter((employee) => employee.status === "running").length}</div>
-              </div>
-              <div className="rounded-xl border border-white/70 bg-white/80 p-3">
-                <div className="text-slate-500">Blockers</div>
-                <div className="mt-1 text-xl font-semibold text-slate-900">{employees.reduce((count, employee) => count + (employee.memory?.openBlockers.length ?? 0), 0)}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-          <Card className="border-slate-200">
+          <Card>
             <CardHeader>
               <CardTitle className="text-base">Employee directory</CardTitle>
               <CardDescription>Interactive roster with quick health status.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2">
               {employees.length === 0 ? (
-                <p className="text-sm text-slate-500">No employees available yet.</p>
+                <p className="text-sm text-[var(--swiss-gray-300)]">No employees available yet.</p>
               ) : (
                 employees.map((employee) => {
                   const selected = employee.id === selectedEmployee?.id;
@@ -140,20 +132,20 @@ export default function EmployeesPage() {
                       key={employee.id}
                       type="button"
                       onClick={() => setSelectedEmployeeId(employee.id)}
-                      className={`w-full rounded-2xl border p-3 text-left transition ${selected ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"}`}
+                      className={`w-full border p-3 text-left transition ${selected ? "border-[var(--swiss-black)] bg-[var(--swiss-black)] text-[var(--swiss-white)]" : "border-[var(--swiss-gray-100)] bg-[var(--swiss-white)] hover:border-[var(--swiss-gray-200)]"}`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className={`font-semibold ${selected ? "text-white" : "text-slate-900"}`}>{employee.name}</div>
-                          <div className={`text-xs ${selected ? "text-slate-300" : "text-slate-500"}`}>{employee.title}</div>
+                          <div className={`font-semibold ${selected ? "text-[var(--swiss-white)]" : ""}`}>{employee.name}</div>
+                          <div className={`text-xs ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-300)]"}`}>{employee.title}</div>
                         </div>
                         <Badge variant={selected ? "secondary" : employee.status === "error" ? "destructive" : employee.status === "running" ? "secondary" : "outline"}>{employee.status}</Badge>
                       </div>
-                      <div className={`mt-3 flex flex-wrap gap-2 text-[11px] ${selected ? "text-slate-300" : "text-slate-500"}`}>
+                      <div className={`mt-3 flex flex-wrap gap-2 swiss-caption ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-300)]"}`}>
                         <span>{employee.role}</span>
-                        <span>•</span>
+                        <span>·</span>
                         <span>{employee.memory?.currentFocus.length ?? 0} focus items</span>
-                        <span>•</span>
+                        <span>·</span>
                         <span>{employee.memory?.openBlockers.length ?? 0} blockers</span>
                       </div>
                     </button>
@@ -163,7 +155,7 @@ export default function EmployeesPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-200">
+          <Card>
             <CardHeader>
               {selectedEmployee ? (
                 <>
@@ -188,74 +180,123 @@ export default function EmployeesPage() {
             <CardContent className="space-y-6">
               {selectedEmployee ? (
                 <>
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><Sparkles className="h-4 w-4" /> Focus</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedEmployee.memory?.currentFocus.length ?? 0}</div>
+                  <div className="grid gap-px border border-[var(--swiss-gray-100)] md:grid-cols-2 xl:grid-cols-4">
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Focus</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedEmployee.memory?.currentFocus.length ?? 0}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><BrainCircuit className="h-4 w-4" /> Learnings</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedEmployee.memory?.recentLearnings.length ?? 0}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Learnings</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedEmployee.memory?.recentLearnings.length ?? 0}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><ShieldAlert className="h-4 w-4" /> Blockers</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedEmployee.memory?.openBlockers.length ?? 0}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Blockers</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedEmployee.memory?.openBlockers.length ?? 0}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><CheckCircle2 className="h-4 w-4" /> Decisions</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{selectedEmployee.memory?.importantDecisions.length ?? 0}</div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Decisions</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedEmployee.memory?.importantDecisions.length ?? 0}</div>
                     </div>
                   </div>
 
                   <div className="grid gap-4 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 p-4">
-                      <div className="mb-3 text-sm font-semibold text-slate-900">Memory stack</div>
+                    <div className="border border-[var(--swiss-gray-100)] p-4">
+                      <div className="mb-3 text-sm font-semibold">Memory stack</div>
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <div className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Current focus</div>
+                        <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                          <div className="mb-2 swiss-caption text-[var(--swiss-gray-300)]">Current focus</div>
                           {renderList(selectedEmployee.memory?.currentFocus ?? [], "No current focus yet.")}
                         </div>
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <div className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Recent learnings</div>
+                        <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                          <div className="mb-2 swiss-caption text-[var(--swiss-gray-300)]">Recent learnings</div>
                           {renderList(selectedEmployee.memory?.recentLearnings ?? [], "No learnings captured yet.")}
                         </div>
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <div className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Open blockers</div>
+                        <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                          <div className="mb-2 swiss-caption text-[var(--swiss-gray-300)]">Open blockers</div>
                           {renderList(selectedEmployee.memory?.openBlockers ?? [], "No blockers recorded.")}
                         </div>
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <div className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Important decisions</div>
+                        <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                          <div className="mb-2 swiss-caption text-[var(--swiss-gray-300)]">Important decisions</div>
                           {renderList(selectedEmployee.memory?.importantDecisions ?? [], "No decisions captured yet.")}
                         </div>
                       </div>
                     </div>
 
                     <div className="space-y-4">
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900"><Activity className="h-4 w-4" /> Runtime session</div>
+                      <div className="border border-[var(--swiss-gray-100)] p-4">
+                        <div className="mb-3 swiss-caption">Runtime session</div>
                         {selectedEmployee.session ? (
-                          <div className="space-y-3 text-sm text-slate-700">
-                            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                              <span className="text-slate-500">Model</span>
-                              <span className="font-medium text-slate-900">{selectedEmployee.session.model}</span>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex items-center justify-between border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                              <span className="text-[var(--swiss-gray-300)]">Model</span>
+                              <span className="font-medium">{selectedEmployee.session.model}</span>
                             </div>
-                            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                              <span className="text-slate-500">Runtime status</span>
+                            <div className="flex items-center justify-between border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                              <span className="text-[var(--swiss-gray-300)]">Runtime status</span>
                               <Badge variant={selectedEmployee.session.runtimeStatus === "connected" ? "secondary" : "outline"}>{selectedEmployee.session.runtimeStatus}</Badge>
                             </div>
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                              <div className="text-slate-500">Last seen</div>
-                              <div className="mt-1 font-medium text-slate-900">{new Date(selectedEmployee.session.lastSeenAt).toLocaleString()}</div>
+                            <div className="flex items-center justify-between border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                              <span className="text-[var(--swiss-gray-300)]">Opencode session</span>
+                              <span className="font-medium">{selectedEmployee.session.sessionId ? selectedEmployee.session.sessionId.slice(-8) : "not bound"}</span>
+                            </div>
+                            <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                              <div className="text-[var(--swiss-gray-300)]">Awaiting</div>
+                              <div className="mt-1 font-medium">{selectedEmployee.session.awaiting ?? "idle"}</div>
+                            </div>
+                            <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                              <div className="text-[var(--swiss-gray-300)]">Last session update</div>
+                              <div className="mt-1 text-sm font-medium">{selectedEmployee.session.lastEventSummary ?? "No Opencode progress recorded yet."}</div>
+                              {selectedEmployee.session.lastEventType ? <div className="mt-1 text-xs text-[var(--swiss-gray-300)]">{selectedEmployee.session.lastEventType}</div> : null}
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                                <div className="text-[var(--swiss-gray-300)]">Last progress</div>
+                                <div className="mt-1 font-medium">{selectedEmployee.session.lastProgressAt ? new Date(selectedEmployee.session.lastProgressAt).toLocaleString() : "No progress yet"}</div>
+                              </div>
+                              <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                                <div className="text-[var(--swiss-gray-300)]">Last workspace change</div>
+                                <div className="mt-1 font-medium">{selectedEmployee.session.lastWorkspaceChangeAt ? new Date(selectedEmployee.session.lastWorkspaceChangeAt).toLocaleString() : "No workspace changes"}</div>
+                              </div>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-3">
+                              <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                                <div className="text-[var(--swiss-gray-300)]">Events</div>
+                                <div className="mt-1 font-medium">{selectedEmployee.session.eventCount}</div>
+                              </div>
+                              <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                                <div className="text-[var(--swiss-gray-300)]">Tools</div>
+                                <div className="mt-1 font-medium">{selectedEmployee.session.toolInvocationCount}</div>
+                              </div>
+                              <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                                <div className="text-[var(--swiss-gray-300)]">Shell commands</div>
+                                <div className="mt-1 font-medium">{selectedEmployee.session.shellCommandCount}</div>
+                              </div>
+                            </div>
+                            {selectedEmployee.session.lastToolName ? (
+                              <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                                <div className="text-[var(--swiss-gray-300)]">Last tool</div>
+                                <div className="mt-1 font-medium">{selectedEmployee.session.lastToolName}{selectedEmployee.session.lastToolStatus ? ` (${selectedEmployee.session.lastToolStatus})` : ""}</div>
+                              </div>
+                            ) : null}
+                            {selectedEmployee.session.stallReason ? (
+                              <div className="border border-[var(--swiss-red)] px-3 py-2">
+                                <div className="font-medium">Stall diagnosis</div>
+                                <div className="mt-1 text-sm leading-6">{selectedEmployee.session.stallReason}</div>
+                              </div>
+                            ) : null}
+                            <div className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2">
+                              <div className="text-[var(--swiss-gray-300)]">Last seen</div>
+                              <div className="mt-1 font-medium">{new Date(selectedEmployee.session.lastSeenAt).toLocaleString()}</div>
                             </div>
                           </div>
                         ) : (
-                          <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">No runtime session bound yet.</div>
+                          <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No runtime session bound yet.</div>
                         )}
                       </div>
 
-                      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 to-slate-800 p-4 text-white">
+                      <div className="border border-[var(--swiss-black)] bg-[var(--swiss-black)] p-4 text-[var(--swiss-white)]">
                         <div className="text-sm font-semibold">Memory freshness</div>
-                        <div className="mt-2 text-sm text-slate-300">Last memory update</div>
+                        <div className="mt-2 text-sm text-[var(--swiss-gray-200)]">Last memory update</div>
                         <div className="mt-1 text-lg font-semibold">{selectedEmployee.memory ? new Date(selectedEmployee.memory.updatedAt).toLocaleString() : "No memory yet"}</div>
                       </div>
                     </div>

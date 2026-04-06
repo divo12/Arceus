@@ -1,10 +1,10 @@
 import type { FastifyReply } from "fastify";
-import { classifyCeoResponse, generateStrategy } from "./ceo";
-import { bootstrapCompany, deriveCompanyNameFromIdea, getSnapshot } from "./store";
-import { ensureDeployment } from "./config";
+import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type CeoCard } from "./ceo";
+import { appendChatMessage, bootstrapCompany, deriveCompanyNameFromIdea, getSnapshot } from "./store";
+import { ensureDeployment } from "./config/index";
 import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "./opencode";
-import { getRoleSoul } from "@arceus/company-runtime";
 import { recordCeoCardMeeting } from "./orchestrator";
+import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 
 type OpenCodeEvent = {
   type: string;
@@ -69,15 +69,28 @@ async function readSseEvent(reader: ReadableStreamDefaultReader<Uint8Array>, buf
   };
 }
 
-async function startCeoPromptAsync(message: string) {
+function appendConversationMessage(snapshot: CompanySnapshot, role: ChatMessage["role"], content: string, card: CeoCard | null = null) {
+  return appendChatMessage({
+    id: `chat_${crypto.randomUUID()}`,
+    companyId: snapshot.company.id,
+    sprintId: snapshot.company.currentSprintId,
+    agentId: null,
+    role,
+    content,
+    cardType: card?.card_type ?? null,
+    cardData: card ? card : null,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot) {
   const session = await getCeoSession();
   const deployment = ensureDeployment("ceoDeployment");
-  const ceoSoul = getRoleSoul("ceo");
 
   await postOpencodeJson(`/session/${session.id}/prompt_async`, {
     model: { providerID: "azure", modelID: deployment },
     agent: "ceo",
-    system: ceoSoul.systemPrompt,
+    system: buildCeoOperatingPrompt(snapshot),
     parts: [{ type: "text", text: message }]
   });
 
@@ -101,6 +114,9 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     });
   }
 
+  appendConversationMessage(snapshot, "board", trimmedMessage);
+  snapshot = getSnapshot();
+
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
   reply.raw.setHeader("Connection", "keep-alive");
@@ -111,7 +127,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   const reader = await openOpencodeEventStream();
   let buffer = "";
   let targetMessageId: string | null = null;
-  const sessionId = await startCeoPromptAsync(trimmedMessage);
+  const sessionId = await startCeoPromptAsync(trimmedMessage, snapshot);
   let fullText = "";
 
   sseWrite(reply, "status", { phase: "running" });
@@ -157,11 +173,12 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     }
 
     let nextSnapshot = getSnapshot();
-    if (nextSnapshot.company.goal && fullText) {
+    if (fullText) {
       try {
         sseWrite(reply, "status", { phase: "classifying" });
         const card = await classifyCeoResponse(fullText, nextSnapshot);
         const meeting = recordCeoCardMeeting(card, trimmedMessage, fullText);
+        appendConversationMessage(getSnapshot(), "ceo", fullText, card);
         if (meeting) {
           sseWrite(reply, "meeting", {
             meetingId: meeting.id,
@@ -170,10 +187,12 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
             taskDeltaCount: meeting.taskModifications.length,
             memoryDeltaCount: meeting.memoryModifications.length,
           });
-          nextSnapshot = getSnapshot();
         }
+        nextSnapshot = getSnapshot();
         sseWrite(reply, "proposal", card);
       } catch (cardErr) {
+        appendConversationMessage(getSnapshot(), "ceo", fullText);
+        nextSnapshot = getSnapshot();
         sseWrite(reply, "error", {
           message: cardErr instanceof Error ? cardErr.message : "Card classification failed"
         });
@@ -212,18 +231,41 @@ export async function sendBoardMessageToCeo(message: string) {
     });
   }
 
+  appendConversationMessage(snapshot, "board", trimmedMessage);
+  snapshot = getSnapshot();
+
   const strategy = await generateStrategy(snapshot);
-  const card = {
+  const assistantMessage = [strategy.summary, `First release: ${strategy.first_release}`].join("\n\n");
+  const card: CeoCard = {
     card_type: "strategy_proposal" as const,
+    stage: "kickoff",
     title: strategy.strategy_title,
     summary: strategy.summary,
+    welcome: null,
+    mission: null,
     strategy: {
       first_release: strategy.first_release,
       scope_boundary: strategy.scope_boundary,
       role_rationale: strategy.role_rationale,
       roles: strategy.roles,
+      execution_sequence: [
+        "Approve the first release and initial org chart.",
+        "Have the CTO break execution into taskable work.",
+        "Run the first implementation cycle and review the preview.",
+      ],
+      board_checkpoints: [
+        "Confirm the target user and first-release scope.",
+        "Review delivery progress and the first runnable preview.",
+        "Approve launch-readiness or tighten scope.",
+      ],
+      key_risks: [
+        "Scope could sprawl if the board keeps adding first-release requirements.",
+        "The team shape may be too heavy unless each role has a clear delivery edge.",
+        "Launch quality will slip if preview validation is deferred too late.",
+      ],
     },
     question: null,
+    status: null,
     meeting: {
       create: true,
       type: "ad_hoc" as const,
@@ -233,10 +275,12 @@ export async function sendBoardMessageToCeo(message: string) {
     },
   };
 
+  appendConversationMessage(getSnapshot(), "ceo", assistantMessage, card);
+
   return {
-    assistantMessage: strategy.summary,
+    assistantMessage,
     strategy,
     card,
-    snapshot,
+    snapshot: getSnapshot(),
   };
 }

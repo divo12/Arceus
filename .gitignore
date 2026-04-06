@@ -5,3 +5,7 @@ coverage/
 *.log
 .env
 .env.local
+
+# folders for local development
+product/
+workspace/

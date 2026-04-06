@@ -6,9 +6,10 @@ import { z } from "zod";
 import { getEvents, getSnapshot, bootstrapCompany, deriveCompanyNameFromIdea, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, resetOrchestratorState, stopExecution } from "./orchestrator";
+import { approveBoardReview, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
+import { serverConfig } from "./config/index";
 import { getLocalPreviewState } from "./preview";
 
 const app = Fastify({ logger: true });
@@ -86,16 +87,68 @@ async function listProductFiles(dir = productDir, base = productDir): Promise<Ar
 
 function getEmployeeDirectory() {
   const snapshot = getSnapshot();
-  return snapshot.agents.map((agent) => ({
-    id: agent.id,
-    name: agent.name,
-    role: agent.role,
-    title: agent.title,
-    status: agent.status,
-    profile: agent.profile,
-    memory: snapshot.memories.find((memory) => memory.agentId === agent.id) ?? null,
-    session: snapshot.sessions.find((session) => session.agentId === agent.id) ?? null,
-  }));
+  const liveSessions = getAgentSessions() as Record<string, {
+    sessionId: string;
+    status: string;
+    lastEventAt: string | null;
+    lastEventType: string | null;
+    lastEventSummary: string | null;
+    lastToolName: string | null;
+    lastToolStatus: "invoked" | "completed" | null;
+    lastToolAt: string | null;
+    lastProgressAt: string | null;
+    lastWorkspaceChangeAt: string | null;
+    awaiting: string | null;
+    activeTaskId: string | null;
+    promptStartedAt: string | null;
+    promptCompletedAt: string | null;
+    eventCount: number;
+    toolInvocationCount: number;
+    fileEditCount: number;
+    shellCommandCount: number;
+    stallReason: string | null;
+  }>;
+
+  return snapshot.agents.map((agent) => {
+    const persistedSession = snapshot.sessions.find((session) => session.agentId === agent.id) ?? null;
+    const liveSession = liveSessions[agent.role];
+
+    return {
+      id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      title: agent.title,
+      status: agent.status,
+      profile: agent.profile,
+      memory: snapshot.memories.find((memory) => memory.agentId === agent.id) ?? null,
+      session: !persistedSession && !liveSession
+        ? null
+        : {
+            id: persistedSession?.id ?? agent.sessionBindingId,
+            runtimeStatus: liveSession?.status ?? persistedSession?.runtimeStatus ?? "idle",
+            model: persistedSession?.model ?? (agent.role === "ceo" ? "azure/ceo-deployment" : "azure/worker-deployment"),
+            lastSeenAt: liveSession?.lastEventAt ?? persistedSession?.lastSeenAt ?? new Date().toISOString(),
+            sessionId: liveSession?.sessionId ?? persistedSession?.sessionId ?? null,
+            lastEventAt: liveSession?.lastEventAt ?? null,
+            lastEventType: liveSession?.lastEventType ?? null,
+            lastEventSummary: liveSession?.lastEventSummary ?? null,
+            lastToolName: liveSession?.lastToolName ?? null,
+            lastToolStatus: liveSession?.lastToolStatus ?? null,
+            lastToolAt: liveSession?.lastToolAt ?? null,
+            lastProgressAt: liveSession?.lastProgressAt ?? null,
+            lastWorkspaceChangeAt: liveSession?.lastWorkspaceChangeAt ?? null,
+            awaiting: liveSession?.awaiting ?? null,
+            activeTaskId: liveSession?.activeTaskId ?? null,
+            promptStartedAt: liveSession?.promptStartedAt ?? null,
+            promptCompletedAt: liveSession?.promptCompletedAt ?? null,
+            eventCount: liveSession?.eventCount ?? 0,
+            toolInvocationCount: liveSession?.toolInvocationCount ?? 0,
+            fileEditCount: liveSession?.fileEditCount ?? 0,
+            shellCommandCount: liveSession?.shellCommandCount ?? 0,
+            stallReason: liveSession?.stallReason ?? null,
+          },
+    };
+  });
 }
 
 await app.register(cors, {
@@ -175,13 +228,13 @@ app.get("/api/chat/ceo/stream", async (request, reply) => {
 
 app.delete("/api/company", async (request, reply) => {
   try {
+    await resetOrchestratorState();
     const warnings = await resetProductWorkspace();
     if (warnings.length > 0) {
       request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
     }
 
     resetEmployeeActivityLog();
-    resetOrchestratorState();
     return resetCompany();
   } catch (error) {
     request.log?.error?.(error);
@@ -279,6 +332,35 @@ app.get("/api/product/overview", async () => {
 
 app.get("/api/artifacts", async () => {
   return getArtifacts();
+});
+
+app.get("/api/transitions", async () => {
+  return getTransitions();
+});
+
+app.get("/api/feedback-rounds", async () => {
+  return getFeedbackRounds();
+});
+
+app.get("/api/execution-flow", async () => {
+  const snapshot = getSnapshot();
+  return {
+    tasks: snapshot.tasks.map((t) => ({
+      id: t.id,
+      kind: t.kind,
+      title: t.title,
+      status: t.status,
+      assignedRole: t.assignedRole,
+      priority: t.priority,
+      iterationCount: t.iterationCount ?? 0,
+      maxIterations: t.maxIterations ?? 3,
+      dependsOnTaskIds: t.dependsOnTaskIds,
+      childTaskIds: t.childTaskIds,
+    })),
+    transitions: getTransitions().slice(-50),
+    feedbackRounds: getFeedbackRounds(),
+    executionStatus: getExecutionStatus(),
+  };
 });
 
 app.get("/api/artifacts/:id", async (request, reply) => {
@@ -394,7 +476,6 @@ app.post("/api/quick-execute", async (request, reply) => {
   }
 });
 
-const port = Number(process.env.PORT ?? 4000);
-const host = process.env.HOST ?? "0.0.0.0";
+const { port, host } = serverConfig;
 
 await app.listen({ port, host });
