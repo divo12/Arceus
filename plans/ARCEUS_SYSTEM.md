@@ -43,6 +43,7 @@
 32. [Polsia Gap: fal.ai Media Generation](#32-polsia-gap-falai-media-generation)
 33. [Dependency Graph](#33-dependency-graph)
 34. [Effort Estimates](#34-effort-estimates)
+35. [v3.4 Gaps: Constructs Missing from Current Implementation](#35-v34-gaps-constructs-missing-from-current-implementation)
 
 ---
 
@@ -1557,6 +1558,290 @@ Independent:
 | **MVP+** (should ship) | PG-2, PG-3, PG-6, PG-7 | 10-16 | Better retrieval, tools, docs, real-time UX |
 | **Hosting** (multi-user) | 11, 12, 13, 14, 15, PG-4, PG-15, PG-16 | 20-28 | Deployable, authenticated, billed, secure |
 | **Scale** (growth) | 05b, PG-1, PG-5, PG-9-14, PG-17-21 | 30-52 | Full Polsia parity: ads, social, email, autonomous, browser |
+
+---
+
+## 35. v3.4 Gaps: Constructs Missing from Current Implementation
+
+> **Source:** arceus-v3.4-conso.md — features designed in the full plan that aren't in any existing spec or Polsia gap
+
+### V3-1: Sub-Agent Spawning System
+
+**What v3.4 designed:**
+- Employees spawn ephemeral sub-agents (Generic, Specialized, Exploratory) for task execution
+- `SubAgentOrchestrator` per employee manages their personal sub-agent pool
+- SpawnRules govern what each role can spawn (Engineer → codegen, test, deploy agents)
+- Spawned agents are one-level deep only — cannot spawn their own sub-agents
+- After task: trajectory distilled back to parent memory, spawned agent destroyed
+- Agent types: Generic (generalist), Specialized (codegen, test, web, deploy), Exploratory (research, hypothesis)
+
+**What we have:** OpenCode sessions per employee role. No sub-agent spawning, no trajectory distillation.
+
+**Effort:** 5-7 days
+
+---
+
+### V3-2: A2A Protocol (Agent-to-Agent Communication)
+
+**What v3.4 designed:**
+- Formal message types: TASK_DELEGATE, EMPLOYEE_DELEGATE, TASK_UPDATE, QUESTION, FEEDBACK, ESCALATION, MEETING_INVITE, APPROVAL_REQUEST, MENTION, MEMORY_SHARE
+- Heartbeat system — periodic status pings from agents
+- Atomic task checkout (Paperclip-style) — prevents two agents from working on same task
+- Escalation chain: Agent → Manager (Meeting) → Manager's Manager → CEO → Board
+- Employee delegation with DelegationStyle (directive, collaborative, autonomous)
+
+**What we have:** Orchestrator dispatches tasks directly. No agent-to-agent messaging, no heartbeat, no atomic checkout, no escalation chain.
+
+**Effort:** 5-7 days
+
+---
+
+### V3-3: Meeting Engine
+
+**What v3.4 designed:**
+- Meeting types: standup (every 4h), sprint_review (every 2d), board_report (weekly), ad_hoc (on demand)
+- Each participant submits: goal progress, active tasks, blockers, learnings
+- CEO relays user feedback + own research
+- Pain point identification (low hitrate problems)
+- Discussion → resolution → learnings stored in each participant's Hippocampus
+- Positive affirmations for high-performing agents
+- Memory extraction from meeting transcript
+- Task list updated based on meeting decisions
+- Deep consolidation triggered post-meeting (patterns, dedup, skills, habits)
+
+**What we have:** Meeting records in the DB schema (Spec 04), basic meeting creation in orchestrator. No structured meeting execution, no periodic standups, no pain point identification.
+
+**Effort:** 4-6 days
+
+---
+
+### V3-4: Task Engine (Planner → Executor → Verifier)
+
+**What v3.4 designed:**
+- Every task has three internal components: PlannerState, ExecutorState, VerifierState
+- Task decomposition is recursive until atomic sub-tasks
+- Dependency DAG across sub-tasks
+- Parent agent verifies spawned agent's work (VerifierState populated by parent)
+- max_retries per task (default 3)
+- TraceEntry per step: action, result, cost, timestamp (immutable audit)
+- Definition of done (DoD) contract per task
+
+**What we have:** Tasks have status, description, assigned role. Orchestrator manages execution phases. No Planner/Executor/Verifier components, no recursive decomposition, no per-step tracing.
+
+**Effort:** 4-6 days
+
+---
+
+### V3-5: Profile Engine
+
+**What v3.4 designed:**
+- Auto-generated employee profiles from static + dynamic memories
+- Profile injected into agent's system prompt
+- Contains: role, core_knowledge, current_context, habits, state (priming), skills, performance_summary
+- Updates periodically (not per-task — based on memory changes)
+- Like a "this agent is like this right now" summary card
+
+**What we have:** Agent SOULs are static prompts. Memory context is injected per-task but no persistent profile summary.
+
+**Effort:** 2-3 days (after Hippocampus 05a)
+
+---
+
+### V3-6: Skill Store
+
+**What v3.4 designed:**
+- Learned capabilities emerged from consolidated patterns
+- Each skill: name, description, proficiency (0-1), usage_count, formed_from (pattern ID)
+- Skills are different from habits: habits are auto-triggered behaviors, skills are recognized competencies
+- Used for routing decisions (which agent is best for this type of task)
+- Proficiency score evolves with usage
+
+**What we have:** Nothing. Patterns exist in Spec 05b (post-MVP) but skills don't.
+
+**Effort:** 2-3 days (after 05b PatternLearner)
+
+---
+
+### V3-7: Graph Memory (Entity-Relationship Store)
+
+**What v3.4 designed:**
+- Knowledge graph (Neo4j or Memgraph) for entity-relationship memory
+- Relationship types: UPDATES (versioning), EXTENDS, DERIVES, USES, OWNS, DEPENDS_ON, REPORTS_TO
+- Entity extraction via LLM from facts
+- Embedding-based similarity matching (threshold 0.7) to find existing nodes
+- Hybrid search: vector similarity + graph traversal (1-2 hops) + BM25 rerank
+- Memory versioning via Updates relationship chain
+
+**What we have:** Spec 04 decided "No graph store (Neo4j removed)." Using pgvector only.
+
+**Effort:** 5-7 days (if using Neo4j) or 3-4 days (if using Postgres recursive CTEs for graph traversal)
+
+---
+
+### V3-8: Pivot Construct
+
+**What v3.4 designed (deferred):**
+- Direction-change system when startup needs to pivot
+- Memory impact planning — which memories become invalid after pivot
+- Task rebuilding — cancel in-progress tasks, regenerate from new direction
+- Board-governed transition flow (board must approve pivot)
+- Preserves valuable learnings while discarding invalid direction-specific context
+
+**What we have:** Nothing. No pivot support.
+
+**Effort:** 3-5 days
+
+---
+
+### V3-9: Autonomy Levels
+
+**What v3.4 designed (deferred):**
+- Per-startup governance mode (1-5 scale)
+- Level 1: Board approves everything (current behavior)
+- Level 3: Board approves strategy, agents execute autonomously within sprint
+- Level 5: Fully autonomous — agents propose, decide, and execute. Board reviews post-hoc.
+- Affects: approval gates, escalation thresholds, budget authority, meeting cadence
+
+**What we have:** Fixed at Level 1 (board approves everything). No autonomy configuration.
+
+**Effort:** 3-4 days
+
+---
+
+### V3-10: LLM Model Tiering
+
+**What v3.4 designed:**
+- 4 tiers of models based on task criticality:
+  - Tier 0 (Board Critical): Claude Opus / GPT-4o — CEO board conversations, org design
+  - Tier 1 (Employee Strategic): Claude Sonnet / GPT-4o — CTO, PM planning
+  - Tier 2 (Execution): GPT-4o-mini — spawned agents, operational work
+  - Tier 3 (Embeddings): Small model — memory, vector search, graph seeding
+- Routing rules: CEO always Tier 0, employees default Tier 1, spawned agents Tier 2
+- If verifier confidence low, escalate one tier upward
+- Embeddings isolated from reasoning budget in cost tracking
+
+**What we have:** Spec 10 has Azure pricing table. Config has CEO vs worker deployment. But no formal tiering, no automatic tier escalation.
+
+**Effort:** 2-3 days
+
+---
+
+### V3-11: Belief System
+
+**What v3.4 designed:**
+- Initial beliefs injected from CEO/CTO at employee instantiation
+- Represents the company's core values, approach, and technical philosophy
+- Different from memory — beliefs are foundational, don't decay, influence all decisions
+- Evolves through meetings and board feedback
+
+**What we have:** Agent SOULs are role-specific prompts. No company-specific belief system injection.
+
+**Effort:** 1-2 days
+
+---
+
+### V3-12: Pipeline Stage Tracking
+
+**What v3.4 designed:**
+- Startup has a `pipeline_stage`: ideation → validation → build → launch → measure → iterate
+- Each stage has different agent behaviors, meeting cadences, and priorities
+- Stage transitions driven by CEO + board decisions
+- Dashboard shows current position in pipeline
+
+**What we have:** Company has `status` (ideation, active, paused, archived). No pipeline stage concept.
+
+**Effort:** 2-3 days
+
+---
+
+### V3-13: Multi-Company Support
+
+**What v3.4 designed:**
+- User owns multiple Startups
+- Each startup is fully isolated (agents, memory, tasks, budget)
+- Startup switcher in dashboard header
+- Row-level security per company
+
+**What we have:** Schema supports it (company_id on everything). Single company at a time in practice. No startup switcher, no multi-company UX.
+
+**Effort:** 3-4 days (mostly UX + routing)
+
+---
+
+### V3-14: Incremental Hiring
+
+**What v3.4 designed (deferred):**
+- CEO/CTO decide when to hire new roles as tasks demand
+- Hiring pipeline: propose → board approval → instantiate → onboard
+- Dynamic team growth instead of all-at-once instantiation
+
+**What we have:** All employees hired at once on strategy approval.
+
+**Effort:** 3-4 days
+
+---
+
+### V3-15: Chat with Non-CEO Agents
+
+**What v3.4 designed (deferred):**
+- Board can directly message any EmployeeAgent, not just CEO
+- Breaks the Board of Directors metaphor but useful as power-user feature
+- Could enable direct feedback to Developer or questions to CTO
+
+**What we have:** Board talks to CEO only.
+
+**Effort:** 2-3 days
+
+---
+
+### V3-16: Task Queue Self-Assignment
+
+**What v3.4 designed (deferred):**
+- Employee agents pull tasks from a shared pool based on skills/availability
+- Instead of top-down assignment from CTO/orchestrator
+- Agent evaluates task fit based on own skills and current workload
+- More autonomous, less hierarchical
+
+**What we have:** CTO plan assigns roles. Orchestrator dispatches. No self-assignment.
+
+**Effort:** 3-4 days
+
+---
+
+## Summary: All v3.4 Gaps
+
+| # | Gap | Category | Effort |
+|---|-----|----------|--------|
+| V3-1 | Sub-Agent Spawning | Agent System | 5-7 days |
+| V3-2 | A2A Protocol | Communication | 5-7 days |
+| V3-3 | Meeting Engine | Communication | 4-6 days |
+| V3-4 | Task Engine (Planner/Executor/Verifier) | Execution | 4-6 days |
+| V3-5 | Profile Engine | Memory | 2-3 days |
+| V3-6 | Skill Store | Memory | 2-3 days |
+| V3-7 | Graph Memory | Memory | 3-7 days |
+| V3-8 | Pivot Construct | Strategy | 3-5 days |
+| V3-9 | Autonomy Levels | Governance | 3-4 days |
+| V3-10 | LLM Model Tiering | Cost | 2-3 days |
+| V3-11 | Belief System | Agent System | 1-2 days |
+| V3-12 | Pipeline Stage Tracking | UX | 2-3 days |
+| V3-13 | Multi-Company Support | Platform | 3-4 days |
+| V3-14 | Incremental Hiring | Agent System | 3-4 days |
+| V3-15 | Chat with Non-CEO Agents | UX | 2-3 days |
+| V3-16 | Task Queue Self-Assignment | Execution | 3-4 days |
+| **Total** | **16 items** | | **~47-71 days** |
+
+---
+
+## Updated Grand Total
+
+| Source | Items | Days |
+|--------|-------|------|
+| Remaining Specs (05a-15) | 10 | 24-33 |
+| Polsia Gaps (PG-1 to PG-21) | 21 | 46-77 |
+| v3.4 Gaps (V3-1 to V3-16) | 16 | 47-71 |
+| **Grand Total** | **47 items** | **~117-181 days** |
+
+---
 
 ### What Arceus Has That Polsia Doesn't
 
