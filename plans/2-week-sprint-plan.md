@@ -1,258 +1,303 @@
 # Arceus — 2-Week Execution Plan
 
 > **Period:** April 7 — April 20, 2026
-> **Goal:** Go from "specs on paper" to "Arceus running on a URL with Supabase persistence"
-> **Starting point:** 5,271 lines of working backend (in-memory), Next.js dashboard, 10 specs written, zero persistence
+> **Goal:** Make Arceus a real product — multi-sprint, memory across sprints, cost-tracked, verified, deployable
+> **Starting point:** Specs 0, 1, 2, 3, 4, 8 implemented. Sprint 1 works end-to-end. NO sprint cycle, NO memory, NO cost tracking, NO verification.
 
 ---
 
-## Where We Are (Honest Assessment)
+## What Works Right Now
 
-**What works today:**
-- CEO chat with streaming responses via OpenCode + Azure
-- Strategy generation + approval flow
-- Agent execution — Developer builds code in /workspace
-- Preview detection — iframe shows the generated app
-- Activity feed via SSE
-- Dashboard with CEO chat, sprint progress, team activity
+- CEO chat with streaming ✅
+- Strategy generation + approval ✅
+- Agent execution (Developer builds code) ✅
+- Preview iframe ✅
+- Dashboard with CEO chat + sprint progress ✅
+- Supabase Postgres persistence ✅
+- Git workspace + Supabase Storage bundles ✅
 
-**What doesn't exist yet:**
-- No database. Server restart = total data loss.
-- No Supabase. Everything lives in JS variables.
-- No git in workspace. No versioning, no rollback.
-- No cost tracking. Azure bills are invisible.
-- No verification gate. Code ships without build/test check.
-- Tester agent has a SOUL but no tasks.
-- No workspace isolation per company.
-- No export, no download, no snapshot.
+## What's Broken (Pain Points in Order of Severity)
 
-**Code size:** ~5,300 lines backend, ~2,000 lines frontend, ~500 lines shared packages.
+### P0: Company is a one-shot machine
+Sprint 1 finishes. Nothing happens. No Sprint 2 proposal. No between-sprints state. The company is effectively dead after one sprint. **Spec 06 (Sprint Cycle) was not implemented.**
 
----
+### P1: Sprint 2 agents have amnesia
+Even if Sprint Cycle worked, agents would start Sprint 2 with zero memory of Sprint 1. Developer re-discovers the tech stack. CTO re-plans architecture. Tokens wasted, consistency lost. **No Hippocampus.**
 
-## The 2-Week Goal
+### P2: No cost visibility
+Azure tokens burn silently. No tracking, no alerts, no budget. A retry loop can drain $20 in minutes with nobody noticing. **No budget system.**
 
-By April 20, Arceus should:
-1. **Persist across restarts** — Supabase Postgres for all state, Supabase Storage for workspace bundles
-2. **Track costs** — every Azure LLM call logged with token counts, budget widget on dashboard
-3. **Verify builds** — orchestrator runs `npm run build` + `npm run test` before board review
-4. **Version products** — git repo per company, sprint tags, rollback capability
-5. **Run on a URL** — Docker image deployable to Railway/Fly with zero persistent volumes
+### P3: Broken code reaches the board
+Developer writes code → orchestrator marks done → board sees blank page. No build check, no test check. **No verification gate.**
 
-That's the "first hostable Arceus." Not multi-user, not production-grade, but something real that survives a restart and shows a budget.
+### P4: Transient failures kill sprints
+One Azure rate limit or Supabase hiccup → sprint crashes. No retry, no fallback. **No resilience.**
 
----
+### P5: Can't host anywhere
+Everything is localhost. No Docker, no health check, no deployment path. **Can't demo without screen-sharing.**
 
-## Week 1: Foundation (April 7-13)
+### P6: Board is blind during execution
+5-15 minutes of "executing..." with minimal visibility. Can't see what agents are doing. **SSE only, no real-time agent visibility.**
 
-The theme: **make things stick.** Every mutation that currently writes to a JS variable should also write to Supabase. Every workspace write should go through git.
-
-### Day 1-2: `packages/db` + Supabase Setup
-
-**What to build:**
-- Create Supabase project (manual, 5 minutes)
-- Create `arceus-workspaces` and `arceus-assets` storage buckets
-- Build `packages/db` package:
-  - `client.ts` — `getDb()`, `getSupabaseClient()`, `isSupabaseConfigured()`
-  - All schema files (Spec 04 domains + Spec 08 storage tables)
-  - `drizzle.config.ts`
-  - Run `drizzle-kit push` to create tables in Supabase
-- Update `config.ts` with Supabase env vars
-- Create `.env.example` with all env vars documented
-
-**Deliverable:** `packages/db` builds, tables exist in Supabase, `isSupabaseConfigured()` returns true.
-
-**Risk:** Drizzle + Supabase Postgres connection quirks. Mitigate: test with `drizzle-kit push` before writing any app code.
-
-### Day 2-3: Workspace Manager + Git Ops
-
-**What to build:**
-- `git-ops.ts` — gitInit, gitAdd, gitCommit, gitTag, gitBundle, gitCloneFromBundle
-- `workspace-manager.ts` — provision, commitAndSync, tagSprint, getLocalPath, ensureLocal
-- `supabase-storage.ts` — uploadBundle, downloadBundle, createSignedUrl
-- Wire `provision()` into company bootstrap (replace `resetProductWorkspace`)
-- Wire `commitAndSync()` into orchestrator after developer task completion
-- Wire `tagSprint()` into board review approval
-
-**Deliverable:** Create company → workspace has git repo. Developer completes task → git commit. Sprint approved → git tag + bundle uploaded to Supabase Storage.
-
-**Test:** Kill server. Restart. Call `ensureLocal()`. Workspace restores from Supabase bundle.
-
-### Day 3-4: Store Persistence (Dual-Write)
-
-**What to build:**
-- `store-persistence.ts` — reads/writes full CompanySnapshot as JSON to Supabase Postgres
-- Dual-write pattern: every mutation in `store.ts` calls `maybePersist()` fire-and-forget
-- On server startup: if Supabase configured, load snapshot from DB
-- Artifact persistence: `addArtifact()` writes to Postgres AND in-memory array
-- Sprint snapshot: `tagSprint()` serializes full state to `sprint_snapshots` table
-
-**Deliverable:** Create company, run sprint, kill server, restart — company still exists. Artifacts still queryable.
-
-**This is the big unlock.** Everything after this builds on persistent state.
-
-### Day 5: Cost Tracking
-
-**What to build:**
-- `cost-config.ts` — Azure pricing table, `computeCostCents()`, `estimateTokens()`
-- `cost-tracker.ts` — `trackCost()`, `checkBudget()`, `getCompanySpend()`
-- Wire into `azure-openai.ts` — extract `response.usage`, call `trackCost()`
-- Wire into `ceo.ts` — track strategy generation costs
-- Wire into `chat.ts` — track CEO chat costs
-- Wire into orchestrator — estimated tracking for OpenCode agent calls
-- Add budget routes: `GET /api/budget`, `GET /api/budget/breakdown`, `PATCH /api/budget`
-
-**Deliverable:** Run a sprint. `GET /api/budget` returns real spend data with token counts. Dashboard shows "$X.XX / $20.00 spent."
-
-### Day 6-7: Verification Gate + Tester Task
-
-**What to build:**
-- `verification-gate.ts` — `runVerificationGate()` with build + test check
-- Update orchestrator: create Tester task parallel with Developer tasks
-- Update orchestrator: run verification gate after both complete
-- Update orchestrator: failure → retry loop (Developer fixes code, max 2 retries)
-- Update Quinn's SOUL prompt with test-writing instructions
-- Add `test` and `verification` task kinds to contracts
-
-**Deliverable:** Sprint creates Developer + Tester tasks in parallel. After both finish, orchestrator runs `npm run build` + `npm run test`. Failure loops back to Developer.
+### P7: No institutional knowledge
+No living company docs. Decisions scatter across artifacts. Sprint 5 doesn't know what Sprint 1 decided. **No company documents, no belief system.**
 
 ---
 
-## Week 2: Polish + Deploy (April 14-20)
+## Week 1: Make It Real (April 7-13)
 
-The theme: **make it presentable and hostable.**
+The theme: **A company that survives Sprint 1 and gets smarter.**
 
-### Day 8-9: Dashboard Updates
+### Day 1-2: Sprint Cycle (Spec 06) — THE CRITICAL PATH
 
-**What to build:**
-- Budget widget on overview page (progress bar, per-sprint breakdown)
-- Sprint snapshot list with rollback button
-- Workspace export button (download tarball)
-- Verification gate results visible (build passed/failed, test summary)
-- Cost breakdown view (by agent, by model, by sprint)
-
-**Deliverable:** Dashboard shows budget, sprint history with rollback, and build/test status. Board can download their code.
-
-### Day 9-10: Rollback + Export
+Without this, nothing else matters. Company must be able to continue.
 
 **What to build:**
-- `POST /api/workspace/rollback/:sprint` — download sprint bundle, restore, reload snapshot
-- `POST /api/workspace/export` — create tarball, upload to Supabase, return signed URL
-- `GET /api/workspace/diff/:from/:to` — git diff between sprints
-- Wire rollback into dashboard (button on sprint snapshot card)
-- Wire export into dashboard (download button)
+- Sprint completion detection (all tasks done → status: reviewing)
+- Board review approval → status: completed
+- Between-sprints state in store
+- CEO Sprint N+1 proposal (analyzes artifacts + chat + failures → proposes next sprint as strategy_proposal card)
+- Board approval of next sprint → creates Sprint N+1 tasks → orchestrator executes
+- Sprint numbering (1, 2, 3...)
+- Sprint-aware orchestrator (executeSprint reads sprint.id, scopes tasks)
+- `sprint-manager.ts` service (or extend orchestrator)
 
-**Deliverable:** Board can roll back to any previous sprint. Board can download their code as a tarball.
+**API changes:**
+- `POST /api/board-review/approve` → triggers sprint completion + CEO proposal
+- Sprint status tracking in dashboard
 
-### Day 10-11: Budget Enforcement
+**Verify:** Create company → Sprint 1 → approve → CEO proposes Sprint 2 → approve → Sprint 2 executes on top of Sprint 1's code.
+
+### Day 2-4: Hippocampus Core (Spec 05a) — MVP Scope
+
+Sprint Cycle makes Sprint 2 possible. Hippocampus makes Sprint 2 smart.
+
+**MVP scope (2 tiers + 2 LLM calls instead of full 5+4):**
+- **Static memory** (pgvector) — permanent facts: "We use Next.js", "Supabase for DB"
+- **Dynamic memory** (pgvector, decays) — temporary context: "Sprint 2 focuses on auth"
+- **Extraction** (LLM call #1, gpt-4o) — extract facts from agent output on task completion
+- **Action decision** (LLM call #2, gpt-4o) — ADD/UPDATE/DELETE/NONE per fact
+- **Retrieval** (pgvector cosine + tier boosting) — basic MMR, top_k=5
+- **Embedding** (@xenova/transformers, local, free)
+
+**Skip for now (add in Week 2 or Week 3):**
+- Working memory (Redis) — agents work fine without ephemeral scratch space
+- Procedural memory (habits) — nice but not blocking Sprint 2
+- Priming (confidence/morale) — polish, not core
+- Habit matching LLM call — skipped with procedural
+- Priming generation LLM call — skipped with priming
+
+**Integration:** 2 touch points in orchestrator:
+```
+prepareAgentContext(agentId, taskDescription) → { memories: string[] }
+processTaskCompletion(agentId, taskId, { output, outcome }) → void
+```
+
+**Verify:** Sprint 1 builds quiz app. Sprint 2 Developer's context includes "Framework: Next.js", "Database: Supabase" from Sprint 1.
+
+### Day 4-5: Budget & Cost Control (Spec 10) — Essential Safety
 
 **What to build:**
-- Pre-task budget check in orchestrator (before dispatching any agent)
-- Hard stop when company budget exhausted
-- Warning thresholds: 50% info, 75% CEO mentions, 90% dashboard alert
-- Sprint soft limit: CEO proposes, board approves, warning on overage
-- Resume flow: board adds funds → execution resumes
-- Inject budget state into CEO system prompt
+- `cost-tracker.ts` — trackCost(), checkBudget(), getCompanySpend()
+- `cost-config.ts` — Azure pricing table, computeCostCents()
+- Wire into `azure-openai.ts` — extract response.usage, call trackCost()
+- Wire into `ceo.ts`, `chat.ts` — track CEO and strategy costs
+- Wire into orchestrator — estimated tracking for OpenCode calls
+- $20 default budget on company creation
+- Pre-task budget check in orchestrator
+- Hard stop at 100% (block all dispatch, CEO posts warning)
+- Warning thresholds: 50/75/90% events
+- 3 API routes: GET /api/budget, GET /api/budget/breakdown, PATCH /api/budget
 
-**Deliverable:** Set budget to $1. Run sprint. Hard stop triggers. Increase budget. Execution resumes. CEO naturally mentions budget status in chat.
+**Verify:** Run sprint. GET /api/budget returns real spend. Set budget to $1, verify hard stop.
 
-### Day 12-13: Docker + Deployment
+### Day 5-6: Verification Gate (Spec 09) — Quality Floor
 
 **What to build:**
-- `Dockerfile` — multi-stage build (Node 22, build TS, copy dist, minimal runtime)
-- `docker-compose.yml` — Arceus API + Redis (Supabase is external)
-- `docker/entrypoint.sh` — run migrations on startup, health check
-- `/api/health` endpoint — checks Supabase Postgres + Redis + OpenCode connectivity
-- `.env.example` with complete documentation
-- Update `README.md` with deployment instructions
+- `verification-gate.ts` — runVerificationGate() with npm run build + npm run test
+- Update orchestrator: run gate after Developer completes (before board review)
+- Failure → Developer retry with error context (max 2 retries, then CTO escalation)
+- Gate results stored as artifact
 
-**Deliverable:** `docker compose up` starts Arceus. Health check passes. Connected to Supabase.
+**Tester agent (Quinn) parallel execution — defer to Week 2.** For now, just the orchestrator gate (build + test if test script exists). Quinn writing tests is an enhancement on top.
+
+**Verify:** Developer writes broken code → gate catches build failure → retries → if still broken, escalates.
+
+### Day 6-7: Circuit Breaker + Delegation Memory
+
+**Circuit Breaker (PG-8, 1 day):**
+- `apps/api/src/utils/retry.ts` — withRetry() decorator + CircuitBreaker class
+- Apply to: Azure OpenAI calls, Supabase operations, OpenCode session calls
+- Retry: 3 attempts, exponential backoff (1s, 2s, 4s)
+- Circuit breaker: open after 5 failures, cooldown 30s
+
+**Delegation Memory (Spec 07, 1 day):**
+- Extend `prepareAgentContext()` with optional `delegatorAgentId`
+- Query delegator's shared/board memories (top_k=3, MMR)
+- Copy into agent's context as "[from Lin/CTO]" marked memories
+- Context budget: 5 own + 3 delegated = 8 max
+
+**Verify:** CTO decides "use JWT for auth" → Developer sees "[from Lin/CTO] use JWT for auth" in Sprint 2 context.
+
+---
+
+## Week 2: Make It Hostable and Polished (April 14-20)
+
+The theme: **Something you can put on a URL and show people.**
+
+### Day 8-9: Deployment & Infrastructure (Spec 11)
+
+**What to build:**
+- `Dockerfile` — multi-stage: Node 22 + TS compile + minimal runtime
+- `docker-compose.yml` — Arceus API + Redis (Supabase external)
+- `docker/entrypoint.sh` — run Drizzle migrations, validate env, start server
+- `GET /api/health` — checks Supabase + Redis + OpenCode
+- `.env.example` — complete with all vars documented
+- Sprint crash recovery: on startup, detect `status: 'executing'` sprints → mark as failed or resume
+
+**Verify:** `docker compose up` → health check passes → create company → Sprint 1 works.
+
+### Day 9-10: Product Preview & Hosting (Spec 12)
+
+**What to build:**
+- Extend `preview.ts` for multi-company port isolation
+- Framework detection: read package.json → pick build + start commands
+- Preview process lifecycle: start after execution, keep alive during review, kill on reset
+- Reverse proxy config (Caddy or nginx) for preview URLs
+- Fallback: serve static files if framework unknown
+
+**Verify:** Sprint completes → preview auto-starts on random port → dashboard iframe loads the generated app.
+
+### Day 10-11: Company Documents (PG-6) + Belief System (V3-11)
+
+**Company Docs (PG-6, 1.5 days):**
+- `company_documents` table: type (tech_notes, product_overview, brand_voice), content, version
+- Auto-created empty templates on company bootstrap
+- Agents update relevant docs after task completion (CTO → tech_notes, PM → product_overview)
+- Injected into agent context alongside memories
+- Dashboard view for docs
+
+**Belief System (V3-11, 0.5 day):**
+- Company beliefs extracted from strategy approval (CEO's rationale, CTO's tech choices)
+- Stored as special static memories with `source_type = 'belief'`
+- Highest retrieval priority (above regular statics)
+- Injected first in agent prompt: "Company beliefs: ..."
+
+**Verify:** After Sprint 1, tech_notes contains "Next.js 15, Supabase, Tailwind". Sprint 2 CTO reads it before planning.
+
+### Day 11-12: Hippocampus Full Tiers + Tester Agent
+
+**Complete Hippocampus (add what we skipped in Week 1):**
+- Working memory (Redis TTL per task)
+- Procedural memory (habits) + LLM trigger matching
+- Priming (confidence/morale) + LLM disposition generation
+- Memory GC background job (every 6h): expire temporals, decay dynamics, prune stale
+
+**Tester Agent (from Spec 09):**
+- Quinn runs in parallel with Developer
+- Writes happy-path test files from CTO's plan
+- Orchestrator creates Tester task automatically per sprint
+- Tests accumulate across sprints = regression suite
+
+**Verify:** Sprint 1 Developer + Tester parallel → gate runs build + test → Sprint 2 Tester writes new tests, Sprint 1 tests catch regressions.
+
+### Day 12-13: WebSocket + Dashboard Polish (PG-7)
+
+**WebSocket (1.5 days):**
+- Replace or supplement SSE with WebSocket per company
+- Pipe OpenCode event stream → Redis pub/sub → WebSocket → dashboard
+- Events: agent_started, tool_call, tool_result, agent_completed, task_status_changed
+- Dashboard shows: "Jules (Developer) is calling create_file..." live
+
+**Dashboard polish (0.5 day):**
+- Budget widget (progress bar, per-sprint cost)
+- Sprint history with snapshot list
+- Verification gate status (passed/failed badge)
+- Agent memory indicators (how many memories per agent)
 
 ### Day 14: End-to-End Testing + Bug Fixes
 
-**What to do:**
-- Full lifecycle test: create company → CEO chat → strategy → approve → Sprint 1 → approve → Sprint 2
-- Verify: artifacts in Supabase Postgres
-- Verify: git bundle in Supabase Storage
-- Verify: cost_events have real data
-- Verify: kill server, restart, state restored
-- Verify: rollback to Sprint 1 works
-- Verify: export tarball downloads
-- Fix whatever breaks
+Full lifecycle test:
+1. Create company → CEO chat → strategy → approve
+2. Sprint 1 executes → Tester writes tests → gate passes → preview works → board approves
+3. CEO proposes Sprint 2 → board approves → Sprint 2 executes
+4. Sprint 2 agents have Sprint 1 memories
+5. Budget shows real costs
+6. Kill server → restart → state restored from Supabase
+7. Rollback to Sprint 1 works
+8. Export tarball downloads
 
-**Deliverable:** Arceus runs end-to-end with persistence, verification, and cost tracking. Ready to deploy.
-
----
-
-## What We're NOT Doing These 2 Weeks
-
-| Deferred | Why |
-|----------|-----|
-| Hippocampus (Spec 05a) | Memory system is valuable but not blocking. Artifact handoff works for Sprint 1-3. |
-| Auth (Spec 13) | Single-user for now. Add when we go multi-user. |
-| Tier 2 Playwright verification | Tier 1 (build+test) is sufficient. Playwright adds 200MB and sandbox complexity. |
-| Sprint soft limit UI | Budget hard limit works. Soft limit is a polish feature. |
-| Multi-company | One company at a time. Schema supports it, enforce later. |
-| Security sandboxing | Agents run code on the host. Acceptable for single-user. Docker sandbox later. |
-| Observability | console.log for now. Structured logging later. |
+Fix whatever breaks. This is buffer day.
 
 ---
 
-## Daily Standup Checkpoints
+## What Ships on April 20
 
-| Day | Mon 7 | Tue 8 | Wed 9 | Thu 10 | Fri 11 | Sat 12 | Sun 13 |
-|-----|-------|-------|-------|--------|--------|--------|--------|
-| **Week 1** | DB pkg + Supabase setup | Workspace mgr + git ops | Store dual-write | Cost tracker | Verification gate | Buffer / bugs | Buffer / bugs |
+- [x] Multi-sprint companies (Sprint 1 → Sprint 2 → Sprint 3)
+- [x] Agent memory across sprints (Hippocampus 5 tiers)
+- [x] CTO context flows to Developer (delegation memory)
+- [x] Build + test verification before board review
+- [x] Tester agent writes tests parallel with Developer
+- [x] $20 budget with hard stop, per-call Azure tracking
+- [x] Retry + circuit breaker on all external calls
+- [x] Company documents that evolve across sprints
+- [x] Company belief system from strategy
+- [x] Docker deployment with health checks
+- [x] Product preview serving
+- [x] WebSocket real-time agent visibility
+- [x] Dashboard with budget, sprint history, verification status
+- [x] Sprint crash recovery on server restart
 
-| Day | Mon 14 | Tue 15 | Wed 16 | Thu 17 | Fri 18 | Sat 19 | Sun 20 |
-|-----|--------|--------|--------|--------|--------|--------|--------|
-| **Week 2** | Dashboard budget + snapshots | Rollback + export | Budget enforcement | Docker + deploy | E2E test + fix | Buffer | **Ship** |
+## What Does NOT Ship (Week 3+)
+
+| Item | Why Deferred |
+|------|-------------|
+| Auth & multi-tenancy (Spec 13) | Single-user works for demo/testing. Add before public launch. |
+| Billing & credits (PG-4) | Need auth first. Budget tracking is sufficient for now. |
+| Per-company infra (PG-1) | Big project (GitHub + Render + Neon). Products run locally for now. |
+| Browser agent (PG-5) | Cool but not core. No web scraping/automation needed for MVP. |
+| RAG pipeline upgrade (PG-2) | Basic pgvector works. Reranking + hybrid search is optimization. |
+| Tool registry (PG-3) | OpenCode handles tools. Formal registry is for extensibility. |
+| Meetings (V3-3) | Agents communicate through artifacts and delegation. Standups are enhancement. |
+| Sub-agent spawning (V3-1) | OpenCode sessions work fine. Sub-agents are orchestration complexity. |
+| A2A protocol (V3-2) | Orchestrator-driven dispatch works. Agent-to-agent messaging is post-MVP. |
+| Meta Ads, Social, Email (PG-9,10,11) | Marketing stack. Build when there are users to market. |
+| Autonomy levels (V3-9) | Fixed at Level 1 (board approves everything). Increase later. |
+| Pipeline stages (V3-12) | Nice UX. Not blocking anything. |
+| Observability (Spec 14) | console.log + cost tracking for now. Structured logging later. |
+| Security sandboxing (Spec 15) | Acceptable risk at single-user scale. |
 
 ---
 
-## Success Criteria (April 20)
-
-- [ ] Server restart preserves all company state (Supabase Postgres)
-- [ ] Workspace restores from Supabase Storage bundle on cold start
-- [ ] Every LLM call tracked in cost_events with token counts
-- [ ] `GET /api/budget` returns real spend data
-- [ ] Dashboard shows budget widget with progress bar
-- [ ] Orchestrator runs build + test gate before board review
-- [ ] Tester agent writes test files parallel with Developer
-- [ ] Git repo per company with commits per task and tags per sprint
-- [ ] Rollback to previous sprint works (restore workspace + snapshot)
-- [ ] Export tarball downloadable via signed URL
-- [ ] Hard budget stop triggers at 100% company budget
-- [ ] `docker compose up` starts Arceus connected to Supabase
-- [ ] Health check endpoint validates all dependencies
-- [ ] Full Sprint 1 → Sprint 2 lifecycle works with persistence
-
----
-
-## Dependency Graph
+## Dependency Chain
 
 ```
-Day 1-2: packages/db + Supabase
+Day 1-2: Sprint Cycle ←── CRITICAL PATH (nothing works without this)
     │
-    ├───► Day 2-3: Workspace Manager (needs db for workspace registry)
-    │         │
-    │         └───► Day 9-10: Rollback + Export (needs workspace manager)
+    ├── Day 2-4: Hippocampus (needs sprints to be useful across sprints)
+    │     │
+    │     └── Day 6: Delegation Memory (extends Hippocampus)
+    │           │
+    │           └── Day 11-12: Full tiers + Tester (extends Hippocampus)
     │
-    ├───► Day 3-4: Store Persistence (needs db for snapshot storage)
-    │         │
-    │         └───► Day 8-9: Dashboard Updates (needs persisted data to display)
+    ├── Day 4-5: Budget (needs orchestrator executing to track costs)
     │
-    ├───► Day 5: Cost Tracking (needs db for cost_events)
-    │         │
-    │         └───► Day 10-11: Budget Enforcement (needs cost data)
+    ├── Day 5-6: Verification Gate (needs orchestrator executing)
     │
-    └───► Day 6-7: Verification Gate (needs orchestrator changes)
+    └── Day 6: Circuit Breaker (independent utility, apply to everything)
 
-Day 12-13: Docker (needs everything above working)
-Day 14: E2E Testing (needs everything)
+Day 8-9: Deployment (needs everything above working)
+    │
+    └── Day 9-10: Preview Hosting (needs deployment infra)
+
+Day 10-11: Company Docs + Beliefs (needs persistence + Hippocampus)
+
+Day 12-13: WebSocket + Dashboard (needs all data flowing)
+
+Day 14: E2E testing (needs everything)
 ```
 
-No circular deps. Each day builds on the previous. The critical path is Day 1-2 (db package) — everything else depends on it.
+**Critical path:** Sprint Cycle → Hippocampus → Budget → Verification → Deploy
 
 ---
 
@@ -260,10 +305,9 @@ No circular deps. Each day builds on the previous. The critical path is Day 1-2 
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Drizzle + Supabase connection issues | Medium | Blocks everything | Test connection on Day 1 before writing any schema code |
-| Orchestrator changes break existing flow | High | 2-3 days to fix | Surgical insertions only. Test after each change. Keep in-memory fallback. |
-| Git operations flaky on workspace | Low | Slows Day 2-3 | Use execFile with timeouts. Comprehensive error handling in git-ops.ts. |
-| Supabase Storage upload latency | Low | Slows execution | All uploads are fire-and-forget. Execution never blocks on network. |
-| OpenCode SDK doesn't expose token counts | Known | Estimated costs for agent calls | Already planned: estimateTokens() fallback. tracking_method field distinguishes exact vs estimated. |
-| Docker build fails with OpenCode dependency | Medium | Blocks deploy | Test Docker build early (Day 10). OpenCode may need separate container. |
-| Quinn writes bad tests that always fail | Medium | Verification gate never passes | Max 2 retries then CTO escalation. Can disable gate as escape hatch. |
+| Sprint Cycle takes >2 days | Medium | Delays everything | Sprint manager can be minimal: completion detection + CEO proposal + Sprint 2 creation. Polish between-sprints UX later. |
+| Hippocampus MVP scope creep | High | Eats Week 1 | Strict 2-tier + 2-LLM scope. No habits, no priming in Week 1. Add in Day 11-12. |
+| OpenCode sessions don't report token usage | Known | Estimated costs for agent calls | Already planned: estimateTokens() fallback. tracking_method field. |
+| Docker build fails with OpenCode | Medium | Blocks deploy | Test Docker build on Day 7 (buffer). OpenCode may need separate container. |
+| Verification gate always fails (agents write bad code) | Medium | Sprint never completes | Max 2 retries + CTO escalation. Gate can be disabled as escape hatch. |
+| Too many integration points in Week 1 | High | Bugs compound | Test after each day's work. Don't move to next item until current one works end-to-end. |
