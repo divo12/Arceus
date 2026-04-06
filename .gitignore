@@ -9,3 +9,15 @@ coverage/
 # folders for local development
 product/
 workspace/
+
+.playwright-mcp
+*/node_modules/*
+*.tsbuildinfo
+*.cache/
+*/dist/*
+*/coverage/*
+*/.bin/*
+*/.next/*
+*/.cache/*
+*/.tsbuildinfo/*
+*/.env*

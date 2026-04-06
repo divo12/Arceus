@@ -1,10 +1,12 @@
 import type {
   AgentIdentity,
+  AssetRecord,
   Approval,
   Artifact,
   ChatMessage,
   Company,
   EventEnvelope,
+  ExportResult,
   Habit,
   Meeting,
   MemorySummary,
@@ -12,10 +14,12 @@ import type {
   PrimingState,
   SessionBinding,
   Sprint,
+  SprintSnapshot,
   StrategyBrief,
   Task,
   FundamentalIdea,
   HierarchyNode,
+  WorkspaceInfo,
 } from "@arceus/contracts";
 
 export type EntityName =
@@ -32,6 +36,9 @@ export type EntityName =
   | "meetings"
   | "approvals"
   | "events"
+  | "workspaces"
+  | "sprintSnapshots"
+  | "assets"
   | "memorySummaries"
   | "memoryUnits"
   | "habits"
@@ -51,6 +58,9 @@ export type EntityRecordMap = {
   meetings: Meeting;
   approvals: Approval;
   events: EventEnvelope;
+  workspaces: WorkspaceInfo;
+  sprintSnapshots: SprintSnapshot;
+  assets: AssetRecord;
   memorySummaries: MemorySummary;
   memoryUnits: MemoryUnit;
   habits: Habit;
@@ -61,6 +71,15 @@ export type DatabaseHealth = {
   ok: boolean;
   kind: string;
   details?: string;
+};
+
+export type DatabaseRuntimeMode = "disabled" | "direct" | "fallback";
+
+export type DatabaseConnectionConfig = {
+  supabaseUrl: string;
+  supabaseServiceRoleKey: string;
+  databaseUrl: string;
+  mode: DatabaseRuntimeMode;
 };
 
 export interface DatabaseAdapter {

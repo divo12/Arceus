@@ -10,6 +10,8 @@ import type { CeoCard } from "./ceo";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
+import { persistRuntimeArtifact } from "./artifact-persistence";
+import { workspaceManager } from "./workspace-manager";
 
 type AgentSessionState = {
   role: string;
@@ -363,7 +365,53 @@ function addArtifact(agent: string, kind: Artifact["kind"], title: string, conte
     createdAt: new Date().toISOString(),
   };
   artifacts.push(artifact);
+  void persistRuntimeArtifact(getSnapshot().company.id, artifact);
   return artifact;
+}
+
+async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, message: string) {
+  const companyId = getSnapshot().company.id;
+  if (!companyId || companyId === "company_pending") {
+    return;
+  }
+
+  try {
+    const result = await workspaceManager.commitAndSync(companyId, taskId, agentRole, message);
+    if (result.warnings.length > 0) {
+      emitEmployeeActivity("system", "info", `Workspace sync completed with warnings: ${result.warnings.join(" | ")}`, {
+        taskId,
+      });
+      return;
+    }
+
+    emitEmployeeActivity("system", "info", `Workspace sync complete at commit ${result.commitSha}.`, {
+      taskId,
+    });
+  } catch (error) {
+    emitEmployeeActivity("system", "error", error instanceof Error ? error.message : "Workspace sync failed.", {
+      taskId,
+    });
+  }
+}
+
+async function tagCurrentSprintSnapshot() {
+  const snapshot = getSnapshot();
+  if (snapshot.company.id === "company_pending") {
+    return;
+  }
+
+  try {
+    const result = await workspaceManager.tagSprint(snapshot.company.id, Math.max(1, snapshot.sprints.length || 1), snapshot);
+    if (result.warnings.length > 0) {
+      emitEmployeeActivity("system", "info", `Sprint snapshot completed with warnings: ${result.warnings.join(" | ")}`, {
+        taskId: activeExecution?.reviewTaskId ?? null,
+      });
+    }
+  } catch (error) {
+    emitEmployeeActivity("system", "error", error instanceof Error ? error.message : "Sprint snapshot failed.", {
+      taskId: activeExecution?.reviewTaskId ?? null,
+    });
+  }
 }
 
 function getAgentByRole(snapshot: CompanySnapshot, role: AgentIdentity["role"]) {
@@ -1511,6 +1559,7 @@ async function executeSpecialistTask(taskId: string) {
     appendTaskResult(task.id, `skill-package:${skillPackage.relativePath}`);
     deliverSkillsLeadMemoryHandoff(task, artifact.id, skillPackage.relativePath);
     setTaskStatus(task.id, "completed", `Skills Lead authored reusable package ${skillPackage.relativePath}.`);
+    await syncWorkspaceCheckpoint(task.id, role, `Skills Lead authored reusable package ${skillPackage.relativePath}`);
   } else {
     setTaskStatus(task.id, "completed", `${role} completed the specialist task.`);
   }
@@ -2150,6 +2199,7 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
 
   clearReportedPreviewCandidate();
   await stopLocalPreview();
+  await workspaceManager.ensureLocal(snapshot.company.id);
 
   const devSession = await ensureAgentSession(snapshot, "developer");
   const devSoul = getRoleSoul("developer");
@@ -2270,6 +2320,11 @@ async function startPreviewPhase() {
 
   setTaskPreviewUrl(activeExecution.previewTaskId, previewUrl);
   appendTaskResult(activeExecution.previewTaskId, `preview:${previewUrl}`);
+  await syncWorkspaceCheckpoint(
+    activeExecution.buildTaskId,
+    "developer",
+    `Developer implementation reached a runnable preview at ${previewUrl}`
+  );
   setTaskStatus(activeExecution.previewTaskId, "completed", `Local preview reachable at ${previewUrl}`);
   clearRoleBlockers("developer", [preview.lastError ?? "Local preview launch failed."]);
   const previewReviewMeeting = recordMeeting({
@@ -2518,7 +2573,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
   };
 }
 
-export function approveBoardReview() {
+export async function approveBoardReview() {
   if (executionStatus !== "awaiting_board_review" || !activeExecution) {
     throw new Error("Board review is not awaiting approval.");
   }
@@ -2585,6 +2640,8 @@ export function approveBoardReview() {
 
   activeExecution = null;
 
+  await tagCurrentSprintSnapshot();
+
   return {
     executionStatus,
     reviewTaskId,
@@ -2610,6 +2667,8 @@ export async function beginExecution(snapshot: CompanySnapshot) {
   emitEmployeeActivity("system", "info", "Beginning strategy execution…");
 
   try {
+    await workspaceManager.ensureLocal(snapshot.company.id);
+
     if (!eventBridgeStarted) {
       startEventBridge().catch(() => {});
       eventBridgeStarted = true;

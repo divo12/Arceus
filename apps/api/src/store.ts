@@ -14,6 +14,7 @@ import type {
 } from "@arceus/contracts";
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
 import type { StrategyOutput } from "./ceo";
+import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
 
 type BootstrapInput = {
   companyName: string;
@@ -24,6 +25,19 @@ type BootstrapInput = {
 
 let snapshot = createEmptyCompanySnapshot();
 let events: EventEnvelope[] = [];
+
+function persistState() {
+  void schedulePersistedCompanyState(snapshot, events).catch((error) => {
+    console.warn("[store] Failed to persist company state", error);
+  });
+}
+
+function replaceState(nextSnapshot: CompanySnapshot, nextEvents = events) {
+  snapshot = nextSnapshot;
+  events = nextEvents;
+  persistState();
+  return snapshot;
+}
 
 function titleCase(value: string) {
   return value
@@ -71,20 +85,39 @@ export function resetCompany() {
   return snapshot;
 }
 
+export async function hydrateStoreFromPersistence() {
+  const persisted = await loadPersistedCompanyState();
+  if (!persisted) {
+    return false;
+  }
+
+  snapshot = persisted.snapshot;
+  events = persisted.events;
+  return true;
+}
+
+export async function clearPersistedStoreState(companyId: string) {
+  await deletePersistedCompanyState(companyId);
+}
+
+export async function flushStorePersistence() {
+  await flushPersistedCompanyState();
+}
+
 export function appendChatMessage(message: ChatMessage) {
-  snapshot = {
+  replaceState({
     ...snapshot,
     chatMessages: [...snapshot.chatMessages, message],
-  };
+  });
 
   return message;
 }
 
 export function replaceTasks(tasks: Task[]) {
-  snapshot = {
+  replaceState({
     ...snapshot,
     tasks,
-  };
+  });
   return snapshot.tasks;
 }
 
@@ -98,10 +131,10 @@ export function upsertTask(task: Task) {
     nextTasks.push(task);
   }
 
-  snapshot = {
+  replaceState({
     ...snapshot,
     tasks: nextTasks,
-  };
+  });
 
   return task;
 }
@@ -125,10 +158,10 @@ export function upsertMeeting(meeting: Meeting) {
     nextMeetings.unshift(meeting);
   }
 
-  snapshot = {
+  replaceState({
     ...snapshot,
     meetings: nextMeetings,
-  };
+  });
 
   return meeting;
 }
@@ -143,10 +176,10 @@ export function upsertApproval(approval: Approval) {
     nextApprovals.unshift(approval);
   }
 
-  snapshot = {
+  replaceState({
     ...snapshot,
     approvals: nextApprovals,
-  };
+  });
 
   return approval;
 }
@@ -171,32 +204,32 @@ export function updateMeeting(meetingId: string, updater: (meeting: Meeting) => 
 
 export function updateAgentMemory(agentId: string, updater: (memory: MemorySummary) => MemorySummary) {
   const memories = snapshot.memories.map((memory) => (memory.agentId === agentId ? updater(memory) : memory));
-  snapshot = {
+  replaceState({
     ...snapshot,
     memories,
-  };
+  });
   return snapshot.memories.find((memory) => memory.agentId === agentId) ?? null;
 }
 
 export function appendTransition(transition: Transition) {
-  snapshot = {
+  replaceState({
     ...snapshot,
     transitions: [...(snapshot.transitions ?? []), transition],
-  };
+  });
   return transition;
 }
 
 export function updateTransition(transitionId: string, updater: (t: Transition) => Transition) {
   const transitions = (snapshot.transitions ?? []).map((t) => (t.id === transitionId ? updater(t) : t));
-  snapshot = { ...snapshot, transitions };
+  replaceState({ ...snapshot, transitions });
   return transitions.find((t) => t.id === transitionId) ?? null;
 }
 
 export function appendFeedbackRound(round: FeedbackRound) {
-  snapshot = {
+  replaceState({
     ...snapshot,
     feedbackRounds: [...(snapshot.feedbackRounds ?? []), round],
-  };
+  });
   return round;
 }
 
@@ -204,7 +237,7 @@ export function bootstrapCompany(input: BootstrapInput) {
   const companyId = `company_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
 
-  snapshot = {
+  replaceState({
     ...createEmptyCompanySnapshot(),
     company: {
       ...createEmptyCompanySnapshot().company,
@@ -229,15 +262,13 @@ export function bootstrapCompany(input: BootstrapInput) {
       companyId,
       createdAt: now
     }
-  };
-
-  events = [
+  }, [
     createBootstrapEvent("Board bootstrapped a new company.", {
       companyId,
       companyName: input.companyName,
       budgetCents: input.budgetCents
     })
-  ];
+  ]);
 
   return snapshot;
 }
@@ -344,7 +375,7 @@ export function applyStrategy(output: StrategyOutput) {
     updatedAt: new Date().toISOString()
   }));
 
-  snapshot = {
+  replaceState({
     ...snapshot,
     company: {
       ...snapshot.company,
@@ -368,9 +399,7 @@ export function applyStrategy(output: StrategyOutput) {
     agents,
     sessions,
     memories
-  };
-
-  events = [
+  }, [
     ...events,
     {
       eventId: crypto.randomUUID(),
@@ -389,7 +418,7 @@ export function applyStrategy(output: StrategyOutput) {
         roles: output.roles
       }
     }
-  ];
+  ]);
 
   return snapshot;
 }

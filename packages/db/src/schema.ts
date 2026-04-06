@@ -92,6 +92,27 @@ export const arceusTableDefinitions: Record<EntityName, TableDefinition> = {
     notes: "Event log for activity fanout and audit.",
     indexes: ["company_id", "event_type", "occurred_at"]
   },
+  workspaces: {
+    entity: "workspaces",
+    tableName: "workspaces",
+    primaryKey: "id",
+    notes: "Workspace registry rows for local cache plus remote bundle state.",
+    indexes: ["company_id", "status", "current_sprint_number"]
+  },
+  sprintSnapshots: {
+    entity: "sprintSnapshots",
+    tableName: "sprint_snapshots",
+    primaryKey: "id",
+    notes: "Sprint boundary snapshots persisted for rollback and recovery.",
+    indexes: ["company_id", "sprint_number", "status"]
+  },
+  assets: {
+    entity: "assets",
+    tableName: "assets",
+    primaryKey: "id",
+    notes: "Binary asset registry for screenshots, exports, and stored bundles.",
+    indexes: ["company_id", "namespace", "object_key"]
+  },
   memorySummaries: {
     entity: "memorySummaries",
     tableName: "memory_summaries",

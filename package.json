@@ -11,6 +11,9 @@
     "dev:api": "npm run dev --workspace @arceus/api",
     "run:ui": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-ui.ps1",
     "rebuild:run": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/rebuild-and-run.ps1",
+    "db:generate": "npm run db:generate --workspace @arceus/db",
+    "db:migrate": "npm run db:migrate --workspace @arceus/db",
+    "db:push": "npm run db:push --workspace @arceus/db",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
