@@ -48,6 +48,8 @@
 │   │                                                                  │ │
 │   │  Store (snapshot CRUD)  │  Activity (SSE pub/sub)               │ │
 │   │  Preview (detect+launch)│  Config (Azure, OpenCode)             │ │
+│   │  WorkspaceManager (S08) │  CostTracker (Spec 10)               │ │
+│   │  VerificationGate (S09) │  Supabase Storage (Spec 08)          │ │
 │   └──────────────────────────────────────────────────────────────────┘ │
 │          │                                                             │
 └──────────┼─────────────────────────────────────────────────────────────┘
@@ -56,31 +58,33 @@
      │     │                          │
      ▼     ▼                          ▼
 ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐
-│  PostgreSQL │  │    Redis     │  │    OpenCode      │
-│  :5433      │  │    :6379     │  │    :4096         │
-│             │  │              │  │                  │
-│  companies  │  │  working     │  │  Agent sessions  │
-│  agents     │  │  memory      │  │  (SDK client)    │
-│  sprints    │  │  (TTL keys)  │  │                  │
-│  tasks      │  │              │  │  ┌────────────┐  │
-│  artifacts  │  │  pub/sub     │  │  │ Avery(CEO) │  │
-│  chat_msgs  │  │  channels:   │  │  │ Lin (CTO)  │  │
-│  meetings   │  │  activity    │  │  │ Mina (PM)  │  │
-│  approvals  │  │  tasks       │  │  │ Jules(Dev) │  │
-│  events     │  │  chat        │  │  │ Kai (Test) │  │
-│  cost_events│  │              │  │  └────────────┘  │
-│             │  │              │  │        │         │
-│  memory_    │  └──────────────┘  │        ▼         │
-│  units      │                    │  ┌────────────┐  │
-│  (pgvector) │                    │  │Azure GPT4.1│  │
-│  habits     │                    │  │(LLM calls) │  │
-│  patterns   │                    │  └────────────┘  │
-│  priming    │                    │        │         │
-│             │                    │        ▼         │
-└─────────────┘                    │  ┌────────────┐  │
-                                   │  │ /workspace │  │
-                                   │  │ (product   │  │
-                                   │  │  code)     │  │
+│  Supabase   │  │    Redis     │  │    OpenCode      │
+│  Postgres   │  │    :6379     │  │    :4096         │
+│  (pgvector) │  │              │  │                  │
+│             │  │  working     │  │  Agent sessions  │
+│  companies  │  │  memory      │  │  (SDK client)    │
+│  agents     │  │  (TTL keys)  │  │                  │
+│  sprints    │  │              │  │  ┌────────────┐  │
+│  tasks      │  │  pub/sub     │  │  │ Avery(CEO) │  │
+│  artifacts  │  │  channels:   │  │  │ Lin (CTO)  │  │
+│  chat_msgs  │  │  activity    │  │  │ Mina (PM)  │  │
+│  meetings   │  │  tasks       │  │  │ Jules(Dev) │  │
+│  approvals  │  │  chat        │  │  │ Quinn(Test)│  │
+│  events     │  │              │  │  └────────────┘  │
+│  cost_events│  │              │  │        │         │
+│  workspaces │  └──────────────┘  │        ▼         │
+│  sprint_snp │                    │  ┌────────────┐  │
+│  assets     │                    │  │Azure GPT4.1│  │
+│  memory_*   │  ┌──────────────┐  │  │(LLM calls) │  │
+│  habits     │  │  Supabase    │  │  │  ↓         │  │
+│  patterns   │  │  Storage     │  │  │ cost_events│  │
+│  priming    │  │              │  │  └────────────┘  │
+│             │  │  git bundles │  │        │         │
+└─────────────┘  │  screenshots │  │        ▼         │
+                 │  exports     │  │  ┌────────────┐  │
+                 └──────────────┘  │  │ /workspace │  │
+                                   │  │ (cache,    │  │
+                                   │  │  git repo) │  │
                                    │  └────────────┘  │
                                    └──────────────────┘
 ```
@@ -486,22 +490,25 @@ Well within context budget. Leaves room for agent's work.
 
 ## Deployment Topology
 
-### Local Development
+### Local Development (no Supabase required)
 ```
 pnpm dev:api     → Fastify on :4000
 pnpm dev:web     → Next.js on :3000
-podman start     → PostgreSQL on :5433 + Redis on :6379
+podman start     → Redis on :6379 (optional: local Postgres on :5433)
 opencode serve   → OpenCode on :4096 (auto-launched by API)
 ```
+Without SUPABASE_* env vars, system runs fully in-memory. Set them to enable persistence.
 
-### Production (future)
+### Hosted (Supabase + ephemeral compute)
 ```
+Railway/Fly      → Fastify API + OpenCode (ephemeral, no persistent volume)
 Vercel           → Next.js dashboard
-Railway/Fly      → Fastify API + OpenCode
-Neon/Supabase    → PostgreSQL + pgvector
-Upstash          → Redis
-Azure OpenAI     → LLM API
+Supabase         → Postgres (pgvector) + Storage (git bundles, assets) + Auth (future)
+Upstash          → Redis (working memory, pub/sub)
+Azure OpenAI     → LLM API (all calls through board's Azure endpoint)
 ```
+Local disk is a cache. Supabase is source of truth. Cold start restores from git bundles (Spec 08).
+Budget tracked per-call via Azure token counts (Spec 10). $20 default, hard stop at limit.
 
 ## File Structure (Complete)
 
@@ -510,18 +517,24 @@ arceus/
 ├── apps/
 │   ├── api/
 │   │   └── src/
-│   │       ├── server.ts              — Fastify routes (Spec 01, 06)
+│   │       ├── server.ts              — Fastify routes (Spec 01, 06, 08, 10)
 │   │       ├── store.ts               — In-memory snapshot + DB sync
 │   │       ├── ceo.ts                 — Strategy gen + card classification (Spec 01)
 │   │       ├── chat.ts                — CEO streaming + meeting records (Spec 01)
-│   │       ├── orchestrator.ts        — Sprint execution engine (Spec 02, 06)
+│   │       ├── orchestrator.ts        — Sprint execution engine (Spec 02, 06, 09)
 │   │       ├── sprint-manager.ts      — Sprint lifecycle + proposals (Spec 06)
 │   │       ├── opencode.ts            — OpenCode SDK client (Spec 02)
 │   │       ├── preview.ts             — Dev server detection (Spec 02)
 │   │       ├── activity.ts            — Employee activity pub/sub (Spec 03)
 │   │       ├── azure-openai.ts        — Structured completion client
-│   │       ├── config.ts              — Environment config
-│   │       └── runtime.ts             — Health checks
+│   │       ├── config.ts              — Environment config (Azure + Supabase)
+│   │       ├── runtime.ts             — Health checks
+│   │       ├── workspace-manager.ts   — Git repo lifecycle, Supabase sync (Spec 08)
+│   │       ├── git-ops.ts             — Git command wrappers (Spec 08)
+│   │       ├── supabase-storage.ts    — Supabase Storage upload/download (Spec 08)
+│   │       ├── verification-gate.ts   — Build + test gate runner (Spec 09)
+│   │       ├── cost-tracker.ts        — Cost tracking + budget enforcement (Spec 10)
+│   │       └── cost-config.ts         — Azure pricing table (Spec 10)
 │   │
 │   └── web/
 │       └── src/
@@ -572,8 +585,11 @@ arceus/
 │       │   │   ├── work.ts
 │       │   │   ├── comms.ts
 │       │   │   ├── memory.ts
-│       │   │   └── audit.ts
-│       │   ├── client.ts              — Drizzle connection
+│       │   │   ├── audit.ts
+│       │   │   ├── workspaces.ts      — Spec 08
+│       │   │   ├── sprint-snapshots.ts — Spec 08
+│       │   │   └── assets.ts          — Spec 08
+│       │   ├── client.ts              — Drizzle + Supabase client singletons
 │       │   └── index.ts
 │       ├── drizzle/
 │       │   └── migrations/
@@ -589,7 +605,11 @@ arceus/
 │       ├── 04-persistence.md
 │       ├── 05a-hippocampus-core.md
 │       ├── 05b-hippocampus-intelligence.md
-│       └── 06-sprint-cycle.md
+│       ├── 06-sprint-cycle.md
+│       ├── 07-delegation-memory.md
+│       ├── 08-product-storage.md
+│       ├── 09-product-verification.md
+│       └── 10-budget-cost-control.md
 │
 ├── docs/
 │   └── core-design-principles.md
@@ -604,9 +624,10 @@ arceus/
 
 ```
 Week 1: Foundation
-  ├── Spec 04: PostgreSQL + Redis + Drizzle schema (15 tables)
+  ├── Spec 04: Supabase Postgres + Redis + Drizzle schema (19 tables)
+  ├── Spec 08: packages/db client, git-ops, workspace-manager (local-only first)
   ├── Spec 01 (partial): Company bootstrap + CEO chat (existing code, wire to DB)
-  └── Wire store.ts to PostgreSQL (replace in-memory)
+  └── Wire store.ts to Supabase Postgres (replace in-memory)
 
 Week 2: Memory
   ├── Spec 05a: Hippocampus TypeScript module
@@ -616,20 +637,30 @@ Week 2: Memory
   │   └── Integration tests
   └── Wire Hippocampus into orchestrator (3 integration points)
 
-Week 3: Execution
+Week 3: Execution + Verification
   ├── Spec 02: Sprint-scoped orchestrator
   │   ├── Dependency graph execution
-  │   ├── Parallel agent sessions
+  │   ├── Parallel agent sessions (Developer + Tester parallel)
   │   ├── Artifact collection + handoff
   │   └── Stall detection + error recovery
-  └── Spec 06: Sprint manager (completion, CEO proposal, numbering)
+  ├── Spec 09: Verification gate (build + test check after parallel tasks)
+  ├── Spec 06: Sprint manager (completion, CEO proposal, numbering)
+  └── Spec 10: Cost tracker + budget enforcement (wire into all Azure calls)
 
-Week 4: Dashboard + Polish
+Week 4: Storage + Dashboard
+  ├── Spec 08: Supabase Storage sync (git bundles, cold start restore)
   ├── Spec 03: Living Dashboard (Next.js)
   │   ├── CEO chat panel (streaming)
   │   ├── Preview iframe
-  │   ├── Sprint progress
+  │   ├── Sprint progress + budget widget
   │   ├── Team activity (SSE)
   │   └── Phase-adaptive layout
-  └── End-to-end testing: create company → Sprint 1 → Sprint 2
+  └── End-to-end testing: create company → Sprint 1 → Sprint 2 → rollback
+
+Week 5+: Hosting (Specs 11-15)
+  ├── Spec 11: Deployment & Infrastructure (Docker, health checks)
+  ├── Spec 12: Product Preview & Hosting (framework detection, live serving)
+  ├── Spec 13: Auth & Multi-Tenancy (Supabase Auth, RLS)
+  ├── Spec 14: Observability (logging, crash recovery, alerting)
+  └── Spec 15: Security & Sandboxing (code sandbox, network isolation)
 ```
