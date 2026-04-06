@@ -49,7 +49,7 @@
 
 ## 1. Status Overview
 
-### Done Today (Cofounder Implementing)
+### Done (Cofounder Implemented)
 
 | Spec | Title | What It Delivers |
 |------|-------|-----------------|
@@ -58,13 +58,19 @@
 | 02 | Agent Execution | Orchestrator, parallel agents, artifact handoff |
 | 03 | Living Dashboard | Single-page CEO chat + preview + sprint progress |
 | 04 | Persistence | Supabase Postgres (19 tables), Drizzle ORM, packages/db |
-| 06 | Sprint Cycle | Sprint lifecycle, CEO proposals, numbering |
 | 08 | Product Storage | Git per company, Supabase Storage bundles, workspace manager |
+
+### NOT Done (Was Planned, Not Implemented)
+
+| Spec | Title | Impact |
+|------|-------|--------|
+| 06 | Sprint Cycle | No multi-sprint support. Company runs Sprint 1 only. No CEO proposal for Sprint 2. No between-sprints state. |
 
 ### Remaining (This Doc)
 
 | Spec | Title | Category | Effort |
 |------|-------|----------|--------|
+| 06 | Sprint Cycle | Core Loop | 3-4 days |
 | 05a | Hippocampus Core | Memory | 3-4 days |
 | 05b | Hippocampus Intelligence | Memory (post-MVP) | 2-3 days |
 | 07 | Delegation Memory | Memory | 1-2 days |
@@ -1836,10 +1842,10 @@ Independent:
 
 | Source | Items | Days |
 |--------|-------|------|
-| Remaining Specs (05a-15) | 10 | 24-33 |
+| Remaining Specs (06, 05a-15) | 11 | 27-37 |
 | Polsia Gaps (PG-1 to PG-21) | 21 | 46-77 |
 | v3.4 Gaps (V3-1 to V3-16) | 16 | 47-71 |
-| **Grand Total** | **47 items** | **~117-181 days** |
+| **Grand Total** | **48 items** | **~120-185 days** |
 
 ---
 
