@@ -1,25 +1,101 @@
 # Spec 04: Persistence
 
 > Status: DRAFT (may change based on Hippocampus + Sprint Cycle discussions)
-> Last updated: 2026-04-05
+> Last updated: 2026-04-06
 
 ## Stack
 
-- **PostgreSQL** (pgvector extension) — all persistent data
+- **Supabase Postgres** (pgvector extension) — all persistent data, single instance for all specs
+- **Supabase Storage** (S3-compatible) — git bundles, binary assets, exports (see Spec 08)
+- **Supabase Auth** — user authentication (future, see Spec 12)
+- **Supabase Realtime** — dashboard live updates (future, replaces custom SSE)
 - **Redis** — working memory (TTL), pub/sub for real-time events, activity stream
-- **Filesystem** — /workspace (product code)
+- **Local filesystem** — workspace cache (rebuilt from Supabase on cold start, see Spec 08)
 - **Drizzle ORM** — TypeScript schema, auto-migrations, type-safe queries
 
-## Infrastructure
+## Infrastructure Provider: Supabase
 
+One Supabase project hosts everything. All specs share the same database, storage buckets, and connection credentials.
+
+```
+Supabase Project: arceus
+  ├── Postgres (pgvector enabled)
+  │     ├── Domain 1-6 tables (this spec)         — 15 tables
+  │     ├── Spec 08 tables (product storage)       — 4 tables
+  │     └── Future spec tables added here
+  │
+  ├── Storage Buckets
+  │     ├── arceus-workspaces (private)            — git bundles, exports
+  │     └── arceus-assets (private, signed URLs)   — screenshots, binary assets
+  │
+  ├── Auth (future)
+  │     └── Board user accounts, sessions, RLS
+  │
+  └── Realtime (future)
+        └── Postgres change notifications → dashboard WebSocket
+```
+
+### Connection Pattern
+
+All specs use the same shared `packages/db` package:
+
+```typescript
+// packages/db/src/client.ts — singleton access for the entire codebase
+
+getDb(): DrizzleInstance
+  // Connects via SUPABASE_DB_URL (direct connection, not pooler)
+  // Lazy singleton — created on first call, reused after
+
+getSupabaseClient(): SupabaseClient
+  // Connects via SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+  // persistSession: false, autoRefreshToken: false (server-side only)
+  // Used for Storage, Auth, and Realtime APIs
+
+isSupabaseConfigured(): boolean
+  // Returns true when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set
+  // Universal gate — ALL persistence calls check this first
+  // When false, Arceus runs in-memory only (local dev mode)
+```
+
+### Environment Variables
+
+```env
+# Required for persistence (optional — system works in-memory without these)
+SUPABASE_URL=https://abcdefgh.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIs...
+SUPABASE_DB_URL=postgresql://postgres:password@db.abcdefgh.supabase.co:5432/postgres
+
+# Storage buckets (defaults shown, used by Spec 08)
+SUPABASE_STORAGE_BUCKET=arceus-workspaces
+SUPABASE_ASSETS_BUCKET=arceus-assets
+
+# Local workspace root (default: /tmp/workspaces, used by Spec 08)
+ARCEUS_WORKSPACE_ROOT=/tmp/workspaces
+```
+
+### Local Development (No Supabase Required)
+
+For local dev, Arceus runs without any Supabase configuration:
+- All state stays in-memory (current behavior)
+- Workspace is local filesystem only
+- No persistence across restarts
+- Set `SUPABASE_*` vars to enable persistence
+
+Optionally, run local Postgres for development:
 ```
 Podman (local dev):
   arceus-pg    → PostgreSQL 17 + pgvector  (port 5433)
   arceus-redis → Redis 7 alpine            (port 6379)
-
-Filesystem:
-  /workspace   → product code (persists across sprints)
 ```
+Set `SUPABASE_DB_URL=postgresql://postgres:postgres@localhost:5433/arceus` to use local Postgres with the same Drizzle schema.
+
+### Why Supabase (not raw AWS/self-hosted)
+
+- One project gives us Postgres + Storage + Auth + Realtime — no multi-service wiring
+- Free tier: 1GB database, 1GB storage, 50K auth users — sufficient for MVP
+- Pro tier ($25/mo): 8GB database, 100GB storage — handles ~25,000 companies
+- pgvector extension available out of the box (needed for Spec 05 memory)
+- Direct connection string (not session pooler) avoids the pool exhaustion issues Paperclip hit
 
 ## Schema: 15 Tables, 6 Domains
 
@@ -366,25 +442,62 @@ pnpm db:push        # Push schema directly (dev only)
 
 ## Decisions Made
 
-- PostgreSQL + pgvector for everything persistent
+- **Supabase as single infrastructure provider** — Postgres + Storage + (future) Auth + Realtime from one project
+- Supabase Postgres (pgvector extension) for all persistent data across all specs
+- Supabase Storage for binary assets, git bundles, exports (Spec 08)
+- **Direct connection string, NOT session pooler** — avoids pool exhaustion (Paperclip lesson)
 - Redis for working memory (TTL), pub/sub (real-time events)
 - Drizzle ORM for type-safe schema + migrations
-- 15 tables across 6 domains
-- No graph store (Neo4j removed)
-- Filesystem for workspace (/workspace persists across sprints)
+- 15 core tables across 6 domains (this spec) + 4 storage tables (Spec 08) = 19 total
+- No graph store (Neo4j removed — use pgvector + recursive CTEs instead)
+- Local filesystem is a **cache only** — Supabase is source of truth (Spec 08)
 - HNSW indexes for vector similarity search on memory_units and patterns
+- **All Supabase optional** — system runs in-memory without config (local dev mode)
 
 ## Lessons from Paperclip
 
-- Paperclip had 69 tables — too many. We have 15.
-- Paperclip used Supabase session pooler — pool exhaustion was constant. We use local Postgres.
+- Paperclip had 69 tables — too many. We have 19 (15 core + 4 storage).
+- Paperclip used Supabase session pooler — pool exhaustion was constant. **We use direct connection.**
 - Paperclip's startup_id/company_id mismatch caused UUID errors. We use company_id consistently.
-- Paperclip's Drizzle migrations auto-applied on startup — keeping that (PAPERCLIP_MIGRATION_AUTO_APPLY pattern).
+- Paperclip's Drizzle migrations auto-applied on startup — keeping that pattern.
+- Paperclip had 3 storage providers (local, S3, Supabase) — unnecessary abstraction for MVP. **We use Supabase Storage directly.**
+- Paperclip's StorageProvider interface with SHA256 hashing and company-scoped access is a good pattern — adopted in Spec 08.
+
+## Cross-Spec Table Registry
+
+All tables share the same Supabase Postgres database. This is the canonical list:
+
+| Table | Spec | Domain |
+|-------|------|--------|
+| companies | 04 | Company |
+| strategies | 04 | Company |
+| role_definitions | 04 | People |
+| agents | 04 | People |
+| sprints | 04 | Work |
+| tasks | 04 | Work |
+| artifacts | 04 | Work |
+| task_comments | 04 | Work |
+| chat_messages | 04 | Comms |
+| meetings | 04 | Comms |
+| approvals | 04 | Comms |
+| memory_units | 04 (Spec 05) | Memory |
+| habits | 04 (Spec 05) | Memory |
+| patterns | 04 (Spec 05) | Memory |
+| priming_state | 04 (Spec 05) | Memory |
+| events | 04 | Audit |
+| cost_events | 04 | Audit |
+| workspaces | 08 | Storage |
+| sprint_snapshots | 08 | Storage |
+| assets | 08 | Storage |
+
+> Note: `artifacts` is defined in this spec (Domain 3: Work). Spec 08 adds `sprint_id` and `file_references` columns to it. The table lives here; Spec 08 extends it.
 
 ## Post-MVP
 
-- Graph relationships (Neo4j or PostgreSQL recursive CTEs)
-- Full-text search on artifacts and chat
+- Supabase Auth for board user accounts + RLS for multi-tenant isolation
+- Supabase Realtime to replace custom SSE for dashboard live updates
+- Graph relationships via PostgreSQL recursive CTEs
+- Full-text search on artifacts and chat (Postgres tsvector)
 - Read replicas for dashboard queries
-- Backup/restore automation
-- Multi-company isolation (row-level security)
+- Automated Supabase backup/restore
+- Row-level security for multi-company isolation
