@@ -28,8 +28,21 @@
 17. [Polsia Gap: Company Documents](#17-polsia-gap-company-documents)
 18. [Polsia Gap: WebSocket Bidirectional](#18-polsia-gap-websocket-bidirectional)
 19. [Polsia Gap: Circuit Breaker & Retry](#19-polsia-gap-circuit-breaker--retry)
-20. [Dependency Graph](#20-dependency-graph)
-21. [Effort Estimates](#21-effort-estimates)
+20. [Polsia Gap: Meta Ads Engine](#20-polsia-gap-meta-ads-engine)
+21. [Polsia Gap: Twitter/Social Posting](#21-polsia-gap-twittersocial-posting)
+22. [Polsia Gap: Email Outbound](#22-polsia-gap-email-outbound)
+23. [Polsia Gap: Night Shift / Autonomous Execution](#23-polsia-gap-night-shift--autonomous-execution)
+24. [Polsia Gap: Recurring Tasks](#24-polsia-gap-recurring-tasks)
+25. [Polsia Gap: Agent Routing (LLM)](#25-polsia-gap-agent-routing-llm)
+26. [Polsia Gap: Rate Limiting](#26-polsia-gap-rate-limiting)
+27. [Polsia Gap: Security Middleware](#27-polsia-gap-security-middleware)
+28. [Polsia Gap: Magic Links](#28-polsia-gap-magic-links)
+29. [Polsia Gap: Referral System](#29-polsia-gap-referral-system)
+30. [Polsia Gap: Content Agent](#30-polsia-gap-content-agent)
+31. [Polsia Gap: Growth Agent](#31-polsia-gap-growth-agent)
+32. [Polsia Gap: fal.ai Media Generation](#32-polsia-gap-falai-media-generation)
+33. [Dependency Graph](#33-dependency-graph)
+34. [Effort Estimates](#34-effort-estimates)
 
 ---
 
@@ -65,10 +78,23 @@
 | PG-2 | Retrieval/RAG Pipeline | Polsia Gap | 3-5 days |
 | PG-3 | Tool Registry | Polsia Gap | 3-5 days |
 | PG-4 | Billing & Credits | Polsia Gap | 5-7 days |
-| PG-5 | Browser Agent | Polsia Gap | 3-5 days |
-| PG-6 | Company Documents | Polsia Gap | 2-3 days |
-| PG-7 | WebSocket Bidirectional | Polsia Gap | 2-3 days |
-| PG-8 | Circuit Breaker & Retry | Polsia Gap | 1-2 days |
+| PG-5 | Browser Agent | Polsia Gap T2 | 3-5 days |
+| PG-6 | Company Documents | Polsia Gap T2 | 2-3 days |
+| PG-7 | WebSocket Bidirectional | Polsia Gap T2 | 2-3 days |
+| PG-8 | Circuit Breaker & Retry | Polsia Gap T2 | 1-2 days |
+| PG-9 | Meta Ads Engine | Polsia Gap T3 | 7-10 days |
+| PG-10 | Twitter/Social Posting | Polsia Gap T3 | 3-5 days |
+| PG-11 | Email Outbound | Polsia Gap T3 | 3-5 days |
+| PG-12 | Night Shift / Autonomous | Polsia Gap T3 | 2-3 days |
+| PG-13 | Recurring Tasks | Polsia Gap T3 | 2-3 days |
+| PG-14 | Agent Routing (LLM) | Polsia Gap T3 | 2-3 days |
+| PG-15 | Rate Limiting | Polsia Gap T3 | 0.5-1 day |
+| PG-16 | Security Middleware | Polsia Gap T3 | 2-3 days |
+| PG-17 | Magic Links | Polsia Gap T3 | 0.5-1 day |
+| PG-18 | Referral System | Polsia Gap T3 | 1-2 days |
+| PG-19 | Content Agent | Polsia Gap T3 | 1-2 days |
+| PG-20 | Growth Agent | Polsia Gap T3 | 1-2 days |
+| PG-21 | fal.ai Media Generation | Polsia Gap T3 | 1-2 days |
 
 ---
 
@@ -871,7 +897,682 @@ Apply to: Azure OpenAI calls, Supabase operations, OpenCode session management.
 
 ---
 
-## 20. Dependency Graph
+## 20. Polsia Gap: Meta Ads Engine
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+Full programmatic Meta (Facebook + Instagram) advertising:
+- **Ad account management** — per-company Meta ad accounts with daily budgets ($10-1000/day)
+- **Campaign lifecycle** — create, pause, optimize, complete. Objectives: traffic, conversions, awareness, engagement, leads
+- **AI-generated creatives** — video ads generated via fal.ai, image ads, carousel formats
+- **Performance tracking** — impressions, clicks, CTR, CPC, CPM, conversions, ROAS, cost per conversion
+- **Daily optimization** — automated bid adjustment and audience refinement
+- **Platform fee** — 20% on ad spend (revenue model)
+- **Dedicated Meta Ads agent** — specialized agent managing campaigns autonomously
+
+### Polsia Implementation
+
+- `app/services/ads_service.py` — campaign CRUD, creative generation, performance tracking
+- `app/agents/meta_ads_agent.py` — dedicated ads agent
+- `app/integrations/meta_ads_client.py` — Meta Marketing API wrapper (campaign, adset, ad, creative, insights endpoints)
+- `app/models/ads.py` — AdAccount, AdCampaign, AdCreative, AdPerformance, AdBillingEvent
+- `app/api/ads.py` — ads routes (campaigns, performance, billing)
+
+### Key API Integration
+
+Meta Marketing API: campaign creation, adset management, creative upload, insights retrieval. Requires Meta App approval (takes 2-4 weeks for review).
+
+### Effort: 7-10 days (including Meta App approval wait)
+
+### Dependencies
+
+- PG-4 (Billing — ad spend billing pipeline)
+- PG-5 (Browser Agent — for Meta Business Manager setup)
+- fal.ai integration (PG-15) for AI creative generation
+- Meta App approval (external, 2-4 week lead time)
+
+---
+
+## 21. Polsia Gap: Twitter/Social Posting
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- **Twitter/X auto-posting** — 1 tweet/day per company from shared @polsia account
+- **Engagement tracking** — likes, retweets, replies, impressions, clicks per post
+- **Twitter API v2** with OAuth 2.0
+- **Social scheduling** — Late.dev integration for Instagram/TikTok/LinkedIn
+- **SocialAccount model** — tracks platform, handle, daily limits, posts today, status
+- **SocialPost model** — draft → scheduled → posted → engagement tracked
+
+### Polsia Implementation
+
+- `app/integrations/twitter_client.py` — tweet posting, engagement reading, OAuth headers
+- `app/models/social.py` — SocialAccount, SocialPost, SocialEngagement
+- `app/api/social.py` — posts CRUD, stats endpoint
+- `app/agents/tools/social_tools.py` — `post_tweet` tool for agents
+
+### What to Build
+
+- Twitter API v2 integration (post tweets, read engagement)
+- SocialAccount + SocialPost tables
+- Agent tool for posting
+- Dashboard view for social stats
+- Later: Instagram, LinkedIn, TikTok via Late.dev or direct APIs
+
+### Effort: 3-5 days
+
+### Dependencies
+
+- PG-3 (Tool Registry — to register social tools for agents)
+- Twitter/X developer account (manual, one-time)
+
+---
+
+## 22. Polsia Gap: Email Outbound
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- **Platform inbox** per company (e.g., spectra@polsia.com) with 2/day outbound limit
+- **Gmail API integration** — connect user's Gmail for higher volume
+- **Inbound email processing** — receive and parse incoming emails
+- **Thread tracking** — reply chains, in_reply_to, thread_id
+- **CompanyInbox model** — inbox_address, daily limits, Gmail connection status
+- **Email model** — direction, from/to, subject, body, attachments, status, provider
+
+### Polsia Implementation
+
+- `app/integrations/resend_client.py` — Resend API for transactional outbound
+- `app/models/email.py` — CompanyInbox, Email, EmailAttachment
+- `app/api/emails.py` — send, inbox, stats endpoints
+- `app/agents/tools/email_tools.py` — `send_email` tool for agents
+
+### What to Build
+
+- Resend integration for outbound email
+- Gmail API for connected inboxes
+- Email model + inbox management
+- Agent email tool
+- Dashboard inbox view
+
+### Effort: 3-5 days
+
+### Dependencies
+
+- PG-3 (Tool Registry)
+- Resend account (manual, one-time)
+- Domain DNS setup for custom email addresses
+
+---
+
+## 23. Polsia Gap: Night Shift / Autonomous Execution
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- **Night shift worker** — runs daily at 4 AM UTC
+- Picks up ALL pending tasks for ALL active companies
+- Executes sequentially with credit deduction
+- Summary generated after completion
+- Each company's pending queue processed in priority order
+
+### Polsia Implementation
+
+- `app/workers/night_shift.py` — Celery task (`run_night_shift`)
+- Queries all active companies → finds pending tasks → executes via task executor → marks complete
+
+### What to Build
+
+- Background worker (cron-style) that runs on schedule
+- Task queue processing without human trigger
+- Per-company execution isolation (one company's failure doesn't block others)
+- Night shift summary generation (CEO posts "here's what happened overnight")
+
+### Effort: 2-3 days
+
+### Dependencies
+
+- Spec 02 (orchestrator for task execution)
+- PG-4 (Billing — credit deduction per autonomous task)
+- Redis/worker infrastructure
+
+---
+
+## 24. Polsia Gap: Recurring Tasks
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- **Recurring task templates** — define once, auto-creates instances on schedule
+- **Frequencies:** daily, weekdays, weekly (specific days), monthly (specific day)
+- **RecurringTask model** — title, description, tag, frequency, days, is_active, last_run_at, next_run_at, total_runs
+- **RecurringTaskInstance** — links recurring template to actual task created
+
+### Polsia Implementation
+
+- `app/workers/recurring.py` — Celery beat task, checks due recurring tasks, creates instances
+- `app/models/task.py` — RecurringTask, RecurringTaskInstance
+- `app/api/tasks.py` — recurring CRUD endpoints
+
+### What to Build
+
+```sql
+CREATE TABLE recurring_tasks (
+  id UUID PRIMARY KEY,
+  company_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  agent_tag TEXT NOT NULL,
+  frequency TEXT NOT NULL,       -- daily | weekdays | weekly | monthly
+  days INTEGER[],                -- for weekly: [0-6] (Sun-Sat)
+  day_of_month INTEGER,          -- for monthly: 1-28
+  priority TEXT DEFAULT 'medium',
+  is_active BOOLEAN DEFAULT true,
+  last_run_at TIMESTAMPTZ,
+  next_run_at TIMESTAMPTZ,
+  total_runs INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ
+);
+```
+
+- Scheduler checks due tasks on interval (every 15 minutes)
+- Creates real task from template
+- Computes next_run_at based on frequency
+
+### Effort: 2-3 days
+
+### Dependencies
+
+- Task system (Spec 02)
+- Background worker infrastructure (same as PG-9/Night Shift)
+
+---
+
+## 25. Polsia Gap: Agent Routing (LLM)
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- **AgentRouter class** — LLM-based task classification using gpt-4o-mini
+- Takes task description + company context → returns best agent tag with confidence score
+- **Historical performance tracking** — success rate per agent per task type
+- **Confidence threshold** — if confidence < 0.5, flags for manual review
+- **Fallback logic** — if primary agent fails, routes to fallback
+
+### Polsia Implementation
+
+- `app/services/agent_router.py` — AgentRouter with LLM classification + historical stats
+- Uses JSON mode: `{"tag": "engineering|browser|research", "confidence": 0.0-1.0, "reason": "..."}`
+- Queries historical task outcomes grouped by tag for success rate
+
+### What Arceus Has
+
+CTO plan assigns roles. Orchestrator maps role → OpenCode session. No intelligence.
+
+### What to Build
+
+```typescript
+class AgentRouter {
+  async classifyTask(description: string, companyContext: object): Promise<{
+    agentTag: string;
+    confidence: number;
+    reason: string;
+  }>;
+
+  async getHistoricalStats(companyId: string): Promise<Record<string, {
+    totalTasks: number;
+    successes: number;
+    successRate: number;
+    avgDurationMs: number;
+  }>>;
+}
+```
+
+Use gpt-4o-mini for classification (~$0.0001 per routing decision). Track outcomes to improve routing over time.
+
+### Effort: 2-3 days
+
+### Dependencies
+
+- Task completion data in database (Spec 04)
+- Azure OpenAI for gpt-4o-mini classification
+
+---
+
+## 26. Polsia Gap: Rate Limiting
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+Per-route Redis-backed sliding window rate limiting:
+
+```python
+LIMITS = {
+    "/api/chat": "30/min",
+    "/api/tasks": "60/min",
+    "/api/agents": "30/min",
+    "default": "100/min",
+}
+```
+
+### What Arceus Has
+
+Nothing.
+
+### What to Build
+
+Fastify rate limit plugin (`@fastify/rate-limit`) with Redis backing:
+
+```typescript
+app.register(rateLimit, {
+  max: 100,
+  timeWindow: '1 minute',
+  redis: redisClient,
+  keyGenerator: (req) => req.user?.id ?? req.ip,
+});
+```
+
+Per-route overrides for sensitive endpoints (chat, execution triggers).
+
+### Effort: 0.5-1 day
+
+### Dependencies
+
+- Redis
+- Spec 13 (Auth — need user identity for per-user limits)
+
+---
+
+## 27. Polsia Gap: Security Middleware
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+Multiple security layers:
+- **Tenant isolation middleware** — every request scoped to company_id via JWT
+- **SQL injection detection** — rejects patterns like UNION SELECT, DROP TABLE
+- **XSS protection headers** — X-Content-Type-Options, X-Frame-Options, CSP
+- **Request size limits** — 1MB body, 5MB uploads
+- **CSRF protection**
+- **Private hostname guard** — blocks requests from private/internal hostnames
+
+### What Arceus Has
+
+CORS only.
+
+### What to Build
+
+```typescript
+// Middleware stack:
+app.register(tenantIsolation);     // Extract company_id from JWT, scope all queries
+app.register(inputSanitization);   // Reject SQL injection patterns
+app.register(securityHeaders);     // XSS, clickjacking, MIME sniffing headers
+app.register(bodySizeLimit);       // 1MB body, 5MB file upload
+```
+
+### Effort: 2-3 days
+
+### Dependencies
+
+- Spec 13 (Auth — tenant isolation needs JWT)
+
+---
+
+## 28. Polsia Gap: Magic Links
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+One-click task execution URLs:
+- Each task gets a unique token URL
+- CEO includes run links in chat: "Click here to run: [link]"
+- Click → agent starts executing that task immediately
+- Token expires after use (one-time)
+- Redirects to dashboard task view after execution starts
+
+### Polsia Implementation
+
+```python
+class MagicLink:
+    task_id: int
+    token: str          # unique, unguessable (128 chars)
+    expires_at: Date
+    used: bool
+```
+
+- `magic_link_token` column on tasks table (unique index)
+- `GET /run/{token}` → validates → triggers execution → redirects
+
+### What to Build
+
+- Add `magic_link_token` column to tasks table
+- Generate token on task creation (crypto.randomUUID)
+- `GET /api/run/:token` route → validate → execute → redirect
+- CEO prompt updated to include run links in task references
+
+### Effort: 0.5-1 day
+
+### Dependencies
+
+- Task execution (Spec 02)
+
+---
+
+## 29. Polsia Gap: Referral System
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- Unique referral code per company
+- 25 credits awarded per successful referral (when referred user subscribes)
+- Referral tracking: pending → converted → expired
+- Dashboard showing referral stats
+
+### What to Build
+
+```sql
+CREATE TABLE referrals (
+  id UUID PRIMARY KEY,
+  referrer_company_id TEXT NOT NULL,
+  referred_user_id TEXT,
+  referral_code TEXT UNIQUE NOT NULL,
+  status TEXT DEFAULT 'pending',     -- pending | converted | expired
+  credits_awarded INTEGER DEFAULT 25,
+  created_at TIMESTAMPTZ,
+  converted_at TIMESTAMPTZ
+);
+```
+
+- Generate unique code on company creation
+- Track signup source via referral code
+- Award credits on conversion
+- Dashboard referral stats
+
+### Effort: 1-2 days
+
+### Dependencies
+
+- PG-4 (Billing & Credits — need credit system to award)
+- Spec 13 (Auth — need user accounts)
+
+---
+
+## 30. Polsia Gap: Content Agent
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+Dedicated content writing agent with detailed system prompt:
+- Complete blog posts (not outlines)
+- Newsletters, landing page copy, brand voice enforcement
+- Metadata generation (title, meta description, OG tags)
+- Product descriptions, email copy
+- Write-then-review workflow
+
+### Polsia System Prompt Rules
+
+1. Write complete content — if asked for blog post, write the entire post
+2. Include metadata — title, meta description, OG tags
+3. Match brand voice from company documents
+4. Include calls-to-action
+5. SEO-optimized headings and structure
+
+### What to Build
+
+- New agent SOUL prompt: `.opencode/prompts/content-soul.txt`
+- Add `content` agent type to `opencode.json`
+- Content tasks: blog posts, landing copy, email copy, social copy
+- Integration with Company Documents (PG-6) for brand voice
+
+### Effort: 1-2 days (mostly prompt engineering + config)
+
+### Dependencies
+
+- PG-6 (Company Documents — for brand voice context)
+- Agent system (Spec 02)
+
+---
+
+## 31. Polsia Gap: Growth Agent
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+Dedicated growth/marketing strategy agent:
+- Marketing channel analysis (SEO, paid, social, email, partnerships)
+- Outreach planning with email/DM templates
+- 30-day priority action plans
+- Competitive positioning analysis
+- Success metrics and KPI tracking
+
+### Polsia System Prompt Structure
+
+```
+## Output Format for Growth Reports
+### Channel 1: [e.g., SEO]
+  Current State: ...
+  Opportunity: ...
+  Recommended Actions: ...
+### Channel 2: [e.g., Meta Ads]
+  ...
+## Priority Actions (Next 30 Days)
+  1. [Highest impact action]
+  2. [Second priority]
+  3. [Third priority]
+## Success Metrics
+  | Metric | Target |
+```
+
+### What to Build
+
+- New agent SOUL prompt: `.opencode/prompts/growth-soul.txt`
+- Add `growth` agent type (or extend Marketing agent)
+- Growth tasks: market analysis, outreach strategy, channel optimization
+- Integration with search tools for competitive research
+
+### Effort: 1-2 days (mostly prompt engineering + config)
+
+### Dependencies
+
+- PG-3 (Tool Registry — search tools for research)
+- Agent system (Spec 02)
+
+---
+
+## 32. Polsia Gap: fal.ai Media Generation
+
+> **Source:** Gap Analysis, Tier 3
+
+### What Polsia Has
+
+- AI video generation for ad creatives (Sora-equivalent via fal.ai)
+- AI image generation for social posts, ads, landing pages
+- Async generation (submit → poll status → get result)
+- Integration with Meta Ads for programmatic creative generation
+
+### Polsia Implementation
+
+- `app/integrations/fal_client.py` — fal.ai API wrapper (submit, poll status, get result)
+- Used by Meta Ads agent for video/image creative generation
+- Used by Content agent for blog/social images
+
+### What to Build
+
+```typescript
+class FalClient {
+  async generateImage(prompt: string, model?: string): Promise<string>;  // returns URL
+  async generateVideo(prompt: string, model?: string): Promise<string>;  // returns URL
+  async checkStatus(requestId: string): Promise<FalStatus>;
+}
+```
+
+- fal.ai API integration (REST, async polling)
+- Store generated media in Supabase Storage
+- Agent tool for media generation
+
+### Effort: 1-2 days
+
+### Dependencies
+
+- Supabase Storage (Spec 08 — for storing generated media)
+- fal.ai account (manual, one-time)
+- PG-3 (Tool Registry — to register as agent tool)
+
+---
+
+## 33. Dependency Graph
+
+```
+Spec 04 (done today)
+  │
+  ├── Spec 05a: Hippocampus Core
+  │     │
+  │     ├── Spec 07: Delegation Memory (extends 05a)
+  │     │
+  │     ├── Spec 05b: Hippocampus Intelligence (post-MVP, extends 05a)
+  │     │
+  │     └── PG-2: RAG Pipeline (upgrades 05a retrieval)
+  │
+  ├── Spec 10: Budget & Cost Control
+  │     │
+  │     └── PG-4: Billing & Credits (extends 10 with Stripe)
+  │           │
+  │           ├── PG-9: Night Shift (needs credits for autonomous execution)
+  │           ├── PG-13: Referral System (needs credit system)
+  │           └── PG-7: Meta Ads billing pipeline
+  │
+  ├── Spec 09: Product Verification
+  │
+  ├── PG-6: Company Documents
+  │     │
+  │     ├── PG-14: Content Agent (needs brand voice docs)
+  │     └── PG-15: Growth Agent (needs company context docs)
+  │
+  ├── PG-8: Circuit Breaker (no deps, utility)
+  │
+  └── PG-11: Agent Routing LLM (needs task history data)
+
+Spec 08 (done today)
+  │
+  ├── Spec 11: Deployment & Infrastructure
+  │     │
+  │     ├── Spec 12: Product Preview & Hosting
+  │     │
+  │     └── PG-1: Per-Company Infra Provisioning
+  │
+  └── Spec 15: Security & Sandboxing
+
+Spec 03 (done today)
+  │
+  ├── PG-7: WebSocket Bidirectional
+  │
+  └── Spec 13: Auth & Multi-Tenancy
+        │
+        ├── PG-4: Billing & Credits (needs user accounts)
+        ├── PG-12: Rate Limiting (needs user identity)
+        ├── PG-13: Security Middleware (needs tenant isolation)
+        ├── PG-13b: Referral System (needs user accounts)
+        └── Spec 15: Security & Sandboxing (needs tenant isolation)
+
+Spec 02 (done today)
+  │
+  ├── PG-9: Night Shift (uses orchestrator for execution)
+  ├── PG-10: Recurring Tasks (creates tasks for orchestrator)
+  ├── PG-12b: Magic Links (triggers task execution)
+  ├── PG-14: Content Agent (new agent type)
+  └── PG-15: Growth Agent (new agent type)
+
+PG-3: Tool Registry (independent)
+  │
+  ├── PG-5: Browser Agent (registers browser tools)
+  ├── PG-8b: Social Posting (registers social tools)
+  ├── PG-8c: Email Outbound (registers email tools)
+  ├── PG-16: fal.ai Media Gen (registers media tools)
+  └── All future integrations register through this
+
+Independent:
+  └── Spec 14: Observability (can be added anytime)
+```
+
+---
+
+## 34. Effort Estimates
+
+### Complete Inventory
+
+| # | Item | Category | Tier | Effort |
+|---|------|----------|------|--------|
+| 1 | Spec 05a — Hippocampus Core | Memory | MVP | 3-4 days |
+| 2 | Spec 05b — Hippocampus Intelligence | Memory | Post-MVP | 2-3 days |
+| 3 | Spec 07 — Delegation Memory | Memory | MVP | 1-2 days |
+| 4 | Spec 09 — Product Verification | Quality | MVP | 2-3 days |
+| 5 | Spec 10 — Budget & Cost Control | Finance | MVP | 2-3 days |
+| 6 | Spec 11 — Deployment & Infrastructure | Ops | MVP | 2-3 days |
+| 7 | Spec 12 — Product Preview & Hosting | Product | MVP | 2-3 days |
+| 8 | Spec 13 — Auth & Multi-Tenancy | Security | Hosting | 3-4 days |
+| 9 | Spec 14 — Observability | Ops | Hosting | 2-3 days |
+| 10 | Spec 15 — Security & Sandboxing | Security | Hosting | 2-3 days |
+| 11 | PG-1 — Per-Company Infra Provisioning | Polsia T1 | Scale | 5-7 days |
+| 12 | PG-2 — Retrieval/RAG Pipeline | Polsia T1 | MVP+ | 3-5 days |
+| 13 | PG-3 — Tool Registry | Polsia T1 | MVP+ | 3-5 days |
+| 14 | PG-4 — Billing & Credits | Polsia T2 | Hosting | 5-7 days |
+| 15 | PG-5 — Browser Agent | Polsia T2 | Scale | 3-5 days |
+| 16 | PG-6 — Company Documents | Polsia T2 | MVP+ | 2-3 days |
+| 17 | PG-7 — WebSocket Bidirectional | Polsia T2 | MVP+ | 2-3 days |
+| 18 | PG-8 — Circuit Breaker & Retry | Polsia T2 | MVP | 1-2 days |
+| 19 | PG-9 — Meta Ads Engine | Polsia T3 | Scale | 7-10 days |
+| 20 | PG-10 — Twitter/Social Posting | Polsia T3 | Scale | 3-5 days |
+| 21 | PG-11 — Email Outbound | Polsia T3 | Scale | 3-5 days |
+| 22 | PG-12 — Night Shift / Autonomous | Polsia T3 | Scale | 2-3 days |
+| 23 | PG-13 — Recurring Tasks | Polsia T3 | Scale | 2-3 days |
+| 24 | PG-14 — Agent Routing (LLM) | Polsia T3 | Scale | 2-3 days |
+| 25 | PG-15 — Rate Limiting | Polsia T3 | Hosting | 0.5-1 day |
+| 26 | PG-16 — Security Middleware | Polsia T3 | Hosting | 2-3 days |
+| 27 | PG-17 — Magic Links | Polsia T3 | Scale | 0.5-1 day |
+| 28 | PG-18 — Referral System | Polsia T3 | Scale | 1-2 days |
+| 29 | PG-19 — Content Agent | Polsia T3 | Scale | 1-2 days |
+| 30 | PG-20 — Growth Agent | Polsia T3 | Scale | 1-2 days |
+| 31 | PG-21 — fal.ai Media Generation | Polsia T3 | Scale | 1-2 days |
+| **Total** | **31 items** | | | **~70-110 days** |
+
+### By Phase
+
+| Phase | Items | Days | What It Unlocks |
+|-------|-------|------|----------------|
+| **MVP** (must ship) | 05a, 07, 09, 10, PG-8 | 10-14 | Memory, budget, verification, reliability |
+| **MVP+** (should ship) | PG-2, PG-3, PG-6, PG-7 | 10-16 | Better retrieval, tools, docs, real-time UX |
+| **Hosting** (multi-user) | 11, 12, 13, 14, 15, PG-4, PG-15, PG-16 | 20-28 | Deployable, authenticated, billed, secure |
+| **Scale** (growth) | 05b, PG-1, PG-5, PG-9-14, PG-17-21 | 30-52 | Full Polsia parity: ads, social, email, autonomous, browser |
+
+### What Arceus Has That Polsia Doesn't
+
+Not all gaps favor Polsia. Our advantages:
+
+| Advantage | Details |
+|-----------|---------|
+| 5-tier memory with habits + priming | Behavioral continuity Polsia lacks |
+| Per-agent memory isolation | No cross-agent context pollution |
+| Delegation memory | CTO reasoning flows to Developer |
+| Sprint cycle with board review | Structured cadence vs flat task queue |
+| Org hierarchy + delegation authority | Reporting lines vs flat CEO → everyone |
+| Verification gate (build + test) | Quality check Polsia doesn't have |
+| Git-based workspace versioning | Sprint tags, rollback, diff |
+| Budget with hard stop | $20 default, progressive alerts |
+| CEO as company voice | Natural communication vs system alerts |
 
 ```
 Spec 04 (done today)
