@@ -1,9 +1,7 @@
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
-import { getEvents, getSnapshot, bootstrapCompany, deriveCompanyNameFromIdea, resetCompany, applyStrategy } from "./store";
+import { clearPersistedStoreState, flushStorePersistence, getEvents, getSnapshot, hydrateStoreFromPersistence, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
 import { approveBoardReview, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
@@ -11,10 +9,16 @@ import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivit
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig } from "./config/index";
 import { getLocalPreviewState } from "./preview";
+import { workspaceManager } from "./workspace-manager";
+import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./bootstrap";
+import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifacts } from "./artifact-persistence";
+import { getDatabaseHealth } from "@arceus/db";
+import { getSupabaseEndpointHealth } from "./supabase-storage";
 
 const app = Fastify({ logger: true });
-const workspaceRoot = resolve(process.cwd(), "..", "..");
-const productDir = resolve(workspaceRoot, "workspace");
+const productDir = workspaceManager.getLegacyProductDir();
+
+await hydrateStoreFromPersistence();
 
 const bootstrapSchema = z.object({
   companyName: z.string().min(2),
@@ -26,64 +30,6 @@ const bootstrapSchema = z.object({
 const chatSchema = z.object({
   message: z.string().min(1)
 });
-
-async function resetProductWorkspace() {
-  const warnings: string[] = [];
-  await mkdir(productDir, { recursive: true });
-  const entries = await readdir(productDir, { withFileTypes: true });
-
-  await Promise.all(
-    entries
-      .filter((entry) => entry.name !== ".gitkeep")
-      .map(async (entry) => {
-        try {
-          await rm(resolve(productDir, entry.name), { recursive: true, force: true });
-        } catch (error) {
-          warnings.push(
-            `Could not remove workspace/${entry.name}: ${error instanceof Error ? error.message : "Unknown filesystem error"}`
-          );
-        }
-      })
-  );
-
-  try {
-    await writeFile(resolve(productDir, ".gitkeep"), "", { flag: "a" });
-  } catch (error) {
-    warnings.push(`Could not refresh workspace/.gitkeep: ${error instanceof Error ? error.message : "Unknown filesystem error"}`);
-  }
-
-  try {
-    await rm(resolve(workspaceRoot, "apps", "api", "workspace"), { recursive: true, force: true });
-  } catch (error) {
-    warnings.push(`Could not remove apps/api/workspace: ${error instanceof Error ? error.message : "Unknown filesystem error"}`);
-  }
-
-  return warnings;
-}
-
-async function listProductFiles(dir = productDir, base = productDir): Promise<Array<{ path: string; modifiedAt: string }>> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const results: Array<{ path: string; modifiedAt: string }> = [];
-
-  for (const entry of entries) {
-    const fullPath = resolve(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...await listProductFiles(fullPath, base));
-      continue;
-    }
-
-    const info = await stat(fullPath);
-    if (entry.name === ".gitkeep") {
-      continue;
-    }
-    results.push({
-      path: fullPath.replace(`${base}\\`, "").replace(/\\/g, "/"),
-      modifiedAt: info.mtime.toISOString(),
-    });
-  }
-
-  return results.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
-}
 
 function getEmployeeDirectory() {
   const snapshot = getSnapshot();
@@ -172,7 +118,10 @@ app.get("/api/runtime", async () => {
 
 app.post("/api/company/bootstrap", async (request, reply) => {
   const body = bootstrapSchema.parse(request.body);
-  const snapshot = bootstrapCompany(body);
+  const { snapshot, warnings } = await bootstrapCompanyWithWorkspace(body);
+  if (warnings.length > 0) {
+    request.log?.warn({ warnings }, "Workspace provision completed with warnings");
+  }
   reply.code(201);
   return snapshot;
 });
@@ -228,8 +177,15 @@ app.get("/api/chat/ceo/stream", async (request, reply) => {
 
 app.delete("/api/company", async (request, reply) => {
   try {
+    const companyId = getSnapshot().company.id;
     await resetOrchestratorState();
-    const warnings = await resetProductWorkspace();
+    const warnings = companyId === "company_pending"
+      ? []
+      : (await workspaceManager.archive(companyId)).warnings;
+    if (companyId !== "company_pending") {
+      await clearPersistedStoreState(companyId);
+      await deletePersistedArtifacts(companyId);
+    }
     if (warnings.length > 0) {
       request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
     }
@@ -249,6 +205,8 @@ app.get("/api/events", async (_request, reply) => {
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
   reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("Access-Control-Allow-Origin", _request.headers.origin || "*");
+  reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
 
   for (const event of getEvents()) {
     reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -323,15 +281,104 @@ app.get("/api/employee-memories", async () => {
 });
 
 app.get("/api/product/overview", async () => {
+  const companyId = getSnapshot().company.id;
+  const workspace = companyId === "company_pending" ? null : await workspaceManager.get(companyId);
+  const files = companyId === "company_pending"
+    ? []
+    : (await workspaceManager.listFiles(companyId)).files;
+
   return {
-    root: productDir,
+    root: workspace?.localPath ?? productDir,
+    workspace,
     preview: getLocalPreviewState(),
-    files: await listProductFiles(),
+    files,
   };
 });
 
+app.get("/api/persistence/health", async () => {
+  return {
+    database: await getDatabaseHealth(),
+    supabase: await getSupabaseEndpointHealth(),
+  };
+});
+
+app.get("/api/workspace", async () => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") {
+    return {
+      workspace: null,
+      snapshots: [],
+      preview: getLocalPreviewState(),
+    };
+  }
+
+  return {
+    workspace: await workspaceManager.getWorkspaceInfo(companyId),
+    snapshots: await workspaceManager.listSprintSnapshots(companyId),
+    preview: getLocalPreviewState(),
+  };
+});
+
+app.get("/api/workspace/snapshots", async () => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") {
+    return [];
+  }
+
+  return workspaceManager.listSprintSnapshots(companyId);
+});
+
+app.get("/api/workspace/diff", async (request, reply) => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") {
+    reply.code(400);
+    return { error: "No company bootstrapped yet." };
+  }
+
+  const query = z.object({
+    from: z.coerce.number().int().positive(),
+    to: z.coerce.number().int().positive(),
+  }).parse(request.query);
+
+  return {
+    diff: await workspaceManager.getDiff(companyId, query.from, query.to),
+  };
+});
+
+app.post("/api/workspace/sync", async (request, reply) => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") {
+    reply.code(400);
+    return { error: "No company bootstrapped yet." };
+  }
+
+  const body = z.object({
+    taskId: z.string().default("manual_sync"),
+    agentRole: z.string().default("system"),
+    message: z.string().default("Manual workspace sync requested."),
+  }).parse(request.body ?? {});
+
+  return workspaceManager.commitAndSync(companyId, body.taskId, body.agentRole, body.message);
+});
+
+app.get("/api/workspace/export", async (request, reply) => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") {
+    reply.code(400);
+    return { error: "No company bootstrapped yet." };
+  }
+
+  return workspaceManager.exportTarball(companyId);
+});
+
 app.get("/api/artifacts", async () => {
-  return getArtifacts();
+  const companyId = getSnapshot().company.id;
+  const liveArtifacts = getArtifacts();
+  if (liveArtifacts.length > 0 || companyId === "company_pending") {
+    return liveArtifacts;
+  }
+
+  return listPersistedArtifacts(companyId);
 });
 
 app.get("/api/transitions", async () => {
@@ -365,10 +412,15 @@ app.get("/api/execution-flow", async () => {
 
 app.get("/api/artifacts/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
+  const companyId = getSnapshot().company.id;
   const artifact = getArtifacts().find((a) => a.id === id);
   if (!artifact) {
-    reply.code(404);
-    return { error: "Artifact not found" };
+    const persisted = companyId === "company_pending" ? null : await getPersistedArtifactById(companyId, id);
+    if (!persisted) {
+      reply.code(404);
+      return { error: "Artifact not found" };
+    }
+    return persisted;
   }
   return artifact;
 });
@@ -447,12 +499,7 @@ app.post("/api/quick-execute", async (request, reply) => {
     // 1. Bootstrap
     let snapshot = getSnapshot();
     if (snapshot.company.id === "company_pending") {
-      snapshot = bootstrapCompany({
-        companyName: deriveCompanyNameFromIdea(idea),
-        boardOwner: "Board",
-        idea,
-        budgetCents: 0,
-      });
+      snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
     }
 
     // 2. Generate strategy (structured output — no CEO chat)
@@ -478,4 +525,5 @@ app.post("/api/quick-execute", async (request, reply) => {
 
 const { port, host } = serverConfig;
 
+await flushStorePersistence();
 await app.listen({ port, host });

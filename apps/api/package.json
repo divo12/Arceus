@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@arceus/db": "file:../../packages/db",
     "@arceus/company-runtime": "file:../../packages/company-runtime",
     "@arceus/contracts": "file:../../packages/contracts",
     "@fastify/cors": "^10.0.2",

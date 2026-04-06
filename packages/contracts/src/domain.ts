@@ -382,6 +382,65 @@ export const primingStateSchema = z.object({
   updatedAt: z.string()
 });
 
+export const workspaceStatusSchema = z.enum(["active", "archived", "restoring"]);
+export const sprintSnapshotStatusSchema = z.enum(["active", "rolled_back"]);
+
+export const workspaceInfoSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  localPath: z.string().nullable(),
+  status: workspaceStatusSchema,
+  latestBundleKey: z.string().nullable(),
+  latestBundleSha256: z.string().nullable(),
+  latestBundleBytes: z.number().int().nonnegative().nullable(),
+  currentSprintNumber: z.number().int().nonnegative(),
+  currentGitRef: z.string().nullable(),
+  lastSyncedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const workspaceFileManifestEntrySchema = z.object({
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+});
+
+export const sprintSnapshotSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  sprintNumber: z.number().int().positive(),
+  gitTag: z.string(),
+  bundleKey: z.string().nullable(),
+  bundleSha256: z.string().nullable(),
+  bundleBytes: z.number().int().nonnegative().nullable(),
+  snapshotData: z.lazy(() => companySnapshotSchema),
+  fileManifest: z.array(workspaceFileManifestEntrySchema),
+  status: sprintSnapshotStatusSchema,
+  createdAt: z.string(),
+});
+
+export const assetRecordSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  provider: z.string(),
+  objectKey: z.string(),
+  contentType: z.string(),
+  byteSize: z.number().int().nonnegative(),
+  sha256: z.string(),
+  originalFilename: z.string().nullable(),
+  namespace: z.string(),
+  createdByAgent: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const exportResultSchema = z.object({
+  assetId: z.string().nullable(),
+  objectKey: z.string(),
+  signedUrl: z.string(),
+  expiresAt: z.string(),
+  byteSize: z.number().int().nonnegative(),
+});
+
 export const transitionSchema = z.object({
   id: z.string(),
   companyId: z.string(),
@@ -469,6 +528,11 @@ export type MemorySummary = z.infer<typeof memorySummarySchema>;
 export type MemoryUnit = z.infer<typeof memoryUnitSchema>;
 export type Habit = z.infer<typeof habitSchema>;
 export type PrimingState = z.infer<typeof primingStateSchema>;
+export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
+export type WorkspaceFileManifestEntry = z.infer<typeof workspaceFileManifestEntrySchema>;
+export type SprintSnapshot = z.infer<typeof sprintSnapshotSchema>;
+export type AssetRecord = z.infer<typeof assetRecordSchema>;
+export type ExportResult = z.infer<typeof exportResultSchema>;
 export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
 export type TransitionStatus = z.infer<typeof transitionStatusSchema>;
 export type FeedbackVerdict = z.infer<typeof feedbackVerdictSchema>;

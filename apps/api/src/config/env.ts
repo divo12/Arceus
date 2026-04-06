@@ -19,6 +19,27 @@ export function readOptionalEnv(name: string, fallback = "") {
   return process.env[name]?.trim() || fallback;
 }
 
+export function readAliasedOptionalEnv(name: string, aliases: string[], fallback = "") {
+  const names = [name, ...aliases];
+
+  for (const candidate of names) {
+    const value = process.env[candidate]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return fallback;
+}
+
+export function readAliasedRequiredEnv(name: string, aliases: string[]) {
+  const value = readAliasedOptionalEnv(name, aliases);
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}${aliases.length > 0 ? ` (aliases: ${aliases.join(", ")})` : ""}`);
+  }
+  return value;
+}
+
 export function readNumberEnv(name: string, fallback: number) {
   const raw = process.env[name]?.trim();
   if (!raw) {

@@ -1,6 +1,6 @@
 const API_PORT = process.env.NEXT_PUBLIC_API_PORT || "4000";
 const PROXIED_API_BASE = "/backend/api";
-const LOCAL_API_BASE = `http://127.0.0.1:${API_PORT}/api`;
+const LOCAL_API_BASE = `http://localhost:${API_PORT}/api`;
 
 export function getApiBase() {
   if (typeof window !== "undefined") {

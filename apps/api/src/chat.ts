@@ -1,10 +1,11 @@
 import type { FastifyReply } from "fastify";
 import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type CeoCard } from "./ceo";
-import { appendChatMessage, bootstrapCompany, deriveCompanyNameFromIdea, getSnapshot } from "./store";
+import { appendChatMessage, getSnapshot } from "./store";
 import { ensureDeployment } from "./config/index";
 import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "./opencode";
 import { recordCeoCardMeeting } from "./orchestrator";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
+import { bootstrapIdeaWithWorkspace } from "./bootstrap";
 
 type OpenCodeEvent = {
   type: string;
@@ -106,12 +107,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   let snapshot = getSnapshot();
 
   if (snapshot.company.id === "company_pending") {
-    snapshot = bootstrapCompany({
-      companyName: deriveCompanyNameFromIdea(trimmedMessage),
-      boardOwner: "Board",
-      idea: trimmedMessage,
-      budgetCents: 0
-    });
+    snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
   }
 
   appendConversationMessage(snapshot, "board", trimmedMessage);
@@ -120,6 +116,8 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
   reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("Access-Control-Allow-Origin", reply.request.headers.origin || "*");
+  reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
 
   sseWrite(reply, "board", { content: trimmedMessage });
   sseWrite(reply, "status", { phase: "connecting" });
@@ -223,12 +221,7 @@ export async function sendBoardMessageToCeo(message: string) {
   let snapshot = getSnapshot();
 
   if (snapshot.company.id === "company_pending") {
-    snapshot = bootstrapCompany({
-      companyName: deriveCompanyNameFromIdea(trimmedMessage),
-      boardOwner: "Board",
-      idea: trimmedMessage,
-      budgetCents: 0
-    });
+    snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
   }
 
   appendConversationMessage(snapshot, "board", trimmedMessage);
