@@ -2,7 +2,7 @@
 
 import ReactMarkdown from "react-markdown";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Activity, AlertCircle, ArrowUpRight, Bot, Check, Cpu, FileCode, LoaderCircle, Play, Terminal, X } from "lucide-react";
+import { Activity, AlertCircle, ArrowUpRight, Bot, Cpu, FileCode, LoaderCircle, Play, Terminal, X } from "lucide-react";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 import { apiUrl } from "../lib/api";
+import { useChatMessages } from "../components/chat-context";
 
 type RuntimeStatus = {
   ready: boolean;
@@ -278,7 +279,7 @@ const TYPE_ICONS: Record<string, typeof FileCode> = {
   info: Activity,
 };
 
-const CHAT_STORAGE_KEY = "arceus-board-messages";
+// Chat storage moved to ChatProvider (components/chat-context.tsx)
 
 const emptyProductOverview: ProductOverview = {
   root: "",
@@ -400,13 +401,36 @@ function buildStrategyPayload(card: StrategyProposalCard) {
     throw new Error("Strategy proposal is missing structured strategy data.");
   }
 
+  // Deduplicate roles — classifier can produce duplicates.
+  // Keep first occurrence of each role type.
+  const seen = new Set<string>();
+  const uniqueRoles = card.strategy.roles.filter((r) => {
+    if (seen.has(r.role)) return false;
+    seen.add(r.role);
+    return true;
+  });
+
+  // Ensure the 4 core roles exist (ceo, cto, pm, developer).
+  // If classifier omitted any, add minimal defaults.
+  const coreDefaults: Array<{ role: string; title: string; parent_role: string | null; capabilities: string[] }> = [
+    { role: "ceo", title: "Chief Executive Officer", parent_role: null, capabilities: ["Strategic leadership"] },
+    { role: "cto", title: "Chief Technology Officer", parent_role: "ceo", capabilities: ["Technical architecture"] },
+    { role: "pm", title: "Product Manager", parent_role: "cto", capabilities: ["Product scope and delivery"] },
+    { role: "developer", title: "Software Developer", parent_role: "pm", capabilities: ["Implementation"] },
+  ];
+  for (const def of coreDefaults) {
+    if (!uniqueRoles.some((r) => r.role === def.role)) {
+      uniqueRoles.push(def);
+    }
+  }
+
   return {
     strategy_title: card.title,
     summary: card.summary,
     first_release: card.strategy.first_release,
     scope_boundary: card.strategy.scope_boundary,
     role_rationale: card.strategy.role_rationale,
-    roles: card.strategy.roles,
+    roles: uniqueRoles,
   };
 }
 
@@ -613,7 +637,6 @@ function WelcomeBriefView({ card, disabled, onChoose }: { card: WelcomeBriefCard
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <MeetingIntentSummary meeting={card.meeting} />
         <div className="border-l-2 border-[var(--swiss-black)] pl-3 text-[0.8125rem] text-[var(--swiss-gray-500)]">{card.welcome.headline}</div>
         <StringList title="Next steps" items={card.welcome.next_steps} />
         <div>
@@ -644,7 +667,6 @@ function MissionBriefView({ card, disabled, onChoose }: { card: MissionBriefCard
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <MeetingIntentSummary meeting={card.meeting} />
         <div className="grid gap-3 xl:grid-cols-3">
           <div className="border border-[var(--swiss-gray-100)] p-3">
             <div className="swiss-caption text-[var(--swiss-gray-400)]">Mission</div>
@@ -714,7 +736,6 @@ function StrategyProposalEditor({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <MeetingIntentSummary meeting={draft.meeting} />
 
         <div>
           <label className="swiss-caption mb-1 block text-[var(--swiss-gray-400)]">Strategy Title</label>
@@ -848,13 +869,9 @@ function StrategyProposalEditor({
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button variant="outline" disabled={busy || resolved} onClick={() => void onApprove(draft, false)}>
-            <Check className="h-4 w-4" />
-            Approve
-          </Button>
           <Button disabled={busy || resolved} onClick={() => void onApprove(draft, true)}>
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            Approve & Execute
+            {resolved ? "Approved" : "Approve & Execute"}
           </Button>
         </div>
       </CardContent>
@@ -891,7 +908,6 @@ function ClarifyingQuestionView({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <MeetingIntentSummary meeting={card.meeting} />
         <p className="text-[0.8125rem] leading-6 text-[var(--swiss-gray-500)]">{card.question.prompt}</p>
         <div className="border-l-2 border-[var(--swiss-black)] pl-3 text-[0.8125rem] text-[var(--swiss-gray-500)]">{card.question.why_now}</div>
         <div className="flex flex-wrap gap-2">
@@ -988,7 +1004,9 @@ export default function Page() {
   const [snapshot, setSnapshot] = useState<CompanySnapshot>(emptySnapshot);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [composer, setComposer] = useState("");
-  const [messages, setMessages] = useState<ChatBubble[]>([]);
+  const { messages: rawMessages, setMessages: setRawMessages, resolvedProposalIds, setResolvedProposalIds, clearMessages } = useChatMessages();
+  const messages = rawMessages as ChatBubble[];
+  const setMessages = setRawMessages as React.Dispatch<React.SetStateAction<ChatBubble[]>>;
   const [isPending, startTransition] = useTransition();
   const [isStreaming, setIsStreaming] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -996,14 +1014,12 @@ export default function Page() {
   const [executionStatus, setExecutionStatus] = useState<string>("idle");
   const [orchestratorStatus, setOrchestratorStatus] = useState<OrchestratorStatus | null>(null);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
-  const [resolvedProposalIds, setResolvedProposalIds] = useState<string[]>([]);
   const [quickExecuting, setQuickExecuting] = useState(false);
   const [stoppingExecution, setStoppingExecution] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [expandedArtifact, setExpandedArtifact] = useState<Artifact | null>(null);
   const [productOverview, setProductOverview] = useState<ProductOverview>(emptyProductOverview);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const chatHydratedRef = useRef(false);
 
   async function loadState(options?: { suppressRuntimeError?: boolean }) {
     const [companyResult, runtimeResult] = await Promise.allSettled([
@@ -1072,30 +1088,8 @@ export default function Page() {
     void loadExecutionTelemetry();
   }, []);
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as ChatBubble[];
-        setMessages(parsed);
-      }
-    } catch {
-      /* ignore broken session state */
-    } finally {
-      chatHydratedRef.current = true;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!chatHydratedRef.current) {
-      return;
-    }
-    try {
-      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
-    } catch {
-      /* ignore storage failures */
-    }
-  }, [messages]);
+  // Chat persistence is handled by ChatProvider in layout.tsx.
+  // No hydrate/persist effects needed here — state survives navigation.
 
   async function handleApproveBoardReview() {
     try {
@@ -1301,12 +1295,18 @@ export default function Page() {
         setExecutionStatus("planning");
       }
 
+      const teamSummary = nextSnapshot.agents.length > 0
+        ? `\n\nTeam hired (${nextSnapshot.agents.length}):\n${nextSnapshot.agents.map((a: { role: string; title: string; name: string }) => `- ${a.name} — ${a.title} (${a.role})`).join("\n")}`
+        : "";
+
       setMessages((current) => [
         ...current,
         {
           id: createId(),
           role: "system",
-          content: execute ? "Board approved the strategy and started execution." : "Board approved the strategy.",
+          content: execute
+            ? `Board approved the strategy and started execution.${teamSummary}\n\nCTO is planning tasks. Watch the Execution tab for progress.`
+            : `Board approved the strategy.${teamSummary}\n\nThe team is ready. Type a message to start execution.`,
         },
       ]);
 
@@ -1412,25 +1412,16 @@ export default function Page() {
       }
 
       const nextSnapshot = (await response.json()) as CompanySnapshot;
-      const preservedMessages = [
-        ...messages,
-        {
-          id: createId(),
-          role: "system" as const,
-          content: "Company reset complete. CEO chat history was preserved locally.",
-        },
-      ];
       setSnapshot(nextSnapshot);
-      setMessages(preservedMessages);
+      clearMessages();
       setActivityEvents([]);
       setExpandedArtifact(null);
       setProductOverview(emptyProductOverview);
       setExecutionStatus("idle");
       setComposer("");
-      setResolvedProposalIds([]);
       setProposalActionId(null);
       setRuntimeError(null);
-      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(preservedMessages));
+      // localStorage persistence handled by ChatProvider automatically
       await loadExecutionTelemetry();
       window.setTimeout(() => {
         void loadState({ suppressRuntimeError: true });

@@ -175,6 +175,8 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       try {
         sseWrite(reply, "status", { phase: "classifying" });
         const card = await classifyCeoResponse(fullText, nextSnapshot);
+        // Spec 01: No side effects during ideation. Meetings and tasks are only
+        // created after strategy approval when the company is active with agents.
         const meeting = recordCeoCardMeeting(card, trimmedMessage, fullText);
         appendConversationMessage(getSnapshot(), "ceo", fullText, card);
         if (meeting) {

@@ -114,18 +114,18 @@ const roleSchema = z.object({
 
 const welcomeBriefSchema = z.object({
   headline: z.string(),
-  next_steps: z.array(z.string()).min(2).max(5),
-  suggested_prompts: z.array(z.string()).min(3).max(6),
+  next_steps: z.array(z.string()).min(1).max(5),
+  suggested_prompts: z.array(z.string()).min(1).max(6),
 });
 
 const missionBriefSchema = z.object({
   mission_statement: z.string(),
   target_user: z.string(),
   problem: z.string(),
-  differentiators: z.array(z.string()).min(2).max(5),
+  differentiators: z.array(z.string()).min(1).max(5),
   assumptions: z.array(z.string()).max(5),
   unknowns: z.array(z.string()).max(5),
-  suggested_replies: z.array(z.string()).min(2).max(5),
+  suggested_replies: z.array(z.string()).min(1).max(5),
 });
 
 const questionBlockSchema = z.object({
@@ -138,17 +138,17 @@ const strategyBlockSchema = z.object({
   first_release: z.string(),
   scope_boundary: z.array(z.string()),
   role_rationale: z.array(z.string()),
-  roles: z.array(roleSchema).min(4).max(8).superRefine(validateStrategyRoles),
-  execution_sequence: z.array(z.string()).min(3).max(6),
-  board_checkpoints: z.array(z.string()).min(2).max(5),
-  key_risks: z.array(z.string()).min(2).max(5),
+  roles: z.array(roleSchema).min(1).max(8),
+  execution_sequence: z.array(z.string()).min(1).max(6),
+  board_checkpoints: z.array(z.string()).min(1).max(5),
+  key_risks: z.array(z.string()).min(1).max(5),
 });
 
 const statusBlockSchema = z.object({
   headline: z.string(),
-  current_focus: z.array(z.string()).min(1).max(5),
+  current_focus: z.array(z.string()).max(5),
   blockers: z.array(z.string()).max(4),
-  next_actions: z.array(z.string()).min(1).max(5),
+  next_actions: z.array(z.string()).max(5),
   board_requests: z.array(z.string()).max(4),
 });
 
@@ -293,6 +293,8 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot) {
     "- Avoid generic filler. Be concise, opinionated, and operationally sharp.",
     "- Prefer tradeoffs and recommendations over vague brainstorming.",
     "- Never invent implementation details that are not grounded in company state.",
+    "- Convergence: after 2-3 clarifying exchanges, stop asking and propose a strategy_proposal. Do not ask more than 3 clarifying questions total. If the board has given enough direction, converge immediately. The goal is a demoable first release, not perfect requirements.",
+    "- One intent per response: either ASK a question or PROPOSE a strategy — never both. If you want board confirmation before proceeding, stop after the question. Do not answer your own question in the same message.",
     "",
     "Current company intelligence:",
     buildSnapshotContext(snapshot),
@@ -331,9 +333,8 @@ export async function classifyCeoResponse(
     "- You may add tester, ui_designer, marketing, and skills_lead when they materially improve delivery quality, launch readiness, or reusable leverage.",
     "- No duplicate roles. ceo has parent_role null. Every other role must have a valid parent_role.",
     "- Prefer this reporting shape unless there is a strong reason not to: ceo manages cto and marketing; cto manages pm, developer, tester, ui_designer, and skills_lead; pm may manage developer, tester, or ui_designer when product coordination is the point.",
-    "- For strategy_proposal: set meeting.create to true, use type ad_hoc, and propose up to 4 typed task_deltas when the strategy clearly implies backlog changes.",
-    "- For clarifying_question: create a meeting when the question changes strategy, scope, ownership, or exposes a blocker.",
-    "- For welcome_brief and mission_brief: avoid creating a meeting unless the CEO is explicitly escalating a decision.",
+    "- During idea refinement (welcome_brief, mission_brief, clarifying_question): set meeting.create to false and leave task_deltas empty. The chat is pure conversation — no side effects until the board approves a strategy.",
+    "- For strategy_proposal: set meeting.create to false and leave task_deltas empty. The strategy card is a read-only proposal for board review. Agents, tasks, and meetings are created only after the board clicks Approve.",
     `Current stage hint: ${stage}`,
   ].join("\n");
 
