@@ -1,8 +1,9 @@
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, stat, writeFile, readFile } from "node:fs/promises";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { getOpencode, postOpencodeJson } from "./opencode";
+import { getOpencode } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
-import { ensureDeployment, orchestratorConfig } from "./config/index";
+import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
 import { getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateMeeting, updateTask, upsertApproval, upsertMeeting, upsertTask } from "./store";
 import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Task, Transition, TransitionProposal } from "@arceus/contracts";
@@ -12,6 +13,82 @@ import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
 import { persistRuntimeArtifact } from "./artifact-persistence";
 import { workspaceManager } from "./workspace-manager";
+
+// ---------------------------------------------------------------------------
+// Skill loader — reads SKILL.md files with YAML frontmatter
+// ---------------------------------------------------------------------------
+
+const skillsDir = resolve(process.cwd(), "packages", "company-runtime", "skills");
+
+interface SkillEntry {
+  name: string;
+  description: string;
+  role: string;
+  body: string;
+  path: string;
+}
+
+function parseSkillFrontmatter(content: string): { frontmatter: Record<string, string>; body: string } {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) return { frontmatter: {}, body: content };
+  const lines = match[1].split("\n");
+  const frontmatter: Record<string, string> = {};
+  for (const line of lines) {
+    const colonIndex = line.indexOf(":");
+    if (colonIndex > 0) {
+      frontmatter[line.slice(0, colonIndex).trim()] = line.slice(colonIndex + 1).trim();
+    }
+  }
+  return { frontmatter, body: match[2].trim() };
+}
+
+function loadSkillsForRole(role: string): SkillEntry[] {
+  const entries: SkillEntry[] = [];
+  if (!existsSync(skillsDir)) return entries;
+
+  for (const dir of readdirSync(skillsDir, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const skillPath = join(skillsDir, dir.name, "SKILL.md");
+    if (!existsSync(skillPath)) continue;
+
+    const raw = readFileSync(skillPath, "utf8");
+    const { frontmatter, body } = parseSkillFrontmatter(raw);
+
+    // Include skills that match this role or have no role specified (universal)
+    if (frontmatter.role && frontmatter.role !== role) continue;
+
+    entries.push({
+      name: frontmatter.name || dir.name,
+      description: frontmatter.description || "",
+      role: frontmatter.role || "",
+      body,
+      path: skillPath,
+    });
+  }
+  return entries;
+}
+
+function buildSkillMenu(role: string): string {
+  const skills = loadSkillsForRole(role);
+  if (skills.length === 0) return "";
+  const lines = ["", "# Available skills for this role"];
+  for (const skill of skills) {
+    lines.push(`- **${skill.name}**: ${skill.description}`);
+  }
+  return lines.join("\n");
+}
+
+function getSkillBody(role: string, skillName?: string): string {
+  const skills = loadSkillsForRole(role);
+  if (skills.length === 0) return "";
+  // If a specific skill is requested, return its body
+  if (skillName) {
+    const match = skills.find(s => s.name === skillName);
+    return match ? `\n# Skill: ${match.name}\n\n${match.body}` : "";
+  }
+  // Otherwise return all skills for this role (there's usually just one)
+  return skills.map(s => `\n# Skill: ${s.name}\n\n${s.body}`).join("\n");
+}
 
 type AgentSessionState = {
   role: string;
@@ -72,7 +149,7 @@ let activeExecution: ExecutionContext | null = null;
 let developerWatchdog: NodeJS.Timeout | null = null;
 let developerWorkspaceMonitor: NodeJS.Timeout | null = null;
 let developerWorkspaceSnapshot = new Map<string, number>();
-const workspaceRoot = resolve(process.cwd(), "..", "..");
+const workspaceRoot = process.cwd();
 const productDir = resolve(workspaceRoot, "workspace");
 const DEVELOPER_STALL_TIMEOUT_MINUTES = orchestratorConfig.developer.stallTimeoutMinutes;
 const DEVELOPER_STALL_TIMEOUT_MS = DEVELOPER_STALL_TIMEOUT_MINUTES * 60 * 1000;
@@ -1029,6 +1106,22 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
             feedback: feedback ?? task.verifierState.feedback,
           },
   }));
+
+  // Auto-promote downstream tasks when a task completes
+  if (status === "completed") {
+    const snapshot = getSnapshot();
+    for (const task of snapshot.tasks) {
+      if (task.status !== "created") continue;
+      if (task.dependsOnTaskIds.length === 0) continue;
+      const allDepsMet = task.dependsOnTaskIds.every((depId) => {
+        const dep = snapshot.tasks.find((t) => t.id === depId);
+        return dep?.status === "completed";
+      });
+      if (allDepsMet) {
+        updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+      }
+    }
+  }
 }
 
 function taskSortWeight(task: Task) {
@@ -1976,6 +2069,12 @@ async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity
 async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string) {
   const deployment = ensureDeployment("workerDeployment");
   const opencode = await getOpencode();
+
+  // Inject role-specific skills into the system prompt
+  const skillMenu = buildSkillMenu(role);
+  const skillBody = getSkillBody(role);
+  const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody].filter(Boolean).join("\n");
+
   updateAgentSessionState(role, {
     promptStartedAt: nowIso(),
     promptCompletedAt: null,
@@ -1988,10 +2087,17 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
     body: {
       model: { providerID: "azure", modelID: deployment },
       agent: role,
-      system: systemPrompt,
+      system: enrichedSystemPrompt,
       parts: [{ type: "text", text }],
     },
   });
+
+  // Check for OpenCode-level errors embedded in data.info
+  const infoError = (result.data?.info as any)?.error;
+  if (infoError) {
+    const errorMsg = infoError.data?.message ?? infoError.name ?? "Unknown OpenCode session error";
+    throw new Error(`OpenCode ${role} session error: ${errorMsg}`);
+  }
 
   const output = (
     (result.data?.parts as Array<{ type: string; text?: string }>)
@@ -2231,37 +2337,54 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
   setTaskStatus(activeExecution.buildTaskId, "in_progress");
   emitEmployeeActivity("developer", "working", "Implementing the delivery spec in the company workspace…", { taskId: activeExecution.buildTaskId });
 
-  await postOpencodeJson(`/session/${devSession.sessionId}/prompt_async`, {
-    model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
-    agent: "developer",
-    system: devSoul.systemPrompt,
-    parts: [
-      {
-        type: "text",
-        text: [
-          `# Workspace Context`,
-          `The full workspace root is ${workspaceRoot}.`,
-          `All implementation output must go in ${productDir}.`,
-          `Read any existing docs and code under ${productDir} before changing files.`,
-          "",
-          `# CTO Technical Plan`,
-          activeExecution.planText,
-          "",
-          `# PM Acceptance Criteria`,
-          activeExecution.acceptanceText,
-          "",
-          `# Delivery Rules`,
-          `1. Work only through the company workspace at ${productDir}.`,
-          `2. If the workspace is empty, scaffold it there.`,
-          `3. Get a minimal runnable app and local preview working as early as possible, then iterate on top of that instead of waiting until the end.`,
-          `4. Add or preserve the scripts and files needed so the preview detector can launch the app locally.`,
-          `4a. When you discover a working preview or service endpoint, print a line exactly like PREVIEW_URL: http://127.0.0.1:3000/path so the runtime can validate and surface it immediately.`,
-          `5. Run the minimum validation needed to prove the result works.`,
-          `6. Stop when the implementation is ready for CTO review. Do not continue with extra polish after the spec is satisfied.`,
-          `7. Keep your work legible for board review.`,
-        ].join("\n"),
+  const opencode = await getOpencode();
+  const devSkillBody = getSkillBody("developer");
+  const devSystemPrompt = [devSoul.systemPrompt, buildSkillMenu("developer"), devSkillBody].filter(Boolean).join("\n");
+  await opencode.client.session.promptAsync({
+    path: { id: devSession.sessionId },
+    body: {
+      model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
+      agent: "developer",
+      system: devSystemPrompt,
+      tools: {
+        bash: true,
+        read: true,
+        write: true,
+        edit: true,
+        glob: true,
+        grep: true,
+        apply_patch: true,
       },
-    ],
+      parts: [
+        {
+          type: "text",
+          text: [
+            `# Workspace Context`,
+            `The full workspace root is ${workspaceRoot}.`,
+            `All implementation output must go in ${productDir}.`,
+            `Read any existing docs and code under ${productDir} before changing files.`,
+            "",
+            `# CTO Technical Plan`,
+            activeExecution.planText,
+            "",
+            `# PM Acceptance Criteria`,
+            activeExecution.acceptanceText,
+            "",
+            `# Delivery Rules`,
+            `IMPORTANT: You MUST use tools (write, edit, bash) to create and modify files. Do NOT just describe what you would do — actually do it by calling tools.`,
+            `1. Work only through the company workspace at ${productDir}.`,
+            `2. If the workspace is empty, scaffold it there using the write tool.`,
+            `3. Get a minimal runnable app and local preview working as early as possible, then iterate on top of that instead of waiting until the end.`,
+            `4. Add or preserve the scripts and files needed so the preview detector can launch the app locally.`,
+            `4a. When you discover a working preview or service endpoint, print a line exactly like PREVIEW_URL: http://127.0.0.1:${previewConfig.port}/path so the runtime can validate and surface it immediately.`,
+            `4b. IMPORTANT: Your app MUST listen on port ${previewConfig.port}. Do NOT use port 3000 (reserved for the dashboard). Pass --port ${previewConfig.port} or set PORT=${previewConfig.port} when starting the dev server.`,
+            `5. Run the minimum validation needed to prove the result works.`,
+            `6. Stop when the implementation is ready for CTO review. Do not continue with extra polish after the spec is satisfied.`,
+            `7. Keep your work legible for board review.`,
+          ].join("\n"),
+        },
+      ],
+    },
   });
 
   emitEmployeeActivity("developer", "info", `Target workspace: ${productDir}`, { taskId: activeExecution.buildTaskId });
@@ -3111,10 +3234,11 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       }
     }
 
-    if (part.type === "tool-invocation" || part.type === "tool-result") {
-      const toolName: string = part.toolInvocation?.toolName ?? part.name ?? "";
-      const args: Record<string, any> = part.toolInvocation?.args ?? {};
-      const isInvocation = part.type === "tool-invocation";
+    if (part.type === "tool-invocation" || part.type === "tool-result" || part.type === "tool") {
+      const toolName: string = part.toolInvocation?.toolName ?? part.tool ?? part.name ?? "";
+      const args: Record<string, any> = part.toolInvocation?.args ?? part.state?.input ?? {};
+      const toolStatus: string = part.state?.status ?? "";
+      const isInvocation = part.type === "tool-invocation" || (part.type === "tool" && toolStatus === "running");
 
       if (toolName) {
         updateAgentSessionState(role, {
@@ -3128,8 +3252,8 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         });
       }
 
-      if (toolName === "edit" || toolName === "write" || toolName === "patch") {
-        const filePath = args.file_path || args.filePath || "file";
+      if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {
+        const filePath = args.filePath || args.file_path || "unknown file";
         updateAgentSessionState(role, {
           fileEditCount: (agentSessions.get(role)?.fileEditCount ?? 0) + 1,
           lastEventSummary: `Edited ${filePath}`,
@@ -3142,12 +3266,12 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         if (role === "developer" && activeExecution) {
           appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
         }
-      } else if (toolName === "bash") {
+      } else if (isInvocation && toolName === "bash") {
         const cmd = String(args.command || "").slice(0, 180);
         updateAgentSessionState(role, {
           shellCommandCount: (agentSessions.get(role)?.shellCommandCount ?? 0) + 1,
           lastEventSummary: `$ ${cmd}`,
-          awaiting: isInvocation ? "waiting for shell result" : "processing shell result",
+          awaiting: "waiting for shell result",
         });
         emitEmployeeActivity(role, "shell", `$ ${cmd}`, {
           taskId: role === "developer" && activeExecution ? activeExecution.buildTaskId : null,
@@ -3155,7 +3279,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         if (role === "developer" && activeExecution) {
           appendTaskCommand(activeExecution.buildTaskId, cmd);
         }
-      } else if (toolName) {
+      } else if (isInvocation && toolName) {
         emitEmployeeActivity(role, "info", `tool: ${toolName}`);
       }
     }

@@ -1,6 +1,7 @@
 ---
 name: tester
 description: Validate apps and services through browser-based QA, smoke testing, accessibility checks, and structured verification artifacts. Use when a runnable preview or service needs evidence-based quality review.
+role: tester
 ---
 
 # Tester

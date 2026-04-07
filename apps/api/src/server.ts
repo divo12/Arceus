@@ -14,6 +14,7 @@ import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./boo
 import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifacts } from "./artifact-persistence";
 import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "./supabase-storage";
+import { getBreakersHealth } from "./resilience";
 
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
@@ -102,9 +103,13 @@ await app.register(cors, {
 });
 
 app.get("/health", async () => {
+  const circuitBreakers = getBreakersHealth();
+  const allClosed = circuitBreakers.every((b) => b.state === "closed");
   return {
     ok: true,
-    service: "arceus-api"
+    service: "arceus-api",
+    circuitBreakers,
+    degraded: !allClosed,
   };
 });
 

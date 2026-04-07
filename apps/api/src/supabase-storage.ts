@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { getDatabaseConnectionConfig, getDb, getSupabaseClient, isDatabaseConfigured, isSupabaseConfigured, assetsTable } from "@arceus/db";
 import { persistenceConfig } from "./config/index";
+import { resilientCall, breakers, isRetryableError } from "./resilience";
 
 type UploadResult = {
   assetId: string | null;
@@ -126,21 +127,27 @@ export async function uploadFileToBucket(bucket: string, objectKey: string, loca
   }
 
   const buffer = await readFile(localFilePath);
-  const { error } = await getSupabaseClient().storage.from(bucket).upload(objectKey, buffer, {
-    upsert: true,
-    contentType,
-  });
 
-  if (error) {
-    throw new Error(`Supabase upload failed for ${objectKey}: ${error.message}`);
-  }
+  return resilientCall(
+    async () => {
+      const { error } = await getSupabaseClient().storage.from(bucket).upload(objectKey, buffer, {
+        upsert: true,
+        contentType,
+      });
 
-  return {
-    assetId: null,
-    objectKey,
-    sha256: await sha256ForBuffer(buffer),
-    byteSize: buffer.byteLength,
-  } satisfies UploadResult;
+      if (error) {
+        throw new Error(`Supabase upload failed for ${objectKey}: ${error.message}`);
+      }
+
+      return {
+        assetId: null,
+        objectKey,
+        sha256: await sha256ForBuffer(buffer),
+        byteSize: buffer.byteLength,
+      } satisfies UploadResult;
+    },
+    { breaker: breakers.supabase, shouldRetry: isRetryableError },
+  );
 }
 
 export async function downloadFileFromBucket(bucket: string, objectKey: string, localFilePath: string) {
@@ -148,21 +155,26 @@ export async function downloadFileFromBucket(bucket: string, objectKey: string, 
     throw new Error("Supabase storage is not configured.");
   }
 
-  const { data, error } = await getSupabaseClient().storage.from(bucket).download(objectKey);
-  if (error || !data) {
-    throw new Error(`Supabase download failed for ${objectKey}: ${error?.message ?? "Object missing"}`);
-  }
+  return resilientCall(
+    async () => {
+      const { data, error } = await getSupabaseClient().storage.from(bucket).download(objectKey);
+      if (error || !data) {
+        throw new Error(`Supabase download failed for ${objectKey}: ${error?.message ?? "Object missing"}`);
+      }
 
-  const buffer = Buffer.from(await data.arrayBuffer());
-  await mkdir(dirname(localFilePath), { recursive: true });
-  await writeFile(localFilePath, buffer);
+      const buffer = Buffer.from(await data.arrayBuffer());
+      await mkdir(dirname(localFilePath), { recursive: true });
+      await writeFile(localFilePath, buffer);
 
-  return {
-    assetId: null,
-    objectKey,
-    sha256: await sha256ForBuffer(buffer),
-    byteSize: buffer.byteLength,
-  } satisfies UploadResult;
+      return {
+        assetId: null,
+        objectKey,
+        sha256: await sha256ForBuffer(buffer),
+        byteSize: buffer.byteLength,
+      } satisfies UploadResult;
+    },
+    { breaker: breakers.supabase, shouldRetry: isRetryableError },
+  );
 }
 
 export async function uploadWorkspaceBundle(companyId: string, localFilePath: string, objectKey = `${companyId}/bundles/latest.bundle`) {
@@ -196,34 +208,40 @@ export async function uploadArtifactPayload(companyId: string, artifactId: strin
 
   const objectKey = `${companyId}/artifacts/${artifactId}.txt`;
   const buffer = Buffer.from(content, "utf8");
-  const { error } = await getSupabaseClient().storage.from(persistenceConfig.storage.assetsBucket).upload(objectKey, buffer, {
-    upsert: true,
-    contentType: "text/plain; charset=utf-8",
-  });
 
-  if (error) {
-    throw new Error(`Supabase artifact upload failed for ${objectKey}: ${error.message}`);
-  }
+  return resilientCall(
+    async () => {
+      const { error } = await getSupabaseClient().storage.from(persistenceConfig.storage.assetsBucket).upload(objectKey, buffer, {
+        upsert: true,
+        contentType: "text/plain; charset=utf-8",
+      });
 
-  const sha256 = await sha256ForBuffer(buffer);
-  const assetId = await upsertAssetRecord({
-    assetId: `asset_${artifactId}`,
-    companyId,
-    objectKey,
-    contentType: "text/plain; charset=utf-8",
-    byteSize: buffer.byteLength,
-    sha256,
-    originalFilename: `${title}.txt`,
-    namespace: "artifacts",
-    createdByAgent: null,
-  });
+      if (error) {
+        throw new Error(`Supabase artifact upload failed for ${objectKey}: ${error.message}`);
+      }
 
-  return {
-    assetId,
-    objectKey,
-    sha256,
-    byteSize: buffer.byteLength,
-  } satisfies UploadResult;
+      const sha256 = await sha256ForBuffer(buffer);
+      const assetId = await upsertAssetRecord({
+        assetId: `asset_${artifactId}`,
+        companyId,
+        objectKey,
+        contentType: "text/plain; charset=utf-8",
+        byteSize: buffer.byteLength,
+        sha256,
+        originalFilename: `${title}.txt`,
+        namespace: "artifacts",
+        createdByAgent: null,
+      });
+
+      return {
+        assetId,
+        objectKey,
+        sha256,
+        byteSize: buffer.byteLength,
+      } satisfies UploadResult;
+    },
+    { breaker: breakers.supabase, shouldRetry: isRetryableError },
+  );
 }
 
 export async function getAssetRecordByObjectKey(companyId: string, objectKey: string) {
@@ -245,12 +263,17 @@ export async function createSignedBucketUrl(bucket: string, objectKey: string, e
     throw new Error("Supabase storage is not configured.");
   }
 
-  const { data, error } = await getSupabaseClient().storage.from(bucket).createSignedUrl(objectKey, expiresInSeconds);
-  if (error || !data) {
-    throw new Error(`Supabase signed URL failed for ${objectKey}: ${error?.message ?? "Unknown error"}`);
-  }
+  return resilientCall(
+    async () => {
+      const { data, error } = await getSupabaseClient().storage.from(bucket).createSignedUrl(objectKey, expiresInSeconds);
+      if (error || !data) {
+        throw new Error(`Supabase signed URL failed for ${objectKey}: ${error?.message ?? "Unknown error"}`);
+      }
 
-  return data.signedUrl;
+      return data.signedUrl;
+    },
+    { breaker: breakers.supabase, shouldRetry: isRetryableError },
+  );
 }
 
 export async function getLocalFileInfo(path: string) {

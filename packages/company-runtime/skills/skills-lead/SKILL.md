@@ -1,6 +1,7 @@
 ---
 name: skills-lead
 description: Capture repeated workflows as reusable skills with clear metadata, instructions, and supporting assets. Use when company knowledge should be turned into portable operational capability.
+role: skills_lead
 ---
 
 # Skills Lead

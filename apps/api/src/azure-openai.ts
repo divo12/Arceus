@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import zodToJsonSchema from "zod-to-json-schema";
 import { runtimeConfig, ensureDeployment } from "./config/index";
+import { resilientCall, breakers, isRetryableError } from "./resilience";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -16,25 +17,30 @@ export async function chatCompletion(
   const deployment = ensureDeployment(deploymentKey);
   const url = deploymentUrl(deployment);
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": runtimeConfig.azureApiKey
+  return resilientCall(
+    async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": runtimeConfig.azureApiKey
+        },
+        body: JSON.stringify({ messages, temperature: 0.7 })
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Azure OpenAI ${deployment} error ${response.status}: ${body}`);
+      }
+
+      const json = (await response.json()) as {
+        choices: Array<{ message: { content: string } }>;
+      };
+
+      return json.choices[0]?.message?.content ?? "";
     },
-    body: JSON.stringify({ messages, temperature: 0.7 })
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Azure OpenAI ${deployment} error ${response.status}: ${body}`);
-  }
-
-  const json = (await response.json()) as {
-    choices: Array<{ message: { content: string } }>;
-  };
-
-  return json.choices[0]?.message?.content ?? "";
+    { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
+  );
 }
 
 /**
@@ -61,42 +67,46 @@ export async function structuredCompletion<T>(
     $refStrategy: "none",
   });
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": runtimeConfig.azureApiKey,
-    },
-    body: JSON.stringify({
-      messages,
-      temperature: options?.temperature ?? 0.7,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: schemaName,
-          strict: true,
-          schema: derived,
+  return resilientCall(
+    async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": runtimeConfig.azureApiKey,
         },
-      },
-    }),
-  });
+        body: JSON.stringify({
+          messages,
+          temperature: options?.temperature ?? 0.7,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: schemaName,
+              strict: true,
+              schema: derived,
+            },
+          },
+        }),
+      });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Azure OpenAI structured output (${schemaName}) failed ${response.status}: ${body}`);
-  }
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Azure OpenAI structured output (${schemaName}) failed ${response.status}: ${body}`);
+      }
 
-  const json = (await response.json()) as {
-    choices: Array<{ message: { content: string } }>;
-  };
+      const json = (await response.json()) as {
+        choices: Array<{ message: { content: string } }>;
+      };
 
-  const raw = json.choices[0]?.message?.content;
-  if (!raw) {
-    throw new Error(`Azure OpenAI returned no content for structured output (${schemaName}).`);
-  }
+      const raw = json.choices[0]?.message?.content;
+      if (!raw) {
+        throw new Error(`Azure OpenAI returned no content for structured output (${schemaName}).`);
+      }
 
-  // Validate through Zod for runtime type safety
-  return schema.parse(JSON.parse(raw));
+      return schema.parse(JSON.parse(raw));
+    },
+    { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
+  );
 }
 
 export async function chatCompletionStream(
@@ -106,23 +116,29 @@ export async function chatCompletionStream(
   const deployment = ensureDeployment(deploymentKey);
   const url = deploymentUrl(deployment);
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": runtimeConfig.azureApiKey
+  // Retry the connection attempt; once streaming starts we can't retry mid-stream.
+  return resilientCall(
+    async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": runtimeConfig.azureApiKey
+        },
+        body: JSON.stringify({ messages, temperature: 0.7, stream: true })
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Azure OpenAI ${deployment} stream error ${response.status}: ${body}`);
+      }
+
+      if (!response.body) {
+        throw new Error("Azure OpenAI returned no stream body.");
+      }
+
+      return response.body;
     },
-    body: JSON.stringify({ messages, temperature: 0.7, stream: true })
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Azure OpenAI ${deployment} stream error ${response.status}: ${body}`);
-  }
-
-  if (!response.body) {
-    throw new Error("Azure OpenAI returned no stream body.");
-  }
-
-  return response.body;
+    { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
+  );
 }

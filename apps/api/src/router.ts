@@ -142,7 +142,26 @@ export function executeTransition(
     appendFeedbackRound(round);
   }
 
+  // Auto-promote: when a task completes, check if downstream tasks can move from created → planned
+  if (proposal.toStatus === "completed") {
+    autoPromoteReadyTasks();
+  }
+
   return transition;
+}
+
+/**
+ * Scan all tasks: if a task is "created" and all its dependencies are "completed",
+ * promote it to "planned" so the router can propose starting it.
+ * This removes the need for the LLM to propose created → planned transitions.
+ */
+function autoPromoteReadyTasks() {
+  const snapshot = getSnapshot();
+  for (const task of snapshot.tasks) {
+    if (task.status !== "created") continue;
+    if (!areDependenciesMet(task, snapshot)) continue;
+    updateTask(task.id, (t) => ({ ...t, status: "planned" as const }));
+  }
 }
 
 /* ---------- LLM Router: propose next transitions ---------- */
@@ -239,6 +258,11 @@ export async function runRouterLoop(
     // ask the LLM Router
     const decision = await proposeNextTransitions(snapshot, executionStatus, currentEvent);
 
+    console.log(`[Router] Cycle ${cycle}: shouldPause=${decision.shouldPause}, transitions=${decision.transitions.length}, pauseReason=${decision.pauseReason ?? "none"}`);
+    for (const t of decision.transitions) {
+      console.log(`[Router]   → ${t.toTaskId?.substring(0, 20)} to ${t.toStatus} (confidence=${t.confidence}, role=${t.triggeredByRole})`);
+    }
+
     if (decision.shouldPause) {
       result.paused = true;
       result.pauseReason = decision.pauseReason;
@@ -246,6 +270,7 @@ export async function runRouterLoop(
     }
 
     let anyExecuted = false;
+    const rejectionReasons: string[] = [];
 
     for (const proposal of decision.transitions) {
       const freshSnapshot = getSnapshot();
@@ -253,6 +278,7 @@ export async function runRouterLoop(
 
       if (!validation.valid) {
         console.warn(`[Router] Rejected transition: ${validation.reason}`);
+        rejectionReasons.push(`${proposal.toTaskId} → ${proposal.toStatus}: ${validation.reason}`);
         continue;
       }
 
@@ -303,6 +329,11 @@ export async function runRouterLoop(
     }
 
     if (!anyExecuted) {
+      if (rejectionReasons.length > 0) {
+        // Feed rejection reasons back so the router can propose different transitions
+        currentEvent = `Previous proposals were rejected: ${rejectionReasons.join("; ")}. Propose different valid transitions for tasks whose dependencies are already met.`;
+        continue;
+      }
       result.pauseReason = "No valid transitions could be executed";
       break;
     }
