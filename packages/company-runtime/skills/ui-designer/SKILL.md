@@ -1,6 +1,7 @@
 ---
 name: ui-designer
 description: Provide visual direction, UX critique, design-system guidance, and interface polish recommendations. Use when a product needs stronger design quality or a clearer interaction model.
+role: ui_designer
 ---
 
 # UI Designer

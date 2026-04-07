@@ -1,6 +1,7 @@
 ---
 name: marketing
 description: Create positioning, launch messaging, email drafts, social copy, campaign briefs, and outbound plans. Use when a product is approaching launch or needs a clearer narrative.
+role: marketing
 ---
 
 # Marketing

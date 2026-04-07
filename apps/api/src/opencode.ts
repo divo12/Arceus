@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
 import { ensureDeployment, runtimeConfig } from "./config/index";
+import { resilientCall, breakers, isRetryableError } from "./resilience";
 
 type OpencodeInstance = {
   server: { url: string; close(): void };
@@ -11,7 +12,7 @@ type OpencodeInstance = {
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
-const workspaceRoot = resolve(process.cwd(), "..", "..");
+const workspaceRoot = process.cwd();
 
 function ensureAzureRuntimeEnvironment() {
   process.env.AZURE_RESOURCE_NAME = runtimeConfig.azureResourceName;
@@ -220,35 +221,45 @@ export async function getOpencode() {
 }
 
 export async function postOpencodeJson<T>(path: string, body: unknown): Promise<T> {
-  const opencode = await getOpencode();
-  const response = await fetch(`${opencode.server.url}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
+  return resilientCall(
+    async () => {
+      const opencode = await getOpencode();
+      const response = await fetch(`${opencode.server.url}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenCode request failed for ${path}: ${response.status} ${response.statusText}`);
+      }
+
+      if (response.status === 204) {
+        return undefined as T;
+      }
+
+      return (await response.json()) as T;
     },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    throw new Error(`OpenCode request failed for ${path}: ${response.status} ${response.statusText}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return (await response.json()) as T;
+    { breaker: breakers.opencode, shouldRetry: isRetryableError },
+  );
 }
 
 export async function openOpencodeEventStream() {
-  const opencode = await getOpencode();
-  const response = await fetch(`${opencode.server.url}/event`);
+  return resilientCall(
+    async () => {
+      const opencode = await getOpencode();
+      const response = await fetch(`${opencode.server.url}/event`);
 
-  if (!response.ok || !response.body) {
-    throw new Error(`Unable to open OpenCode event stream: ${response.status} ${response.statusText}`);
-  }
+      if (!response.ok || !response.body) {
+        throw new Error(`Unable to open OpenCode event stream: ${response.status} ${response.statusText}`);
+      }
 
-  return response.body.getReader();
+      return response.body.getReader();
+    },
+    { breaker: breakers.opencode, shouldRetry: isRetryableError },
+  );
 }
 
 export async function getCeoSession() {
