@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import { NavShell } from "../components/nav-shell";
+import { ChatProvider } from "../components/chat-context";
 import "./globals.css";
 
 const inter = Inter({
@@ -30,7 +31,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable}`}>
       <body>
-        <NavShell>{children}</NavShell>
+        <ChatProvider>
+          <NavShell>{children}</NavShell>
+        </ChatProvider>
       </body>
     </html>
   );

@@ -724,6 +724,10 @@ function applyMeetingEffects(taskModifications: TaskModificationInput[], memoryM
 
 function createTaskFromCeoDelta(delta: CeoCard["meeting"]["task_deltas"][number]) {
   const snapshot = getSnapshot();
+  const agent = getAgentByRole(snapshot, delta.assigned_role);
+  if (!agent) {
+    return null;
+  }
   const task = createWorkflowTask(
     snapshot,
     "follow_up",
@@ -756,6 +760,11 @@ function resolveTaskFromHint(targetTaskHint: string | null | undefined) {
 
 export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoText: string) {
   if (!card.meeting.create) return null;
+  const snapshot = getSnapshot();
+  // Spec 01: No side effects until strategy is approved and agents exist.
+  // During ideation the CEO chat is pure refinement — meetings and tasks
+  // only make sense once the company is active with a hired team.
+  if (snapshot.company.status !== "active" || snapshot.agents.length === 0) return null;
 
   const taskModifications: TaskModificationInput[] = [];
   const participantRoles = new Set<AgentIdentity["role"]>(["ceo"]);
@@ -765,6 +774,7 @@ export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoTex
 
     if (delta.action === "create") {
       const task = createTaskFromCeoDelta(delta);
+      if (!task) continue;
       taskModifications.push({
         taskId: task.id,
         modificationType: "assign",
@@ -2867,6 +2877,8 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     const specialistNodes = taskPlan.task_graph.filter((entry) => entry.stage_key === null);
 
     for (const node of specialistNodes) {
+      if (!getAgentByRole(snapshot, node.assigned_role)) continue;
+
       const specialistTask = createWorkflowTask(
         snapshot,
         node.kind,
@@ -2941,6 +2953,8 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     }
 
     for (const followUp of taskPlan.follow_up_tasks) {
+      if (!getAgentByRole(snapshot, followUp.assigned_role)) continue;
+
       const parentTaskId = determineFollowUpParentTaskId(followUp.title, followUp.description, activeExecution);
       const followUpTask = createWorkflowTask(
         snapshot,
