@@ -220,6 +220,15 @@ export async function getOpencode() {
   return opencodePromise;
 }
 
+/**
+ * Invalidate the cached OpenCode instance so the next `getOpencode()` call
+ * will reconnect to an existing server or launch a new one.  Call this when
+ * a "fetch failed" or similar network error indicates the server died.
+ */
+export function resetOpencodeConnection() {
+  opencodePromise = null;
+}
+
 export async function postOpencodeJson<T>(path: string, body: unknown): Promise<T> {
   return resilientCall(
     async () => {

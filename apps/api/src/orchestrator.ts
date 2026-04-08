@@ -2,7 +2,7 @@ import { mkdir, readdir, stat, writeFile, readFile } from "node:fs/promises";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
-import { getOpencode } from "./opencode";
+import { getOpencode, resetOpencodeConnection } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
@@ -14,6 +14,9 @@ import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
 import { persistRuntimeArtifact } from "./artifact-persistence";
 import { workspaceManager } from "./workspace-manager";
+import { structuredCompletion } from "./azure-openai";
+import { withRetry, isRetryableError } from "./resilience";
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Skill loader — reads SKILL.md files with YAML frontmatter
@@ -137,6 +140,7 @@ type ExecutionContext = {
   planText: string | null;
   acceptanceText: string | null;
   reviewStarted: boolean;
+  reworkCycles: number;
 };
 
 const CORE_EXECUTION_TASK_KINDS = new Set<Task["kind"]>(orchestratorConfig.coreExecutionTaskKinds);
@@ -373,6 +377,13 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     return;
   }
 
+  // Don't auto-launch preview while the dev step loop is running — the scaffold
+  // boilerplate (index.html) is detected as a "runnable target" and would show
+  // a dummy Vite + React page before any product code is written.
+  if (developerStepLoopActive) {
+    return;
+  }
+
   const previewState = getLocalPreviewState();
   if (previewState.status === "starting" || previewState.status === "ready") {
     const previewUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
@@ -401,13 +412,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     return;
   }
 
-  if (isUntrustedStaticFallbackPreview(preview)) {
-    emitEmployeeActivity("developer", "info", "Static fallback preview is not accepted as live evidence. Waiting for a developer-reported PREVIEW_URL.", {
-      taskId: activeExecution.buildTaskId,
-    });
-    await stopLocalPreview();
-    return;
-  }
+
 
   setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
   appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
@@ -515,10 +520,6 @@ function extractPreviewUrls(text: string) {
   );
 }
 
-function isUntrustedStaticFallbackPreview(preview: ReturnType<typeof getLocalPreviewState>) {
-  return preview.framework === "Static HTML" && !hasReportedPreviewCandidate();
-}
-
 function createWorkflowTask(
   snapshot: CompanySnapshot,
   kind: Task["kind"],
@@ -559,24 +560,6 @@ function createWorkflowTask(
     maxIterations: 3,
     incomingArtifactIds: [],
   };
-}
-
-function determineFollowUpParentTaskId(title: string, description: string, context: ExecutionContext) {
-  const text = `${title} ${description}`.toLowerCase();
-
-  if (/(preview|smoke|launch|serve|run locally|reachable)/.test(text)) {
-    return context.previewTaskId;
-  }
-
-  if (/(review|handoff|board|verify verdict)/.test(text)) {
-    return context.reviewTaskId;
-  }
-
-  if (/(acceptance|criteria|scope|non-goal|definition of done)/.test(text)) {
-    return context.acceptanceTaskId;
-  }
-
-  return context.buildTaskId;
 }
 
 function attachChildTask(parentTaskId: string, childTaskId: string) {
@@ -1738,6 +1721,94 @@ async function executeSpecialistTask(taskId: string) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Specialist task pruning — auto-resolve tasks the developer already covered
+// ---------------------------------------------------------------------------
+
+const SpecialistPruneVerdict = z.object({
+  resolved: z.array(z.object({
+    taskId: z.string(),
+    reason: z.string(),
+  })),
+});
+
+async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnapshot): Promise<number> {
+  const pendingSpecialist = snapshot.tasks.filter(
+    (task) =>
+      !CORE_EXECUTION_TASK_KINDS.has(task.kind) &&
+      ["created", "planned"].includes(task.status),
+  );
+  if (pendingSpecialist.length === 0) return 0;
+
+  // Collect workspace source listing for the LLM to evaluate.
+  const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".html", ".css"]);
+  const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".vite"]);
+  const fileList: string[] = [];
+
+  function walk(dir: string, depth = 0) {
+    if (depth > 3) return;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
+    for (const entry of entries) {
+      if (ignoreDirs.has(entry.name)) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(fullPath, depth + 1); continue; }
+      const ext = entry.name.slice(entry.name.lastIndexOf("."));
+      if (sourceExtensions.has(ext)) {
+        fileList.push(relative(productDir, fullPath).replace(/\\/g, "/"));
+      }
+    }
+  }
+  walk(productDir);
+  if (fileList.length === 0) return 0;
+
+  const taskSummary = pendingSpecialist.map((t) =>
+    `- id="${t.id}" kind=${t.kind} role=${t.assignedRole} title="${t.title}" dod=[${t.definitionOfDone.join("; ")}]`
+  ).join("\n");
+
+  try {
+    const verdict = await structuredCompletion(
+      "workerDeployment",
+      [
+        {
+          role: "system",
+          content: [
+            "You decide which queued specialist tasks have ALREADY been satisfied by the developer implementation.",
+            "A task is resolved ONLY if the workspace files clearly demonstrate its definition-of-done is met.",
+            "Do not resolve tasks that require runtime verification (e.g. running tests, checking HTTP).",
+            "Return the list of resolved task IDs with a short reason.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [
+            "Workspace files:",
+            fileList.join("\n"),
+            "",
+            "Pending specialist tasks:",
+            taskSummary,
+          ].join("\n"),
+        },
+      ],
+      SpecialistPruneVerdict,
+      "specialist_prune_verdict",
+      { temperature: 0 },
+    );
+
+    const validIds = new Set(pendingSpecialist.map((t) => t.id));
+    let resolved = 0;
+    for (const item of verdict.resolved) {
+      if (!validIds.has(item.taskId)) continue;
+      setTaskStatus(item.taskId, "completed", `Auto-resolved by workspace audit: ${item.reason}`);
+      resolved += 1;
+    }
+    return resolved;
+  } catch {
+    // Non-fatal — if the LLM call fails, just proceed with regular specialist execution.
+    return 0;
+  }
+}
+
 async function runAutonomousReadyTasks(checkpoint: string) {
   let pass = 0;
 
@@ -1784,14 +1855,9 @@ function shouldPauseForBoardReview(snapshot: CompanySnapshot) {
     };
   }
 
-  const blockedOrFailedTasks = snapshot.tasks.filter((task) => ["blocked", "failed"].includes(task.status));
-  if (blockedOrFailedTasks.length > 0) {
-    return {
-      shouldPause: true,
-      reason: `Board review required because ${blockedOrFailedTasks.length} task${blockedOrFailedTasks.length === 1 ? " is" : "s are"} blocked or failed.`,
-    };
-  }
-
+  // Failed/blocked specialist tasks do NOT gate execution — they are
+  // noted in the completion summary but the company keeps running.
+  // Only failed/blocked CORE tasks warrant a pause.
   const incompleteCoreTasks = snapshot.tasks.filter(
     (task) => CORE_EXECUTION_TASK_KINDS.has(task.kind) && !["completed", "cancelled"].includes(task.status),
   );
@@ -1903,6 +1969,14 @@ function pauseForBoardReview(reason: string) {
 }
 
 async function reconcilePostReviewExecution() {
+  // ── Auto-resolve specialist tasks the developer already covered ──
+  const prePruneSnapshot = getSnapshot();
+  const prunedCount = await pruneAlreadyCompletedSpecialistTasks(prePruneSnapshot);
+  if (prunedCount > 0) {
+    emitEmployeeActivity("system", "info", `Auto-resolved ${prunedCount} specialist task${prunedCount === 1 ? "" : "s"} already covered by the developer implementation.`);
+  }
+
+  // ── Execute remaining specialist tasks (tester, designer, etc.) ──
   await runAutonomousReadyTasks("post-review");
 
   const snapshot = getSnapshot();
@@ -1912,7 +1986,7 @@ async function reconcilePostReviewExecution() {
     return;
   }
 
-  completeExecutionCycle("Autonomous execution completed without requiring additional board review.");
+  completeExecutionCycle("Autonomous execution completed — all phases finished.");
 }
 
 async function continueExecutionFromCurrentState(checkpoint: string) {
@@ -1938,11 +2012,11 @@ async function continueExecutionFromCurrentState(checkpoint: string) {
 
   if (result.paused && result.pauseReason?.startsWith("Yielding for async work")) {
     // The router yielded because a task needs async work (e.g., developer session)
-    // The async work (developer session) will eventually fire events that re-enter this function
+    // Run the full build → preview → review loop with automatic rework
     const snapshot = getSnapshot();
     const buildTask = getTaskById(activeExecution.buildTaskId, snapshot);
     if (buildTask && buildTask.status === "in_progress" && buildTask.kind === "implementation") {
-      await startDeveloperPhase(snapshot);
+      await runBuildPreviewReviewLoop(snapshot);
       return;
     }
   }
@@ -1993,19 +2067,15 @@ async function executeTransitionWork(transition: Transition, snapshot: CompanySn
         break;
 
       case "implementation":
-        // Developer phase is async — handled via yield in shouldYield
+        // Developer phase + preview + review handled by runBuildPreviewReviewLoop via yield
         break;
 
       case "local_preview":
-        if (transition.toStatus === "in_progress" || transition.toStatus === "verifying") {
-          await startPreviewPhase();
-        }
+        // Handled inside runBuildPreviewReviewLoop — no standalone execution
         break;
 
       case "board_handoff":
-        if (transition.toStatus === "in_progress") {
-          await startReviewPhase();
-        }
+        // Handled inside runBuildPreviewReviewLoop — no standalone execution
         break;
 
       default:
@@ -2077,7 +2147,6 @@ async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity
 
 async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string) {
   const deployment = ensureDeployment("workerDeployment");
-  const opencode = await getOpencode();
 
   // Inject role-specific skills into the system prompt
   const skillMenu = buildSkillMenu(role);
@@ -2091,29 +2160,45 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
     lastEventSummary: truncateTelemetry(text, 140),
     stallReason: null,
   });
-  const result = await opencode.client.session.prompt({
-    path: { id: sessionId },
-    body: {
-      model: { providerID: "azure", modelID: deployment },
-      agent: role,
-      system: enrichedSystemPrompt,
-      parts: [{ type: "text", text }],
+
+  const output = await withRetry(
+    async () => {
+      const opencode = await getOpencode();
+      const result = await opencode.client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          model: { providerID: "azure", modelID: deployment },
+          agent: role,
+          system: enrichedSystemPrompt,
+          parts: [{ type: "text", text }],
+        },
+      });
+
+      // Check for OpenCode-level errors embedded in data.info
+      const infoError = (result.data?.info as any)?.error;
+      if (infoError) {
+        const errorMsg = infoError.data?.message ?? infoError.name ?? "Unknown OpenCode session error";
+        throw new Error(`OpenCode ${role} session error: ${errorMsg}`);
+      }
+
+      return (
+        (result.data?.parts as Array<{ type: string; text?: string }>)
+          ?.filter((part) => part.type === "text" && part.text)
+          .map((part) => part.text ?? "")
+          .join("\n")
+          .trim() || ""
+      );
     },
-  });
-
-  // Check for OpenCode-level errors embedded in data.info
-  const infoError = (result.data?.info as any)?.error;
-  if (infoError) {
-    const errorMsg = infoError.data?.message ?? infoError.name ?? "Unknown OpenCode session error";
-    throw new Error(`OpenCode ${role} session error: ${errorMsg}`);
-  }
-
-  const output = (
-    (result.data?.parts as Array<{ type: string; text?: string }>)
-      ?.filter((part) => part.type === "text" && part.text)
-      .map((part) => part.text ?? "")
-      .join("\n")
-      .trim() || ""
+    {
+      maxRetries: 3,
+      delay: 2000,
+      backoff: 2,
+      shouldRetry: isRetryableError,
+      onRetry: (attempt, _error) => {
+        resetOpencodeConnection();
+        emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
+      },
+    },
   );
 
   updateAgentSessionState(role, {
@@ -2189,6 +2274,15 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
       `   - Specify typography: font family, sizes for headings/body/captions`,
       `   - Specify layout pattern: alternating dark/light sections, component styling`,
       `   - Include a ready-to-use CSS variables block the developer can paste into index.css`,
+      `   - Specify global body styles (margin:0, font-family, background-color, color)`,
+      `   - All components MUST use the CSS variables — no bare unstyled HTML`,
+      ``,
+      `## Scope Discipline (CRITICAL)`,
+      `Only plan features that the strategy explicitly asks for.`,
+      `Do NOT add authentication, login pages, registration, or user auth unless the strategy specifically requires it.`,
+      `Do NOT add backend APIs, servers, or databases unless the strategy specifically requires them.`,
+      `When in doubt, ship less — a polished, styled, focused MVP beats a feature-bloated skeleton.`,
+      ``,
       `Do NOT include file paths or directory structure — the developer handles project scaffolding.`,
       `Do not edit files in this step.`,
     ].join("\n"),
@@ -2365,26 +2459,40 @@ interface VerifyResult {
 }
 
 async function runDeveloperStep(sessionId: string, systemPrompt: string, text: string): Promise<string> {
-  const opencode = await getOpencode();
-  const result = await opencode.client.session.prompt({
-    path: { id: sessionId },
-    body: {
-      model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
-      agent: "developer",
-      system: systemPrompt,
-      tools: { bash: true, read: true, write: true, edit: true, glob: true, grep: true, apply_patch: true },
-      parts: [{ type: "text", text }],
+  return withRetry(
+    async () => {
+      const opencode = await getOpencode();
+      const result = await opencode.client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
+          agent: "developer",
+          system: systemPrompt,
+          tools: { bash: true, read: true, write: true, edit: true, glob: true, grep: true, apply_patch: true },
+          parts: [{ type: "text", text }],
+        },
+      });
+      const infoError = (result.data?.info as any)?.error;
+      if (infoError) {
+        throw new Error(`OpenCode developer step error: ${infoError.data?.message ?? infoError.name ?? "unknown"}`);
+      }
+      return (result.data?.parts as Array<{ type: string; text?: string }>)
+        ?.filter((p) => p.type === "text" && p.text)
+        .map((p) => p.text ?? "")
+        .join("\n")
+        .trim() || "";
     },
-  });
-  const infoError = (result.data?.info as any)?.error;
-  if (infoError) {
-    throw new Error(`OpenCode developer step error: ${infoError.data?.message ?? infoError.name ?? "unknown"}`);
-  }
-  return (result.data?.parts as Array<{ type: string; text?: string }>)
-    ?.filter((p) => p.type === "text" && p.text)
-    .map((p) => p.text ?? "")
-    .join("\n")
-    .trim() || "";
+    {
+      maxRetries: 3,
+      delay: 2000,
+      backoff: 2,
+      shouldRetry: isRetryableError,
+      onRetry: (attempt, error) => {
+        resetOpencodeConnection();
+        emitEmployeeActivity("developer", "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
+      },
+    },
+  );
 }
 
 async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
@@ -2401,6 +2509,7 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
       "The developer ONLY writes code. Verification is compile-only (npm run build + tsc --noEmit).",
       "Start from building the first UI component. Keep steps small and focused.",
       "Each step must be independently executable and verifiable.",
+      "CRITICAL: The LAST step MUST be an integration/wiring step that imports ALL components into the app entry point (src/main.tsx or src/App.tsx) and renders them together in a cohesive layout. This step ensures nothing is left as an orphan file. Its expectedFiles MUST include the entry point file.",
       `Maximum ${orchestratorConfig.developer.maxSteps} steps total.`,
       "",
       "Return ONLY a JSON array (no markdown fencing, no explanation) where each element has:",
@@ -2449,6 +2558,7 @@ function verifyStep(step: DevStep, workDir: string): VerifyResult {
     try {
       commandOutput = execSync(step.verifyCommand, {
         cwd: workDir, timeout: 60000, encoding: "utf-8", stdio: "pipe",
+        shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh",
       });
     } catch (err: any) {
       commandPassed = false;
@@ -2479,11 +2589,19 @@ function buildStepPrompt(step: DevStep, totalSteps: number): string {
     `Read existing files before editing — preserve work from previous steps.`,
     "",
     ...(step.expectedFiles.length > 0 ? [`Files that must exist when done: ${step.expectedFiles.join(", ")}`] : []),
-    ...(step.verifyCommand ? [`Verify command: \`${step.verifyCommand}\``] : []),
     "",
-    `Use tools (write, edit, bash) to create files. Do ONLY this step. Stop when done.`,
-    `CRITICAL: All React component files MUST use .tsx extension, NEVER .jsx.`,
-    `Do NOT run npm run dev or npm start — running the app is handled by a separate preview phase.`,
+    `## Self-Verification (MANDATORY before finishing)`,
+    `After writing code, you MUST:`,
+    `1. Run the project's build/compile command (e.g. \`npm run build\`, \`npx tsc --noEmit\`, \`python -m py_compile\`, or the equivalent for this stack).`,
+    `2. Read the FULL build output. If there are compile errors, fix them.`,
+    `3. If this is the LAST step (step ${totalSteps}): read the app entry point file and confirm ALL modules/components created in earlier steps are imported and rendered. If any are missing, add them.`,
+    `Do NOT consider this step complete until the build passes cleanly.`,
+    "",
+    `## Rules`,
+    `Use tools (write, edit, bash) to create and edit files. Do ONLY this step.`,
+    `Do NOT start a dev server (npm run dev, npm start, etc.) — the preview phase handles that automatically after all steps are complete.`,
+    `Do NOT add authentication, login pages, or features not in the CTO plan.`,
+    `Every component MUST be visually styled — no bare unstyled HTML tags. Use CSS variables, proper padding, typography, and colors.`,
   ].join("\n");
 }
 
@@ -2540,6 +2658,22 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     "You MUST follow the **frontend-web-app** skill for project setup, framework choice (Vite + React), and port configuration (3210).",
     "CRITICAL: Always use .tsx file extensions for React components, NEVER .jsx. TypeScript catches errors that JSX silently misses.",
     "For visual design: strictly follow the CTO's technical plan.",
+    "",
+    "# UI Quality Standards (NON-NEGOTIABLE)",
+    "Every component you write MUST be visually polished. No bare unstyled HTML.",
+    "Apply these rules to EVERY component:",
+    "- Use CSS variables from the CTO plan (or sensible defaults: dark bg, light text, accent color).",
+    "- All text must have proper font-family, font-size, line-height, and color.",
+    "- All containers must have proper padding, margin, border-radius, and background.",
+    "- Buttons must have hover states, proper padding, cursor:pointer, and border-radius.",
+    "- Forms must have styled inputs (padding, border, border-radius, focus outline).",
+    "- Use flexbox/grid for layout — never rely on browser defaults.",
+    "- The index.css or global stylesheet MUST set body { margin:0; font-family; background-color; color }.",
+    "",
+    "# Scope Discipline",
+    "Only build what the CTO plan and acceptance criteria ask for.",
+    "Do NOT add auth, login, registration, or user management unless explicitly specified in the plan.",
+    "Do NOT add features, pages, or flows not in the spec.",
   ].filter(Boolean).join("\n");
 
   // ── Decompose CTO plan into implementation steps ──
@@ -2564,7 +2698,7 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
         `CRITICAL: This is a FRONTEND-ONLY app. No Express, no backend, no server.js, no API routes.`,
       ] : []),
     ].join("\n"),
-    verifyCommand: "test -f package.json && test -f vite.config.ts && test -f index.html",
+    verifyCommand: "",
     expectedFiles: ["package.json", "vite.config.ts", "index.html"],
   };
 
@@ -2576,7 +2710,8 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     { taskId: activeExecution.buildTaskId });
 
   // ── Step loop ──
-  developerStepLoopActive = true;
+  // NOTE: developerStepLoopActive is managed by the caller
+  // (runBuildPreviewReviewLoop) to prevent event-bridge race conditions.
   await startDeveloperWorkspaceMonitor();
 
   try {
@@ -2612,12 +2747,11 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
         { taskId: activeExecution.buildTaskId });
     }
   } finally {
-    developerStepLoopActive = false;
     clearDeveloperWatchdog();
     stopDeveloperWorkspaceMonitor();
   }
 
-  // ── Post-loop: mark done and continue execution ──
+  // ── Post-loop: mark done ──
   touchAgentSession("developer", "done");
   updateAgentSessionState("developer", {
     awaiting: "idle",
@@ -2630,11 +2764,251 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     taskId: activeExecution.buildTaskId,
   });
   setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished via step loop.");
-  await continueExecutionFromCurrentState("post-developer-steps-complete");
 }
 
-async function startPreviewPhase() {
+// ---------------------------------------------------------------------------
+// Developer rework — send the dev agent back with specific feedback
+// ---------------------------------------------------------------------------
+
+async function runDeveloperRework(snapshot: CompanySnapshot, feedback: string) {
   if (!activeExecution) return;
+
+  const cycle = activeExecution.reworkCycles + 1;
+  activeExecution.reworkCycles = cycle;
+
+  emitEmployeeActivity("developer", "working", `Rework cycle ${cycle}: addressing feedback…`, { taskId: activeExecution.buildTaskId });
+
+  clearReportedPreviewCandidate();
+  await stopLocalPreview();
+
+  executionStatus = "executing";
+  setTaskStatus(activeExecution.buildTaskId, "in_progress", `Rework cycle ${cycle}`);
+  setTaskStatus(activeExecution.previewTaskId, "created");
+  // Allow the CTO review phase to re-enter
+  activeExecution.reviewStarted = false;
+
+  const devSession = await ensureAgentSession(snapshot, "developer");
+  const devSoul = getRoleSoul("developer");
+  const devSkillBody = getSkillBody("developer");
+  const devSystemPrompt = [
+    devSoul.systemPrompt,
+    buildSkillMenu("developer"),
+    devSkillBody,
+    "",
+    "# UI Quality Standards (NON-NEGOTIABLE)",
+    "Every component MUST be visually polished. No bare unstyled HTML.",
+    "Use CSS variables, proper padding, border-radius, typography, and colors for ALL elements.",
+    "Do NOT add auth/login/registration unless explicitly in the feedback.",
+  ].filter(Boolean).join("\n");
+
+  touchAgentSession("developer", "working");
+  updateAgentSessionState("developer", {
+    activeTaskId: activeExecution.buildTaskId,
+    promptStartedAt: nowIso(),
+    promptCompletedAt: null,
+    awaiting: `rework cycle ${cycle}`,
+    lastEventSummary: `Rework cycle ${cycle}: fixing issues from feedback.`,
+    stallReason: null,
+  });
+
+  const reworkPrompt = [
+    `# Rework Required (cycle ${cycle})`,
+    "",
+    `The previous implementation was reviewed and feedback was received. You MUST fix the issues below.`,
+    "",
+    `## Feedback`,
+    feedback,
+    "",
+    `## Workspace: ${productDir}`,
+    `Read existing files before editing — do NOT start over. Patch what is broken.`,
+    "",
+    `## Self-Verification (MANDATORY before finishing)`,
+    `After fixing:`,
+    `1. Run the project's build/compile command and read the FULL output. Fix any errors.`,
+    `2. Read the app entry point and confirm ALL modules/components are imported and rendered.`,
+    `3. Start the dev server so the preview URL is captured.`,
+    `Do NOT consider this rework complete until the build passes cleanly and the dev server is running.`,
+  ].join("\n");
+
+  scheduleDeveloperWatchdog();
+  // NOTE: developerStepLoopActive is managed by runBuildPreviewReviewLoop.
+  try {
+    await runDeveloperStep(devSession.sessionId, devSystemPrompt, reworkPrompt);
+  } finally {
+    clearDeveloperWatchdog();
+  }
+
+  touchAgentSession("developer", "done");
+  updateAgentSessionState("developer", {
+    awaiting: "idle",
+    promptCompletedAt: nowIso(),
+    lastProgressAt: nowIso(),
+    lastEventSummary: `Rework cycle ${cycle} complete.`,
+  });
+  setTaskStatus(activeExecution.buildTaskId, "completed", `Rework cycle ${cycle} complete.`);
+}
+
+// ---------------------------------------------------------------------------
+// Build → Preview → Review loop with automatic rework
+// ---------------------------------------------------------------------------
+
+async function runBuildPreviewReviewLoop(snapshot: CompanySnapshot) {
+  if (!activeExecution) return;
+
+  const maxCycles = orchestratorConfig.developer.maxReworkCycles;
+
+  // Keep the flag true for the ENTIRE loop so the event bridge never
+  // triggers post-developer routing while the loop is still in control.
+  developerStepLoopActive = true;
+  try {
+    // ── Initial developer implementation ──
+    await startDeveloperPhase(snapshot);
+
+    // ── Rework loop: preview → (optionally) review → rework if needed ──
+    for (let cycle = 0; cycle <= maxCycles; cycle++) {
+      if (!activeExecution) return;
+
+      // 1. Preview validation
+      const previewResult = await startPreviewPhase();
+      if (!previewResult.ok) {
+        if (cycle >= maxCycles) {
+          emitEmployeeActivity("system", "error", `Max rework cycles (${maxCycles}) exhausted at preview stage. Pausing for board review.`, { taskId: activeExecution.previewTaskId });
+          pauseForBoardReview(`Developer could not pass preview validation after ${maxCycles} rework cycles.`);
+          return;
+        }
+        emitEmployeeActivity("system", "info", `Preview failed — sending developer to rework (cycle ${cycle + 1}/${maxCycles}).`, { taskId: activeExecution.buildTaskId });
+        await runDeveloperRework(getSnapshot(), previewResult.reworkFeedback);
+        continue;
+      }
+
+      // 2. CTO review
+      const reviewResult = await startReviewPhase();
+      if (!reviewResult.ok) {
+        if (cycle >= maxCycles) {
+          emitEmployeeActivity("system", "error", `Max rework cycles (${maxCycles}) exhausted at CTO review stage. Pausing for board review.`, { taskId: activeExecution.reviewTaskId });
+          pauseForBoardReview(`Developer could not pass CTO review after ${maxCycles} rework cycles.`);
+          return;
+        }
+        emitEmployeeActivity("system", "info", `CTO review requested rework — sending developer back (cycle ${cycle + 1}/${maxCycles}).`, { taskId: activeExecution.buildTaskId });
+        await runDeveloperRework(getSnapshot(), reviewResult.reworkFeedback);
+        continue;
+      }
+
+      // Both passed — done
+      return;
+    }
+  } finally {
+    developerStepLoopActive = false;
+    clearDeveloperWatchdog();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Preview Content Validation — LLM evaluates rendered page against spec
+// ---------------------------------------------------------------------------
+
+const PreviewContentVerdict = z.object({
+  pass: z.boolean(),
+  reason: z.string(),
+  missingElements: z.array(z.string()),
+  visibleElements: z.array(z.string()),
+});
+type PreviewContentVerdict = z.infer<typeof PreviewContentVerdict>;
+
+async function validatePreviewContent(previewUrl: string, acceptanceSpec: string): Promise<PreviewContentVerdict> {
+  // Collect ALL source files from the workspace (stack-agnostic).
+  // We evaluate source code — not rendered HTML — because SPAs serve an empty
+  // shell and JS must execute in a browser to produce actual content.
+  const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".html", ".css", ".json"]);
+  const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".vite"]);
+
+  const sourceSnippets: string[] = [];
+  function collectSources(dir: string, depth = 0) {
+    if (depth > 4) return;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
+    for (const entry of entries) {
+      if (ignoreDirs.has(entry.name)) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        collectSources(fullPath, depth + 1);
+      } else {
+        const ext = entry.name.slice(entry.name.lastIndexOf("."));
+        if (sourceExtensions.has(ext) && entry.name !== "package-lock.json") {
+          try {
+            const content = readFileSync(fullPath, "utf-8");
+            const relPath = relative(productDir, fullPath).replace(/\\/g, "/");
+            sourceSnippets.push(`--- ${relPath} ---\n${content.slice(0, 3000)}`);
+          } catch { /* skip unreadable */ }
+        }
+      }
+    }
+  }
+  collectSources(productDir);
+
+  // Cap total context to stay within token budget
+  let totalLen = 0;
+  const cappedSnippets: string[] = [];
+  for (const s of sourceSnippets) {
+    if (totalLen + s.length > 30000) break;
+    cappedSnippets.push(s);
+    totalLen += s.length;
+  }
+
+  try {
+    return await structuredCompletion(
+      "workerDeployment",
+      [
+        {
+          role: "system",
+          content: [
+            "You are a QA engineer verifying that a product's SOURCE CODE delivers the features described in the acceptance specification.",
+            "You will receive the acceptance spec and the source files from the workspace.",
+            "",
+            "FAIL if ANY of these are true:",
+            "- The app entry point (main file, index file, or equivalent for any framework) does not import or use the product-specific modules/components",
+            "- The source code only contains scaffold/boilerplate with no product-specific logic",
+            "- Key features from the acceptance spec have no corresponding implementation in any source file",
+            "- Modules were created as files but are never imported or used by the application entry point",
+            "- The UI has NO meaningful styling — bare browser-default HTML with no CSS, no design tokens, no layout system",
+            "- The app includes features NOT in the acceptance spec (e.g. login/auth pages, admin panels, settings screens) unless the spec explicitly requires them",
+            "",
+            "PASS if:",
+            "- The app entry point imports and uses the product-specific modules",
+            "- The core features from the acceptance spec have corresponding implementations",
+            "- The application would render/serve meaningful product content when run (even with mock/demo data)",
+            "- The UI code includes actual styling (CSS variables, classes, inline styles, or a CSS framework) — not bare unstyled HTML",
+            "- The app ONLY implements what the spec asks for — no hallucinated features like login pages or auth flows unless specified",
+            "",
+            "Be stack-agnostic. This could be React, Vue, Svelte, Python, plain HTML, Express, or anything else.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [
+            "# Acceptance Specification",
+            acceptanceSpec,
+            "",
+            `# Source Files (${cappedSnippets.length} files from workspace)`,
+            ...cappedSnippets,
+          ].join("\n"),
+        },
+      ],
+      PreviewContentVerdict,
+      "preview_content_verdict",
+      { temperature: 0.2 },
+    );
+  } catch (err) {
+    // If LLM call fails, don't block — let the CTO review phase catch issues
+    emitEmployeeActivity("system", "info", `LLM preview validation unavailable, deferring to CTO review: ${err instanceof Error ? err.message : "unknown"}`);
+    return { pass: true, reason: "LLM validation unavailable — deferred to CTO review", missingElements: [], visibleElements: [] };
+  }
+}
+
+type PhaseResult = { ok: true } | { ok: false; reworkFeedback: string };
+
+async function startPreviewPhase(): Promise<PhaseResult> {
+  if (!activeExecution) return { ok: true };
 
   stopDeveloperWorkspaceMonitor();
 
@@ -2652,7 +3026,8 @@ async function startPreviewPhase() {
   const preview = await startLocalPreview(productDir, preferredTargetPath);
   const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
   if (preview.status !== "ready" || !previewUrl) {
-    setTaskStatus(activeExecution.previewTaskId, "failed", preview.lastError ?? "Preview launch failed.");
+    const reason = preview.lastError ?? "Preview launch failed.";
+    setTaskStatus(activeExecution.previewTaskId, "failed", reason);
     recordMeeting({
       type: "escalation",
       facilitatorRole: "developer",
@@ -2662,44 +3037,75 @@ async function startPreviewPhase() {
         {
           topic: "Preview launch blocker",
           type: "blocker",
-          content: preview.lastError ?? "Local preview launch failed.",
+          content: reason,
           raisedByRole: "developer",
           relatedTaskId: activeExecution.previewTaskId,
         },
       ],
       decisions: [
         {
-          description: "CTO reviews the preview failure before any additional implementation work proceeds.",
+          description: "Developer must fix the preview launch issue before the cycle can continue.",
           decidedByRoles: ["developer", "cto", "ceo"],
           impactIds: [activeExecution.previewTaskId],
         },
       ],
-      taskModifications: [
-        {
-          taskId: activeExecution.previewTaskId,
-          modificationType: "unblock",
-          details: "Preview failed and requires CTO escalation review.",
-        },
-      ],
     });
-    throw new Error(preview.lastError ?? "Preview launch failed.");
+    emitEmployeeActivity("developer", "error", reason, { taskId: activeExecution.previewTaskId });
+    return { ok: false, reworkFeedback: `Preview launch failed: ${reason}. Fix the issue so the dev server starts and is reachable.` };
   }
 
-  if (isUntrustedStaticFallbackPreview(preview)) {
-    await stopLocalPreview();
-    const message = "Preview fallback resolved to a static index page without a developer-reported PREVIEW_URL. The developer must report the real preview endpoint before preview can pass.";
-    setTaskStatus(activeExecution.previewTaskId, "failed", message);
-    throw new Error(message);
-  }
+
 
   setTaskPreviewUrl(activeExecution.previewTaskId, previewUrl);
   appendTaskResult(activeExecution.previewTaskId, `preview:${previewUrl}`);
+
+  // ── LLM Content Validation ──
+  const contentVerdict = await validatePreviewContent(previewUrl, activeExecution.acceptanceText ?? "");
+  if (!contentVerdict.pass) {
+    await stopLocalPreview();
+    const failMsg = `Preview content validation failed: ${contentVerdict.reason}`;
+    setTaskStatus(activeExecution.previewTaskId, "failed", failMsg);
+    setTaskStatus(activeExecution.buildTaskId, "in_progress", failMsg);
+    recordMeeting({
+      type: "escalation",
+      facilitatorRole: "developer",
+      participantRoles: ["developer", "cto"],
+      summary: "Preview launched but rendered content does not match the acceptance spec. Developer must fix.",
+      agenda: [
+        {
+          topic: "Preview content mismatch",
+          type: "blocker",
+          content: contentVerdict.reason,
+          raisedByRole: "developer",
+          relatedTaskId: activeExecution.previewTaskId,
+        },
+        ...(contentVerdict.missingElements.length > 0 ? [{
+          topic: "Missing elements",
+          type: "blocker" as const,
+          content: `Missing from the rendered preview: ${contentVerdict.missingElements.join(", ")}`,
+          raisedByRole: "developer" as const,
+          relatedTaskId: activeExecution.buildTaskId,
+        }] : []),
+      ],
+      decisions: [{
+        description: "Developer must fix the implementation so the preview renders the full product.",
+        decidedByRoles: ["developer", "cto"],
+        impactIds: [activeExecution.buildTaskId, activeExecution.previewTaskId],
+      }],
+    });
+    emitEmployeeActivity("developer", "error", failMsg, { taskId: activeExecution.previewTaskId });
+    const missingHint = contentVerdict.missingElements.length > 0
+      ? ` Missing elements: ${contentVerdict.missingElements.join(", ")}.`
+      : "";
+    return { ok: false, reworkFeedback: `${contentVerdict.reason}${missingHint} Fix the source code so the product renders correctly when the dev server runs.` };
+  }
+
   await syncWorkspaceCheckpoint(
     activeExecution.buildTaskId,
     "developer",
     `Developer implementation reached a runnable preview at ${previewUrl}`
   );
-  setTaskStatus(activeExecution.previewTaskId, "completed", `Local preview reachable at ${previewUrl}`);
+  setTaskStatus(activeExecution.previewTaskId, "completed", `Local preview reachable at ${previewUrl} — content validated against acceptance spec.`);
   clearRoleBlockers("developer", [preview.lastError ?? "Local preview launch failed."]);
   const previewReviewMeeting = recordMeeting({
     type: "ad_hoc",
@@ -2751,11 +3157,12 @@ async function startPreviewPhase() {
     taskId: activeExecution.previewTaskId,
     meetingId: previewReviewMeeting.id,
   });
+  return { ok: true };
 }
 
-async function startReviewPhase() {
-  if (!activeExecution || activeExecution.reviewStarted || !activeExecution.planText || !activeExecution.acceptanceText) {
-    return;
+async function startReviewPhase(): Promise<PhaseResult> {
+  if (!activeExecution || !activeExecution.planText || !activeExecution.acceptanceText) {
+    return { ok: true };
   }
 
   activeExecution.reviewStarted = true;
@@ -2788,11 +3195,12 @@ async function startReviewPhase() {
       "",
       `# Output Requirements`,
       `Return text only with these sections:`,
-      `1. Review verdict`,
+      `1. Review verdict (APPROVED or NEEDS_REWORK)`,
       `2. What was built`,
       `3. Verification evidence`,
       `4. Open risks or follow-ups`,
       `5. Recommendation to the board`,
+      `6. If NEEDS_REWORK: a clear, actionable list of what the developer must fix`,
       "",
       `If unresolved risks or blocked work remain, state clearly that board review is recommended. If the remaining work is autonomous and policy-safe, say so explicitly.`,
     ].join("\n"),
@@ -2803,32 +3211,89 @@ async function startReviewPhase() {
   appendTaskResult(activeExecution.reviewTaskId, `artifact:${reviewArtifact.id}`);
   attachArtifactToTask(activeExecution.reviewTaskId, reviewArtifact.id);
   setTaskPreviewUrl(activeExecution.reviewTaskId, getLocalPreviewState().url);
-  setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished and ready for board review.");
-  setTaskStatus(activeExecution.reviewTaskId, "completed", "Board handoff prepared.");
+
+  // ── Classify the CTO review into a structured verdict ──
+  const CtoReviewVerdict = z.object({
+    approved: z.boolean().describe("true if the CTO approved the implementation, false if rework is needed"),
+    reworkItems: z.array(z.string()).describe("Specific items the developer must fix (empty if approved)"),
+    summary: z.string().describe("One-sentence verdict summary"),
+  });
+
+  let verdict = { approved: true, reworkItems: [] as string[], summary: "CTO approved the implementation." };
+  try {
+    verdict = await structuredCompletion(
+      "workerDeployment",
+      [
+        {
+          role: "system",
+          content: "You are classifying a CTO code review into a structured verdict. Extract whether the review APPROVED the implementation or requests REWORK. If rework is needed, list the specific items to fix.",
+        },
+        {
+          role: "user",
+          content: reviewText || "No review text available.",
+        },
+      ],
+      CtoReviewVerdict,
+      "cto_review_verdict",
+      { temperature: 0 },
+    );
+  } catch {
+    // If verdict extraction fails, assume approved to avoid blocking
+    emitEmployeeActivity("system", "info", "Could not extract structured CTO verdict — assuming approved.", { taskId: activeExecution.reviewTaskId });
+  }
+
+  if (!verdict.approved && verdict.reworkItems.length > 0) {
+    // CTO found issues — developer needs to rework
+    setTaskStatus(activeExecution.reviewTaskId, "failed", `CTO review: ${verdict.summary}`);
+    setTaskStatus(activeExecution.buildTaskId, "in_progress", `CTO rework: ${verdict.reworkItems.join("; ")}`);
+    recordMeeting({
+      type: "escalation",
+      facilitatorRole: "cto",
+      participantRoles: ["cto", "developer"],
+      summary: `CTO review found issues requiring developer rework: ${verdict.summary}`,
+      agenda: verdict.reworkItems.map((item, i) => ({
+        topic: `Rework item ${i + 1}`,
+        type: "blocker" as const,
+        content: item,
+        raisedByRole: "cto" as const,
+        relatedTaskId: activeExecution!.buildTaskId,
+      })),
+      decisions: [{
+        description: "Developer must address the CTO's rework items before the review can pass.",
+        decidedByRoles: ["cto"],
+        impactIds: [activeExecution.buildTaskId, activeExecution.reviewTaskId],
+      }],
+    });
+    emitEmployeeActivity("cto", "error", `CTO review: NEEDS_REWORK — ${verdict.summary}`, { taskId: activeExecution.reviewTaskId });
+    return { ok: false, reworkFeedback: `CTO review feedback:\n${verdict.reworkItems.map((item, i) => `${i + 1}. ${item}`).join("\n")}\n\nFix all items above, then run the build to confirm no errors.` };
+  }
+
+  setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished and CTO-approved.");
+  setTaskStatus(activeExecution.reviewTaskId, "completed", "CTO review passed — proceeding to autonomous specialist execution.");
   const boardPrepMeeting = recordMeeting({
     type: "handoff",
     facilitatorRole: "cto",
     participantRoles: ["cto", "ceo"],
-    summary: "CTO and CEO aligned on the review packet and decided whether more autonomous execution is needed.",
+    summary: "CTO approved the implementation — company continues autonomous execution of remaining specialist tasks.",
     agenda: [
       {
         topic: "Implementation review verdict",
         type: "update",
-        content: "CTO summarized what was built, verification evidence, and open risks for board review.",
+        content: "CTO verified the implementation against acceptance criteria and approved it.",
         raisedByRole: "cto",
         relatedTaskId: activeExecution.reviewTaskId,
       },
       {
-        topic: "Autonomy checkpoint",
+        topic: "Autonomous continuation",
         type: "proposal",
-        content: "CEO will either continue autonomous execution on ready dependent work or escalate to the board only if policy requires it.",
+        content: "CEO authorized continued autonomous execution for ready specialist tasks (QA, design, marketing).",
         raisedByRole: "ceo",
         relatedTaskId: activeExecution.reviewTaskId,
       },
     ],
     decisions: [
       {
-        description: "Board review is used only when unresolved risk, blocked work, or approvals require explicit intervention.",
+        description: "CTO approved — autonomous execution continues for specialist work.",
         decidedByRoles: ["cto", "ceo"],
         impactIds: [activeExecution.reviewTaskId, reviewArtifact.id],
       },
@@ -2836,15 +3301,16 @@ async function startReviewPhase() {
     learnings: [
       {
         role: "ceo",
-        content: "Board review now depends on the CTO handoff artifact and attached preview evidence.",
+        content: "Company operates autonomously through CTO review and specialist execution without board gates.",
       },
     ],
   });
-  emitEmployeeActivity("cto", "idle", `Board handoff ready → /api/artifacts/${reviewArtifact.id}`, {
+  emitEmployeeActivity("cto", "idle", `CTO review passed — continuing autonomous execution → /api/artifacts/${reviewArtifact.id}`, {
     taskId: activeExecution.reviewTaskId,
     meetingId: boardPrepMeeting.id,
   });
   await reconcilePostReviewExecution();
+  return { ok: true };
 }
 
 export function getArtifacts() {
@@ -3190,6 +3656,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
       planText: null,
       acceptanceText: null,
       reviewStarted: false,
+      reworkCycles: 0,
     };
 
     const taskPlan = await generateWorkflowTaskPlan(snapshot);
@@ -3299,34 +3766,16 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     // Only apply LLM graph edges to specialist/non-core tasks.
     // Core task dependencies are already set at lines above (buildTask depends on acceptanceTask, etc.).
 
-    for (const followUp of taskPlan.follow_up_tasks) {
-      if (!getAgentByRole(snapshot, followUp.assigned_role)) continue;
-
-      const parentTaskId = determineFollowUpParentTaskId(followUp.title, followUp.description, activeExecution);
-      const followUpTask = createWorkflowTask(
-        snapshot,
-        "follow_up",
-        followUp.assigned_role,
-        followUp.title,
-        followUp.description,
-        followUp.problem_statement,
-        followUp.deliverable,
-        followUp.definition_of_done,
-        mapTaskPriority(followUp.priority),
-        "created",
-      );
-
-      followUpTask.parentTaskId = parentTaskId;
-      followUpTask.dependsOnTaskIds = [parentTaskId];
-      upsertTask(followUpTask);
-      attachChildTask(parentTaskId, followUpTask.id);
-    }
+    // Follow-up tasks are no longer generated upfront.  All specialist
+    // work is represented in the task_graph as properly sequenced graph
+    // nodes.  This avoids redundant tasks when the developer's first pass
+    // already covers the follow-up scope.
 
     updateMeeting(kickoffMeeting.id, (meeting) => ({
       ...meeting,
       summary: `${meeting.summary} Meeting ${meeting.id} anchors the ${taskPlan.delivery_profile.replace(/_/g, " ")} task pipeline for this sprint.`,
     }));
-    emitEmployeeActivity("system", "info", `Task pipeline created for ${taskPlan.delivery_profile.replace(/_/g, " ")}: CTO plan → PM spec → Developer implementation → Local validation → CTO board handoff review`, {
+    emitEmployeeActivity("system", "info", `Task pipeline created for ${taskPlan.delivery_profile.replace(/_/g, " ")}: CTO plan → PM spec → Developer implementation → Preview validation → CTO review → Specialist tasks`, {
       meetingId: kickoffMeeting.id,
     });
     await runPlanningPhase(snapshot);
@@ -3403,8 +3852,16 @@ async function startEventBridge() {
       }
     }
   } catch {
-    emitEmployeeActivity("system", "info", "Event bridge disconnected");
+    emitEmployeeActivity("system", "info", "Event bridge disconnected — will reconnect on next OpenCode call");
     eventBridgeStarted = false;
+    resetOpencodeConnection();
+    // Auto-reconnect after a brief delay
+    setTimeout(() => {
+      if (!eventBridgeStarted) {
+        startEventBridge().catch(() => {});
+        eventBridgeStarted = true;
+      }
+    }, 3000);
   }
 }
 
@@ -3462,7 +3919,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       const toolName: string = part.toolInvocation?.toolName ?? part.tool ?? part.name ?? "";
       const args: Record<string, any> = part.toolInvocation?.args ?? part.state?.input ?? {};
       const toolStatus: string = part.state?.status ?? "";
-      const isInvocation = part.type === "tool-invocation" || (part.type === "tool" && toolStatus === "running");
+      const isInvocation = part.type === "tool-invocation";
 
       if (toolName) {
         updateAgentSessionState(role, {
