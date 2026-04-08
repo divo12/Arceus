@@ -1,26 +1,35 @@
 @import "tailwindcss";
 
-/* ── Swiss Design System ────────────────────────────── */
+/* ── Arceus — Light Engineering Theme ───────────────── */
 
 :root {
   color-scheme: light;
-  --swiss-black: #1c1917;
-  --swiss-white: #faf9f7;
-  --swiss-gray-50: #f5f5f0;
-  --swiss-gray-100: #e7e5e4;
-  --swiss-gray-200: #d6d3d1;
-  --swiss-gray-300: #a8a29e;
-  --swiss-gray-400: #78716c;
-  --swiss-gray-500: #57534e;
-  --swiss-red: #b91c1c;
-  --swiss-blue: #1e40af;
+
+  --swiss-black: #111827;
+  --swiss-white: #FFFFFF;
+  --swiss-gray-50: #F8F9FB;
+  --swiss-gray-100: #EEF0F4;
+  --swiss-gray-200: #DDE1E9;
+  --swiss-gray-300: #B8BFCC;
+  --swiss-gray-400: #7C8598;
+  --swiss-gray-500: #4B5563;
+  --swiss-red: #DC2626;
+  --swiss-blue: #2563EB;
+
+  /* Extended semantic tokens */
+  --arc-success: #059669;
+  --arc-warning: #D97706;
+  --arc-surface: #F8F9FB;
+  --arc-elevated: #FFFFFF;
+  --arc-glow: rgba(37, 99, 235, 0.04);
+  --arc-preview-bg: #F1F3F7;
 }
 
 body {
   min-height: 100vh;
   background-color: var(--swiss-white);
   color: var(--swiss-black);
-  font-family: var(--font-inter), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "cv01", "cv02", "ss01";
@@ -32,34 +41,34 @@ body {
   box-sizing: border-box;
 }
 
-/* ── Swiss Typography Scale ─────────────────────────── */
+/* ── Typography Scale ───────────────────────────────── */
 
 .swiss-display {
-  font-family: var(--font-display), var(--font-inter), sans-serif;
-  font-size: 3.5rem;
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 2.5rem;
   font-weight: 700;
-  letter-spacing: -0.04em;
-  line-height: 1.06;
-}
-
-.swiss-h1 {
-  font-family: var(--font-display), var(--font-inter), sans-serif;
-  font-size: 2rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.035em;
   line-height: 1.1;
 }
 
+.swiss-h1 {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
 .swiss-h2 {
-  font-family: var(--font-display), var(--font-inter), sans-serif;
-  font-size: 1.25rem;
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 1.125rem;
   font-weight: 600;
   letter-spacing: -0.02em;
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .swiss-h3 {
-  font-family: var(--font-display), var(--font-inter), sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
   font-size: 0.9375rem;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -67,22 +76,22 @@ body {
 }
 
 .swiss-caption {
-  font-family: var(--font-inter), sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
   font-size: 0.6875rem;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   line-height: 1;
   color: var(--swiss-gray-400);
 }
 
 .swiss-mono {
-  font-family: var(--font-mono), "SF Mono", "Fira Code", monospace;
+  font-family: var(--font-mono), "SF Mono", monospace;
   font-size: 0.8125rem;
   letter-spacing: 0;
 }
 
-/* ── Swiss Grid ─────────────────────────────────────── */
+/* ── Grid ───────────────────────────────────────────── */
 
 .swiss-grid-12 {
   display: grid;
@@ -90,7 +99,7 @@ body {
   gap: 1.25rem;
 }
 
-/* ── Swiss Dividers ─────────────────────────────────── */
+/* ── Dividers ───────────────────────────────────────── */
 
 .swiss-rule {
   border: 0;
@@ -99,7 +108,27 @@ body {
 
 .swiss-rule-dark {
   border: 0;
-  border-top: 1px solid var(--swiss-black);
+  border-top: 1px solid var(--swiss-gray-200);
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--swiss-gray-200);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--swiss-gray-300);
 }
 
 /* ── Markdown Content ───────────────────────────────── */
@@ -135,18 +164,20 @@ body {
 .markdown-content ol { list-style: decimal; }
 
 .markdown-content code {
-  border-radius: 2px;
+  border-radius: 3px;
   background: var(--swiss-gray-50);
-  padding: 0.1rem 0.35rem;
+  padding: 0.15rem 0.4rem;
   font-size: 0.875em;
+  color: var(--swiss-blue);
 }
 
 .markdown-content pre {
   overflow-x: auto;
-  border-radius: 0;
+  border-radius: 6px;
   background: var(--swiss-black);
   color: #e2e8f0;
   padding: 1rem;
+  border: 1px solid var(--swiss-gray-100);
 }
 
 .markdown-content pre code {

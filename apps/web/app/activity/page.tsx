@@ -5,6 +5,7 @@ import { Activity, AlertCircle, FileCode, LoaderCircle, Terminal, Waves } from "
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiUrl } from "../../lib/api";
+import { PageShell } from "../../components/page-shell";
 
 type EmployeeActivityEvent = {
   id: string;
@@ -78,15 +79,8 @@ export default function ActivityPage() {
   const fileEditCount = events.filter((event) => event.type === "file_edit").length;
 
   return (
-    <main className="min-h-screen px-6 py-6">
-      <div className="mx-auto max-w-[1400px] space-y-6">
-        <header>
-          <div className="swiss-caption text-[var(--swiss-gray-300)]">05 — Activity</div>
-          <h1 className="swiss-h1 mt-1">Live operations timeline</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Filter the stream by employee or event type to follow how execution, edits, shell work, and escalations unfolded.</p>
-        </header>
-
-        <hr className="swiss-rule" />
+    <PageShell title="Activity Timeline" description="Live employee operations — filter by type or team member.">
+      <div className="space-y-6">
 
         <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
           <div className="bg-[var(--swiss-white)] p-4">
@@ -172,6 +166,6 @@ export default function ActivityPage() {
           </CardContent>
         </Card>
       </div>
-    </main>
+    </PageShell>
   );
 }
