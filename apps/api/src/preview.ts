@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { basename, extname, join, normalize, relative } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { previewConfig } from "./config/index";
 
 type PreviewStatus = "idle" | "starting" | "ready" | "error";
@@ -263,20 +263,26 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
     const packageJsonPath = join(candidate.dir, "package.json");
     if (await exists(packageJsonPath)) {
       const raw = await readFile(packageJsonPath, "utf8");
-      const parsed = JSON.parse(raw) as {
+      let parsed: {
         scripts?: Record<string, string>;
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
       };
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // Malformed package.json (e.g. developer wrote comments) — skip this candidate
+        continue;
+      }
       const scripts = parsed.scripts ?? {};
       const profile = detectNodePreviewProfile(parsed);
 
       const npmScriptArgs = ["--", "--port", String(previewState.port), "--host", previewConfig.host];
       const targetPath = relative(productDir, candidate.dir) || ".";
 
-      if (scripts.preview) return { command: "npm", args: ["run", "preview", ...npmScriptArgs], kind: "npm-preview", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
-      if (scripts.start) return { command: "npm", args: ["run", "start", ...npmScriptArgs], kind: "npm-start", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
       if (scripts.dev) return { command: "npm", args: ["run", "dev", ...npmScriptArgs], kind: "npm-dev", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
+      if (scripts.start) return { command: "npm", args: ["run", "start", ...npmScriptArgs], kind: "npm-start", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
+      if (scripts.preview) return { command: "npm", args: ["run", "preview", ...npmScriptArgs], kind: "npm-preview", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
     }
 
     const indexHtmlPath = join(candidate.dir, "index.html");
@@ -522,6 +528,16 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
       ? "entry-url"
       : "root-url";
 
+  // Kill any stale process occupying the preview port before launching
+  try {
+    const pids = execSync(`lsof -ti:${previewState.port}`, { encoding: "utf8" }).trim();
+    if (pids) {
+      for (const pid of pids.split("\n")) {
+        try { process.kill(Number(pid), "SIGTERM"); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* no process on port — good */ }
+
   if (launch.kind === "static-http") {
     await startStaticPreviewServer(launch.cwd);
   } else {
@@ -544,10 +560,27 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
     });
   }
 
-  const ready = await waitForUrl(previewState.validationUrl ?? previewState.entryUrl ?? previewState.url, previewConfig.launchTimeoutMs);
+  const primaryUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
+  let ready = await waitForUrl(primaryUrl, previewConfig.launchTimeoutMs);
+
+  // Fallback: Vite may bind to "localhost" but not "127.0.0.1" (or vice versa)
+  if (!ready && primaryUrl) {
+    const fallbackUrl = primaryUrl.includes("127.0.0.1")
+      ? primaryUrl.replace("127.0.0.1", "localhost")
+      : primaryUrl.replace("localhost", "127.0.0.1");
+    ready = await waitForUrl(fallbackUrl, 5000);
+    if (ready) {
+      previewState.url = previewState.url?.replace(
+        primaryUrl.includes("127.0.0.1") ? "127.0.0.1" : "localhost",
+        primaryUrl.includes("127.0.0.1") ? "localhost" : "127.0.0.1",
+      );
+      previewState.validationUrl = fallbackUrl;
+    }
+  }
+
   if (!ready) {
     previewState.status = "error";
-    previewState.lastError = `Preview validation URL did not become reachable in time${previewState.validationUrl ? `: ${previewState.validationUrl}` : "."}`;
+    previewState.lastError = `Preview not reachable at ${primaryUrl} after ${previewConfig.launchTimeoutMs}ms. Launch: ${previewState.command}. Check if package.json exists at cwd and 'dev' script starts on port ${previewState.port}.`;
     return previewState;
   }
 

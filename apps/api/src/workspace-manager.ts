@@ -18,7 +18,7 @@ type WorkspaceFileEntry = {
 
 type WorkspaceManifestEntry = WorkspaceFileManifestEntry;
 
-const repoRoot = process.cwd();
+const repoRoot = resolve(process.cwd(), "..", "..");
 const legacyProductDir = resolve(repoRoot, "workspace");
 const legacyApiWorkspaceDir = resolve(repoRoot, "apps", "api", "workspace");
 const fallbackWorkspaceState = new Map<string, WorkspaceInfo>();
