@@ -37,6 +37,7 @@ export const orchestratorConfig = {
     workspaceMonitorIgnore: readListEnv("ARCEUS_WORKSPACE_MONITOR_IGNORE", defaultWorkspaceIgnore),
     maxSteps: readNumberEnv("ARCEUS_DEVELOPER_MAX_STEPS", 4),
     maxRetriesPerStep: readNumberEnv("ARCEUS_DEVELOPER_MAX_RETRIES_PER_STEP", 2),
+    maxReworkCycles: readNumberEnv("ARCEUS_DEVELOPER_MAX_REWORK_CYCLES", 3),
   },
   execution: {
     autonomousReadyPassLimit: readNumberEnv("ARCEUS_AUTONOMOUS_READY_PASS_LIMIT", 8),
