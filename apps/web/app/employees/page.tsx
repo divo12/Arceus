@@ -6,6 +6,7 @@ import type { AgentIdentity, MemorySummary } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiUrl } from "../../lib/api";
+import { PageShell } from "../../components/page-shell";
 
 type EmployeeDirectoryEntry = {
   id: string;
@@ -90,15 +91,8 @@ export default function EmployeesPage() {
   const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) ?? employees[0] ?? null;
 
   return (
-    <main className="min-h-screen px-6 py-6">
-      <div className="mx-auto max-w-[1400px] space-y-6">
-        <header>
-          <div className="swiss-caption text-[var(--swiss-gray-300)]">03 — Employees</div>
-          <h1 className="swiss-h1 mt-1">Roster, memory, and runtime health</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Select any employee to inspect their working memory, blockers, recent learnings, and runtime state.</p>
-        </header>
-
-        <hr className="swiss-rule" />
+    <PageShell title="Team Roster" description="Employee directory, working memory, and runtime health.">
+      <div className="space-y-6">
 
         <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
           <div className="bg-[var(--swiss-white)] p-4">
@@ -307,6 +301,6 @@ export default function EmployeesPage() {
           </Card>
         </div>
       </div>
-    </main>
+    </PageShell>
   );
 }

@@ -9,6 +9,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Separator } from "../../components/ui/separator";
 import { apiUrl } from "../../lib/api";
+import { PageShell } from "../../components/page-shell";
 
 type Artifact = {
   id: string;
@@ -131,18 +132,9 @@ export default function TasksPage() {
   const pendingApprovals = snapshot?.approvals.filter((approval) => approval.status === "pending") ?? [];
 
   return (
-    <main className="min-h-screen px-6 py-6">
-      <div className="mx-auto max-w-[1400px] space-y-6">
-        <header className="flex items-end justify-between gap-4">
-          <div>
-            <div className="swiss-caption text-[var(--swiss-gray-300)]">02 — Tasks</div>
-            <h1 className="swiss-h1 mt-1">Task pipeline</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Tasks move through planning, execution, and completion. Select a task card to inspect the detailed contract, dependencies, and execution evidence.</p>
-          </div>
-          <Badge variant={executionStatus === "awaiting_board_review" ? "secondary" : "outline"}>{executionStatus}</Badge>
-        </header>
-
-        <hr className="swiss-rule" />
+    <PageShell title="Task Pipeline" description="Tasks move through planning, execution, and completion.">
+      <div className="space-y-6">
+        <Badge variant={executionStatus === "awaiting_board_review" ? "secondary" : "outline"}>{executionStatus}</Badge>
 
         <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
           <div className="bg-[var(--swiss-white)] p-4">
@@ -351,6 +343,6 @@ export default function TasksPage() {
           </div>
         </div>
       ) : null}
-    </main>
+    </PageShell>
   );
 }

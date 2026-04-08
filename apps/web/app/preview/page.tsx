@@ -6,6 +6,7 @@ import type { CompanySnapshot, Task } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiUrl } from "../../lib/api";
+import { PageShell } from "../../components/page-shell";
 
 type EmployeeActivityEvent = {
   id: string;
@@ -138,13 +139,9 @@ export default function PreviewPage() {
   const recentShellEvents = activityEvents.filter((e) => e.type === "shell").slice(-8).reverse();
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-[var(--swiss-gray-100)] px-8 py-5">
+    <PageShell title="Product Preview" description="Live preview surface, runtime details, and recent edits.">
+      <div className="space-y-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <div className="swiss-caption">07 — Preview</div>
-            <h1 className="swiss-h1 mt-1">Product surface</h1>
-          </div>
           <div className="flex items-center gap-3">
             {previewHref ? (
               <a className="inline-flex items-center gap-2 border border-[var(--swiss-gray-200)] px-4 py-2 text-[0.8125rem] font-medium transition hover:border-[var(--swiss-black)]" href={previewHref} target="_blank" rel="noreferrer">
@@ -154,16 +151,12 @@ export default function PreviewPage() {
             <Badge variant={productOverview.preview.status === "ready" ? "secondary" : "outline"}>{productOverview.preview.status}</Badge>
           </div>
         </div>
-        <hr className="swiss-rule mt-4" />
-        <div className="mt-4 grid grid-cols-4 gap-px border border-[var(--swiss-gray-100)]">
+        <div className="grid grid-cols-4 gap-px border border-[var(--swiss-gray-100)]">
           <div className="bg-[var(--swiss-white)] p-4"><div className="swiss-caption">Framework</div><div className="mt-1 text-lg font-semibold">{productOverview.preview.framework ?? "—"}</div></div>
           <div className="bg-[var(--swiss-white)] p-4"><div className="swiss-caption">Runtime</div><div className="mt-1 text-lg font-semibold">{productOverview.preview.runtime ?? "—"}</div></div>
           <div className="bg-[var(--swiss-white)] p-4"><div className="swiss-caption">Files</div><div className="mt-1 text-lg font-semibold">{productOverview.files.length}</div></div>
           <div className="bg-[var(--swiss-white)] p-4"><div className="swiss-caption">Live edits</div><div className="mt-1 text-lg font-semibold">{recentFileEditCount}</div></div>
         </div>
-      </header>
-
-      <div className="px-8 py-6 space-y-6">
         {/* Preview iframe */}
         <div className="border border-[var(--swiss-gray-100)]">
           {previewHref ? (
@@ -290,6 +283,6 @@ export default function PreviewPage() {
           </div>
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

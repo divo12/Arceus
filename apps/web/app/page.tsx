@@ -1,8 +1,9 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Activity, AlertCircle, ArrowUpRight, Bot, Cpu, FileCode, LoaderCircle, Play, Terminal, X } from "lucide-react";
+import { Activity, AlertCircle, ArrowUpRight, Bell, Bot, ChevronDown, Cpu, FileCode, Inbox, LoaderCircle, Monitor, Play, Terminal, Users, X, Zap } from "lucide-react";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -412,7 +413,7 @@ function buildStrategyPayload(card: StrategyProposalCard) {
 
   // Ensure the 4 core roles exist (ceo, cto, pm, developer).
   // If classifier omitted any, add minimal defaults.
-  const coreDefaults: Array<{ role: string; title: string; parent_role: string | null; capabilities: string[] }> = [
+  const coreDefaults: RoleEntry[] = [
     { role: "ceo", title: "Chief Executive Officer", parent_role: null, capabilities: ["Strategic leadership"] },
     { role: "cto", title: "Chief Technology Officer", parent_role: "ceo", capabilities: ["Technical architecture"] },
     { role: "pm", title: "Product Manager", parent_role: "cto", capabilities: ["Product scope and delivery"] },
@@ -667,7 +668,7 @@ function MissionBriefView({ card, disabled, onChoose }: { card: MissionBriefCard
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 xl:grid-cols-3">
+        <div className="grid gap-3">
           <div className="border border-[var(--swiss-gray-100)] p-3">
             <div className="swiss-caption text-[var(--swiss-gray-400)]">Mission</div>
             <div className="mt-2 text-[0.8125rem] leading-6">{card.mission.mission_statement}</div>
@@ -682,7 +683,7 @@ function MissionBriefView({ card, disabled, onChoose }: { card: MissionBriefCard
           </div>
         </div>
         <StringList title="Differentiators" items={card.mission.differentiators} />
-        <div className="grid gap-3 xl:grid-cols-2">
+        <div className="grid gap-3">
           <StringList title="Assumptions" items={card.mission.assumptions} />
           <StringList title="Unknowns" items={card.mission.unknowns} />
         </div>
@@ -771,7 +772,7 @@ function StrategyProposalEditor({
           />
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4">
           <div>
             <label className="swiss-caption mb-1 block text-[var(--swiss-gray-400)]">Scope Boundary</label>
             <Textarea
@@ -802,7 +803,7 @@ function StrategyProposalEditor({
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-4">
           <div>
             <label className="swiss-caption mb-1 block text-[var(--swiss-gray-400)]">Execution Sequence</label>
             <Textarea
@@ -849,7 +850,7 @@ function StrategyProposalEditor({
 
         <div className="space-y-3">
           <div className="swiss-caption text-[var(--swiss-gray-400)]">Team Structure</div>
-          <div className="grid gap-3 xl:grid-cols-2">
+          <div className="grid gap-3">
             {draft.strategy.roles.map((role, index) => (
               <RoleEditor
                 key={`${role.role}-${index}`}
@@ -937,7 +938,7 @@ function StatusUpdateView({ card, disabled, onChoose }: { card: StatusUpdateCard
         {card.status ? (
           <>
             <div className="border border-[var(--swiss-gray-100)] p-3 text-[0.8125rem] font-medium">{card.status.headline}</div>
-            <div className="grid gap-3 xl:grid-cols-3">
+            <div className="grid gap-3">
               <StringList title="Current focus" items={card.status.current_focus} />
               <StringList title="Blockers" items={card.status.blockers} />
               <StringList title="Next actions" items={card.status.next_actions} />
@@ -1020,6 +1021,9 @@ export default function Page() {
   const [expandedArtifact, setExpandedArtifact] = useState<Artifact | null>(null);
   const [productOverview, setProductOverview] = useState<ProductOverview>(emptyProductOverview);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [sprintOpen, setSprintOpen] = useState(false);
 
   async function loadState(options?: { suppressRuntimeError?: boolean }) {
     const [companyResult, runtimeResult] = await Promise.allSettled([
@@ -1478,177 +1482,592 @@ export default function Page() {
 
   const pendingApprovals = snapshot.approvals.filter((approval) => approval.status === "pending");
 
+  // ── Computed values for the living dashboard ──────────
+  const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+  const sprintTasks = currentSprint
+    ? snapshot.tasks.filter((t) => t.sprintId === currentSprint.id)
+    : snapshot.tasks;
+  const completedTaskCount = sprintTasks.filter((t) => t.status === "completed").length;
+  const totalTaskCount = sprintTasks.length;
+
+  const buildTaskWithPreview = snapshot.tasks.find((t) => !!t.localPreviewUrl);
+  const previewHref = getPreviewHref(productOverview, buildTaskWithPreview);
+  const previewStatus = productOverview.preview.status;
+
+  const agentSessionEntries = orchestratorStatus?.agentSessions
+    ? Object.entries(orchestratorStatus.agentSessions)
+    : [];
+  const activeAgentCount = agentSessionEntries.filter(([, s]) => s.status === "working").length;
+  const developerSession = agentSessionEntries.find(([, s]) => s.role === "developer")?.[1] ?? null;
+  const latestProductFile = productOverview.files.length > 0 ? productOverview.files[productOverview.files.length - 1] : null;
+  const recentMeeting = snapshot.meetings.length > 0 ? snapshot.meetings[snapshot.meetings.length - 1] : null;
+
+  const activeTasks = snapshot.tasks.filter((t) => ["in_progress", "verifying", "planned"].includes(t.status));
+  const returnSummary = buildReturnSummary({
+    executionStatus,
+    activeTasks,
+    pendingApprovals,
+    previewHref,
+    latestProductFile,
+    developerSession,
+    recentMeeting,
+  });
+
+  const showCompanyView = executionStatus !== "idle" || snapshot.tasks.length > 0 || snapshot.sprints.length > 0 || previewStatus !== "idle";
+
+  // ── Inbox items ────────────────────────────────────────
+  type InboxItem = {
+    id: string;
+    kind: "approval" | "error" | "completed" | "stall" | "meeting" | "info";
+    title: string;
+    detail: string;
+    time: string;
+    actionLabel?: string;
+    onAction?: () => void;
+    href?: string;
+  };
+
+  const inboxItems: InboxItem[] = [];
+
+  // Pending approvals
+  for (const approval of pendingApprovals) {
+    inboxItems.push({
+      id: `approval-${approval.id}`,
+      kind: "approval",
+      title: approval.title,
+      detail: approval.description || "Needs board decision",
+      time: "",
+      actionLabel: executionStatus === "awaiting_board_review" ? "Approve" : undefined,
+      onAction: executionStatus === "awaiting_board_review" ? () => void handleApproveBoardReview() : undefined,
+    });
+  }
+
+  // Agent stalls
+  for (const [, sess] of agentSessionEntries) {
+    if (sess.stallReason) {
+      inboxItems.push({
+        id: `stall-${sess.agentId}`,
+        kind: "stall",
+        title: `${sess.name || sess.role} is stalled`,
+        detail: sess.stallReason,
+        time: sess.lastEventAt ? formatRelativeTime(sess.lastEventAt) : "",
+        href: "/employees",
+      });
+    }
+  }
+
+  // Recent errors from activity (last 5)
+  const recentErrors = activityEvents
+    .filter((e) => e.type === "error")
+    .slice(-5)
+    .reverse();
+  for (const ev of recentErrors) {
+    inboxItems.push({
+      id: `error-${ev.id}`,
+      kind: "error",
+      title: `Error from ${ev.employee}`,
+      detail: ev.content.slice(0, 120),
+      time: formatRelativeTime(ev.timestamp),
+      href: "/activity",
+    });
+  }
+
+  // Recently completed tasks (last 3)
+  const recentlyCompleted = snapshot.tasks
+    .filter((t) => t.status === "completed" && t.completedAt)
+    .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime())
+    .slice(0, 3);
+  for (const task of recentlyCompleted) {
+    inboxItems.push({
+      id: `done-${task.id}`,
+      kind: "completed",
+      title: task.title,
+      detail: `Completed by ${task.assignedRole}`,
+      time: task.completedAt ? formatRelativeTime(task.completedAt) : "",
+      href: "/tasks",
+    });
+  }
+
+  // Recent meetings (last 2)
+  const recentMeetings = snapshot.meetings.slice(-2).reverse();
+  for (const mtg of recentMeetings) {
+    inboxItems.push({
+      id: `mtg-${mtg.id}`,
+      kind: "meeting",
+      title: `${mtg.type.replace(/_/g, " ")} meeting`,
+      detail: mtg.summary.slice(0, 100),
+      time: formatRelativeTime(mtg.scheduledAt),
+      href: "/meetings",
+    });
+  }
+
+  // Execution done notice
+  if (executionStatus === "done") {
+    inboxItems.push({
+      id: "exec-done",
+      kind: "info",
+      title: "Execution cycle complete",
+      detail: "Review the preview or give the CEO the next instruction.",
+      time: "",
+    });
+  }
+
+  const inboxCount = inboxItems.length;
+
+  const inboxKindIcon = (kind: InboxItem["kind"]) => {
+    switch (kind) {
+      case "approval": return <AlertCircle className="h-3.5 w-3.5 text-[var(--swiss-red)]" />;
+      case "error": return <AlertCircle className="h-3.5 w-3.5 text-[var(--swiss-red)]" />;
+      case "stall": return <AlertCircle className="h-3.5 w-3.5 text-[var(--arc-warning)]" />;
+      case "completed": return <Activity className="h-3.5 w-3.5 text-[var(--arc-success)]" />;
+      case "meeting": return <Users className="h-3.5 w-3.5 text-[var(--swiss-blue)]" />;
+      case "info": return <Cpu className="h-3.5 w-3.5 text-[var(--swiss-gray-400)]" />;
+    }
+  };
+
+  const getAgentName = (task: Task) => {
+    const agent = snapshot.agents.find((a) => a.role === task.assignedRole);
+    return agent?.name ?? task.assignedRole;
+  };
+
+  const getTaskStatusIcon = (status: Task["status"]) => {
+    switch (status) {
+      case "completed": return "✓";
+      case "in_progress": return "●";
+      case "verifying": return "◐";
+      case "planned": return "○";
+      case "created": return "○";
+      case "blocked": return "✗";
+      case "failed": return "✗";
+      case "cancelled": return "—";
+      default: return "○";
+    }
+  };
+
+  const getTaskStatusColor = (status: Task["status"]) => {
+    switch (status) {
+      case "completed": return "text-[var(--arc-success)]";
+      case "in_progress": return "text-[var(--swiss-blue)]";
+      case "verifying": return "text-[var(--arc-warning)]";
+      case "failed":
+      case "blocked": return "text-[var(--swiss-red)]";
+      default: return "text-[var(--swiss-gray-400)]";
+    }
+  };
+
+  const getAgentStatusColor = (status?: string) => {
+    switch (status) {
+      case "working": return "bg-[var(--arc-success)]";
+      case "done": return "bg-[var(--swiss-blue)]";
+      case "error": return "bg-[var(--swiss-red)]";
+      default: return "bg-[var(--swiss-gray-300)]";
+    }
+  };
+
   return (
-    <div className="min-h-screen">
-      {/* ── Page header ─────────────────────────────────── */}
-      <header className="border-b border-[var(--swiss-gray-100)] px-8 py-5">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <div className="swiss-caption">01 — Board</div>
-            <h1 className="swiss-h1 mt-1">{snapshot.company.id === "company_pending" ? "Boardroom" : snapshot.company.name}</h1>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={runtime?.chatReady ? "secondary" : "warning"}>{runtime?.chatReady ? "CEO ready" : "CEO needs config"}</Badge>
-            <Badge variant={executionStatus === "done" ? "secondary" : executionStatus === "error" ? "destructive" : "outline"}>{executionStatus}</Badge>
-            <Badge variant="outline">{snapshot.agents.length} employees</Badge>
-            <Badge variant="outline">{snapshot.tasks.length} tasks</Badge>
-            <Button variant="outline" size="sm" onClick={() => void handleReset()} disabled={isResetting}>
-              {isResetting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
-              Reset
+    <div className="flex h-screen flex-col">
+      {/* ── Top bar ─────────────────────────────────────── */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-5">
+        <div className="flex items-center gap-3">
+          <span className="text-[0.8125rem] font-bold tracking-tight">
+            {snapshot.company.id === "company_pending" ? "Arceus" : snapshot.company.name}
+          </span>
+          <span className="mx-1 h-4 w-px bg-[var(--swiss-gray-200)]" />
+          <nav className="flex items-center gap-1">
+            {[
+              { href: "/tasks", label: "Tasks" },
+              { href: "/employees", label: "Team" },
+              { href: "/meetings", label: "Meetings" },
+              { href: "/activity", label: "Activity" },
+              { href: "/workspace", label: "Workspace" },
+              { href: "/preview", label: "Preview" },
+              { href: "/execution", label: "Execution" },
+            ].map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="rounded-md px-2 py-1 text-[0.6875rem] text-[var(--swiss-gray-400)] transition hover:bg-[var(--swiss-gray-100)] hover:text-[var(--swiss-black)]"
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <span className="mx-1 h-4 w-px bg-[var(--swiss-gray-200)]" />
+          {currentSprint ? (
+            <Badge variant="outline" className="text-[0.625rem]">Sprint {currentSprint.number}</Badge>
+          ) : null}
+          <Badge
+            variant={executionStatus === "done" ? "secondary" : executionStatus === "error" ? "destructive" : "outline"}
+            className="text-[0.625rem]"
+          >
+            {executionStatus}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant={runtime?.chatReady ? "outline" : "warning"} className="text-[0.625rem]">
+            {runtime?.chatReady ? "CEO ready" : "CEO needs config"}
+          </Badge>
+          <Button variant="ghost" size="sm" onClick={() => void handleReset()} disabled={isResetting}>
+            {isResetting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            Reset
+          </Button>
+          {!["idle", "done", "error", "paused"].includes(executionStatus) ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-[var(--swiss-red)]"
+              onClick={() => void handleStopExecution()}
+              disabled={stoppingExecution}
+            >
+              {stoppingExecution ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+              Stop
             </Button>
-            {!["idle", "done", "error", "paused"].includes(executionStatus) ? (
-              <Button variant="outline" size="sm" className="border-[var(--swiss-red)] text-[var(--swiss-red)]" onClick={() => void handleStopExecution()} disabled={stoppingExecution}>
-                {stoppingExecution ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
-                Stop
-              </Button>
-            ) : null}
-          </div>
+          ) : null}
         </div>
       </header>
 
-      <div className="grid gap-6 px-8 py-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        {/* ── CEO Chat (main area) ──────────────────────── */}
-        <section className="flex flex-col gap-4">
-          {/* Strategy brief */}
-          <div className="border border-[var(--swiss-gray-100)] px-5 py-4">
-            <div className="swiss-caption">Current strategy</div>
-            <div className="mt-2 font-semibold">{snapshot.strategy.title}</div>
-            {snapshot.strategy.summary ? (
-              <div className="mt-1 text-[0.8125rem] leading-6 text-[var(--swiss-gray-400)]">{snapshot.strategy.summary}</div>
-            ) : null}
-          </div>
+      {/* ── Main area ───────────────────────────────────── */}
+      <div className="flex min-h-0 flex-1">
+        {/* ── CEO Chat Panel (left) ─────────────────────── */}
+        <div
+          className={`flex flex-col border-r border-[var(--swiss-gray-100)] ${
+            showCompanyView ? "w-[560px] shrink-0" : "flex-1"
+          }`}
+        >
+          {runtimeError && !isResetting ? (
+            <div className="shrink-0 border-b border-[var(--swiss-red)]/20 bg-[var(--swiss-red)]/5 px-5 py-2">
+              <p className="text-[0.75rem] text-[var(--swiss-red)]">{runtimeError}</p>
+            </div>
+          ) : null}
 
-          {runtimeError && !isResetting ? <p className="text-xs text-[var(--swiss-red)]">{runtimeError}</p> : null}
+          {/* Chat messages (scrollable) */}
+          <div className="flex-1 overflow-y-auto p-4">
+            {messages.length === 0 ? (
+              <LaunchBoardPanel disabled={isStreaming} onPrompt={(prompt) => void sendMessage(prompt)} />
+            ) : (
+              <div className="space-y-3">
+                {messages.map((message) => {
+                  if (message.role === "ceo" && message.card) {
+                    return (
+                      <div key={message.id} className="space-y-2 rounded-lg border border-[var(--swiss-gray-100)] px-4 py-3 text-[0.8125rem]">
+                        <div className="swiss-caption opacity-70">CEO</div>
+                        {message.content ? <p className="whitespace-pre-wrap leading-6 text-[var(--swiss-gray-400)]">{message.content}</p> : null}
+                        {message.card.card_type === "welcome_brief" ? <WelcomeBriefView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                        {message.card.card_type === "mission_brief" ? <MissionBriefView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                        {message.card.card_type === "strategy_proposal" ? (
+                          <StrategyProposalEditor
+                            card={message.card}
+                            busy={proposalActionId === message.id}
+                            resolved={resolvedProposalIds.includes(message.id)}
+                            onApprove={(card, execute) => handleStrategyAction(message.id, card, execute)}
+                          />
+                        ) : null}
+                        {message.card.card_type === "clarifying_question" ? <ClarifyingQuestionView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                        {message.card.card_type === "status_update" ? <StatusUpdateView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                      </div>
+                    );
+                  }
 
-          {/* Chat messages — no nested scroll, flows with page */}
-          {messages.length === 0 ? (
-            <LaunchBoardPanel disabled={isStreaming} onPrompt={(prompt) => void sendMessage(prompt)} />
-          ) : (
-            <div className="space-y-3">
-              {messages.map((message) => {
-                if (message.role === "ceo" && message.card) {
                   return (
-                    <div key={message.id} className="space-y-2 border border-[var(--swiss-gray-100)] px-5 py-4 text-[0.8125rem]">
-                      <div className="swiss-caption opacity-70">CEO</div>
-                      {message.content ? <p className="whitespace-pre-wrap leading-6 text-[var(--swiss-gray-400)]">{message.content}</p> : null}
-                      {message.card.card_type === "welcome_brief" ? <WelcomeBriefView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                      {message.card.card_type === "mission_brief" ? <MissionBriefView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                      {message.card.card_type === "strategy_proposal" ? (
-                        <StrategyProposalEditor
-                          card={message.card}
-                          busy={proposalActionId === message.id}
-                          resolved={resolvedProposalIds.includes(message.id)}
-                          onApprove={(card, execute) => handleStrategyAction(message.id, card, execute)}
-                        />
-                      ) : null}
-                      {message.card.card_type === "clarifying_question" ? <ClarifyingQuestionView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                      {message.card.card_type === "status_update" ? <StatusUpdateView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                    <div
+                      key={message.id}
+                      className={
+                        message.role === "board"
+                          ? "ml-auto max-w-[85%] rounded-lg border border-[var(--swiss-gray-200)] bg-[var(--swiss-gray-50)] px-4 py-3 text-[0.8125rem]"
+                          : message.role === "ceo"
+                            ? "max-w-[90%] rounded-lg border border-[var(--swiss-gray-100)] px-4 py-3 text-[0.8125rem]"
+                            : "max-w-[90%] rounded-lg border-l-2 border-[var(--swiss-gray-200)] py-2 pl-3 text-[0.8125rem] text-[var(--swiss-gray-400)]"
+                      }
+                    >
+                      <div className="swiss-caption mb-1 opacity-70">
+                        {message.role === "board" ? "Board" : message.role === "ceo" ? "CEO" : "System"}
+                      </div>
+                      <p className="whitespace-pre-wrap leading-6">{message.content}</p>
                     </div>
                   );
-                }
+                })}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </div>
 
-                return (
-                  <div
-                    key={message.id}
-                    className={
-                      message.role === "board"
-                        ? "ml-auto max-w-[75%] border border-[var(--swiss-gray-200)] bg-[var(--swiss-gray-50)] px-5 py-3 text-[0.8125rem]"
-                        : message.role === "ceo"
-                          ? "max-w-[85%] border border-[var(--swiss-gray-100)] px-5 py-3 text-[0.8125rem]"
-                          : "max-w-[85%] border-l-2 border-[var(--swiss-gray-200)] pl-4 py-3 text-[0.8125rem] text-[var(--swiss-gray-400)]"
-                    }
-                  >
-                    <div className="swiss-caption mb-1 opacity-70">{message.role === "board" ? "Board" : message.role === "ceo" ? "CEO" : "System"}</div>
-                    <p className="whitespace-pre-wrap leading-6">{message.content}</p>
-                  </div>
-                );
-              })}
-              <div ref={chatEndRef} />
-            </div>
-          )}
-
-          {/* Composer — always visible at bottom of chat */}
-          <div className="sticky bottom-0 border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)] p-4">
+          {/* Composer (pinned to bottom) */}
+          <div className="shrink-0 border-t border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-4">
             <Textarea
-              placeholder="Tell the CEO what company to build or what should happen next…"
+              placeholder="Tell the CEO what to build or what should happen next…"
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
-              className="min-h-[80px] resize-none"
+              className="min-h-[72px] resize-none rounded-lg bg-[var(--swiss-white)] text-[0.8125rem]"
               disabled={isStreaming}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  if (composer.trim() && !isPending && !isStreaming) {
+                    startTransition(() => void sendMessage());
+                  }
+                }
+              }}
             />
-            <div className="mt-3 flex flex-wrap items-center justify-end gap-3">
-              <Button variant="outline" onClick={() => void handleQuickExecute()} disabled={isPending || isStreaming || quickExecuting || !composer.trim()}>
-                {quickExecuting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleQuickExecute()}
+                disabled={isPending || isStreaming || quickExecuting || !composer.trim()}
+              >
+                {quickExecuting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                 Quick Execute
               </Button>
-              <Button onClick={() => startTransition(() => void sendMessage())} disabled={isPending || isStreaming || !composer.trim()}>
-                {isPending || isStreaming ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
-                Send to CEO
+              <Button
+                size="sm"
+                onClick={() => startTransition(() => void sendMessage())}
+                disabled={isPending || isStreaming || !composer.trim()}
+              >
+                {isPending || isStreaming ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ArrowUpRight className="h-3.5 w-3.5" />}
+                Send
               </Button>
             </div>
           </div>
-        </section>
+        </div>
 
-        {/* ── Sidebar (compact) ─────────────────────────── */}
-        <aside className="space-y-4">
-          {/* Company pulse */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2">
-                <Cpu className="h-4 w-4" />
-                Company pulse
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-px border border-[var(--swiss-gray-100)] text-[0.8125rem]">
-              <div className="bg-[var(--swiss-white)] p-3">
-                <div className="swiss-caption">Status</div>
-                <div className="mt-1 font-semibold">{executionStatus}</div>
-              </div>
-              <div className="bg-[var(--swiss-white)] p-3">
-                <div className="swiss-caption">Employees</div>
-                <div className="mt-1 font-semibold">{snapshot.agents.length}</div>
-              </div>
-              <div className="bg-[var(--swiss-white)] p-3">
-                <div className="swiss-caption">Tasks</div>
-                <div className="mt-1 font-semibold">{snapshot.tasks.length}</div>
-              </div>
-              <div className="bg-[var(--swiss-white)] p-3">
-                <div className="swiss-caption">Budget</div>
-                <div className="mt-1 font-semibold">{formatCurrency(snapshot.company.budgetCents)}</div>
-              </div>
-            </CardContent>
-          </Card>
+        {/* ── Company View (right) ──────────────────────── */}
+        {showCompanyView ? (
+          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+            <div className="flex-1 space-y-5 p-6">
+              {/* ── Inbox ────────────────────────────────── */}
+              {inboxCount > 0 ? (
+                <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)]">
+                  <button
+                    className="flex w-full items-center justify-between px-5 py-3 text-left"
+                    onClick={() => setInboxOpen((prev) => !prev)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Inbox className="h-4 w-4 text-[var(--swiss-gray-400)]" />
+                      <span className="text-[0.8125rem] font-semibold">Inbox</span>
+                      <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--swiss-blue)] px-1.5 text-[0.625rem] font-semibold text-white">
+                        {inboxCount}
+                      </span>
+                    </div>
+                    <ChevronDown
+                      className={`h-4 w-4 text-[var(--swiss-gray-400)] transition-transform ${inboxOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {inboxOpen ? (
+                    <div className="border-t border-[var(--swiss-gray-100)]">
+                      {inboxItems.map((item, idx) => {
+                        const inner = (
+                          <>
+                            <span className="shrink-0">{inboxKindIcon(item.kind)}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate text-[0.8125rem] font-medium">{item.title}</span>
+                                {item.time ? (
+                                  <span className="shrink-0 text-[0.625rem] text-[var(--swiss-gray-300)]">{item.time}</span>
+                                ) : null}
+                              </div>
+                              <div className="mt-0.5 truncate text-[0.75rem] leading-relaxed text-[var(--swiss-gray-400)]">
+                                {item.detail}
+                              </div>
+                            </div>
+                            {item.actionLabel && item.onAction ? (
+                              <Button
+                                size="sm"
+                                className="shrink-0"
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); item.onAction!(); }}
+                              >
+                                {item.actionLabel}
+                              </Button>
+                            ) : null}
+                          </>
+                        );
 
-          {/* Pending approvals */}
-          {pendingApprovals.length > 0 ? (
-            <div className="border-l-2 border-[var(--swiss-red)] py-3 pl-4">
-              <div className="swiss-caption text-[var(--swiss-red)]">Board approval required</div>
-              <div className="mt-2 text-[0.8125rem] font-semibold">{pendingApprovals[0]?.title}</div>
-              <div className="mt-1 text-[0.8125rem] text-[var(--swiss-gray-400)]">{pendingApprovals.length} pending</div>
-              {executionStatus === "awaiting_board_review" ? (
-                <Button className="mt-3 w-full" size="sm" onClick={() => void handleApproveBoardReview()}>
-                  Approve Board Review
-                </Button>
+                        const cls = `flex items-start gap-3 px-5 py-3 transition hover:bg-[var(--swiss-gray-50)] ${idx < inboxItems.length - 1 ? "border-b border-[var(--swiss-gray-100)]" : ""}`;
+
+                        return item.href ? (
+                          <Link key={item.id} href={item.href} className={cls}>{inner}</Link>
+                        ) : (
+                          <div key={item.id} className={cls}>{inner}</div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
-            </div>
-          ) : null}
 
-          {executionStatus === "done" ? (
-            <div className="border-l-2 border-[var(--swiss-gray-300)] py-3 pl-4 text-[0.8125rem]">
-              <div className="font-semibold">Execution cycle complete</div>
-              <div className="mt-1 text-[var(--swiss-gray-400)]">Review the preview or give the CEO the next instruction.</div>
-            </div>
-          ) : null}
-        </aside>
-      </div>
+              {/* ── Product Preview (hero) ───────────────── */}
+              <section className="overflow-hidden rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]">
+                <div className="flex items-center justify-between border-b border-[var(--swiss-gray-100)] px-5 py-3">
+                  <div className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4 text-[var(--swiss-gray-400)]" />
+                    <span className="text-[0.8125rem] font-semibold">Product Preview</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {productOverview.preview.framework ? (
+                      <Badge variant="outline" className="text-[0.625rem]">{productOverview.preview.framework}</Badge>
+                    ) : null}
+                    <Badge
+                      variant={previewStatus === "ready" ? "secondary" : previewStatus === "error" ? "destructive" : "outline"}
+                      className="text-[0.625rem]"
+                    >
+                      {previewStatus === "ready" ? "✓ Live" : previewStatus === "starting" ? "Starting…" : previewStatus === "error" ? "Error" : "Waiting"}
+                    </Badge>
+                  </div>
+                </div>
+                {previewHref ? (
+                  <div className="relative bg-[var(--arc-preview-bg)]">
+                    <iframe
+                      src={previewHref}
+                      className="w-full border-0"
+                      style={{ height: "380px" }}
+                      title="Product preview"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                    />
+                    <a
+                      href={previewHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="absolute right-3 top-3 flex h-7 items-center gap-1.5 rounded-md bg-[var(--swiss-gray-50)]/90 px-2.5 text-[0.6875rem] font-medium text-[var(--swiss-gray-400)] backdrop-blur-sm transition hover:text-[var(--swiss-black)]"
+                    >
+                      Open <ArrowUpRight className="h-3 w-3" />
+                    </a>
+                  </div>
+                ) : (
+                  <div className="flex h-48 flex-col items-center justify-center gap-2 bg-[var(--arc-preview-bg)] text-[var(--swiss-gray-300)]">
+                    <Monitor className="h-8 w-8 opacity-30" />
+                    <span className="text-[0.8125rem]">No preview available yet</span>
+                    {executionStatus !== "idle" ? (
+                      <span className="text-[0.6875rem] text-[var(--swiss-gray-400)]">The team is building — preview will appear when ready</span>
+                    ) : null}
+                  </div>
+                )}
+              </section>
 
+              {/* ── Current Sprint (collapsible) ────────── */}
+              <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]">
+                <button
+                  className="flex w-full items-center justify-between px-5 py-3 text-left"
+                  onClick={() => setSprintOpen((prev) => !prev)}
+                >
+                  <span className="text-[0.8125rem] font-semibold">
+                    {currentSprint?.title || (snapshot.strategy.title !== "CEO workspace is waiting for your first message" ? snapshot.strategy.title : "Current Workload")}
+                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-[0.75rem] text-[var(--swiss-gray-400)]">{completedTaskCount}/{totalTaskCount} tasks</span>
+                    {totalTaskCount > 0 ? (
+                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--swiss-gray-200)]">
+                        <div
+                          className="h-full rounded-full bg-[var(--swiss-blue)] transition-all duration-500"
+                          style={{ width: `${(completedTaskCount / totalTaskCount) * 100}%` }}
+                        />
+                      </div>
+                    ) : null}
+                    <ChevronDown
+                      className={`h-4 w-4 text-[var(--swiss-gray-400)] transition-transform ${sprintOpen ? "rotate-180" : ""}`}
+                    />
+                  </div>
+                </button>
+                {sprintOpen ? (
+                  <div className="border-t border-[var(--swiss-gray-100)] px-5 py-4">
+                    {/* Task list */}
+                    {sprintTasks.length > 0 ? (
+                      <div className="space-y-0.5">
+                        {sprintTasks.map((task) => (
+                          <Link
+                            key={task.id}
+                            href="/tasks"
+                            className="flex items-center gap-3 rounded-lg px-3 py-2 transition hover:bg-[var(--swiss-gray-100)] cursor-pointer"
+                          >
+                            <span className={`font-mono text-[0.8125rem] font-semibold ${getTaskStatusColor(task.status)}`}>
+                              {getTaskStatusIcon(task.status)}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{task.title}</span>
+                            <span className="shrink-0 text-[0.6875rem] text-[var(--swiss-gray-400)]">{getAgentName(task)}</span>
+                            <Badge
+                              variant={task.status === "completed" ? "secondary" : task.status === "in_progress" ? "outline" : task.status === "failed" || task.status === "blocked" ? "destructive" : "outline"}
+                              className="shrink-0 text-[0.5625rem]"
+                            >
+                              {task.status.replace(/_/g, " ")}
+                            </Badge>
+                          </Link>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-6 text-center text-[0.8125rem] text-[var(--swiss-gray-300)]">
+                        No tasks yet — start by chatting with the CEO
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </section>
+
+              {/* ── Team (collapsible) ───────────────────── */}
+              {snapshot.agents.length > 0 ? (
+                <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]">
+                  <button
+                    className="flex w-full items-center justify-between px-5 py-3 text-left"
+                    onClick={() => setTeamOpen((prev) => !prev)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-[var(--swiss-gray-400)]" />
+                      <span className="text-[0.8125rem] font-semibold">Team</span>
+                      <span className="text-[0.6875rem] text-[var(--swiss-gray-400)]">{snapshot.agents.length} members</span>
+                    </div>
+                    <ChevronDown
+                      className={`h-4 w-4 text-[var(--swiss-gray-400)] transition-transform ${teamOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {teamOpen ? (
+                    <div className="border-t border-[var(--swiss-gray-100)] px-5 py-3">
+                      <div className="space-y-1">
+                        {snapshot.agents.map((agent) => {
+                          const session = orchestratorStatus?.agentSessions?.[agent.sessionBindingId];
+                          return (
+                            <Link key={agent.id} href="/employees" className="flex items-center gap-3 rounded-lg px-3 py-2 transition hover:bg-[var(--swiss-gray-100)] cursor-pointer">
+                              <span className={`h-2 w-2 shrink-0 rounded-full ${getAgentStatusColor(session?.status)}`} />
+                              <span className="text-[0.8125rem] font-medium">{agent.name}</span>
+                              <Badge variant="outline" className="text-[0.5625rem]">{agent.role}</Badge>
+                              <span className="ml-auto max-w-[200px] truncate text-[0.6875rem] text-[var(--swiss-gray-400)]">
+                                {session?.lastEventSummary || session?.status || "idle"}
+                              </span>
+                              <span className="text-[0.625rem] text-[var(--swiss-gray-300)]">
+                                {session?.lastEventAt ? formatRelativeTime(session.lastEventAt) : "—"}
+                              </span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
+            </div>
+          </div>
+        ) : null}
+        </div>
+
+        {/* ── Status bar ────────────────────────────────── */}
+      <footer className="flex h-8 shrink-0 items-center gap-4 border-t border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-5 font-mono text-[0.6875rem] text-[var(--swiss-gray-400)]">
+        {currentSprint ? <span>Sprint {currentSprint.number}</span> : null}
+        {totalTaskCount > 0 ? <span>{completedTaskCount}/{totalTaskCount} tasks</span> : null}
+        {activeAgentCount > 0 ? (
+          <span className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--arc-success)]" />
+            {activeAgentCount} active
+          </span>
+        ) : null}
+        <span>Preview: {previewStatus === "ready" ? "✓ running" : previewStatus === "starting" ? "starting…" : "—"}</span>
+        <span className="ml-auto text-[var(--swiss-gray-300)]">{snapshot.company.name || "Arceus"}</span>
+      </footer>
+
+      {/* ── Artifact modal ──────────────────────────────── */}
       {expandedArtifact ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-[var(--swiss-black)]/50 p-4">
-          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)]">
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)]">
             <div className="flex items-start justify-between gap-3 border-b border-[var(--swiss-gray-100)] px-5 py-4">
               <div>
-                <div className="text-lg font-semibold">{expandedArtifact.title}</div>
-                <div className="swiss-caption text-[var(--swiss-gray-400)]">
+                <div className="text-[0.9375rem] font-semibold">{expandedArtifact.title}</div>
+                <div className="swiss-caption mt-1 text-[var(--swiss-gray-400)]">
                   {expandedArtifact.agent} · {expandedArtifact.kind} · {new Date(expandedArtifact.createdAt).toLocaleTimeString()}
                 </div>
               </div>

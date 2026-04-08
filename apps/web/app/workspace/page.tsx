@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Activity, AlertCircle, FileCode, FolderKanban, LoaderCircle, Terminal } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { PageShell } from "../../components/page-shell";
 
 type ProductOverview = {
   root: string;
@@ -103,15 +104,8 @@ export default function WorkspacePage() {
   const previewHref = productOverview.preview.entryUrl ?? productOverview.preview.validationUrl ?? productOverview.preview.url;
 
   return (
-    <main className="min-h-screen px-6 py-6">
-      <div className="mx-auto max-w-[1600px] space-y-6">
-        <header>
-          <div className="swiss-caption text-[var(--swiss-gray-300)]">06 — Workspace</div>
-          <h1 className="swiss-h1 mt-1">Preview, files, and live edits</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--swiss-gray-400)]">Inspect the active preview target, recent file changes, and live edit activity while the company runs in the background.</p>
-        </header>
-
-        <hr className="swiss-rule" />
+    <PageShell title="Workspace" description="Preview, files, and live edits.">
+      <div className="space-y-6">
 
         <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
           <div className="bg-[var(--swiss-white)] p-4">
@@ -234,6 +228,6 @@ export default function WorkspacePage() {
           </div>
         </div>
       </div>
-    </main>
+    </PageShell>
   );
 }
