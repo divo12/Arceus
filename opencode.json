@@ -20,6 +20,7 @@
       "prompt": "{file:./.opencode/prompts/cto-soul.txt}",
       "permission": {
         "edit": "allow",
+        "write": "allow",
         "bash": {
           "*": "allow"
         },
@@ -44,6 +45,7 @@
       "prompt": "{file:./.opencode/prompts/developer-soul.txt}",
       "permission": {
         "edit": "allow",
+        "write": "allow",
         "bash": {
           "*": "allow"
         },
@@ -56,6 +58,7 @@
       "prompt": "{file:./.opencode/prompts/tester-soul.txt}",
       "permission": {
         "edit": "allow",
+        "write": "allow",
         "bash": {
           "*": "allow"
         },
@@ -68,6 +71,7 @@
       "prompt": "{file:./.opencode/prompts/ui-designer-soul.txt}",
       "permission": {
         "edit": "allow",
+        "write": "allow",
         "bash": {
           "*": "deny"
         },
@@ -80,6 +84,7 @@
       "prompt": "{file:./.opencode/prompts/marketing-soul.txt}",
       "permission": {
         "edit": "allow",
+        "write": "allow",
         "bash": {
           "*": "deny"
         },
@@ -92,6 +97,7 @@
       "prompt": "{file:./.opencode/prompts/skills-lead-soul.txt}",
       "permission": {
         "edit": "allow",
+        "write": "allow",
         "bash": {
           "*": "allow"
         },

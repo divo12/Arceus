@@ -1,5 +1,6 @@
 import { mkdir, readdir, stat, writeFile, readFile } from "node:fs/promises";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
@@ -149,7 +150,8 @@ let activeExecution: ExecutionContext | null = null;
 let developerWatchdog: NodeJS.Timeout | null = null;
 let developerWorkspaceMonitor: NodeJS.Timeout | null = null;
 let developerWorkspaceSnapshot = new Map<string, number>();
-const workspaceRoot = process.cwd();
+let developerStepLoopActive = false;
+const workspaceRoot = resolve(process.cwd(), "..", "..");
 const productDir = resolve(workspaceRoot, "workspace");
 const DEVELOPER_STALL_TIMEOUT_MINUTES = orchestratorConfig.developer.stallTimeoutMinutes;
 const DEVELOPER_STALL_TIMEOUT_MS = DEVELOPER_STALL_TIMEOUT_MINUTES * 60 * 1000;
@@ -348,7 +350,14 @@ async function pollDeveloperWorkspaceChanges() {
     appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
   }
 
-  await maybeStartDeveloperLivePreview(changedFiles);
+  try {
+    await maybeStartDeveloperLivePreview(changedFiles);
+  } catch (err) {
+    // Preview detection must never crash the API — log and continue
+    emitEmployeeActivity("system", "error", `Preview detection failed: ${err instanceof Error ? err.message : String(err)}`, {
+      taskId: activeExecution?.buildTaskId ?? null,
+    });
+  }
 }
 
 async function startDeveloperWorkspaceMonitor() {
@@ -2132,11 +2141,27 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
   setTaskStatus(activeExecution.planTaskId, "in_progress");
   emitEmployeeActivity("cto", "working", "Producing technical implementation plan…", { taskId: activeExecution.planTaskId });
 
+  const scopeBoundary = [...snapshot.strategy.scopeBoundary];
+  const demoConstraintLines: string[] = [];
+  if (orchestratorConfig.demoMode) {
+    scopeBoundary.push("FRONTEND ONLY — no backend, no API, no database, no server-side code");
+    demoConstraintLines.push(
+      `## CRITICAL SCOPE CONSTRAINT (NON-NEGOTIABLE)`,
+      `Build FRONTEND ONLY. No backend server, no Express/Fastify, no API routes, no database.`,
+      `Use Vite + React. The app runs via \`npm run dev\` on port ${previewConfig.port}.`,
+      `All data hardcoded or localStorage. Plan accordingly.`,
+      `Do NOT propose a file structure — the developer will scaffold with Vite and decide file layout.`,
+      `Focus on: key UI components, data model, user flows, and visual design direction (Apple-inspired: dark/light sections, SF Pro typography, #0071e3 accent).`,
+      "",
+    );
+  }
+
   const ctoPlan = await runPromptText(
     "cto",
     ctoSession.sessionId,
     ctoSoul.systemPrompt,
     [
+      ...demoConstraintLines,
       `# Strategy: ${snapshot.strategy.title}`,
       "",
       `## Summary`,
@@ -2146,7 +2171,7 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
       snapshot.strategy.firstRelease,
       "",
       `## Scope Boundaries`,
-      ...snapshot.strategy.scopeBoundary.map((item) => `- ${item}`),
+      ...scopeBoundary.map((item) => `- ${item}`),
       "",
       `## Workspace Context`,
       `You have access to the full workspace rooted at ${workspaceRoot}.`,
@@ -2154,7 +2179,17 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
       `This should be a spec-driven development plan that a PM can convert into acceptance criteria and a developer can execute.`,
       "",
       `## Output Requirements`,
-      `Produce text only. Include architecture, file structure, implementation sequence, and explicit verification points.`,
+      `Produce a unified technical + design spec that the developer can follow directly.`,
+      `Include:`,
+      `1. Key React components needed and their purpose`,
+      `2. Data model shape (what's stored in localStorage)`,
+      `3. User interaction flows`,
+      `4. Visual Design Direction — this is CRITICAL:`,
+      `   - Specify the exact CSS color variables to use (from your apple-design-system skill)`,
+      `   - Specify typography: font family, sizes for headings/body/captions`,
+      `   - Specify layout pattern: alternating dark/light sections, component styling`,
+      `   - Include a ready-to-use CSS variables block the developer can paste into index.css`,
+      `Do NOT include file paths or directory structure — the developer handles project scaffolding.`,
       `Do not edit files in this step.`,
     ].join("\n"),
   );
@@ -2310,6 +2345,162 @@ async function runAcceptancePhase(snapshot: CompanySnapshot) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Developer step-loop helpers
+// ---------------------------------------------------------------------------
+
+interface DevStep {
+  index: number;
+  title: string;
+  instruction: string;
+  verifyCommand: string;
+  expectedFiles: string[];
+}
+
+interface VerifyResult {
+  passed: boolean;
+  reason: string;
+  missingFiles: string[];
+  commandOutput?: string;
+}
+
+async function runDeveloperStep(sessionId: string, systemPrompt: string, text: string): Promise<string> {
+  const opencode = await getOpencode();
+  const result = await opencode.client.session.prompt({
+    path: { id: sessionId },
+    body: {
+      model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
+      agent: "developer",
+      system: systemPrompt,
+      tools: { bash: true, read: true, write: true, edit: true, glob: true, grep: true, apply_patch: true },
+      parts: [{ type: "text", text }],
+    },
+  });
+  const infoError = (result.data?.info as any)?.error;
+  if (infoError) {
+    throw new Error(`OpenCode developer step error: ${infoError.data?.message ?? infoError.name ?? "unknown"}`);
+  }
+  return (result.data?.parts as Array<{ type: string; text?: string }>)
+    ?.filter((p) => p.type === "text" && p.text)
+    .map((p) => p.text ?? "")
+    .join("\n")
+    .trim() || "";
+}
+
+async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
+  // Use CTO session to decompose — keeps developer context clean
+  try {
+    const ctoEntry = [...agentSessions.entries()].find(([role]) => role === "cto");
+    if (!ctoEntry) throw new Error("No CTO session for decomposition");
+
+    const decompositionPrompt = [
+      "Break the following technical plan into 2-4 sequential IMPLEMENTATION steps for a frontend developer.",
+      "IMPORTANT: The base project is ALREADY scaffolded (Vite + React + npm install done). Do NOT include any setup/scaffold step.",
+      "IMPORTANT: Do NOT include any step that runs the app (npm run dev, npm start, etc). Running the app is handled separately.",
+      "The developer ONLY writes code. Verification is compile-only (npm run build).",
+      "Start from building the first UI component. Keep steps small and focused.",
+      "Each step must be independently executable and verifiable.",
+      `Maximum ${orchestratorConfig.developer.maxSteps} steps total.`,
+      "",
+      "Return ONLY a JSON array (no markdown fencing, no explanation) where each element has:",
+      '  { "title": "short title", "instruction": "what to build — be specific about files and components", "expectedFiles": ["relative/path"] }',
+      "Do NOT include verifyCommand — it will be set automatically to npm run build.",
+      "",
+      "Plan to decompose:",
+      planText,
+    ].join("\n");
+
+    const output = await runPromptText("cto", ctoEntry[1].sessionId, getRoleSoul("cto").systemPrompt, decompositionPrompt);
+    const jsonStr = output.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(jsonStr);
+    if (Array.isArray(parsed) && parsed.length >= 1) {
+      return parsed.slice(0, orchestratorConfig.developer.maxSteps).map((s: any, i: number) => ({
+        index: i + 2, // starts at 2 because step 1 is scaffold
+        title: String(s.title ?? `Step ${i + 2}`),
+        instruction: String(s.instruction ?? ""),
+        verifyCommand: "npm run build",  // always compile-check, never run the app
+        expectedFiles: Array.isArray(s.expectedFiles) ? s.expectedFiles.map(String) : [],
+      }));
+    }
+  } catch (err) {
+    emitEmployeeActivity("developer", "info", `Plan decomposition fell back to default: ${err instanceof Error ? err.message : "unknown"}`);
+  }
+
+  // Fallback: single step with the whole plan + npm run build verify
+  return [{
+    index: 2,
+    title: "Implement full CTO spec",
+    instruction: `Implement the following plan. The Vite project is already scaffolded.\n\n${planText}`,
+    verifyCommand: "npm run build",
+    expectedFiles: ["src/App.tsx"],
+  }];
+}
+
+function verifyStep(step: DevStep, workDir: string): VerifyResult {
+  const missingFiles: string[] = [];
+  for (const file of step.expectedFiles) {
+    if (!existsSync(resolve(workDir, file))) missingFiles.push(file);
+  }
+
+  let commandPassed = true;
+  let commandOutput = "";
+  if (step.verifyCommand) {
+    try {
+      commandOutput = execSync(step.verifyCommand, {
+        cwd: workDir, timeout: 60000, encoding: "utf-8", stdio: "pipe",
+      });
+    } catch (err: any) {
+      commandPassed = false;
+      commandOutput = (err.stderr || err.message || "").slice(0, 500);
+    }
+  }
+
+  const passed = missingFiles.length === 0 && commandPassed;
+  return {
+    passed,
+    reason: !passed
+      ? missingFiles.length > 0
+        ? `Missing files: ${missingFiles.join(", ")}`
+        : `Verify command failed: ${commandOutput.slice(0, 200)}`
+      : "All checks passed",
+    missingFiles,
+    commandOutput,
+  };
+}
+
+function buildStepPrompt(step: DevStep, totalSteps: number): string {
+  return [
+    `# Step ${step.index} of ${totalSteps}: ${step.title}`,
+    "",
+    step.instruction,
+    "",
+    `## Workspace: ${productDir}`,
+    `Read existing files before editing — preserve work from previous steps.`,
+    "",
+    ...(step.expectedFiles.length > 0 ? [`Files that must exist when done: ${step.expectedFiles.join(", ")}`] : []),
+    ...(step.verifyCommand ? [`Verify command: \`${step.verifyCommand}\``] : []),
+    "",
+    `Use tools (write, edit, bash) to create files. Do ONLY this step. Stop when done.`,
+    `Do NOT run npm run dev or npm start — running the app is handled by a separate preview phase.`,
+  ].join("\n");
+}
+
+function buildRetryPrompt(step: DevStep, verification: VerifyResult): string {
+  return [
+    `# Fix Required — Step ${step.index}: ${step.title}`,
+    "",
+    `Verification FAILED: ${verification.reason}`,
+    ...(verification.missingFiles.length > 0 ? [`Missing files: ${verification.missingFiles.join(", ")}`] : []),
+    ...(verification.commandOutput ? [`Command output:\n${verification.commandOutput.slice(0, 500)}`] : []),
+    "",
+    `Fix the issue. Do not start over — patch what's broken.`,
+  ].filter(Boolean).join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Developer phase — plan → exec → verify loop
+// ---------------------------------------------------------------------------
+
 async function startDeveloperPhase(snapshot: CompanySnapshot) {
   if (!activeExecution || !activeExecution.planText || !activeExecution.acceptanceText) return;
 
@@ -2329,67 +2520,114 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     activeTaskId: activeExecution.buildTaskId,
     promptStartedAt: nowIso(),
     promptCompletedAt: null,
-    awaiting: "waiting for first Opencode response",
-    lastEventSummary: "Developer prompt submitted to Opencode.",
+    awaiting: "scaffolding project",
+    lastEventSummary: "Starting step-by-step execution.",
     stallReason: null,
   });
-  updateRoleMemory("developer", ["Implement approved spec", `Company workspace: ${productDir}`, `Read docs/files under ${productDir} before editing`]);
+  updateRoleMemory("developer", ["Implement approved spec", `Company workspace: ${productDir}`]);
   setTaskStatus(activeExecution.buildTaskId, "in_progress");
-  emitEmployeeActivity("developer", "working", "Implementing the delivery spec in the company workspace…", { taskId: activeExecution.buildTaskId });
 
-  const opencode = await getOpencode();
+  // ── Build system prompt ──
   const devSkillBody = getSkillBody("developer");
-  const devSystemPrompt = [devSoul.systemPrompt, buildSkillMenu("developer"), devSkillBody].filter(Boolean).join("\n");
-  await opencode.client.session.promptAsync({
-    path: { id: devSession.sessionId },
-    body: {
-      model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
-      agent: "developer",
-      system: devSystemPrompt,
-      tools: {
-        bash: true,
-        read: true,
-        write: true,
-        edit: true,
-        glob: true,
-        grep: true,
-        apply_patch: true,
-      },
-      parts: [
-        {
-          type: "text",
-          text: [
-            `# Workspace Context`,
-            `The full workspace root is ${workspaceRoot}.`,
-            `All implementation output must go in ${productDir}.`,
-            `Read any existing docs and code under ${productDir} before changing files.`,
-            "",
-            `# CTO Technical Plan`,
-            activeExecution.planText,
-            "",
-            `# PM Acceptance Criteria`,
-            activeExecution.acceptanceText,
-            "",
-            `# Delivery Rules`,
-            `IMPORTANT: You MUST use tools (write, edit, bash) to create and modify files. Do NOT just describe what you would do — actually do it by calling tools.`,
-            `1. Work only through the company workspace at ${productDir}.`,
-            `2. If the workspace is empty, scaffold it there using the write tool.`,
-            `3. Get a minimal runnable app and local preview working as early as possible, then iterate on top of that instead of waiting until the end.`,
-            `4. Add or preserve the scripts and files needed so the preview detector can launch the app locally.`,
-            `4a. When you discover a working preview or service endpoint, print a line exactly like PREVIEW_URL: http://127.0.0.1:${previewConfig.port}/path so the runtime can validate and surface it immediately.`,
-            `4b. IMPORTANT: Your app MUST listen on port ${previewConfig.port}. Do NOT use port 3000 (reserved for the dashboard). Pass --port ${previewConfig.port} or set PORT=${previewConfig.port} when starting the dev server.`,
-            `5. Run the minimum validation needed to prove the result works.`,
-            `6. Stop when the implementation is ready for CTO review. Do not continue with extra polish after the spec is satisfied.`,
-            `7. Keep your work legible for board review.`,
-          ].join("\n"),
-        },
-      ],
-    },
-  });
+  const devSystemPrompt = [
+    devSoul.systemPrompt,
+    buildSkillMenu("developer"),
+    devSkillBody,
+    "",
+    "# Skill Usage (MANDATORY)",
+    "You MUST follow the **frontend-web-app** skill for project setup, framework choice (Vite + React), and port configuration (3210).",
+    "For visual design: strictly follow the CTO's technical plan.",
+  ].filter(Boolean).join("\n");
 
-  emitEmployeeActivity("developer", "info", `Target workspace: ${productDir}`, { taskId: activeExecution.buildTaskId });
+  // ── Decompose CTO plan into implementation steps ──
+  emitEmployeeActivity("developer", "working", "Decomposing CTO plan into execution steps…", {
+    taskId: activeExecution.buildTaskId,
+  });
+  const implSteps = await decomposePlanIntoSteps(activeExecution.planText);
+
+  // ── Build full step list: hardcoded scaffold + decomposed impl steps ──
+  const scaffoldStep: DevStep = {
+    index: 1,
+    title: "Scaffold Vite + React project",
+    instruction: [
+      `cd ${productDir}`,
+      `Run: npm create vite@latest . -- --template react-ts`,
+      `Then edit vite.config.ts to set:`,
+      `  server: { port: ${previewConfig.port}, host: '127.0.0.1' }`,
+      `Then run: npm install`,
+      `Do NOT run npm run dev or npm start — the preview phase handles that.`,
+      ...(orchestratorConfig.demoMode ? [
+        "",
+        `CRITICAL: This is a FRONTEND-ONLY app. No Express, no backend, no server.js, no API routes.`,
+      ] : []),
+    ].join("\n"),
+    verifyCommand: "test -f package.json && test -f vite.config.ts && test -f index.html",
+    expectedFiles: ["package.json", "vite.config.ts", "index.html"],
+  };
+
+  const allSteps = [scaffoldStep, ...implSteps];
+  const totalSteps = allSteps.length;
+
+  emitEmployeeActivity("developer", "info",
+    `Execution plan: ${totalSteps} steps — ${allSteps.map(s => s.title).join(" → ")}`,
+    { taskId: activeExecution.buildTaskId });
+
+  // ── Step loop ──
+  developerStepLoopActive = true;
   await startDeveloperWorkspaceMonitor();
-  scheduleDeveloperWatchdog();
+
+  try {
+    for (const step of allSteps) {
+      scheduleDeveloperWatchdog();
+      touchAgentSession("developer", "working");
+      updateAgentSessionState("developer", {
+        awaiting: `Step ${step.index}/${totalSteps}: ${step.title}`,
+        lastEventSummary: `Starting step ${step.index}: ${step.title}`,
+      });
+      emitEmployeeActivity("developer", "working",
+        `Step ${step.index}/${totalSteps}: ${step.title}`,
+        { taskId: activeExecution.buildTaskId });
+
+      // EXEC
+      const stepPrompt = buildStepPrompt(step, totalSteps);
+      await runDeveloperStep(devSession.sessionId, devSystemPrompt, stepPrompt);
+
+      // VERIFY
+      let verification = verifyStep(step, productDir);
+      for (let retry = 0; retry < orchestratorConfig.developer.maxRetriesPerStep && !verification.passed; retry++) {
+        emitEmployeeActivity("developer", "error",
+          `Step ${step.index} verify failed (retry ${retry + 1}): ${verification.reason}`,
+          { taskId: activeExecution.buildTaskId });
+
+        const retryPrompt = buildRetryPrompt(step, verification);
+        await runDeveloperStep(devSession.sessionId, devSystemPrompt, retryPrompt);
+        verification = verifyStep(step, productDir);
+      }
+
+      emitEmployeeActivity("developer", "info",
+        `Step ${step.index} ${verification.passed ? "verified" : "moved on"}: ${step.title}`,
+        { taskId: activeExecution.buildTaskId });
+    }
+  } finally {
+    developerStepLoopActive = false;
+    clearDeveloperWatchdog();
+    stopDeveloperWorkspaceMonitor();
+  }
+
+  // ── Post-loop: mark done and continue execution ──
+  touchAgentSession("developer", "done");
+  updateAgentSessionState("developer", {
+    awaiting: "idle",
+    promptCompletedAt: nowIso(),
+    lastProgressAt: nowIso(),
+    activeTaskId: activeExecution.previewTaskId,
+    lastEventSummary: "Implementation finished. Handing off to preview validation.",
+  });
+  emitEmployeeActivity("developer", "idle", "All steps complete. Routing to next phase.", {
+    taskId: activeExecution.buildTaskId,
+  });
+  setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished via step loop.");
+  await continueExecutionFromCurrentState("post-developer-steps-complete");
 }
 
 async function startPreviewPhase() {
@@ -3052,28 +3290,11 @@ export async function beginExecution(snapshot: CompanySnapshot) {
       }
     }
 
-    for (const node of taskPlan.task_graph.filter((entry) => entry.stage_key)) {
-      const mappedTaskId = graphNodeTaskIdByNodeId.get(node.id);
-      if (!mappedTaskId) continue;
-
-      const resolvedDependencies = node.depends_on
-        .map((dependencyId) => graphNodeTaskIdByNodeId.get(dependencyId))
-        .filter((value): value is string => Boolean(value && value !== mappedTaskId));
-
-      if (resolvedDependencies.length === 0) {
-        continue;
-      }
-
-      updateTask(mappedTaskId, (task) => ({
-        ...task,
-        parentTaskId: resolvedDependencies[0] ?? task.parentTaskId,
-        dependsOnTaskIds: uniqueStrings(resolvedDependencies, 8),
-      }));
-
-      for (const dependencyId of resolvedDependencies) {
-        attachChildTask(dependencyId, mappedTaskId);
-      }
-    }
+    // For core pipeline tasks (plan→acceptance→implementation→preview→review),
+    // NEVER overwrite the hardcoded dependency chain with LLM-generated graph edges.
+    // The LLM planner can produce circular or wrong dependencies for core tasks.
+    // Only apply LLM graph edges to specialist/non-core tasks.
+    // Core task dependencies are already set at lines above (buildTask depends on acceptanceTask, etc.).
 
     for (const followUp of taskPlan.follow_up_tasks) {
       if (!getAgentByRole(snapshot, followUp.assigned_role)) continue;
@@ -3286,6 +3507,17 @@ async function processEvent(event: { type: string; properties?: Record<string, a
   }
 
   if (event.type === "session.idle" && agentState) {
+    // When the step loop is active, each prompt() returns on session.idle.
+    // The loop itself handles progression — don't trigger post-developer routing here.
+    if (role === "developer" && developerStepLoopActive) {
+      touchAgentSession(role, "working");
+      updateAgentSessionState(role, {
+        lastProgressAt: nowIso(),
+        lastEventSummary: "Step prompt completed. Verifying…",
+      });
+      return;
+    }
+
     touchAgentSession(role, "done");
     updateAgentSessionState(role, {
       awaiting: "idle",

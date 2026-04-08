@@ -1,3 +1,11 @@
+// Prevent unhandled rejections/exceptions from killing the process
+process.on("unhandledRejection", (reason) => {
+  console.error("[ARCEUS] Unhandled rejection (process kept alive):", reason instanceof Error ? reason.message : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[ARCEUS] Uncaught exception (process kept alive):", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
+});
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
@@ -7,7 +15,7 @@ import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
 import { approveBoardReview, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
-import { serverConfig } from "./config/index";
+import { serverConfig, orchestratorConfig } from "./config/index";
 import { getLocalPreviewState } from "./preview";
 import { workspaceManager } from "./workspace-manager";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./bootstrap";
@@ -531,4 +539,7 @@ app.post("/api/quick-execute", async (request, reply) => {
 const { port, host } = serverConfig;
 
 await flushStorePersistence();
+if (orchestratorConfig.demoMode) {
+  console.warn("[ARCEUS] ⚠ DEMO MODE ACTIVE — frontend-only constraints enabled for all agents");
+}
 await app.listen({ port, host });
