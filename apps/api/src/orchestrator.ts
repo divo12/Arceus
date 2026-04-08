@@ -2395,16 +2395,17 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
 
     const decompositionPrompt = [
       "Break the following technical plan into 2-4 sequential IMPLEMENTATION steps for a frontend developer.",
-      "IMPORTANT: The base project is ALREADY scaffolded (Vite + React + npm install done). Do NOT include any setup/scaffold step.",
+      "IMPORTANT: The base project is ALREADY scaffolded (Vite + React TypeScript + npm install done). Do NOT include any setup/scaffold step.",
       "IMPORTANT: Do NOT include any step that runs the app (npm run dev, npm start, etc). Running the app is handled separately.",
-      "The developer ONLY writes code. Verification is compile-only (npm run build).",
+      "IMPORTANT: All React component files MUST use .tsx extension, NEVER .jsx. This ensures TypeScript catches undeclared variables and missing imports.",
+      "The developer ONLY writes code. Verification is compile-only (npm run build + tsc --noEmit).",
       "Start from building the first UI component. Keep steps small and focused.",
       "Each step must be independently executable and verifiable.",
       `Maximum ${orchestratorConfig.developer.maxSteps} steps total.`,
       "",
       "Return ONLY a JSON array (no markdown fencing, no explanation) where each element has:",
       '  { "title": "short title", "instruction": "what to build — be specific about files and components", "expectedFiles": ["relative/path"] }',
-      "Do NOT include verifyCommand — it will be set automatically to npm run build.",
+      "Do NOT include verifyCommand — it will be set automatically to tsc --noEmit + npm run build.",
       "",
       "Plan to decompose:",
       planText,
@@ -2418,7 +2419,7 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
         index: i + 2, // starts at 2 because step 1 is scaffold
         title: String(s.title ?? `Step ${i + 2}`),
         instruction: String(s.instruction ?? ""),
-        verifyCommand: "npm run build",  // always compile-check, never run the app
+        verifyCommand: "npx tsc --noEmit && npm run build",  // type-check then compile
         expectedFiles: Array.isArray(s.expectedFiles) ? s.expectedFiles.map(String) : [],
       }));
     }
@@ -2431,7 +2432,7 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
     index: 2,
     title: "Implement full CTO spec",
     instruction: `Implement the following plan. The Vite project is already scaffolded.\n\n${planText}`,
-    verifyCommand: "npm run build",
+    verifyCommand: "npx tsc --noEmit && npm run build",
     expectedFiles: ["src/App.tsx"],
   }];
 }
@@ -2481,6 +2482,7 @@ function buildStepPrompt(step: DevStep, totalSteps: number): string {
     ...(step.verifyCommand ? [`Verify command: \`${step.verifyCommand}\``] : []),
     "",
     `Use tools (write, edit, bash) to create files. Do ONLY this step. Stop when done.`,
+    `CRITICAL: All React component files MUST use .tsx extension, NEVER .jsx.`,
     `Do NOT run npm run dev or npm start — running the app is handled by a separate preview phase.`,
   ].join("\n");
 }
@@ -2536,6 +2538,7 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     "",
     "# Skill Usage (MANDATORY)",
     "You MUST follow the **frontend-web-app** skill for project setup, framework choice (Vite + React), and port configuration (3210).",
+    "CRITICAL: Always use .tsx file extensions for React components, NEVER .jsx. TypeScript catches errors that JSX silently misses.",
     "For visual design: strictly follow the CTO's technical plan.",
   ].filter(Boolean).join("\n");
 
@@ -2551,7 +2554,7 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     title: "Scaffold Vite + React project",
     instruction: [
       `cd ${productDir}`,
-      `Run: npm create vite@latest . -- --template react-ts`,
+      `Run: npm create vite@latest . -- --template react-ts (this uses .tsx — NEVER create .jsx files)`,
       `Then edit vite.config.ts to set:`,
       `  server: { port: ${previewConfig.port}, host: '127.0.0.1' }`,
       `Then run: npm install`,
