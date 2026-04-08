@@ -285,21 +285,8 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
       if (scripts.preview) return { command: "npm", args: ["run", "preview", ...npmScriptArgs], kind: "npm-preview", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
     }
 
-    const indexHtmlPath = join(candidate.dir, "index.html");
-    if (await exists(indexHtmlPath)) {
-      return {
-        command: "internal-static-server",
-        args: [],
-        kind: "static-http",
-        cwd: candidate.dir,
-        targetPath: relative(productDir, candidate.dir) || basename(candidate.dir),
-        entryPath: "index.html",
-        validationPath: "index.html",
-        targetKind: "browser",
-        runtime: "static",
-        framework: "Static HTML",
-      };
-    }
+    // Static index.html without a dev server is NOT a valid preview candidate.
+    // Only real dev servers (npm dev/start/preview, python uvicorn) qualify.
   }
 
   return detectPythonLaunchCommand(productDir, preference);
@@ -538,27 +525,23 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
     }
   } catch { /* no process on port — good */ }
 
-  if (launch.kind === "static-http") {
-    await startStaticPreviewServer(launch.cwd);
-  } else {
-    previewProcess = spawn(launch.command, launch.args, {
-      cwd: launch.cwd,
-      shell: true,
-      env: {
-        ...process.env,
-        PORT: String(previewState.port),
-        HOST: previewConfig.host,
-        BROWSER: "none",
-      },
-    });
+  previewProcess = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
+    shell: true,
+    env: {
+      ...process.env,
+      PORT: String(previewState.port),
+      HOST: previewConfig.host,
+      BROWSER: "none",
+    },
+  });
 
-    previewProcess.on("exit", (code) => {
-      if (previewState.status !== "ready") {
-        previewState.status = "error";
-        previewState.lastError = `Preview process exited with code ${code}`;
-      }
-    });
-  }
+  previewProcess.on("exit", (code) => {
+    if (previewState.status !== "ready") {
+      previewState.status = "error";
+      previewState.lastError = `Preview process exited with code ${code}`;
+    }
+  });
 
   const primaryUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
   let ready = await waitForUrl(primaryUrl, previewConfig.launchTimeoutMs);
