@@ -6,8 +6,8 @@ import { getOpencode, resetOpencodeConnection } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
-import { getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateMeeting, updateTask, upsertApproval, upsertMeeting, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Task, Transition, TransitionProposal } from "@arceus/contracts";
+import { getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
+import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
@@ -485,6 +485,29 @@ async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, messag
   }
 }
 
+function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: string): Sprint {
+  const number = (snapshot.company.currentSprintNumber ?? 0) + 1;
+  const ceoAgent = getAgentByRole(snapshot, "ceo");
+  const sprint: Sprint = {
+    id: `sprint_${crypto.randomUUID()}`,
+    companyId: snapshot.company.id,
+    strategyId: snapshot.company.currentStrategyId,
+    number,
+    title: title || `Sprint ${number}`,
+    goal: goal || "",
+    status: "planning",
+    plannedByAgentId: ceoAgent?.id ?? null,
+    summary: null,
+    createdAt: nowIso(),
+    startedAt: null,
+    completedAt: null,
+  };
+
+  upsertSprint(sprint);
+  updateCompanySprint(sprint.id, number);
+  return sprint;
+}
+
 async function tagCurrentSprintSnapshot() {
   const snapshot = getSnapshot();
   if (snapshot.company.id === "company_pending") {
@@ -492,7 +515,7 @@ async function tagCurrentSprintSnapshot() {
   }
 
   try {
-    const result = await workspaceManager.tagSprint(snapshot.company.id, Math.max(1, snapshot.sprints.length || 1), snapshot);
+    const result = await workspaceManager.tagSprint(snapshot.company.id, snapshot.company.currentSprintNumber ?? 1, snapshot);
     if (result.warnings.length > 0) {
       emitEmployeeActivity("system", "info", `Sprint snapshot completed with warnings: ${result.warnings.join(" | ")}`, {
         taskId: activeExecution?.reviewTaskId ?? null,
@@ -531,12 +554,14 @@ function createWorkflowTask(
   definitionOfDone: string[],
   priority: Task["priority"],
   status: Task["status"],
+  sprintId?: string | null,
 ): Task {
   const agent = getAgentByRole(snapshot, role);
 
   return {
     id: `task_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
+    sprintId: sprintId ?? snapshot.company.currentSprintId ?? null,
     kind,
     title,
     description,
@@ -1100,10 +1125,12 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
   }));
 
   // Auto-promote downstream tasks when a task completes
+  // Skip follow_up tasks — they are CEO context for sprint proposals, not execution targets
   if (status === "completed") {
     const snapshot = getSnapshot();
     for (const task of snapshot.tasks) {
       if (task.status !== "created") continue;
+      if (task.kind === "follow_up") continue;
       if (task.dependsOnTaskIds.length === 0) continue;
       const allDepsMet = task.dependsOnTaskIds.every((depId) => {
         const dep = snapshot.tasks.find((t) => t.id === depId);
@@ -1570,10 +1597,16 @@ async function executeSpecialistTask(taskId: string) {
   const soul = getRoleSoul(role);
   const previewEvidenceUrl = getPreviewEvidenceUrl();
 
+  // Preview-gating: tester needs a live preview URL before QA can proceed.
+  // If preview isn't available, STOP and surface the blocker — never silently skip.
   if (role === "tester" && ["qa_verification", "service_validation"].includes(task.kind)) {
     const preview = getLocalPreviewState();
     if (preview.status !== "ready" || !previewEvidenceUrl) {
       setTaskStatus(task.id, "blocked", "Tester verification requires a ready preview or validation endpoint.");
+      emitEmployeeActivity("system", "error",
+        `BLOCKED: ${task.title} — preview is not ready (status=${preview.status}, url=${previewEvidenceUrl ?? "none"}). Fix the preview and retry.`,
+        { taskId: task.id },
+      );
       recordMeeting({
         type: "escalation",
         facilitatorRole: "tester",
@@ -2029,13 +2062,21 @@ async function continueExecutionFromCurrentState(checkpoint: string) {
     return;
   }
 
-  // Check if execution is complete
+  // Check if execution is complete — follow-up tasks are excluded (they're CEO context, not execution targets)
   const finalSnapshot = getSnapshot();
-  const allDone = finalSnapshot.tasks.every((t) =>
+  const sprintTasks = finalSnapshot.tasks.filter((t) => t.kind !== "follow_up");
+  const allDone = sprintTasks.every((t) =>
     ["completed", "cancelled", "failed"].includes(t.status)
   );
   if (allDone) {
-    completeExecutionCycle("All tasks completed via dynamic routing.");
+    // If board_handoff just completed, pause for board review instead of auto-completing.
+    // The Board must explicitly approve via POST /api/board-review/approve.
+    const hasHandoff = sprintTasks.some((t) => t.kind === "board_handoff" && t.status === "completed");
+    if (hasHandoff) {
+      pauseForBoardReview("All tasks complete. Board review required before closing the sprint.");
+    } else {
+      completeExecutionCycle("All tasks completed via dynamic routing.");
+    }
   }
 }
 
@@ -2080,14 +2121,21 @@ async function executeTransitionWork(transition: Transition, snapshot: CompanySn
 
       default:
         // Specialist tasks (tester, ui_designer, marketing, skills_lead, etc.)
-        if (transition.toStatus === "in_progress" && isTaskReadyForAutonomousExecution(task, snapshot)) {
+        // Note: Do NOT re-check isTaskReadyForAutonomousExecution here.
+        // The router already validated the transition. By this point the task
+        // status is already "in_progress" (set by executeTransition), so
+        // isTaskReady's ["created","planned"] check would wrongly reject it,
+        // orphaning the task with no agent dispatched.
+        if (transition.toStatus === "in_progress") {
           await executeSpecialistTask(task.id);
         }
         break;
     }
   } catch (err) {
+    // Fix: mark the task as failed so it doesn't orphan at in_progress forever.
     const message = err instanceof Error ? err.message : "Phase execution failed";
     console.error(`[Router] executeTransitionWork failed for ${task.id} (${task.kind}):`, message);
+    setTaskStatus(task.id, "failed", `Execution failed: ${message}`);
     emitEmployeeActivity("system", "error", `Transition work failed for ${task.kind}: ${message}`, {
       taskId: task.id,
     });
@@ -3480,13 +3528,307 @@ export async function approveBoardReview() {
 
   activeExecution = null;
 
+  // Mark current sprint as completed
+  const currentSnapshot = getSnapshot();
+  const sprintId = currentSnapshot.company.currentSprintId;
+  if (sprintId) {
+    const completedTasks = currentSnapshot.tasks
+      .filter((t) => t.sprintId === sprintId && t.status === "completed")
+      .map((t) => t.title);
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      status: "completed" as const,
+      completedAt: nowIso(),
+      summary: completedTasks.length > 0
+        ? `Delivered: ${completedTasks.join(", ")}`
+        : "Sprint completed.",
+    }));
+  }
+
   await tagCurrentSprintSnapshot();
+
+  const sprintNumber = currentSnapshot.company.currentSprintNumber ?? 1;
+  emitEmployeeActivity("system", "info", `Sprint ${sprintNumber} complete. Send a message to the CEO to plan the next sprint.`);
 
   return {
     executionStatus,
     reviewTaskId,
     queuedFollowUpCount,
     resolvedApprovalCount: resolvedApprovals.length,
+    sprintCompleted: sprintNumber,
+  };
+}
+
+type SprintProposalTask = {
+  title: string;
+  assigned_role: AgentIdentity["role"];
+  priority: Task["priority"];
+  depends_on: string[];
+  rationale: string;
+};
+
+// Track tasks currently being dispatched to agents to avoid duplicate dispatch
+const dagDispatchedTaskIds = new Set<string>();
+
+/**
+ * Sprint 2+ DAG dispatcher: finds tasks that are ready to execute and dispatches
+ * them to agents in parallel. Called on sprint start and after each task completion.
+ */
+async function dispatchDagTasks() {
+  const snapshot = getSnapshot();
+  const currentSprintId = snapshot.company.currentSprintId;
+  if (!currentSprintId) return;
+
+  const sprintTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up",
+  );
+
+  // Check if all tasks are done → trigger board review
+  const allDone = sprintTasks.every((t) =>
+    ["completed", "cancelled", "failed"].includes(t.status),
+  );
+  if (allDone) {
+    const hasHandoff = sprintTasks.some(
+      (t) => t.kind === "board_handoff" && t.status === "completed",
+    );
+    if (hasHandoff && executionStatus !== "awaiting_board_review") {
+      pauseForBoardReview("All sprint tasks complete. Board review required before closing the sprint.");
+    }
+    return;
+  }
+
+  // Auto-promote: created → planned for tasks whose deps are all completed
+  for (const task of sprintTasks) {
+    if (task.status !== "created") continue;
+    if (task.dependsOnTaskIds.length === 0) continue; // no-dep tasks already promoted at sprint start
+    const allDepsMet = task.dependsOnTaskIds.every((depId) => {
+      const dep = snapshot.tasks.find((t) => t.id === depId);
+      return dep?.status === "completed";
+    });
+    if (allDepsMet) {
+      updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+    }
+  }
+
+  // Find tasks ready to dispatch
+  const freshSnapshot = getSnapshot();
+  const readyTasks = freshSnapshot.tasks.filter(
+    (t) =>
+      t.sprintId === currentSprintId &&
+      ["planned", "in_progress"].includes(t.status) &&
+      t.kind !== "follow_up" &&
+      !dagDispatchedTaskIds.has(t.id),
+  );
+
+  for (const task of readyTasks) {
+    // Board handoff: auto-complete and pause for board review
+    if (task.kind === "board_handoff") {
+      dagDispatchedTaskIds.add(task.id);
+      if (task.status === "planned") {
+        setTaskStatus(task.id, "in_progress");
+      }
+      setTaskStatus(task.id, "completed", "All sprint tasks delivered. Ready for board review.");
+      pauseForBoardReview("Sprint tasks complete. Board review required before closing the sprint.");
+      return;
+    }
+
+    dagDispatchedTaskIds.add(task.id);
+    if (task.status === "planned") {
+      setTaskStatus(task.id, "in_progress");
+    }
+
+    emitEmployeeActivity(task.assignedRole, "working", `Dispatching DAG task: ${task.title}`, { taskId: task.id });
+
+    // Fire-and-forget: agents run in parallel.
+    // Specialist tasks use sync prompt API (runPromptText), so the SSE event bridge
+    // never sees session.idle — we must chain dispatchDagTasks on both success and failure.
+    executeSpecialistTask(task.id).then(() => {
+      dispatchDagTasks().catch(() => {});
+    }).catch((err) => {
+      dagDispatchedTaskIds.delete(task.id);
+      setTaskStatus(task.id, "failed", err instanceof Error ? err.message : "Task dispatch failed");
+      emitEmployeeActivity("system", "error",
+        `DAG task failed: ${task.title} — ${err instanceof Error ? err.message : "unknown"}`,
+        { taskId: task.id },
+      );
+      dispatchDagTasks().catch(() => {});
+    });
+  }
+}
+
+const roleToTaskKind: Partial<Record<AgentIdentity["role"], Task["kind"]>> = {
+  cto: "technical_plan",
+  pm: "acceptance_spec",
+  developer: "implementation",
+  tester: "qa_verification",
+  ui_designer: "design_direction",
+  marketing: "launch_content",
+  skills_lead: "skill_authoring",
+};
+
+export async function approveSprint(title: string, goal: string, keyTasks?: SprintProposalTask[]) {
+  let snapshot = getSnapshot();
+
+  // Guard: must be done with a completed sprint
+  if (executionStatus !== "done") {
+    throw new Error("Cannot start a new sprint while execution is active.");
+  }
+
+  const lastSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+  if (!lastSprint || lastSprint.status !== "completed") {
+    throw new Error("No completed sprint found. Complete the current sprint first.");
+  }
+
+  if (snapshot.agents.length === 0) {
+    throw new Error("No agents available. Complete the initial strategy first.");
+  }
+
+  // If no key_tasks provided, fall back to rigid Sprint 1 pipeline
+  if (!keyTasks || keyTasks.length === 0) {
+    const newSprint = createSprintRecord(snapshot, title, goal);
+    const freshSnapshot = getSnapshot();
+    await beginExecution(freshSnapshot, newSprint);
+    return { sprint: newSprint, executionStatus };
+  }
+
+  // ── Sprint 2+ path: CEO-driven task DAG ──
+
+  // Flush follow-up tasks from previous sprints — they were CEO context only.
+  // Mark them cancelled so they don't appear as active or leak into Sprint 2.
+  for (const task of snapshot.tasks) {
+    if (task.kind === "follow_up" && ["created", "planned"].includes(task.status)) {
+      updateTask(task.id, (t) => ({
+        ...t,
+        status: "cancelled" as const,
+        completedAt: nowIso(),
+      }));
+    }
+  }
+
+  executionStatus = "planning";
+
+  const newSprint = createSprintRecord(snapshot, title, goal);
+  snapshot = getSnapshot();
+
+  emitEmployeeActivity("system", "info", `Beginning Sprint ${newSprint.number} with CEO-defined task DAG (${keyTasks.length} tasks)…`);
+
+  await workspaceManager.ensureLocal(snapshot.company.id);
+
+  if (!eventBridgeStarted) {
+    startEventBridge().catch(() => {});
+    eventBridgeStarted = true;
+  }
+
+  // Create Task objects from CEO proposal
+  const titleToTaskId = new Map<string, string>();
+  const createdTasks: Task[] = [];
+
+  for (const kt of keyTasks) {
+    const kind = roleToTaskKind[kt.assigned_role] ?? "implementation";
+    const task = createWorkflowTask(
+      snapshot,
+      kind,
+      kt.assigned_role,
+      kt.title,
+      kt.rationale,
+      kt.title,
+      kt.title,
+      [`${kt.title} completed`],
+      kt.priority,
+      "created",
+      newSprint.id,
+    );
+    titleToTaskId.set(kt.title, task.id);
+    createdTasks.push(task);
+  }
+
+  // Resolve depends_on titles to task IDs
+  for (let i = 0; i < keyTasks.length; i++) {
+    const deps = keyTasks[i].depends_on
+      .map((depTitle) => titleToTaskId.get(depTitle))
+      .filter((id): id is string => !!id);
+    createdTasks[i].dependsOnTaskIds = deps;
+
+    // Wire childTaskIds on upstream tasks
+    for (const depId of deps) {
+      const upstream = createdTasks.find((t) => t.id === depId);
+      if (upstream && !upstream.childTaskIds.includes(createdTasks[i].id)) {
+        upstream.childTaskIds.push(createdTasks[i].id);
+      }
+    }
+  }
+
+  // Add board_handoff task at the end — depends on all leaf tasks (those with no children)
+  const leafTaskIds = createdTasks
+    .filter((t) => t.childTaskIds.length === 0)
+    .map((t) => t.id);
+
+  const handoffTask = createWorkflowTask(
+    snapshot,
+    "board_handoff",
+    "cto",
+    "Board handoff — Sprint review",
+    "Review all Sprint deliverables and package the handoff to the Board.",
+    "Verify all tasks are complete and produce the board-ready summary.",
+    "Board handoff review",
+    ["All sprint tasks reviewed", "Board artifact produced"],
+    "medium",
+    "created",
+    newSprint.id,
+  );
+  handoffTask.dependsOnTaskIds = leafTaskIds;
+  for (const leafId of leafTaskIds) {
+    const leaf = createdTasks.find((t) => t.id === leafId);
+    if (leaf) leaf.childTaskIds.push(handoffTask.id);
+  }
+  createdTasks.push(handoffTask);
+
+  // Store all tasks (preserve Sprint 1 tasks via upsert, don't replace)
+  for (const task of createdTasks) {
+    upsertTask(task);
+  }
+
+  // Update sprint status
+  updateSprint(newSprint.id, (s) => ({ ...s, status: "executing" }));
+  executionStatus = "executing";
+
+  // Set activeExecution so board review and event bridge work.
+  // Sprint 2+ uses the handoff task as the review task; other IDs point to
+  // the first matching task of each kind, or the handoff as fallback.
+  const firstByKind = (kind: string) => createdTasks.find((t) => t.kind === kind)?.id ?? handoffTask.id;
+  activeExecution = {
+    companyId: snapshot.company.id,
+    planTaskId: firstByKind("technical_plan"),
+    acceptanceTaskId: firstByKind("acceptance_spec"),
+    buildTaskId: firstByKind("implementation"),
+    previewTaskId: firstByKind("local_preview"),
+    reviewTaskId: handoffTask.id,
+    planText: null,
+    acceptanceText: null,
+    reviewStarted: false,
+    reworkCycles: 0,
+  };
+
+  // Auto-promote tasks with no dependencies to in_progress
+  for (const task of createdTasks) {
+    if (task.dependsOnTaskIds.length === 0 && task.kind !== "board_handoff") {
+      setTaskStatus(task.id, "in_progress");
+    }
+  }
+
+  emitEmployeeActivity("system", "info",
+    `Sprint ${newSprint.number} DAG: ${createdTasks.map((t) => `${t.assignedRole}:${t.title}`).join(" → ")}`,
+  );
+
+  // Kick off execution — dispatch in_progress tasks to agents
+  dispatchDagTasks().catch((err) => {
+    emitEmployeeActivity("system", "error", `Sprint DAG kickoff failed: ${err instanceof Error ? err.message : "unknown"}`);
+  });
+
+  return {
+    sprint: newSprint,
+    executionStatus,
+    tasks: createdTasks.map((t) => ({ id: t.id, title: t.title, role: t.assignedRole, kind: t.kind, status: t.status })),
   };
 }
 
@@ -3497,14 +3839,24 @@ export function resolveRoleBySessionId(sessionId: string): string | null {
   return null;
 }
 
-export async function beginExecution(snapshot: CompanySnapshot) {
+export async function beginExecution(snapshot: CompanySnapshot, existingSprint?: Sprint) {
   if (["planning", "executing", "verifying", "awaiting_board_review"].includes(executionStatus)) {
     emitEmployeeActivity("system", "info", "Execution already in progress");
     return;
   }
 
   executionStatus = "planning";
-  emitEmployeeActivity("system", "info", "Beginning strategy execution…");
+
+  // Create or reuse sprint record
+  const sprint = existingSprint ?? createSprintRecord(
+    snapshot,
+    snapshot.strategy.title,
+    snapshot.strategy.firstRelease,
+  );
+  // Re-read snapshot after sprint was added to store
+  snapshot = getSnapshot();
+
+  emitEmployeeActivity("system", "info", `Beginning Sprint ${sprint.number} execution…`);
 
   try {
     await workspaceManager.ensureLocal(snapshot.company.id);
@@ -3766,10 +4118,24 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     // Only apply LLM graph edges to specialist/non-core tasks.
     // Core task dependencies are already set at lines above (buildTask depends on acceptanceTask, etc.).
 
-    // Follow-up tasks are no longer generated upfront.  All specialist
-    // work is represented in the task_graph as properly sequenced graph
-    // nodes.  This avoids redundant tasks when the developer's first pass
-    // already covers the follow-up scope.
+    // board_handoff (reviewTask) MUST be the last task in the sprint.
+    // Re-wire it to depend on ALL leaf tasks (tasks with no children except reviewTask itself).
+    // This ensures QA, design, and any other specialist tasks complete before CTO handoff.
+    const allSprintTasks = getSnapshot().tasks.filter(
+      (t) => t.kind !== "follow_up" && t.id !== activeExecution!.reviewTaskId,
+    );
+    const leafTaskIds = allSprintTasks
+      .filter((t) => t.childTaskIds.length === 0 || t.childTaskIds.every((cid) => cid === activeExecution!.reviewTaskId))
+      .map((t) => t.id);
+    if (leafTaskIds.length > 0) {
+      updateTask(activeExecution.reviewTaskId, (t) => ({
+        ...t,
+        dependsOnTaskIds: uniqueStrings(leafTaskIds, 16),
+      }));
+      for (const leafId of leafTaskIds) {
+        attachChildTask(leafId, activeExecution.reviewTaskId);
+      }
+    }
 
     updateMeeting(kickoffMeeting.id, (meeting) => ({
       ...meeting,
@@ -3778,6 +4144,16 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     emitEmployeeActivity("system", "info", `Task pipeline created for ${taskPlan.delivery_profile.replace(/_/g, " ")}: CTO plan → PM spec → Developer implementation → Preview validation → CTO review → Specialist tasks`, {
       meetingId: kickoffMeeting.id,
     });
+
+    // Transition sprint to executing
+    if (snapshot.company.currentSprintId) {
+      updateSprint(snapshot.company.currentSprintId, (s) => ({
+        ...s,
+        status: "executing" as const,
+        startedAt: s.startedAt ?? nowIso(),
+      }));
+    }
+
     await runPlanningPhase(snapshot);
     await continueExecutionFromCurrentState("post-planning");
   } catch (err) {
@@ -4014,6 +4390,23 @@ async function processEvent(event: { type: string; properties?: Record<string, a
     }
 
     emitEmployeeActivity(role, "idle", "Work complete");
+
+    // For Sprint 2+ DAG: drive the DAG forward after agent completes
+    // Note: executeSpecialistTask already handles task completion with proper artifacts.
+    // This is a safety net — only mark completed if still in_progress (race window).
+    if (activeExecution) {
+      const snapshot = getSnapshot();
+      const agentTask = snapshot.tasks.find(
+        (t) => t.assignedRole === role && t.status === "in_progress" && t.kind !== "follow_up",
+      );
+      if (agentTask && !["completed", "failed", "cancelled"].includes(agentTask.status)) {
+        setTaskStatus(agentTask.id, "completed", "Agent work completed.");
+      }
+      // Dispatch any newly-promotable downstream tasks
+      dispatchDagTasks().catch((err) => {
+        emitEmployeeActivity("system", "error", `Post-${role} DAG dispatch failed: ${err instanceof Error ? err.message : "unknown"}`);
+      });
+    }
   }
 
   if (event.type === "session.error" && agentState) {

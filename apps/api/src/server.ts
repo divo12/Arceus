@@ -12,7 +12,7 @@ import { z } from "zod";
 import { clearPersistedStoreState, flushStorePersistence, getEvents, getSnapshot, hydrateStoreFromPersistence, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
+import { approveBoardReview, approveSprint, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
@@ -479,6 +479,27 @@ app.post("/api/board-review/approve", async (request, reply) => {
       error: error instanceof Error ? error.message : "Board review approval failed.",
     };
   }
+});
+
+app.post("/api/sprint/approve", async (request, reply) => {
+  try {
+    const body = request.body as { title?: string; goal?: string; key_tasks?: Array<{ title: string; assigned_role: string; priority: string; depends_on: string[]; rationale: string }> } | null;
+    return await approveSprint(
+      body?.title ?? "",
+      body?.goal ?? "",
+      body?.key_tasks as any,
+    );
+  } catch (error) {
+    request.log?.error?.(error);
+    reply.code(400);
+    return {
+      error: error instanceof Error ? error.message : "Sprint approval failed.",
+    };
+  }
+});
+
+app.get("/api/sprints", async () => {
+  return getSnapshot().sprints;
 });
 
 app.get("/api/employee-activity", async () => {

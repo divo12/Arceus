@@ -58,7 +58,12 @@ export default function TasksPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const tasks = snapshot?.tasks ?? [];
+  const allTasks = snapshot?.tasks ?? [];
+  const currentSprintId = snapshot?.company.currentSprintId;
+  // Only show current sprint tasks, hide follow-ups (they're CEO context, not execution targets)
+  const tasks = allTasks.filter((task) =>
+    task.kind !== "follow_up" && (!currentSprintId || task.sprintId === currentSprintId)
+  );
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
   const columns = [
     {
@@ -128,13 +133,20 @@ export default function TasksPage() {
   }
 
   const selectedTaskArtifactIds = selectedTask?.artifactIds ?? [];
-  const queuedFollowUpTasks = tasks.filter((task) => task.kind === "follow_up" && ["created", "planned"].includes(task.status));
+  const currentSprint = snapshot?.sprints.find((s) => s.id === currentSprintId);
   const pendingApprovals = snapshot?.approvals.filter((approval) => approval.status === "pending") ?? [];
 
   return (
     <PageShell title="Task Pipeline" description="Tasks move through planning, execution, and completion.">
       <div className="space-y-6">
-        <Badge variant={executionStatus === "awaiting_board_review" ? "secondary" : "outline"}>{executionStatus}</Badge>
+        <div className="flex items-center gap-2">
+          {currentSprint ? (
+            <Badge variant={currentSprint.status === "completed" ? "secondary" : "outline"}>
+              Sprint {currentSprint.number} · {currentSprint.status === "completed" ? "Done" : currentSprint.status === "executing" ? "Executing" : "Planning"}
+            </Badge>
+          ) : null}
+          <Badge variant={executionStatus === "awaiting_board_review" ? "secondary" : "outline"}>{executionStatus}</Badge>
+        </div>
 
         <div className="grid grid-cols-3 gap-px border border-[var(--swiss-gray-100)]">
           <div className="bg-[var(--swiss-white)] p-4">
@@ -155,11 +167,11 @@ export default function TasksPage() {
           <div className="border border-[var(--swiss-black)] p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <div className="text-lg font-semibold">Execution cycle complete</div>
+                <div className="text-lg font-semibold">
+                  Sprint {currentSprint?.number ?? "?"} complete
+                </div>
                 <div className="mt-1 text-sm text-[var(--swiss-gray-400)]">
-                  {queuedFollowUpTasks.length > 0
-                    ? `${queuedFollowUpTasks.length} follow-up task${queuedFollowUpTasks.length === 1 ? " is" : "s are"} queued for the next cycle.`
-                    : "The current execution cycle is complete. Review the finished package or start the next instruction cycle."}
+                  Message the CEO to plan Sprint {(currentSprint?.number ?? 0) + 1}.
                 </div>
               </div>
             </div>

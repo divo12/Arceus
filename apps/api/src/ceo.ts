@@ -6,7 +6,7 @@ import { structuredCompletion } from "./azure-openai";
 const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
 const coreStrategyRoles = ["ceo", "cto", "pm", "developer"] as const;
 const ceoMeetingTypeSchema = z.enum(["ad_hoc", "sync", "escalation"]);
-export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution"]);
+export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
 
 const ceoTaskDeltaSchema = z.object({
   action: z.enum(["create", "reprioritize", "reassign", "cancel"]),
@@ -152,8 +152,22 @@ const statusBlockSchema = z.object({
   board_requests: z.array(z.string()).max(4),
 });
 
+const sprintProposalBlockSchema = z.object({
+  sprint_goal: z.string(),
+  key_tasks: z.array(z.object({
+    title: z.string(),
+    assigned_role: strategyRoleSchema,
+    priority: z.enum(["critical", "high", "medium", "low"]),
+    depends_on: z.array(z.string()).max(4),
+    rationale: z.string(),
+  })).min(1).max(6),
+  carried_forward: z.array(z.string()).max(4),
+  risks: z.array(z.string()).max(4),
+  rationale: z.string(),
+});
+
 export const ceoCardSchema = z.object({
-  card_type: z.enum(["welcome_brief", "mission_brief", "clarifying_question", "strategy_proposal", "status_update"]),
+  card_type: z.enum(["welcome_brief", "mission_brief", "clarifying_question", "strategy_proposal", "status_update", "sprint_proposal"]),
   stage: ceoStageSchema,
   title: z.string(),
   summary: z.string(),
@@ -162,6 +176,7 @@ export const ceoCardSchema = z.object({
   strategy: strategyBlockSchema.nullable(),
   question: questionBlockSchema.nullable(),
   status: statusBlockSchema.nullable(),
+  sprint_proposal: sprintProposalBlockSchema.nullable(),
   meeting: ceoMeetingIntentSchema,
 });
 
@@ -226,9 +241,15 @@ function summarizeMeetings(snapshot: CompanySnapshot) {
   return snapshot.meetings.slice(0, 4).map((meeting) => `${meeting.type}: ${meeting.summary}`).join("; ");
 }
 
-export function inferCeoStage(snapshot: CompanySnapshot): CeoStage {
+export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
   if (snapshot.company.id === "company_pending") {
     return "welcome";
+  }
+
+  // Between sprints: execution is done AND current sprint is completed AND we have agents
+  const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+  if (currentSprint?.status === "completed" && snapshot.agents.length > 0 && executionStatus === "done") {
+    return "between_sprints";
   }
 
   if (snapshot.agents.length > 0 || snapshot.hierarchy.length > 0 || snapshot.tasks.length > 0 || snapshot.approvals.length > 0) {
@@ -255,9 +276,63 @@ export function inferCeoStage(snapshot: CompanySnapshot): CeoStage {
   return "welcome";
 }
 
-function buildSnapshotContext(snapshot: CompanySnapshot) {
+function buildSprintRetrospectiveContext(snapshot: CompanySnapshot): string {
+  const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+  if (!currentSprint) return "";
+
+  const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === currentSprint.id);
+  const completedTasks = sprintTasks.filter((t) => t.kind !== "follow_up" && t.status === "completed");
+  const failedTasks = sprintTasks.filter((t) => t.status === "failed");
+  const followUpTasks = snapshot.tasks.filter((t) => t.kind === "follow_up" && t.status === "created");
+
+  const lines = [
+    "",
+    `## Sprint ${currentSprint.number} Retrospective`,
+    `Sprint goal: ${currentSprint.goal}`,
+    `Status: ${currentSprint.status}`,
+    "",
+    "### What was delivered",
+    ...completedTasks.map((t) => `- ${t.title} (${t.assignedRole})`),
+    ...(completedTasks.length === 0 ? ["- Nothing completed"] : []),
+  ];
+
+  if (failedTasks.length > 0) {
+    lines.push("", "### What failed");
+    for (const t of failedTasks) {
+      lines.push(`- ${t.title} (${t.assignedRole}): ${t.verifierState?.feedback || "no details"}`);
+    }
+  }
+
+  if (followUpTasks.length > 0) {
+    lines.push("", "### Follow-up suggestions from task planner (not yet executed)");
+    for (const t of followUpTasks) {
+      lines.push(`- ${t.title} → ${t.assignedRole} (${t.priority})`);
+    }
+  }
+
+  // Board feedback during sprint
+  const sprintStartIdx = snapshot.chatMessages.findIndex((m) =>
+    m.content.includes("Sprint") || m.content.includes("execution")
+  );
+  const recentBoardMessages = snapshot.chatMessages
+    .filter((m) => m.role === "board")
+    .slice(-5);
+  if (recentBoardMessages.length > 0) {
+    lines.push("", "### Board feedback during sprint");
+    for (const m of recentBoardMessages) {
+      lines.push(`- "${m.content.slice(0, 150)}"`);
+    }
+  }
+
+  // Workspace state
+  lines.push("", `### Workspace: code has been built in the company workspace across ${completedTasks.length} completed tasks.`);
+
+  return lines.join("\n");
+}
+
+function buildSnapshotContext(snapshot: CompanySnapshot, executionStatus?: string) {
   return [
-    `Stage: ${inferCeoStage(snapshot)}`,
+    `Stage: ${inferCeoStage(snapshot, executionStatus)}`,
     `Company name: ${snapshot.company.name}`,
     `Company status: ${snapshot.company.status}`,
     `Board goal: ${snapshot.company.goal || "Not captured yet"}`,
@@ -276,10 +351,11 @@ function buildSnapshotContext(snapshot: CompanySnapshot) {
   ].join("\n");
 }
 
-export function buildCeoOperatingPrompt(snapshot: CompanySnapshot) {
+export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStatus?: string) {
   const ceoSoul = getRoleSoul("ceo");
+  const stage = inferCeoStage(snapshot, executionStatus);
 
-  return [
+  const lines = [
     ceoSoul.systemPrompt,
     "",
     "Operate like a strong founder-CEO with full visibility into company state, team shape, backlog posture, approvals, meetings, and recent board conversation.",
@@ -290,6 +366,7 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot) {
     "- Team design: pressure-test scope and the minimum org needed to ship.",
     "- Kickoff: propose the first release, team shape, execution sequence, risks, and board checkpoints.",
     "- Execution: report like an operator. Reference real team, tasks, approvals, meetings, and blockers.",
+    "- Between sprints: the prior sprint is complete. Analyze what was built, what failed, what the Board said, and what follow-up tasks the planner suggested. Propose Sprint N+1 using a sprint_proposal card. Assign tasks to specific roles. Define dependencies between tasks. Include a board_handoff task at the end.",
     "- Avoid generic filler. Be concise, opinionated, and operationally sharp.",
     "- Prefer tradeoffs and recommendations over vague brainstorming.",
     "- Never invent implementation details that are not grounded in company state.",
@@ -297,15 +374,23 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot) {
     "- One intent per response: either ASK a question or PROPOSE a strategy — never both. If you want board confirmation before proceeding, stop after the question. Do not answer your own question in the same message.",
     "",
     "Current company intelligence:",
-    buildSnapshotContext(snapshot),
-  ].join("\n");
+    buildSnapshotContext(snapshot, executionStatus),
+  ];
+
+  // Append sprint retrospective when between sprints
+  if (stage === "between_sprints") {
+    lines.push(buildSprintRetrospectiveContext(snapshot));
+  }
+
+  return lines.join("\n");
 }
 
 export async function classifyCeoResponse(
   ceoText: string,
   snapshot: CompanySnapshot,
+  executionStatus?: string,
 ): Promise<CeoCard> {
-  const stage = inferCeoStage(snapshot);
+  const stage = inferCeoStage(snapshot, executionStatus);
   const systemPrompt = [
     "You are the CEO's structured boardroom formatter.",
     "Convert the CEO's free-text message into the single best interactive card for the board.",
@@ -317,6 +402,7 @@ export async function classifyCeoResponse(
     "- clarifying_question: one high-leverage question with concrete options and why it matters now.",
     "- strategy_proposal: first release, team shape, execution sequence, risks, and board checkpoints.",
     "- status_update: current focus, blockers, next actions, and any requests back to the board.",
+    "- sprint_proposal: next sprint goal, key tasks with assigned roles and dependencies, carried items, risks, and rationale. Use ONLY when stage is between_sprints.",
     "",
     "Global rules:",
     "- Pick exactly one card_type.",
@@ -335,6 +421,7 @@ export async function classifyCeoResponse(
     "- Prefer this reporting shape unless there is a strong reason not to: ceo manages cto and marketing; cto manages pm, developer, tester, ui_designer, and skills_lead; pm may manage developer, tester, or ui_designer when product coordination is the point.",
     "- During idea refinement (welcome_brief, mission_brief, clarifying_question): set meeting.create to false and leave task_deltas empty. The chat is pure conversation — no side effects until the board approves a strategy.",
     "- For strategy_proposal: set meeting.create to false and leave task_deltas empty. The strategy card is a read-only proposal for board review. Agents, tasks, and meetings are created only after the board clicks Approve.",
+    "- For sprint_proposal: sprint_proposal block must be filled with sprint_goal, key_tasks (each with title, assigned_role, priority, depends_on, rationale), carried_forward, risks, and rationale. Set all other blocks to null. Set meeting.create to false.",
     `Current stage hint: ${stage}`,
   ].join("\n");
 

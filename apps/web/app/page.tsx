@@ -38,7 +38,7 @@ type RoleEntry = {
   capabilities: string[];
 };
 
-type CeoStage = "welcome" | "idea_refinement" | "team_design" | "kickoff" | "execution";
+type CeoStage = "welcome" | "idea_refinement" | "team_design" | "kickoff" | "execution" | "between_sprints";
 
 type WelcomeBlock = {
   headline: string;
@@ -162,7 +162,37 @@ type StatusUpdateCard = {
   meeting: MeetingIntentBlock;
 };
 
-type CeoCard = WelcomeBriefCard | MissionBriefCard | StrategyProposalCard | ClarifyingQuestionCard | StatusUpdateCard;
+type SprintProposalTask = {
+  title: string;
+  assigned_role: AgentIdentity["role"];
+  priority: "critical" | "high" | "medium" | "low";
+  depends_on: string[];
+  rationale: string;
+};
+
+type SprintProposalBlock = {
+  sprint_goal: string;
+  key_tasks: SprintProposalTask[];
+  carried_forward: string[];
+  risks: string[];
+  rationale: string;
+};
+
+type SprintProposalCard = {
+  card_type: "sprint_proposal";
+  stage: CeoStage | "between_sprints";
+  title: string;
+  summary: string;
+  welcome: null;
+  mission: null;
+  strategy: null;
+  question: null;
+  status: null;
+  sprint_proposal: SprintProposalBlock;
+  meeting: MeetingIntentBlock;
+};
+
+type CeoCard = WelcomeBriefCard | MissionBriefCard | StrategyProposalCard | ClarifyingQuestionCard | StatusUpdateCard | SprintProposalCard;
 
 type ChatBubble = {
   id: string;
@@ -962,6 +992,126 @@ function StatusUpdateView({ card, disabled, onChoose }: { card: StatusUpdateCard
   );
 }
 
+const priorityColor: Record<string, string> = {
+  critical: "text-[var(--swiss-red)]",
+  high: "text-orange-600",
+  medium: "text-[var(--swiss-gray-500)]",
+  low: "text-[var(--swiss-gray-300)]",
+};
+
+function SprintProposalView({
+  card,
+  busy,
+  resolved,
+  onApprove,
+}: {
+  card: SprintProposalCard;
+  busy: boolean;
+  resolved: boolean;
+  onApprove: (card: SprintProposalCard) => Promise<void>;
+}) {
+  const sp = card.sprint_proposal;
+  if (!sp) {
+    return (
+      <Card className="border-[var(--swiss-red)]">
+        <CardContent className="pt-5 text-[0.8125rem] text-[var(--swiss-red)]">Sprint proposal card is missing structured data.</CardContent>
+      </Card>
+    );
+  }
+
+  const [draft, setDraft] = useState(sp);
+
+  function updateTask(index: number, field: keyof SprintProposalTask, value: string) {
+    setDraft((current) => ({
+      ...current,
+      key_tasks: current.key_tasks.map((t, i) =>
+        i === index ? { ...t, [field]: field === "depends_on" ? value.split(",").map((s) => s.trim()).filter(Boolean) : value } : t
+      ),
+    }));
+  }
+
+  function removeTask(index: number) {
+    setDraft((current) => ({
+      ...current,
+      key_tasks: current.key_tasks.filter((_, i) => i !== index),
+    }));
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle>{card.title}</CardTitle>
+            <CardDescription>CEO sprint proposal for board review.</CardDescription>
+          </div>
+          <CardStageHeader stage={card.stage} label={resolved ? "Approved" : "Sprint proposal"} />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-[0.8125rem] leading-6 text-[var(--swiss-gray-500)]">{card.summary}</p>
+
+        <div className="border border-[var(--swiss-gray-100)] p-3">
+          <div className="swiss-caption text-[var(--swiss-gray-400)]">Sprint Goal</div>
+          <div className="mt-1 text-[0.8125rem] font-medium">{draft.sprint_goal}</div>
+        </div>
+
+        <div>
+          <div className="swiss-caption mb-2 text-[var(--swiss-gray-400)]">Key Tasks ({draft.key_tasks.length})</div>
+          <div className="space-y-2">
+            {draft.key_tasks.map((task, index) => (
+              <div key={`${task.title}-${index}`} className="border border-[var(--swiss-gray-100)] p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <input
+                      className="w-full border-none bg-transparent text-[0.8125rem] font-semibold outline-none"
+                      value={task.title}
+                      onChange={(e) => updateTask(index, "title", e.target.value)}
+                      disabled={resolved}
+                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      <Badge variant="outline">{task.assigned_role}</Badge>
+                      <span className={`text-xs font-medium ${priorityColor[task.priority] ?? ""}`}>{task.priority}</span>
+                      {task.depends_on.length > 0 ? (
+                        <span className="text-xs text-[var(--swiss-gray-300)]">depends on: {task.depends_on.join(", ")}</span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--swiss-gray-400)]">{task.rationale}</div>
+                  </div>
+                  {!resolved ? (
+                    <button type="button" onClick={() => removeTask(index)} className="text-[var(--swiss-gray-300)] hover:text-[var(--swiss-red)]">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {draft.risks.length > 0 ? <StringList title="Risks" items={draft.risks} /> : null}
+        {draft.carried_forward.length > 0 ? <StringList title="Carried forward" items={draft.carried_forward} /> : null}
+        {draft.rationale ? (
+          <div>
+            <div className="swiss-caption mb-1 text-[var(--swiss-gray-400)]">Rationale</div>
+            <p className="text-[0.8125rem] text-[var(--swiss-gray-500)]">{draft.rationale}</p>
+          </div>
+        ) : null}
+
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            disabled={busy || resolved || draft.key_tasks.length === 0}
+            onClick={() => void onApprove({ ...card, sprint_proposal: draft })}
+          >
+            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {resolved ? "Sprint Started" : "Approve & Start Sprint"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function LaunchBoardPanel({ disabled, onPrompt }: { disabled: boolean; onPrompt: (prompt: string) => void }) {
   const prompts = [
     "Build a consumer app that helps parents coordinate school schedules and family logistics.",
@@ -1322,6 +1472,55 @@ export default function Page() {
           id: createId(),
           role: "system",
           content: error instanceof Error ? error.message : "Strategy action failed.",
+        },
+      ]);
+    } finally {
+      setProposalActionId(null);
+    }
+  }
+
+  async function handleSprintApproval(messageId: string, card: SprintProposalCard) {
+    setProposalActionId(messageId);
+
+    try {
+      const sp = card.sprint_proposal;
+      const response = await fetch(apiUrl("/sprint/approve"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: card.title,
+          goal: sp.sprint_goal,
+          key_tasks: sp.key_tasks,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Sprint approval failed.");
+      }
+
+      const payload = (await response.json()) as { sprint: { number: number; title: string }; executionStatus: string; tasks: unknown[] };
+
+      setResolvedProposalIds((current) => [...current, messageId]);
+      setExecutionStatus(payload.executionStatus);
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: createId(),
+          role: "system",
+          content: `Sprint ${payload.sprint.number} started: ${payload.sprint.title}\n${payload.tasks.length} tasks dispatched. Watch the Execution tab for progress.`,
+        },
+      ]);
+
+      await loadState();
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: createId(),
+          role: "system",
+          content: error instanceof Error ? error.message : "Sprint approval failed.",
         },
       ]);
     } finally {
@@ -1694,7 +1893,12 @@ export default function Page() {
           </nav>
           <span className="mx-1 h-4 w-px bg-[var(--swiss-gray-200)]" />
           {currentSprint ? (
-            <Badge variant="outline" className="text-[0.625rem]">Sprint {currentSprint.number}</Badge>
+            <Badge
+              variant={currentSprint.status === "completed" ? "secondary" : "outline"}
+              className="text-[0.625rem]"
+            >
+              Sprint {currentSprint.number} · {currentSprint.status === "completed" ? "Done" : currentSprint.status === "executing" ? "Executing" : "Planning"}
+            </Badge>
           ) : null}
           <Badge
             variant={executionStatus === "done" ? "secondary" : executionStatus === "error" ? "destructive" : "outline"}
@@ -1764,6 +1968,14 @@ export default function Page() {
                         ) : null}
                         {message.card.card_type === "clarifying_question" ? <ClarifyingQuestionView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
                         {message.card.card_type === "status_update" ? <StatusUpdateView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                        {message.card.card_type === "sprint_proposal" ? (
+                          <SprintProposalView
+                            card={message.card}
+                            busy={proposalActionId === message.id}
+                            resolved={resolvedProposalIds.includes(message.id)}
+                            onApprove={(card) => handleSprintApproval(message.id, card)}
+                          />
+                        ) : null}
                       </div>
                     );
                   }
