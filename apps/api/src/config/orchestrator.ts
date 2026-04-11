@@ -43,4 +43,8 @@ export const orchestratorConfig = {
     autonomousReadyPassLimit: readNumberEnv("ARCEUS_AUTONOMOUS_READY_PASS_LIMIT", 8),
     continuationPassLimit: readNumberEnv("ARCEUS_EXECUTION_CONTINUATION_PASS_LIMIT", 12),
   },
+  sprint: {
+    autoApproveProposals: readOptionalEnv("ARCEUS_SPRINT_AUTO_APPROVE", "true") === "true",
+    boardReviewEveryNSprints: readNumberEnv("ARCEUS_BOARD_REVIEW_EVERY_N_SPRINTS", 5),
+  },
 };

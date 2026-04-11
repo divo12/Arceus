@@ -241,6 +241,10 @@ export function isRetryableError(error: unknown): boolean {
     if (msg.includes("timeout") || msg.includes("econnreset") || msg.includes("enotfound")) {
       return true;
     }
+    // Stale OpenCode session: "Item with id '...' not found"
+    if (msg.includes("item with id") && msg.includes("not found")) {
+      return true;
+    }
     // Azure OpenAI rate limit or transient server error
     const statusMatch = msg.match(/error (\d{3})/);
     if (statusMatch) {

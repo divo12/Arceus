@@ -1,97 +1,294 @@
 # Orchestration Architecture
 
-## Entry: `beginExecution()`
+## High-Level Flow
 
-Creates **5 core tasks** in a strict dependency chain:
+```mermaid
+flowchart TB
+    START([beginExecution]) --> PLAN[CTO: Technical Plan]
+    PLAN --> SPEC[PM: Acceptance Spec]
+    SPEC --> LOOP[Build → Preview → Review Loop]
+    LOOP --> RECONCILE[Reconcile Specialist Tasks]
+    RECONCILE --> DONE([Execution Complete])
 
+    LOOP -- max cycles exhausted --> BOARD[Pause for Board Review]
+    RECONCILE -- incomplete tasks --> BOARD
+    BOARD -- human approves --> RECONCILE
 ```
-technical_plan (CTO) → acceptance_spec (PM) → implementation (Developer) → local_preview (Developer) → board_handoff (CTO)
+
+Five core tasks are created with a strict dependency chain:
+
+`technical_plan (CTO) → acceptance_spec (PM) → implementation (Developer) → local_preview (Developer) → board_handoff (CTO)`
+
+---
+
+## LLM Router — Dynamic Flow Engine
+
+```mermaid
+flowchart LR
+    SNAP[Snapshot:<br/>task states +<br/>transitions +<br/>feedback] --> LLM[LLM Router]
+    LLM --> PROPS[TransitionProposal[]]
+    PROPS --> VAL{Validate}
+    VAL -- valid --> EXEC[executeTransitionWork]
+    VAL -- invalid --> DROP[Drop + log]
+    EXEC --> SNAP
+    VAL -- no valid transitions / max reached --> EXIT([Exit loop])
 ```
 
-Each task has `dependsOnTaskIds` pointing to its predecessor. The event bridge (OpenCode SSE stream) is started, and execution begins with the planning phase.
+**Validation gates:** state machine legality, dependency satisfaction, iteration limits (3), confidence threshold.
 
-## The LLM Router — Dynamic Flow Engine
+---
 
-The system does **not** use a hardcoded phase pipeline. Instead, `router.ts` implements `runRouterLoop()`:
+## Phase Map
 
-1. After every task completion or status change, the LLM is asked *"what should happen next?"* given current task states, recent transitions, and feedback history.
-2. The LLM responds with typed `TransitionProposal[]`, each with a confidence score.
-3. Each proposal is validated against:
-   - A **state machine** of valid status transitions (e.g., `in_progress` → `completed|failed|blocked|verifying`)
-   - **Dependency satisfaction** — a task can't start until predecessors are complete
-   - **Iteration limits** — max feedback loop reopens per task (default 3)
-   - **Confidence threshold** — low-confidence proposals are recorded but not executed (need approval)
-4. The loop keeps cycling until: all tasks done, router says pause, max transitions reached, or no valid transitions exist.
-
-This means the flow is genuinely **dynamic** — the LLM can skip phases, re-open completed tasks for revision, or route to specialists based on what it observes in the snapshot.
-
-## Phase Execution (`executeTransitionWork`)
-
-When the router transitions a task, the orchestrator maps `task.kind` to the right phase function:
-
-| `task.kind` | Phase Function | Agent | Blocking? |
+| `task.kind` | Function | Agent | Blocking? |
 |---|---|---|---|
-| `technical_plan` | `runPlanningPhase()` | CTO | Sync (awaits prompt) |
-| `acceptance_spec` | `runAcceptancePhase()` | PM | Sync (awaits prompt) |
-| `implementation` | `startDeveloperPhase()` | Developer | **Async** (yields) |
-| `local_preview` | `startPreviewPhase()` | Developer | Sync (launches preview) |
-| `board_handoff` | `startReviewPhase()` | CTO | Sync (awaits prompt) |
-| specialist tasks | `executeSpecialistTask()` | Various | Sync |
+| `technical_plan` | `runPlanningPhase()` | CTO | Sync |
+| `acceptance_spec` | `runAcceptancePhase()` | PM | Sync |
+| `implementation` | `startDeveloperPhase()` | Developer | Async (yields) |
+| `local_preview` | `startPreviewPhase()` | Developer | Sync |
+| `board_handoff` | `startReviewPhase()` | CTO | Sync |
+| specialist | `executeSpecialistTask()` | Various | Sync |
 
-## The Async Developer — Yield & Re-enter Pattern
+---
 
-The developer phase is the only async phase. Here's how it avoids blocking:
+## Build → Preview → Review Loop (`runBuildPreviewReviewLoop`)
 
-1. Router proposes transitioning the `implementation` task to `in_progress`.
-2. The `shouldYield` callback recognizes it and **yields** control back — the router loop exits.
-3. `startDeveloperPhase()` fires an **async prompt** (`prompt_async`) to OpenCode and returns immediately.
-4. Three monitors run in parallel during developer work:
-   - **Event Bridge** — streams OpenCode SSE events (text chunks, tool calls, file edits, shell commands) and updates telemetry in real time.
-   - **Workspace Monitor** — polls the filesystem every N seconds for changed files.
-   - **Developer Watchdog** — timeout timer reset on every activity signal.
-5. When OpenCode emits `session.idle`, the event bridge catches it and calls `continueExecutionFromCurrentState("post-developer-idle")` — **re-entering the router loop** to decide what's next (usually preview → review).
+The core execution engine. Owns `developerStepLoopActive` for its entire duration to prevent race conditions with the event bridge.
 
-## Stall Prevention (3 layers)
+```mermaid
+flowchart TB
+    DEV[startDeveloperPhase<br/>async prompt to OpenCode] --> PV{startPreviewPhase}
 
-### Layer 1 — Developer Watchdog Timer (`DEVELOPER_STALL_TIMEOUT_MS`)
+    PV -- PASS --> REV{startReviewPhase<br/>CTO structured verdict}
+    PV -- FAIL --> CYC1{cycle < max?}
+    CYC1 -- yes --> RW1[runDeveloperRework<br/>with preview feedback]
+    CYC1 -- no --> BOARD([Pause for Board Review])
+    RW1 --> PV
 
-- Started when developer begins working; **reset** on every OpenCode event OR filesystem change.
-- If it fires: marks status → `error`, build task → `failed`, creates an escalation meeting with diagnostic details (last event, tool counts, file edits, shell commands).
-- This is the hard safety net.
+    REV -- PASS --> DONE([Both passed — exit loop])
+    REV -- FAIL --> CYC2{cycle < max?}
+    CYC2 -- yes --> RW2[runDeveloperRework<br/>with CTO feedback]
+    CYC2 -- no --> BOARD
+    RW2 --> PV
 
-### Layer 2 — Workspace Monitor
+    style DEV fill:#1a73e8,color:#fff
+    style DONE fill:#34a853,color:#fff
+    style BOARD fill:#ea4335,color:#fff
+```
 
-- Even if the OpenCode event stream drops, filesystem polling detects file changes and resets the watchdog.
-- Also triggers live preview attempts during implementation (detects runnable targets early).
+**Config:** `maxReworkCycles` (default 3) via `ARCEUS_DEVELOPER_MAX_REWORK_CYCLES`.
 
-### Layer 3 — Event Bridge PREVIEW_URL Detection
+---
 
-- Scans developer text output for `PREVIEW_URL: http://...` patterns.
-- Registers reported preview URLs immediately, enabling early preview validation.
+## Preview Validation (`validatePreviewContent`)
 
-### Router-level Safety Valves
+Stack-agnostic source-code analysis (no HTML fetching).
 
-- `maxTransitionsPerCycle` — prevents infinite routing loops.
-- `maxFeedbackIterations` per task — caps revision cycles at 3.
-- Confidence threshold gates risky transitions.
-- `shouldPauseForBoardReview()` checks: pending approvals, blocked/failed tasks, incomplete core tasks.
+```mermaid
+flowchart LR
+    SCAN[Scan all source files<br/>.ts .tsx .js .jsx .vue<br/>.svelte .py .html .css] --> CAP[Cap at 30k chars]
+    CAP --> LLM[LLM QA Engineer<br/>structuredCompletion]
+    LLM --> VERDICT{PreviewContentVerdict}
+    VERDICT -- pass=true --> OK([Continue])
+    VERDICT -- pass=false --> FAIL([Rework needed])
+```
 
-## Post-Developer Reconciliation
+**FAIL conditions:**
+- Entry point doesn't import product modules
+- Only scaffold/boilerplate, no product logic
+- Key spec features missing in source
+- No meaningful styling (bare unstyled HTML)
+- Hallucinated features not in spec (login pages, auth, etc.)
 
-After the CTO review phase completes:
+---
 
-1. `reconcilePostReviewExecution()` runs autonomous specialist tasks (tester, UI designer, marketing, skills lead) via multi-pass scheduling.
-2. Checks if board review is needed (pending approvals, blockers, incomplete tasks).
-3. If clean → `completeExecutionCycle()` → tags sprint snapshot → done.
-4. If not → `pauseForBoardReview()` → status becomes `awaiting_board_review` → human approves via `approveBoardReview()`.
+## Developer Step Execution with Retry
 
-## Known Stall Risks
+```mermaid
+sequenceDiagram
+    participant Loop as Rework Loop
+    participant Step as runDeveloperStep
+    participant OC as OpenCode
+    participant Retry as withRetry (3 attempts)
 
-| Risk | Scenario | Mitigation |
-|---|---|---|
-| **Sync prompt hang** | CTO/PM OpenCode prompt never returns | No timeout on `runPromptText()` — these are blocking `await` calls with no watchdog |
-| **Event bridge disconnect** | SSE stream drops silently | Bridge sets `eventBridgeStarted = false` but doesn't reconnect. Workspace monitor still works as backup |
-| **Router deadlock** | LLM proposes only invalid transitions repeatedly | `maxTransitionsPerCycle` + "no valid transitions" exit, but execution enters limbo (not error, not done) |
-| **Preview launch hang** | `startLocalPreview()` blocks on unreachable port | Has internal timeout, but failure path throws and can leave execution in error without clear recovery |
+    Loop->>Retry: runDeveloperStep(prompt)
+    Retry->>Step: attempt 1
+    Step->>OC: prompt_async
+    OC-->>Step: session.idle
+    Step-->>Retry: success
 
-The developer phase is well-protected. The remaining stall surface is in the **synchronous phases** (planning, acceptance, review) where there's no watchdog equivalent, and in the router's ability to get stuck proposing invalid transitions without escalating to error state.
+    Note over Retry,OC: On "fetch failed"
+    Retry->>Step: resetOpencodeConnection()
+    Retry->>Step: attempt 2 (backoff 2s→4s→8s)
+    Step->>OC: prompt_async
+    OC-->>Step: session.idle
+    Step-->>Loop: success
+```
+
+Both `runDeveloperStep` and `runPromptText` are wrapped in `withRetry` (3 attempts, exponential backoff). On retryable errors (`TypeError: fetch failed`), the OpenCode connection is reset before the next attempt.
+
+---
+
+## Async Developer — Yield & Re-enter
+
+```mermaid
+sequenceDiagram
+    participant Router as LLM Router
+    participant Orch as Orchestrator
+    participant OC as OpenCode
+    participant EB as Event Bridge
+    participant WD as Watchdog
+
+    Router->>Orch: transition implementation → in_progress
+    Orch->>Router: shouldYield → true (exit loop)
+    Orch->>OC: prompt_async
+    activate OC
+    par Monitors
+        EB->>EB: Stream SSE events
+        EB->>WD: Reset on each event
+    end
+    OC-->>EB: session.idle
+    deactivate OC
+    EB->>Orch: continueExecutionFromCurrentState("post-developer-idle")
+    Orch->>Router: Re-enter router loop
+```
+
+---
+
+## Stall Prevention
+
+```mermaid
+flowchart TB
+    subgraph "Layer 1 — Watchdog"
+        WD[Developer Watchdog Timer] -- fires --> ERR[Mark error + escalation meeting]
+        EVT[Any OpenCode event] -- resets --> WD
+        FS[Filesystem change] -- resets --> WD
+    end
+
+    subgraph "Layer 2 — Workspace Monitor"
+        POLL[Poll filesystem every Ns] -- detects changes --> WD
+    end
+
+    subgraph "Layer 3 — Event Bridge"
+        SSE[SSE stream] -- PREVIEW_URL pattern --> REG[Register preview URL]
+        SSE -- disconnect --> RECON[Auto-reconnect after 3s]
+    end
+
+    subgraph "Layer 4 — Router Safety"
+        MAX[maxTransitionsPerCycle]
+        ITER[maxFeedbackIterations = 3]
+        CONF[Confidence threshold]
+    end
+```
+
+---
+
+## Post-Review Reconciliation
+
+```mermaid
+flowchart TB
+    REV_DONE[CTO Review Passed] --> PRUNE[pruneAlreadyCompletedSpecialistTasks<br/>LLM scans workspace to auto-resolve<br/>tasks already covered by developer]
+    PRUNE --> RUN[runAutonomousReadyTasks<br/>multi-pass specialist execution]
+    RUN --> CHECK{shouldPauseForBoardReview?}
+    CHECK -- pending approvals or<br/>incomplete core tasks --> BOARD[pauseForBoardReview]
+    CHECK -- all clear --> COMPLETE([completeExecutionCycle<br/>tag sprint snapshot])
+
+    BOARD -- human approves --> RUN
+
+    style COMPLETE fill:#34a853,color:#fff
+    style PRUNE fill:#fbbc04,color:#000
+```
+
+**Key:** No follow-up tasks are generated. All specialist work comes from the CTO's `task_graph`. Tasks already implemented by the developer are auto-pruned before specialist execution.
+
+---
+
+## CTO Review Verdict
+
+```mermaid
+flowchart LR
+    SRC[Source files + spec] --> LLM[structuredCompletion<br/>CtoReviewVerdict]
+    LLM --> V{verdict}
+    V -- SHIP_IT --> PASS([PhaseResult ok=true])
+    V -- NEEDS_WORK --> FAIL([PhaseResult ok=false<br/>+ reworkFeedback])
+    V -- BLOCKED --> FAIL
+```
+
+Structured Zod schema — no free-text parsing.
+
+---
+
+## Scope & Quality Enforcement Points
+
+```mermaid
+flowchart TB
+    subgraph "Prompt Layer"
+        P1[CTO Plan Prompt<br/>scope discipline + UI quality]
+        P2[Developer System Prompt<br/>CSS vars, typography, layout]
+        P3[buildStepPrompt<br/>no-auth + styled-components]
+        P4[Rework Prompt<br/>UI quality + no-auth]
+    end
+
+    subgraph "Validation Layer"
+        V1[validatePreviewContent<br/>rejects bare HTML +<br/>hallucinated features]
+        V2[CTO Review Verdict<br/>structured pass/fail]
+    end
+
+    P1 --> P2 --> P3
+    P3 -- rework --> P4
+    P3 --> V1
+    V1 -- pass --> V2
+    V1 -- fail --> P4
+    V2 -- fail --> P4
+    V2 -- pass --> DONE([Ship])
+
+    style DONE fill:#34a853,color:#fff
+```
+
+Five prompt layers + two validation gates ensure UI quality and scope discipline.
+
+---
+
+## End-to-End Sequence
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Orch as Orchestrator
+    participant CTO
+    participant PM
+    participant Dev as Developer (OpenCode)
+    participant QA as LLM QA
+    participant Spec as Specialist Pool
+
+    User->>Orch: beginExecution(strategy)
+    Orch->>CTO: runPlanningPhase()
+    CTO-->>Orch: technical plan + task_graph
+    Orch->>PM: runAcceptancePhase()
+    PM-->>Orch: acceptance spec
+
+    loop Build → Preview → Review (max 3 rework cycles)
+        Orch->>Dev: startDeveloperPhase() / runDeveloperRework()
+        Dev-->>Orch: code complete (session.idle)
+        Orch->>QA: validatePreviewContent(source files)
+        alt QA fails
+            QA-->>Orch: {pass: false, reason}
+            Note over Orch: continue → rework
+        else QA passes
+            QA-->>Orch: {pass: true}
+            Orch->>CTO: startReviewPhase()
+            alt CTO: NEEDS_WORK
+                CTO-->>Orch: reworkFeedback
+                Note over Orch: continue → rework
+            else CTO: SHIP_IT
+                CTO-->>Orch: approved
+            end
+        end
+    end
+
+    Orch->>Orch: pruneAlreadyCompletedSpecialistTasks()
+    Orch->>Spec: runAutonomousReadyTasks()
+    Spec-->>Orch: done
+    Orch->>Orch: completeExecutionCycle()
+    Orch-->>User: Execution complete
+```

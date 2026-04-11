@@ -52,7 +52,17 @@ export function validateTransition(
   proposal: TransitionProposal,
   snapshot: CompanySnapshot
 ): { valid: boolean; reason: string } {
-  const task = snapshot.tasks.find((t) => t.id === proposal.toTaskId);
+  // Normalize task ID — LLM sometimes strips the "task_" prefix
+  let taskId = proposal.toTaskId;
+  if (taskId && !taskId.startsWith("task_") && !snapshot.tasks.some((t) => t.id === taskId)) {
+    const withPrefix = `task_${taskId}`;
+    if (snapshot.tasks.some((t) => t.id === withPrefix)) {
+      taskId = withPrefix;
+      proposal.toTaskId = withPrefix;
+    }
+  }
+
+  const task = snapshot.tasks.find((t) => t.id === taskId);
   if (!task) {
     return { valid: false, reason: `Task ${proposal.toTaskId} not found` };
   }

@@ -511,8 +511,8 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
 
 /**
  * After a sprint completes, triggers the CEO to auto-propose Sprint N+1 via LLM.
- * Sets executionStatus = "done" so inferCeoStage detects "between_sprints".
- * Generates free text via structuredCompletion, classifies it, and appends as CEO chat message.
+ * If auto-approve is enabled and this isn't a board-review sprint, the proposal is
+ * approved immediately without waiting for the board.
  */
 async function triggerCeoSprintProposal(): Promise<void> {
   const snapshot = getSnapshot();
@@ -554,11 +554,24 @@ async function triggerCeoSprintProposal(): Promise<void> {
       createdAt: nowIso(),
     });
 
-    emitEmployeeActivity(
-      "ceo",
-      "info",
-      `CEO proposed Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}. Board can approve or provide feedback.`,
-    );
+    // Determine if this sprint should auto-approve or wait for board review
+    const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
+    const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
+    const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
+
+    if (orchestratorConfig.sprint.autoApproveProposals && !needsBoardReview && card.sprint_proposal) {
+      emitEmployeeActivity(
+        "ceo",
+        "info",
+        `CEO proposed Sprint ${nextSprintNumber}. Auto-approving (board review scheduled for Sprint ${Math.ceil(nextSprintNumber / cadence) * cadence}).`,
+      );
+      await approveSprintProposal(card);
+    } else {
+      const reason = needsBoardReview
+        ? `CEO proposed Sprint ${nextSprintNumber}. Board review required (every ${cadence} sprints). Awaiting board approval.`
+        : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
+      emitEmployeeActivity("ceo", "info", reason);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[Sprint] CEO sprint proposal generation failed:", message);
@@ -2170,11 +2183,23 @@ async function continueExecutionFromCurrentState(checkpoint: string) {
 
   if (result.paused && result.pauseReason?.startsWith("Yielding for async work")) {
     // The router yielded because a task needs async work (e.g., developer session)
-    // Run the full build → preview → review loop with automatic rework
     const snapshot = getSnapshot();
-    const buildTask = getTaskById(activeExecution.buildTaskId, snapshot);
-    if (buildTask && buildTask.status === "in_progress" && buildTask.kind === "implementation") {
-      await runBuildPreviewReviewLoop(snapshot);
+
+    // Find the actual implementation task that was just moved to in_progress
+    const yieldedTask = snapshot.tasks.find(
+      (t) => t.kind === "implementation" && t.status === "in_progress"
+    );
+
+    if (yieldedTask) {
+      // Sprint 1 path: full rework loop when we have a CTO plan + acceptance spec
+      if (activeExecution.planText && activeExecution.acceptanceText) {
+        activeExecution.buildTaskId = yieldedTask.id;
+        await runBuildPreviewReviewLoop(snapshot);
+        return;
+      }
+
+      // Sprint 2+ path: no CTO plan — run as specialist task (generic LLM prompt)
+      await executeSpecialistTask(yieldedTask.id);
       return;
     }
   }
@@ -2237,7 +2262,13 @@ async function executeTransitionWork(transition: Transition, snapshot: CompanySn
         break;
 
       case "board_handoff":
-        // Handled inside runBuildPreviewReviewLoop — no standalone execution
+        if (transition.toStatus === "in_progress") {
+          // Sprint 1: handled inside runBuildPreviewReviewLoop
+          // Sprint 2+: standalone CTO review (no planText/acceptanceText)
+          if (!activeExecution.planText || !activeExecution.acceptanceText) {
+            await executeSpecialistTask(task.id);
+          }
+        }
         break;
 
       default:
@@ -2324,11 +2355,12 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
     stallReason: null,
   });
 
+  let currentSessionId = sessionId;
   const output = await withRetry(
     async () => {
       const opencode = await getOpencode();
       const result = await opencode.client.session.prompt({
-        path: { id: sessionId },
+        path: { id: currentSessionId },
         body: {
           model: { providerID: "azure", modelID: deployment },
           agent: role,
@@ -2357,9 +2389,14 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
       delay: 2000,
       backoff: 2,
       shouldRetry: isRetryableError,
-      onRetry: (attempt, _error) => {
+      onRetry: async (attempt, _error) => {
         resetOpencodeConnection();
+        // Invalidate cached session so a fresh one is created on reconnect
+        agentSessions.delete(role);
         emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
+        const snap = getSnapshot();
+        const freshSession = await ensureAgentSession(snap, role);
+        currentSessionId = freshSession.sessionId;
       },
     },
   );
@@ -2622,11 +2659,12 @@ interface VerifyResult {
 }
 
 async function runDeveloperStep(sessionId: string, systemPrompt: string, text: string): Promise<string> {
+  let currentSessionId = sessionId;
   return withRetry(
     async () => {
       const opencode = await getOpencode();
       const result = await opencode.client.session.prompt({
-        path: { id: sessionId },
+        path: { id: currentSessionId },
         body: {
           model: { providerID: "azure", modelID: ensureDeployment("workerDeployment") },
           agent: "developer",
@@ -2650,9 +2688,14 @@ async function runDeveloperStep(sessionId: string, systemPrompt: string, text: s
       delay: 2000,
       backoff: 2,
       shouldRetry: isRetryableError,
-      onRetry: (attempt, error) => {
+      onRetry: async (attempt, _error) => {
         resetOpencodeConnection();
+        // Invalidate cached session so a fresh one is created on reconnect
+        agentSessions.delete("developer");
         emitEmployeeActivity("developer", "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
+        const snapshot = getSnapshot();
+        const freshSession = await ensureAgentSession(snapshot, "developer");
+        currentSessionId = freshSession.sessionId;
       },
     },
   );
