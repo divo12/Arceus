@@ -6,9 +6,10 @@ import { getOpencode, resetOpencodeConnection } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
-import { getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateMeeting, updateTask, upsertApproval, upsertMeeting, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Task, Transition, TransitionProposal } from "@arceus/contracts";
+import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
+import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
+import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
@@ -485,6 +486,156 @@ async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, messag
   }
 }
 
+function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: string): Sprint {
+  const number = (snapshot.company.currentSprintNumber ?? 0) + 1;
+  const ceoAgent = getAgentByRole(snapshot, "ceo");
+  const sprint: Sprint = {
+    id: `sprint_${crypto.randomUUID()}`,
+    companyId: snapshot.company.id,
+    strategyId: snapshot.company.currentStrategyId,
+    number,
+    title: title || `Sprint ${number}`,
+    goal: goal || "",
+    status: "planning",
+    plannedByAgentId: ceoAgent?.id ?? null,
+    summary: null,
+    createdAt: nowIso(),
+    startedAt: null,
+    completedAt: null,
+  };
+
+  upsertSprint(sprint);
+  updateCompanySprint(sprint.id, number);
+  return sprint;
+}
+
+/**
+ * After a sprint completes, triggers the CEO to auto-propose Sprint N+1 via LLM.
+ * Sets executionStatus = "done" so inferCeoStage detects "between_sprints".
+ * Generates free text via structuredCompletion, classifies it, and appends as CEO chat message.
+ */
+async function triggerCeoSprintProposal(): Promise<void> {
+  const snapshot = getSnapshot();
+
+  // Duplicate guard: skip if sprint_proposal card already exists for current sprint
+  const existingProposal = snapshot.chatMessages.find(
+    (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
+  );
+  if (existingProposal) return;
+
+  // Set execution status so CEO stage infers as "between_sprints"
+  executionStatus = "done";
+
+  try {
+    const ceoPrompt = buildCeoOperatingPrompt(snapshot, executionStatus);
+    const ceoResponse = await structuredCompletion(
+      "ceoDeployment",
+      [
+        { role: "system", content: ceoPrompt },
+        { role: "user", content: "The previous sprint has completed. Analyze the results and propose the next sprint. Include sprint goal, key tasks with assigned roles and dependencies, carried-forward items, risks, and rationale." },
+      ],
+      z.object({ response: z.string() }),
+      "ceo_sprint_proposal",
+    );
+
+    const ceoText = ceoResponse.response;
+    const card = await classifyCeoResponse(ceoText, snapshot, executionStatus);
+
+    // Append CEO message to chat
+    appendChatMessage({
+      id: `chat_${crypto.randomUUID()}`,
+      companyId: snapshot.company.id,
+      sprintId: snapshot.company.currentSprintId,
+      agentId: getAgentByRole(snapshot, "ceo")?.id ?? null,
+      role: "ceo",
+      content: ceoText,
+      cardType: card.card_type,
+      cardData: card,
+      createdAt: nowIso(),
+    });
+
+    emitEmployeeActivity(
+      "ceo",
+      "info",
+      `CEO proposed Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}. Board can approve or provide feedback.`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[Sprint] CEO sprint proposal generation failed:", message);
+    emitEmployeeActivity(
+      "system",
+      "error",
+      `Failed to auto-generate sprint proposal: ${message}. Board can message the CEO directly to request a proposal.`,
+    );
+  }
+}
+
+let sprintCompletionTriggered = false;
+
+/**
+ * Checks if all employee tasks in the current sprint have reached terminal status.
+ * If so, marks the sprint as completed, tags a snapshot, and triggers CEO auto-proposal.
+ * Guard flag prevents double-firing.
+ */
+async function checkSprintCompletion(): Promise<boolean> {
+  if (sprintCompletionTriggered) return false;
+
+  const snapshot = getSnapshot();
+  const currentSprintId = snapshot.company.currentSprintId;
+  if (!currentSprintId) return false;
+
+  const currentSprint = snapshot.sprints.find((s) => s.id === currentSprintId);
+  if (!currentSprint || currentSprint.status === "completed") return false;
+
+  const sprintTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up",
+  );
+  if (sprintTasks.length === 0) return false;
+
+  const allTerminal = sprintTasks.every((t) =>
+    ["completed", "cancelled", "failed"].includes(t.status),
+  );
+  if (!allTerminal) return false;
+
+  sprintCompletionTriggered = true;
+
+  // Mark sprint completed
+  updateSprint(currentSprintId, (sprint) => ({
+    ...sprint,
+    status: "completed" as Sprint["status"],
+    completedAt: nowIso(),
+    summary: `Sprint ${sprint.number} completed — ${sprintTasks.filter((t) => t.status === "completed").length}/${sprintTasks.length} tasks delivered.`,
+  }));
+
+  emitEmployeeActivity(
+    "system",
+    "info",
+    `Sprint ${currentSprint.number} completed. ${sprintTasks.filter((t) => t.status === "completed").length} delivered, ${sprintTasks.filter((t) => t.status === "failed").length} failed, ${sprintTasks.filter((t) => t.status === "cancelled").length} cancelled.`,
+  );
+
+  await tagCurrentSprintSnapshot();
+
+  // CEO announces sprint completion in chat before proposing next sprint
+  const ceoAgent = getAgentByRole(snapshot, "ceo");
+  appendChatMessage({
+    id: `chat_${crypto.randomUUID()}`,
+    companyId: snapshot.company.id,
+    sprintId: currentSprintId,
+    agentId: ceoAgent?.id ?? null,
+    role: "ceo",
+    content: `Sprint ${currentSprint.number} is complete. ${sprintTasks.filter((t) => t.status === "completed").length} tasks delivered, ${sprintTasks.filter((t) => t.status === "failed").length} failed. Preparing next sprint proposal now.`,
+    cardType: "status_update",
+    cardData: null,
+    createdAt: nowIso(),
+  });
+
+  // Trigger CEO to auto-propose Sprint N+1
+  await triggerCeoSprintProposal();
+
+  sprintCompletionTriggered = false;
+  return true;
+}
+
 async function tagCurrentSprintSnapshot() {
   const snapshot = getSnapshot();
   if (snapshot.company.id === "company_pending") {
@@ -492,7 +643,7 @@ async function tagCurrentSprintSnapshot() {
   }
 
   try {
-    const result = await workspaceManager.tagSprint(snapshot.company.id, Math.max(1, snapshot.sprints.length || 1), snapshot);
+    const result = await workspaceManager.tagSprint(snapshot.company.id, snapshot.company.currentSprintNumber ?? 1, snapshot);
     if (result.warnings.length > 0) {
       emitEmployeeActivity("system", "info", `Sprint snapshot completed with warnings: ${result.warnings.join(" | ")}`, {
         taskId: activeExecution?.reviewTaskId ?? null,
@@ -531,12 +682,14 @@ function createWorkflowTask(
   definitionOfDone: string[],
   priority: Task["priority"],
   status: Task["status"],
+  sprintId?: string | null,
 ): Task {
   const agent = getAgentByRole(snapshot, role);
 
   return {
     id: `task_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
+    sprintId: sprintId ?? snapshot.company.currentSprintId ?? null,
     kind,
     title,
     description,
@@ -1104,6 +1257,7 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
     const snapshot = getSnapshot();
     for (const task of snapshot.tasks) {
       if (task.status !== "created") continue;
+      if (task.kind === "follow_up") continue;
       if (task.dependsOnTaskIds.length === 0) continue;
       const allDepsMet = task.dependsOnTaskIds.every((depId) => {
         const dep = snapshot.tasks.find((t) => t.id === depId);
@@ -1874,7 +2028,7 @@ function shouldPauseForBoardReview(snapshot: CompanySnapshot) {
   } as const;
 }
 
-function completeExecutionCycle(reason: string) {
+async function completeExecutionCycle(reason: string) {
   const snapshot = getSnapshot();
   const queuedNonCoreTaskCount = getQueuedNonCoreTaskCount(snapshot);
   executionStatus = "done";
@@ -1931,6 +2085,10 @@ function completeExecutionCycle(reason: string) {
   });
 
   activeExecution = null;
+
+  // After execution cycle completes, check if the sprint is done
+  // (all sprint tasks terminal → mark sprint completed → CEO auto-proposes next sprint)
+  await checkSprintCompletion();
 }
 
 function pauseForBoardReview(reason: string) {
@@ -1986,7 +2144,7 @@ async function reconcilePostReviewExecution() {
     return;
   }
 
-  completeExecutionCycle("Autonomous execution completed — all phases finished.");
+  await completeExecutionCycle("Autonomous execution completed — all phases finished.");
 }
 
 async function continueExecutionFromCurrentState(checkpoint: string) {
@@ -2029,13 +2187,17 @@ async function continueExecutionFromCurrentState(checkpoint: string) {
     return;
   }
 
-  // Check if execution is complete
+  // Check if sprint is complete (all employee tasks terminal)
+  const sprintCompleted = await checkSprintCompletion();
+  if (sprintCompleted) return;
+
+  // Fallback: if no sprint tracking, check all tasks
   const finalSnapshot = getSnapshot();
   const allDone = finalSnapshot.tasks.every((t) =>
     ["completed", "cancelled", "failed"].includes(t.status)
   );
   if (allDone) {
-    completeExecutionCycle("All tasks completed via dynamic routing.");
+    await completeExecutionCycle("All tasks completed via dynamic routing.");
   }
 }
 
@@ -2080,7 +2242,7 @@ async function executeTransitionWork(transition: Transition, snapshot: CompanySn
 
       default:
         // Specialist tasks (tester, ui_designer, marketing, skills_lead, etc.)
-        if (transition.toStatus === "in_progress" && isTaskReadyForAutonomousExecution(task, snapshot)) {
+        if (transition.toStatus === "in_progress") {
           await executeSpecialistTask(task.id);
         }
         break;
@@ -2088,6 +2250,7 @@ async function executeTransitionWork(transition: Transition, snapshot: CompanySn
   } catch (err) {
     const message = err instanceof Error ? err.message : "Phase execution failed";
     console.error(`[Router] executeTransitionWork failed for ${task.id} (${task.kind}):`, message);
+    setTaskStatus(task.id, "failed", message);
     emitEmployeeActivity("system", "error", `Transition work failed for ${task.kind}: ${message}`, {
       taskId: task.id,
     });
@@ -3480,7 +3643,8 @@ export async function approveBoardReview() {
 
   activeExecution = null;
 
-  await tagCurrentSprintSnapshot();
+  // Check if sprint is now complete (board_handoff was the last task)
+  await checkSprintCompletion();
 
   return {
     executionStatus,
@@ -3488,6 +3652,199 @@ export async function approveBoardReview() {
     queuedFollowUpCount,
     resolvedApprovalCount: resolvedApprovals.length,
   };
+}
+
+/**
+ * Approves a CEO sprint proposal and kicks off Sprint N+1.
+ * Creates new sprint record, tasks from the proposal's key_tasks,
+ * auto-adds CTO board_handoff as final task, then starts execution.
+ */
+export async function approveSprintProposal(card: CeoCard) {
+  if (!card.sprint_proposal) {
+    throw new Error("No sprint_proposal data in the provided card.");
+  }
+
+  if (executionStatus !== "done") {
+    throw new Error(`Cannot approve sprint proposal while execution is "${executionStatus}". Must be "done".`);
+  }
+
+  const proposal = card.sprint_proposal;
+
+  if (!proposal.key_tasks || proposal.key_tasks.length === 0) {
+    throw new Error("Sprint proposal has no key_tasks. Ask CEO to repropose with tasks.");
+  }
+
+  const snapshot = getSnapshot();
+  const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+  if (currentSprint && currentSprint.status !== "completed") {
+    throw new Error(`Current sprint (${currentSprint.number}) is still "${currentSprint.status}". Cannot start a new sprint.`);
+  }
+
+  // Create Sprint N+1
+  const sprint = createSprintRecord(
+    snapshot,
+    `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${proposal.sprint_goal}`,
+    proposal.sprint_goal,
+  );
+  let freshSnapshot = getSnapshot();
+
+  // Create tasks from key_tasks
+  const taskTitleToId = new Map<string, string>();
+  const createdTasks: Task[] = [];
+
+  for (const kt of proposal.key_tasks) {
+    const role = kt.assigned_role as AgentIdentity["role"];
+    const task = createWorkflowTask(
+      freshSnapshot,
+      "implementation",
+      role,
+      kt.title,
+      kt.rationale || kt.title,
+      kt.rationale || kt.title,
+      kt.title,
+      [`${kt.title} completed`],
+      kt.priority as Task["priority"] || "medium",
+      "created",
+      sprint.id,
+    );
+    taskTitleToId.set(kt.title, task.id);
+    createdTasks.push(task);
+  }
+
+  // Resolve dependencies by title
+  for (const kt of proposal.key_tasks) {
+    const taskId = taskTitleToId.get(kt.title);
+    if (!taskId) continue;
+    const depIds = (kt.depends_on || [])
+      .map((depTitle: string) => taskTitleToId.get(depTitle))
+      .filter((id): id is string => Boolean(id));
+    if (depIds.length > 0) {
+      const idx = createdTasks.findIndex((t) => t.id === taskId);
+      if (idx >= 0) {
+        createdTasks[idx] = {
+          ...createdTasks[idx],
+          dependsOnTaskIds: depIds,
+          parentTaskId: depIds[0],
+        };
+      }
+    }
+  }
+
+  // Find leaf tasks (tasks that no other task depends on)
+  const allDepIds = new Set(createdTasks.flatMap((t) => t.dependsOnTaskIds));
+  const leafTaskIds = createdTasks
+    .filter((t) => !allDepIds.has(t.id))
+    .map((t) => t.id);
+
+  // Auto-add CTO board_handoff review as final task
+  const reviewTask = createWorkflowTask(
+    freshSnapshot,
+    "board_handoff",
+    "cto",
+    "CTO Sprint Review",
+    "Review the sprint deliverables and prepare handoff summary.",
+    "Verify all sprint work and produce review summary.",
+    "Sprint review summary",
+    ["All sprint deliverables reviewed", "Summary produced"],
+    "medium",
+    "created",
+    sprint.id,
+  );
+  reviewTask.dependsOnTaskIds = leafTaskIds;
+  reviewTask.parentTaskId = leafTaskIds[0] || null;
+  createdTasks.push(reviewTask);
+
+  // Add child links for leaf → review
+  for (const leafId of leafTaskIds) {
+    const idx = createdTasks.findIndex((t) => t.id === leafId);
+    if (idx >= 0) {
+      createdTasks[idx] = {
+        ...createdTasks[idx],
+        childTaskIds: [...createdTasks[idx].childTaskIds, reviewTask.id],
+      };
+    }
+  }
+
+  // Persist all tasks
+  for (const task of createdTasks) {
+    upsertTask(task);
+  }
+
+  // Auto-promote tasks with no dependencies to "planned"
+  for (const task of createdTasks) {
+    if (task.dependsOnTaskIds.length === 0 && task.status === "created") {
+      updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+    }
+  }
+
+  // Mark sprint as active
+  updateSprint(sprint.id, (s) => ({
+    ...s,
+    status: "executing" as Sprint["status"],
+    startedAt: nowIso(),
+  }));
+
+  emitEmployeeActivity(
+    "system",
+    "info",
+    `Sprint ${sprint.number} approved with ${createdTasks.length} tasks. Starting execution.`,
+  );
+
+  // Set up activeExecution and kick off
+  activeExecution = {
+    companyId: freshSnapshot.company.id,
+    planTaskId: createdTasks[0]?.id ?? "",
+    acceptanceTaskId: "",
+    buildTaskId: "",
+    previewTaskId: "",
+    reviewTaskId: reviewTask.id,
+    planText: null,
+    acceptanceText: null,
+    reviewStarted: false,
+    reworkCycles: 0,
+  };
+
+  await beginSprintExecution();
+
+  return { sprintId: sprint.id, sprintNumber: sprint.number, taskCount: createdTasks.length };
+}
+
+/**
+ * Rejects a sprint proposal — resets to "done" so the board can re-chat with CEO.
+ */
+export function rejectSprintProposal() {
+  executionStatus = "done";
+  emitEmployeeActivity(
+    "system",
+    "info",
+    "Sprint proposal rejected by board. CEO awaits further direction via chat.",
+  );
+  return { executionStatus };
+}
+
+/**
+ * Lighter execution entry for Sprint 2+ — uses tasks already created by approveSprintProposal.
+ * Doesn't create the rigid 5-task pipeline. Just starts the router loop.
+ */
+async function beginSprintExecution(): Promise<void> {
+  const snapshot = getSnapshot();
+
+  executionStatus = "executing";
+
+  try {
+    await workspaceManager.ensureLocal(snapshot.company.id);
+
+    if (!eventBridgeStarted) {
+      startEventBridge().catch(() => {});
+      eventBridgeStarted = true;
+    }
+
+    await continueExecutionFromCurrentState("sprint-kickoff");
+  } catch (err) {
+    executionStatus = "error";
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    emitEmployeeActivity("system", "error", `Sprint execution failed: ${msg}`);
+  }
 }
 
 export function resolveRoleBySessionId(sessionId: string): string | null {
@@ -3504,7 +3861,17 @@ export async function beginExecution(snapshot: CompanySnapshot) {
   }
 
   executionStatus = "planning";
-  emitEmployeeActivity("system", "info", "Beginning strategy execution…");
+
+  // Create Sprint 1 record — all tasks created below will inherit this sprintId
+  const sprint = createSprintRecord(
+    snapshot,
+    snapshot.strategy.title,
+    snapshot.strategy.firstRelease,
+  );
+  // Re-read snapshot after sprint was added to store
+  snapshot = getSnapshot();
+
+  emitEmployeeActivity("system", "info", `Beginning Sprint ${sprint.number} execution…`);
 
   try {
     await workspaceManager.ensureLocal(snapshot.company.id);

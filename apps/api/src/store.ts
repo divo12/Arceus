@@ -9,6 +9,7 @@ import type {
   Meeting,
   MemorySummary,
   SessionBinding,
+  Sprint,
   Task,
   Transition
 } from "@arceus/contracts";
@@ -146,6 +147,44 @@ export function updateTask(taskId: string, updater: (task: Task) => Task) {
   const next = updater(current);
   upsertTask(next);
   return next;
+}
+
+export function upsertSprint(sprint: Sprint) {
+  const existing = snapshot.sprints.findIndex((entry) => entry.id === sprint.id);
+  const nextSprints = [...snapshot.sprints];
+
+  if (existing >= 0) {
+    nextSprints[existing] = sprint;
+  } else {
+    nextSprints.push(sprint);
+  }
+
+  replaceState({
+    ...snapshot,
+    sprints: nextSprints,
+  });
+
+  return sprint;
+}
+
+export function updateSprint(sprintId: string, updater: (sprint: Sprint) => Sprint) {
+  const current = snapshot.sprints.find((sprint) => sprint.id === sprintId);
+  if (!current) return null;
+
+  const next = updater(current);
+  upsertSprint(next);
+  return next;
+}
+
+export function updateCompanySprint(sprintId: string | null, sprintNumber: number | null) {
+  replaceState({
+    ...snapshot,
+    company: {
+      ...snapshot.company,
+      currentSprintId: sprintId,
+      currentSprintNumber: sprintNumber,
+    },
+  });
 }
 
 export function upsertMeeting(meeting: Meeting) {

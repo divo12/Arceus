@@ -12,7 +12,7 @@ import { z } from "zod";
 import { clearPersistedStoreState, flushStorePersistence, getEvents, getSnapshot, hydrateStoreFromPersistence, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
+import { approveBoardReview, approveSprintProposal, rejectSprintProposal, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution } from "./orchestrator";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
@@ -264,10 +264,15 @@ app.post("/api/strategy/execute", async (request, reply) => {
 });
 
 app.get("/api/orchestrator/status", async () => {
+  const snapshot = getSnapshot();
+  const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
   return {
     executionStatus: getExecutionStatus(),
     agentSessions: getAgentSessions(),
     localPreview: getLocalPreviewState(),
+    sprint: currentSprint
+      ? { id: currentSprint.id, number: currentSprint.number, status: currentSprint.status, title: currentSprint.title }
+      : null,
   };
 });
 
@@ -477,6 +482,44 @@ app.post("/api/board-review/approve", async (request, reply) => {
     reply.code(400);
     return {
       error: error instanceof Error ? error.message : "Board review approval failed.",
+    };
+  }
+});
+
+app.get("/api/sprints", async () => {
+  return getSnapshot().sprints;
+});
+
+app.post("/api/sprint-proposal/approve", async (request, reply) => {
+  try {
+    const body = request.body as { card?: unknown };
+    if (!body?.card) {
+      // Find the latest sprint_proposal card from chat
+      const snapshot = getSnapshot();
+      const proposalMsg = [...snapshot.chatMessages].reverse().find((m) => m.cardType === "sprint_proposal");
+      if (!proposalMsg?.cardData) {
+        reply.code(400);
+        return { error: "No sprint proposal found to approve." };
+      }
+      return await approveSprintProposal(proposalMsg.cardData as import("./ceo").CeoCard);
+    }
+    return await approveSprintProposal(body.card as import("./ceo").CeoCard);
+  } catch (error) {
+    request.log?.error?.(error);
+    reply.code(400);
+    return {
+      error: error instanceof Error ? error.message : "Sprint proposal approval failed.",
+    };
+  }
+});
+
+app.post("/api/sprint-proposal/reject", async (_request, reply) => {
+  try {
+    return rejectSprintProposal();
+  } catch (error) {
+    reply.code(400);
+    return {
+      error: error instanceof Error ? error.message : "Sprint proposal rejection failed.",
     };
   }
 });

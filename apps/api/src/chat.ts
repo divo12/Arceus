@@ -3,7 +3,7 @@ import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type Ce
 import { appendChatMessage, getSnapshot } from "./store";
 import { ensureDeployment } from "./config/index";
 import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "./opencode";
-import { recordCeoCardMeeting } from "./orchestrator";
+import { getExecutionStatus, recordCeoCardMeeting } from "./orchestrator";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { bootstrapIdeaWithWorkspace } from "./bootstrap";
 
@@ -91,7 +91,7 @@ async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot) {
   await postOpencodeJson(`/session/${session.id}/prompt_async`, {
     model: { providerID: "azure", modelID: deployment },
     agent: "ceo",
-    system: buildCeoOperatingPrompt(snapshot),
+    system: buildCeoOperatingPrompt(snapshot, getExecutionStatus()),
     parts: [{ type: "text", text: message }]
   });
 
@@ -174,7 +174,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     if (fullText) {
       try {
         sseWrite(reply, "status", { phase: "classifying" });
-        const card = await classifyCeoResponse(fullText, nextSnapshot);
+        const card = await classifyCeoResponse(fullText, nextSnapshot, getExecutionStatus());
         // Spec 01: No side effects during ideation. Meetings and tasks are only
         // created after strategy approval when the company is active with agents.
         const meeting = recordCeoCardMeeting(card, trimmedMessage, fullText);
@@ -261,6 +261,7 @@ export async function sendBoardMessageToCeo(message: string) {
     },
     question: null,
     status: null,
+    sprint_proposal: null,
     meeting: {
       create: true,
       type: "ad_hoc" as const,

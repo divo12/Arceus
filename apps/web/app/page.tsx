@@ -38,7 +38,7 @@ type RoleEntry = {
   capabilities: string[];
 };
 
-type CeoStage = "welcome" | "idea_refinement" | "team_design" | "kickoff" | "execution";
+type CeoStage = "welcome" | "idea_refinement" | "team_design" | "kickoff" | "execution" | "between_sprints";
 
 type WelcomeBlock = {
   headline: string;
@@ -78,6 +78,22 @@ type StatusBlock = {
   blockers: string[];
   next_actions: string[];
   board_requests: string[];
+};
+
+type SprintProposalTask = {
+  title: string;
+  assigned_role: string;
+  priority: string;
+  depends_on: string[];
+  rationale: string;
+};
+
+type SprintProposalBlock = {
+  sprint_goal: string;
+  key_tasks: SprintProposalTask[];
+  carried_forward: string[];
+  risks: string[];
+  rationale: string;
 };
 
 type CeoTaskDelta = {
@@ -162,7 +178,21 @@ type StatusUpdateCard = {
   meeting: MeetingIntentBlock;
 };
 
-type CeoCard = WelcomeBriefCard | MissionBriefCard | StrategyProposalCard | ClarifyingQuestionCard | StatusUpdateCard;
+type SprintProposalCard = {
+  card_type: "sprint_proposal";
+  stage: CeoStage;
+  title: string;
+  summary: string;
+  welcome: null;
+  mission: null;
+  strategy: null;
+  question: null;
+  status: null;
+  sprint_proposal: SprintProposalBlock;
+  meeting: MeetingIntentBlock;
+};
+
+type CeoCard = WelcomeBriefCard | MissionBriefCard | StrategyProposalCard | ClarifyingQuestionCard | StatusUpdateCard | SprintProposalCard;
 
 type ChatBubble = {
   id: string;
@@ -962,6 +992,98 @@ function StatusUpdateView({ card, disabled, onChoose }: { card: StatusUpdateCard
   );
 }
 
+function SprintProposalView({
+  card,
+  busy,
+  resolved,
+  onApprove,
+  onReject,
+}: {
+  card: SprintProposalCard;
+  busy: boolean;
+  resolved: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const proposal = card.sprint_proposal;
+  if (!proposal) return null;
+
+  const priorityColor = (p: string) => {
+    if (p === "critical") return "text-red-600";
+    if (p === "high") return "text-orange-500";
+    return "text-[var(--swiss-gray-400)]";
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>{card.title || "Sprint Proposal"}</CardTitle>
+          <Badge variant="outline" className="text-[0.625rem]">Sprint Proposal</Badge>
+        </div>
+        <CardDescription>{proposal.sprint_goal}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-[0.8125rem] leading-6 text-[var(--swiss-gray-500)]">{proposal.rationale}</p>
+
+        {/* Key Tasks */}
+        <div>
+          <div className="swiss-caption mb-2 text-[var(--swiss-gray-400)]">Proposed Tasks ({proposal.key_tasks.length})</div>
+          <div className="space-y-1.5">
+            {proposal.key_tasks.map((task, i) => (
+              <div key={i} className="flex items-center gap-2 rounded border border-[var(--swiss-gray-100)] px-3 py-2 text-[0.8125rem]">
+                <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+                <Badge variant="outline" className="shrink-0 text-[0.5625rem]">{task.assigned_role}</Badge>
+                <span className={`shrink-0 text-[0.625rem] font-mono ${priorityColor(task.priority)}`}>{task.priority}</span>
+                {task.depends_on.length > 0 ? (
+                  <span className="shrink-0 text-[0.5625rem] text-[var(--swiss-gray-300)]" title={task.depends_on.join(", ")}>
+                    dep: {task.depends_on.length}
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Carried Forward */}
+        {proposal.carried_forward.length > 0 ? (
+          <div>
+            <div className="swiss-caption mb-1 text-[var(--swiss-gray-400)]">Carried forward</div>
+            <ul className="list-disc pl-4 text-[0.8125rem] text-[var(--swiss-gray-500)]">
+              {proposal.carried_forward.map((item, i) => <li key={i}>{item}</li>)}
+            </ul>
+          </div>
+        ) : null}
+
+        {/* Risks */}
+        {proposal.risks.length > 0 ? (
+          <div>
+            <div className="swiss-caption mb-1 text-[var(--swiss-gray-400)]">Risks</div>
+            <ul className="list-disc pl-4 text-[0.8125rem] text-[var(--swiss-gray-500)]">
+              {proposal.risks.map((risk, i) => <li key={i}>{risk}</li>)}
+            </ul>
+          </div>
+        ) : null}
+
+        {/* Actions */}
+        {!resolved ? (
+          <div className="flex gap-2 pt-2">
+            <Button size="sm" disabled={busy} onClick={onApprove}>
+              {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Play className="mr-1 h-3 w-3" />}
+              Approve &amp; Start Sprint
+            </Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={onReject}>
+              Reject
+            </Button>
+          </div>
+        ) : (
+          <Badge variant="secondary" className="text-[0.625rem]">Sprint approved</Badge>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function LaunchBoardPanel({ disabled, onPrompt }: { disabled: boolean; onPrompt: (prompt: string) => void }) {
   const prompts = [
     "Build a consumer app that helps parents coordinate school schedules and family logistics.",
@@ -1326,6 +1448,57 @@ export default function Page() {
       ]);
     } finally {
       setProposalActionId(null);
+    }
+  }
+
+  async function handleSprintApproval(messageId: string) {
+    setProposalActionId(messageId);
+    try {
+      const response = await fetch(apiUrl("/sprint-proposal/approve"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Sprint approval failed.");
+      }
+
+      const result = (await response.json()) as { sprintNumber: number; taskCount: number };
+      setResolvedProposalIds((current) => [...current, messageId]);
+      setExecutionStatus("executing");
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: createId(),
+          role: "system" as const,
+          content: `Sprint ${result.sprintNumber} approved with ${result.taskCount} tasks. Execution started.`,
+        },
+      ]);
+
+      await loadState();
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        { id: createId(), role: "system" as const, content: error instanceof Error ? error.message : "Sprint approval failed." },
+      ]);
+    } finally {
+      setProposalActionId(null);
+    }
+  }
+
+  async function handleSprintReject(messageId: string) {
+    try {
+      await fetch(apiUrl("/sprint-proposal/reject"), { method: "POST" });
+      setMessages((current) => [
+        ...current,
+        { id: createId(), role: "system" as const, content: "Sprint proposal rejected. You can chat with the CEO to request a revised proposal." },
+      ]);
+      await loadState();
+    } catch {
+      // silent — non-critical
     }
   }
 
@@ -1764,6 +1937,15 @@ export default function Page() {
                         ) : null}
                         {message.card.card_type === "clarifying_question" ? <ClarifyingQuestionView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
                         {message.card.card_type === "status_update" ? <StatusUpdateView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
+                        {message.card.card_type === "sprint_proposal" ? (
+                          <SprintProposalView
+                            card={message.card}
+                            busy={proposalActionId === message.id}
+                            resolved={resolvedProposalIds.includes(message.id)}
+                            onApprove={() => handleSprintApproval(message.id)}
+                            onReject={() => handleSprintReject(message.id)}
+                          />
+                        ) : null}
                       </div>
                     );
                   }
@@ -1948,9 +2130,22 @@ export default function Page() {
                   className="flex w-full items-center justify-between px-5 py-3 text-left"
                   onClick={() => setSprintOpen((prev) => !prev)}
                 >
-                  <span className="text-[0.8125rem] font-semibold">
-                    {currentSprint?.title || (snapshot.strategy.title !== "CEO workspace is waiting for your first message" ? snapshot.strategy.title : "Current Workload")}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[0.8125rem] font-semibold">
+                      {currentSprint ? `Sprint ${currentSprint.number}` : "Current Workload"}
+                    </span>
+                    {currentSprint ? (
+                      <Badge
+                        variant={currentSprint.status === "completed" ? "secondary" : currentSprint.status === "executing" ? "outline" : "outline"}
+                        className="text-[0.5625rem]"
+                      >
+                        {currentSprint.status === "completed" ? "Done" : currentSprint.status === "executing" ? "Executing" : currentSprint.status}
+                      </Badge>
+                    ) : null}
+                    <span className="ml-1 max-w-[200px] truncate text-[0.6875rem] text-[var(--swiss-gray-400)]">
+                      {currentSprint?.title || (snapshot.strategy.title !== "CEO workspace is waiting for your first message" ? snapshot.strategy.title : "")}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-[0.75rem] text-[var(--swiss-gray-400)]">{completedTaskCount}/{totalTaskCount} tasks</span>
                     {totalTaskCount > 0 ? (
@@ -1996,6 +2191,18 @@ export default function Page() {
                         No tasks yet — start by chatting with the CEO
                       </div>
                     )}
+                    {/* Auto-proposal indicator */}
+                    {currentSprint?.status === "completed" && executionStatus === "done" && !snapshot.chatMessages.some((m) => m.cardType === "sprint_proposal" && m.sprintId === currentSprint.id) ? (
+                      <div className="mt-3 flex items-center gap-2 rounded border border-[var(--swiss-gray-100)] px-3 py-2 text-[0.8125rem] text-[var(--swiss-gray-400)]">
+                        <LoaderCircle className="h-3 w-3 animate-spin" />
+                        CEO is preparing next sprint proposal...
+                      </div>
+                    ) : null}
+                    {currentSprint?.status === "completed" && executionStatus === "done" ? (
+                      <div className="mt-2 text-center text-[0.6875rem] text-[var(--swiss-gray-300)]">
+                        Sprint {currentSprint.number} complete — check CEO chat for next sprint proposal
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </section>

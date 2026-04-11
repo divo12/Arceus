@@ -61,6 +61,16 @@ export function validateTransition(
     return { valid: false, reason: `Task ${proposal.toTaskId} is cancelled and cannot transition` };
   }
 
+  // Reject no-op same-status transitions — prevents the router from burning
+  // LLM cycles proposing e.g. in_progress → in_progress repeatedly.
+  if (task.status === proposal.toStatus) {
+    return { valid: false, reason: `Task ${proposal.toTaskId} is already ${task.status} — no-op transition rejected` };
+  }
+
+  if (task.kind === "follow_up") {
+    return { valid: false, reason: `Follow-up tasks are not executed during sprints — they are CEO context for sprint proposals` };
+  }
+
   const allowed = VALID_STATUS_TRANSITIONS[task.status];
   if (!allowed?.has(proposal.toStatus)) {
     return { valid: false, reason: `Invalid status transition: ${task.status} → ${proposal.toStatus}` };
@@ -159,6 +169,7 @@ function autoPromoteReadyTasks() {
   const snapshot = getSnapshot();
   for (const task of snapshot.tasks) {
     if (task.status !== "created") continue;
+    if (task.kind === "follow_up") continue; // Follow-ups are CEO context, not execution targets
     if (!areDependenciesMet(task, snapshot)) continue;
     updateTask(task.id, (t) => ({ ...t, status: "planned" as const }));
   }
@@ -167,8 +178,10 @@ function autoPromoteReadyTasks() {
 /* ---------- LLM Router: propose next transitions ---------- */
 
 function buildRouterUserPrompt(snapshot: CompanySnapshot, executionStatus: string, recentEvent: string): string {
+  // Only show current sprint tasks to the router — prevents Sprint 1 tasks leaking into Sprint 2 decisions
+  const currentSprintId = snapshot.company.currentSprintId;
   const taskSummary = snapshot.tasks
-    .filter((t) => t.status !== "cancelled")
+    .filter((t) => t.status !== "cancelled" && t.kind !== "follow_up" && (!currentSprintId || t.sprintId === currentSprintId))
     .map(summarizeTask)
     .join("\n");
 
@@ -243,13 +256,19 @@ export async function runRouterLoop(
   };
 
   let currentEvent = triggerEvent;
+  let consecutiveRejections = 0;
 
   for (let cycle = 0; cycle < routerConfig.maxTransitionsPerCycle; cycle++) {
     result.cycleCount = cycle + 1;
     const snapshot = getSnapshot();
 
-    // check if all tasks are done
-    const activeTasks = snapshot.tasks.filter((t) => !["completed", "cancelled", "failed"].includes(t.status));
+    // check if all current sprint tasks are done
+    const currentSprintId = snapshot.company.currentSprintId;
+    const activeTasks = snapshot.tasks.filter((t) =>
+      t.kind !== "follow_up" &&
+      !["completed", "cancelled", "failed"].includes(t.status) &&
+      (!currentSprintId || t.sprintId === currentSprintId)
+    );
     if (activeTasks.length === 0) {
       result.pauseReason = "All tasks completed";
       break;
@@ -330,12 +349,20 @@ export async function runRouterLoop(
 
     if (!anyExecuted) {
       if (rejectionReasons.length > 0) {
+        consecutiveRejections++;
+        if (consecutiveRejections >= 3) {
+          result.paused = true;
+          result.pauseReason = `Router stuck after ${consecutiveRejections} consecutive rejected cycles. Last rejections: ${rejectionReasons.join("; ")}`;
+          break;
+        }
         // Feed rejection reasons back so the router can propose different transitions
         currentEvent = `Previous proposals were rejected: ${rejectionReasons.join("; ")}. Propose different valid transitions for tasks whose dependencies are already met.`;
         continue;
       }
       result.pauseReason = "No valid transitions could be executed";
       break;
+    } else {
+      consecutiveRejections = 0;
     }
   }
 
