@@ -17,7 +17,128 @@ import { persistRuntimeArtifact } from "./artifact-persistence";
 import { workspaceManager } from "./workspace-manager";
 import { structuredCompletion } from "./azure-openai";
 import { withRetry, isRetryableError } from "./resilience";
+import { createHippocampusService, EXTRACTION_SYSTEM_PROMPT, buildExtractionUserPrompt, ACTION_DECISION_SYSTEM_PROMPT, buildActionDecisionUserPrompt, HABIT_MATCHER_SYSTEM_PROMPT, buildHabitMatcherUserPrompt, PRIMING_GENERATOR_SYSTEM_PROMPT, buildPrimingGeneratorUserPrompt, createPgVectorStores } from "@arceus/hippocampus";
+import type { PreparedAgentContext, ExtractedFact, MemoryAction } from "@arceus/hippocampus";
 import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Hippocampus — singleton memory service (in-memory stores for now)
+// ---------------------------------------------------------------------------
+
+const extractedFactSchema = z.object({
+  facts: z.array(z.object({
+    content: z.string(),
+    type: z.enum(["static", "dynamic", "procedural"]),
+    confidence: z.number(),
+    is_temporal: z.boolean(),
+    expiry_days: z.number().nullable(),
+    trigger: z.string().nullable(),
+    action: z.string().nullable(),
+  })),
+});
+
+async function llmFactExtractor(agentOutput: string, taskTitle: string, role: string): Promise<ExtractedFact[]> {
+  const userPrompt = buildExtractionUserPrompt(taskTitle, role, agentOutput);
+  const result = await structuredCompletion(
+    "workerDeployment",
+    [
+      { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    extractedFactSchema,
+    "fact_extraction",
+    { temperature: 0.3 },
+  );
+  return result.facts.map((f) => ({
+    ...f,
+    trigger: f.trigger ?? undefined,
+    action: f.action ?? undefined,
+  }));
+}
+
+const memoryActionSchema = z.object({
+  action: z.enum(["ADD", "UPDATE", "DELETE", "NONE"]),
+  target_id: z.string().nullable(),
+  reason: z.string(),
+});
+
+async function llmActionDecider(
+  newFact: string,
+  existingMemories: Array<{ id: string; content: string; type: string; confidence: number }>,
+): Promise<MemoryAction> {
+  const userPrompt = buildActionDecisionUserPrompt(newFact, existingMemories);
+  const result = await structuredCompletion(
+    "workerDeployment",
+    [
+      { role: "system", content: ACTION_DECISION_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    memoryActionSchema,
+    "memory_action_decision",
+    { temperature: 0.1 },
+  );
+  return result;
+}
+
+const primingDispositionSchema = z.object({
+  disposition: z.string(),
+});
+
+async function llmPrimingGenerator(
+  state: { confidence: number; caution: number; morale: number; recentEvents: string[] },
+): Promise<string> {
+  const userPrompt = buildPrimingGeneratorUserPrompt(state as any);
+  const result = await structuredCompletion(
+    "workerDeployment",
+    [
+      { role: "system", content: PRIMING_GENERATOR_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    primingDispositionSchema,
+    "priming_generation",
+    { temperature: 0.4 },
+  );
+  return result.disposition;
+}
+
+const habitMatcherSchema = z.object({
+  habit_ids: z.array(z.string()),
+});
+
+async function llmHabitMatcher(
+  taskDescription: string,
+  habits: Array<{ id: string; trigger: string; action: string }>,
+): Promise<string[]> {
+  const userPrompt = buildHabitMatcherUserPrompt(taskDescription, habits as any);
+  const result = await structuredCompletion(
+    "workerDeployment",
+    [
+      { role: "system", content: HABIT_MATCHER_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    habitMatcherSchema,
+    "habit_matching",
+    { temperature: 0.1 },
+  );
+  // Only return IDs that actually exist in the input list
+  const validIds = new Set(habits.map((h) => h.id));
+  return result.habit_ids.filter((id) => validIds.has(id));
+}
+
+const pgStores = createPgVectorStores();
+if (pgStores) {
+  console.log("[Hippocampus] Using pgvector-backed persistent stores");
+} else {
+  console.log("[Hippocampus] Database not configured — using in-memory stores (memories lost on restart)");
+}
+
+export const hippocampus = createHippocampusService({
+  ...pgStores,
+  extractFacts: llmFactExtractor,
+  decideAction: llmActionDecider,
+  matchHabits: llmHabitMatcher,
+  generatePriming: llmPrimingGenerator,
+});
 
 // ---------------------------------------------------------------------------
 // Skill loader — reads SKILL.md files with YAML frontmatter
@@ -1180,6 +1301,52 @@ function recordMeeting(params: {
   return meeting;
 }
 
+/**
+ * Build rich memory output from a completed task — includes title, kind, role,
+ * feedback, edited files, and artifact content (capped to stay within budget).
+ */
+function buildTaskMemoryOutput(task: Task, feedback?: string | null): string {
+  const sections: string[] = [
+    `Task: ${task.title}`,
+    `Role: ${task.assignedRole}`,
+    `Kind: ${task.kind}`,
+    `Status: ${task.status}`,
+  ];
+
+  if (feedback) {
+    sections.push(`Outcome: ${feedback}`);
+  }
+
+  // Collect edited files from results
+  const editedFiles = task.executorState.results
+    .filter((r) => r.startsWith("edited:"))
+    .map((r) => r.replace("edited:", ""));
+  if (editedFiles.length > 0) {
+    sections.push(`Files edited: ${editedFiles.join(", ")}`);
+  }
+
+  // Collect preview URLs
+  const previews = task.executorState.results
+    .filter((r) => r.startsWith("preview:"))
+    .map((r) => r.replace("preview:", ""));
+  if (previews.length > 0) {
+    sections.push(`Preview: ${previews.join(", ")}`);
+  }
+
+  // Include artifact content (cap total to ~4000 chars to stay within context budget)
+  let artifactBudget = 4000;
+  for (const artifactId of task.artifactIds) {
+    if (artifactBudget <= 0) break;
+    const artifact = artifacts.find((a) => a.id === artifactId);
+    if (!artifact) continue;
+    const snippet = artifact.content.slice(0, artifactBudget);
+    sections.push(`\n--- Artifact: ${artifact.title} ---\n${snippet}`);
+    artifactBudget -= snippet.length;
+  }
+
+  return sections.join("\n");
+}
+
 function appendTaskResult(taskId: string, result: string) {
   updateTask(taskId, (task) => ({
     ...task,
@@ -1278,6 +1445,31 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
       });
       if (allDepsMet) {
         updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+      }
+    }
+  }
+
+  // Hippocampus: store memory + update priming on terminal status
+  // Fire-and-forget — memory storage never blocks task progression
+  if (["completed", "failed", "cancelled"].includes(status)) {
+    const snapshot = getSnapshot();
+    const task = snapshot.tasks.find((t) => t.id === taskId);
+    if (task) {
+      const agent = getAgentByRole(snapshot, task.assignedRole);
+      if (agent) {
+        const outcome = status === "completed" ? "success" : status === "failed" ? "failure" : "partial";
+        const memoryOutput = buildTaskMemoryOutput(task, feedback);
+        hippocampus.processTaskCompletion({
+          agentId: agent.id,
+          taskId: task.id,
+          companyId: snapshot.company.id,
+          output: memoryOutput,
+          outcome,
+          taskTitle: task.title,
+          role: task.assignedRole,
+        }).catch((err) => {
+          console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${err instanceof Error ? err.message : err}`);
+        });
       }
     }
   }
@@ -2339,13 +2531,53 @@ async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity
   return createAgentSession(agent);
 }
 
+function formatHippocampusContext(ctx: PreparedAgentContext): string {
+  const sections: string[] = [];
+
+  if (ctx.memories.length > 0) {
+    sections.push(
+      "# Your Memory (facts you remember from previous work)",
+      ...ctx.memories.map((m) => `- ${m.content}`),
+    );
+  }
+
+  if (ctx.habits.length > 0) {
+    sections.push(
+      "",
+      "# Your Habits (behavioral patterns you've learned)",
+      ...ctx.habits.map((h) => `- When: ${h.trigger} → Do: ${h.action}`),
+    );
+  }
+
+  if (ctx.priming) {
+    sections.push("", `# Disposition: ${ctx.priming}`);
+  }
+
+  return sections.length > 0 ? sections.join("\n") : "";
+}
+
 async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string) {
   const deployment = ensureDeployment("workerDeployment");
 
   // Inject role-specific skills into the system prompt
   const skillMenu = buildSkillMenu(role);
   const skillBody = getSkillBody(role);
-  const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody].filter(Boolean).join("\n");
+
+  // Inject Hippocampus memory context (never fatal — graceful degradation)
+  let memoryBlock = "";
+  try {
+    const snapshot = getSnapshot();
+    const agent = getAgentByRole(snapshot, role);
+    if (agent) {
+      const ctx = await hippocampus.prepareAgentContext(agent.id, text);
+      memoryBlock = formatHippocampusContext(ctx);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.warn(`[Hippocampus] Memory retrieval failed for ${role}, continuing without: ${msg}`);
+  }
+
+  const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody, memoryBlock].filter(Boolean).join("\n");
 
   updateAgentSessionState(role, {
     promptStartedAt: nowIso(),

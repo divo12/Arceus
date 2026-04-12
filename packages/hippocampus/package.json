@@ -10,6 +10,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@arceus/contracts": "file:../contracts"
+    "@arceus/contracts": "file:../contracts",
+    "@arceus/db": "file:../db",
+    "@huggingface/transformers": "^4.0.1"
   }
 }

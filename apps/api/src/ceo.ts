@@ -74,6 +74,18 @@ function validateStrategyRoles(
         message: `${entry.role} must report to a manager.`,
       });
     }
+
+    // Enforce allowed reporting lines from ROLE_SOULS
+    if (entry.parent_role !== null) {
+      const parentSoul = getRoleSoul(entry.parent_role as any);
+      if (parentSoul && !parentSoul.allowedDirectReports.includes(entry.role as any)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "parent_role"],
+          message: `${entry.parent_role} cannot manage ${entry.role}. Allowed: ${parentSoul.allowedDirectReports.join(", ")}`,
+        });
+      }
+    }
   });
 
   coreStrategyRoles.forEach((role) => {
@@ -412,7 +424,7 @@ export async function classifyCeoResponse(
     "- For strategy_proposal: roles must contain the four core entries ceo, cto, pm, and developer exactly once.",
     "- You may add tester, ui_designer, marketing, and skills_lead when they materially improve delivery quality, launch readiness, or reusable leverage.",
     "- No duplicate roles. ceo has parent_role null. Every other role must have a valid parent_role.",
-    "- Prefer this reporting shape unless there is a strong reason not to: ceo manages cto and marketing; cto manages pm, developer, tester, ui_designer, and skills_lead; pm may manage developer, tester, or ui_designer when product coordination is the point.",
+    "- MANDATORY reporting lines: ceo manages cto and marketing ONLY. cto manages pm, developer, tester, ui_designer, and skills_lead. pm may manage developer, tester, or ui_designer. Never assign pm, developer, tester, ui_designer, or skills_lead directly under ceo.",
     "- During idea refinement (welcome_brief, mission_brief, clarifying_question): set meeting.create to false and leave task_deltas empty. The chat is pure conversation — no side effects until the board approves a strategy.",
     "- For strategy_proposal: set meeting.create to false and leave task_deltas empty. The strategy card is a read-only proposal for board review. Agents, tasks, and meetings are created only after the board clicks Approve.",
     "- For sprint_proposal: sprint_proposal block must be filled with sprint_goal, key_tasks (each with title, assigned_role, priority, depends_on, rationale), carried_forward, risks, and rationale. Set all other blocks to null. Set meeting.create to false.",
@@ -449,7 +461,7 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
     "Use the smallest org that can still ship the first release with quality, launch readiness, and reusable operating leverage.",
     "No duplicate roles.",
     "Each role must have a parent_role except the ceo, which must be null.",
-    "Preferred hierarchy: ceo manages cto and marketing. cto manages pm, developer, tester, ui_designer, and skills_lead. pm may manage developer, tester, or ui_designer when useful for delivery control.",
+    "MANDATORY hierarchy: ceo manages cto and marketing ONLY. cto manages pm, developer, tester, ui_designer, and skills_lead. pm may manage developer, tester, or ui_designer. Never place pm, developer, tester, ui_designer, or skills_lead directly under ceo.",
   ].join("\n");
 
   return structuredCompletion(

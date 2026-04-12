@@ -12,6 +12,35 @@ export class InMemoryProceduralStore implements ProceduralMemoryStore {
     return [...(this.byAgent.get(agentId) ?? [])];
   }
 
+  async add(habit: Habit): Promise<void> {
+    const existing = this.byAgent.get(habit.agentId) ?? [];
+    this.byAgent.set(habit.agentId, [...existing, habit]);
+  }
+
+  async update(id: string, trigger: string, action: string, confidence: number): Promise<void> {
+    for (const [agentId, habits] of this.byAgent.entries()) {
+      this.byAgent.set(
+        agentId,
+        habits.map((h) =>
+          h.id === id
+            ? { ...h, trigger, action, successRate: confidence, updatedAt: new Date().toISOString() }
+            : h,
+        ),
+      );
+    }
+  }
+
+  async softDelete(id: string): Promise<void> {
+    for (const [agentId, habits] of this.byAgent.entries()) {
+      this.byAgent.set(
+        agentId,
+        habits.map((h) =>
+          h.id === id ? { ...h, status: "inactive" as const, updatedAt: new Date().toISOString() } : h,
+        ),
+      );
+    }
+  }
+
   async findMatching(agentId: string, taskDescription: string): Promise<Habit[]> {
     const habits = this.byAgent.get(agentId) ?? [];
     const tokens = new Set(tokenize(taskDescription));
