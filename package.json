@@ -1,0 +1,39 @@
+{
+  "name": "arceus",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @arceus/web",
+    "dev:api": "npm run dev --workspace @arceus/api",
+    "run:ui": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-ui.ps1",
+    "rebuild:run": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/rebuild-and-run.ps1",
+    "db:generate": "npm run db:generate --workspace @arceus/db",
+    "db:migrate": "npm run db:migrate --workspace @arceus/db",
+    "db:push": "npm run db:push --workspace @arceus/db",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^5.8.3",
+    "vite": "^8.0.4"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.6",
+    "@types/express-fileupload": "^1.5.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/react-router-dom": "^5.3.3",
+    "csv-parse": "^6.2.1",
+    "express": "^5.2.1",
+    "express-fileupload": "^1.5.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.14.0"
+  }
+}

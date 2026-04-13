@@ -1,0 +1,194 @@
+@import "tailwindcss";
+
+/* ── Arceus — Light Engineering Theme ───────────────── */
+
+:root {
+  color-scheme: light;
+
+  --swiss-black: #111827;
+  --swiss-white: #FFFFFF;
+  --swiss-gray-50: #F8F9FB;
+  --swiss-gray-100: #EEF0F4;
+  --swiss-gray-200: #DDE1E9;
+  --swiss-gray-300: #B8BFCC;
+  --swiss-gray-400: #7C8598;
+  --swiss-gray-500: #4B5563;
+  --swiss-red: #DC2626;
+  --swiss-blue: #2563EB;
+
+  /* Extended semantic tokens */
+  --arc-success: #059669;
+  --arc-warning: #D97706;
+  --arc-surface: #F8F9FB;
+  --arc-elevated: #FFFFFF;
+  --arc-glow: rgba(37, 99, 235, 0.04);
+  --arc-preview-bg: #F1F3F7;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--swiss-white);
+  color: var(--swiss-black);
+  font-family: var(--font-body), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv01", "cv02", "ss01";
+  letter-spacing: -0.011em;
+  line-height: 1.55;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* ── Typography Scale ───────────────────────────────── */
+
+.swiss-display {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+
+.swiss-h1 {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.swiss-h2 {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.swiss-h3 {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.swiss-caption {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  color: var(--swiss-gray-400);
+}
+
+.swiss-mono {
+  font-family: var(--font-mono), "SF Mono", monospace;
+  font-size: 0.8125rem;
+  letter-spacing: 0;
+}
+
+/* ── Grid ───────────────────────────────────────────── */
+
+.swiss-grid-12 {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 1.25rem;
+}
+
+/* ── Dividers ───────────────────────────────────────── */
+
+.swiss-rule {
+  border: 0;
+  border-top: 1px solid var(--swiss-gray-100);
+}
+
+.swiss-rule-dark {
+  border: 0;
+  border-top: 1px solid var(--swiss-gray-200);
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--swiss-gray-200);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--swiss-gray-300);
+}
+
+/* ── Markdown Content ───────────────────────────────── */
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+  color: var(--swiss-black);
+}
+
+.markdown-content h1 { font-size: 1.5rem; letter-spacing: -0.02em; }
+.markdown-content h2 { font-size: 1.25rem; letter-spacing: -0.015em; }
+.markdown-content h3 { font-size: 1.05rem; }
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content pre,
+.markdown-content blockquote {
+  margin-bottom: 0.85rem;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-content ul { list-style: disc; }
+.markdown-content ol { list-style: decimal; }
+
+.markdown-content code {
+  border-radius: 3px;
+  background: var(--swiss-gray-50);
+  padding: 0.15rem 0.4rem;
+  font-size: 0.875em;
+  color: var(--swiss-blue);
+}
+
+.markdown-content pre {
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--swiss-black);
+  color: #e2e8f0;
+  padding: 1rem;
+  border: 1px solid var(--swiss-gray-100);
+}
+
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.markdown-content blockquote {
+  border-left: 2px solid var(--swiss-black);
+  padding-left: 1rem;
+  color: var(--swiss-gray-500);
+}
+

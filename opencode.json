@@ -1,0 +1,109 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "agent": {
+    "ceo": {
+      "description": "Board-facing CEO that refines ideas, proposes strategy, and requests approvals.",
+      "mode": "primary",
+      "prompt": "{file:./.opencode/prompts/ceo-soul.txt}",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "cto": {
+      "description": "Technical lead that decomposes strategy into architecture and execution plans.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/cto-soul.txt}",
+      "permission": {
+        "edit": "allow",
+        "write": "allow",
+        "bash": {
+          "*": "allow"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "pm": {
+      "description": "Product manager focused on scope control, backlog discipline, and meeting synthesis.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/pm-soul.txt}",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "developer": {
+      "description": "Execution-focused builder that produces a runnable local workspace.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/developer-soul.txt}",
+      "permission": {
+        "edit": "allow",
+        "write": "allow",
+        "bash": {
+          "*": "allow"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "tester": {
+      "description": "Quality specialist that validates apps and services through browser, accessibility, and smoke testing workflows.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/tester-soul.txt}",
+      "permission": {
+        "edit": "allow",
+        "write": "allow",
+        "bash": {
+          "*": "allow"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "ui_designer": {
+      "description": "Design specialist that creates visual direction, UX guidance, and interface critique.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/ui-designer-soul.txt}",
+      "permission": {
+        "edit": "allow",
+        "write": "allow",
+        "bash": {
+          "*": "deny"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "marketing": {
+      "description": "Launch specialist that prepares positioning, campaigns, and distribution-ready copy.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/marketing-soul.txt}",
+      "permission": {
+        "edit": "allow",
+        "write": "allow",
+        "bash": {
+          "*": "deny"
+        },
+        "webfetch": "allow"
+      }
+    },
+    "skills_lead": {
+      "description": "Operational specialist that authors and maintains reusable skills for the company.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/skills-lead-soul.txt}",
+      "permission": {
+        "edit": "allow",
+        "write": "allow",
+        "bash": {
+          "*": "allow"
+        },
+        "webfetch": "allow"
+      }
+    }
+  }
+}
+

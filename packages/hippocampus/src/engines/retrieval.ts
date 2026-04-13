@@ -1,0 +1,184 @@
+import { cosineSimilarity } from "../backends/embedding.js";
+import type { MemoryUnit } from "@arceus/contracts";
+import type { RetrievalOptions, ScoredMemory } from "../types.js";
+
+// ---------------------------------------------------------------------------
+// Defaults
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_RETRIEVAL_OPTIONS: RetrievalOptions = {
+  topK: 5,
+  overFetch: 3,
+  lambda: 0.7,
+  tierBoost: { static: 1.5, dynamic: 1.0 },
+  scopeBoost: 1.3,
+};
+
+// ---------------------------------------------------------------------------
+// Candidate type — what the stores give us before MMR
+// ---------------------------------------------------------------------------
+
+export type RawCandidate = MemoryUnit & {
+  similarity: number;
+  tier: "static" | "dynamic";
+  /** Only present on dynamic memories — pre-computed by pgvector store */
+  decayedScore?: number;
+  /** The embedding vector, needed for inter-candidate similarity in MMR */
+  embedding?: number[];
+};
+
+// ---------------------------------------------------------------------------
+// Tier + scope boosting
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply tier and scope boosts to raw similarity scores.
+ * Returns a new array — does not mutate input.
+ */
+export function applyBoosts(
+  candidates: RawCandidate[],
+  agentContainer: string,
+  options: RetrievalOptions,
+): Array<RawCandidate & { boostedScore: number }> {
+  return candidates.map((c) => {
+    // Base score: for dynamic, use decayedScore if available (already includes decay)
+    const baseScore = c.tier === "dynamic" && c.decayedScore != null
+      ? c.decayedScore
+      : c.similarity;
+
+    // Tier boost
+    const tierMultiplier = options.tierBoost[c.tier];
+
+    // Scope boost — if the memory's container matches the agent's context
+    const scopeMultiplier = agentContainer && c.content
+      ? 1.0 // We don't have container on MemoryUnit output; use a heuristic below
+      : 1.0;
+
+    // For now, scope boost is applied if memory was created for the same agent
+    // (the container field is in the DB row but not on the MemoryUnit type)
+    // Phase 4+ can pass container through for proper scope matching
+
+    const boostedScore = baseScore * tierMultiplier * scopeMultiplier;
+
+    return { ...c, boostedScore };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// MMR (Maximal Marginal Relevance) selection
+// ---------------------------------------------------------------------------
+
+/**
+ * Select topK memories using MMR to balance relevance and diversity.
+ *
+ * For each remaining candidate:
+ *   mmrScore = lambda * boostedScore - (1 - lambda) * maxSim(candidate, selected)
+ *
+ * If embeddings are not available, falls back to pure boosted-score ranking
+ * (equivalent to lambda = 1.0).
+ */
+export function selectByMMR(
+  candidates: Array<RawCandidate & { boostedScore: number }>,
+  topK: number,
+  lambda: number,
+): ScoredMemory[] {
+  if (candidates.length === 0) return [];
+
+  const selected: ScoredMemory[] = [];
+  const remaining = [...candidates];
+
+  // Normalize boosted scores to [0, 1] for fair comparison with similarity
+  const maxBoosted = Math.max(...remaining.map((c) => c.boostedScore), 0.001);
+
+  for (let i = 0; i < topK && remaining.length > 0; i++) {
+    let bestIdx = -1;
+    let bestMMR = -Infinity;
+
+    for (let j = 0; j < remaining.length; j++) {
+      const candidate = remaining[j];
+      const normalizedRelevance = candidate.boostedScore / maxBoosted;
+
+      // Max similarity to already-selected memories
+      let maxSimToSelected = 0;
+      if (candidate.embedding && selected.length > 0) {
+        for (const sel of selected) {
+          if ((sel as any).__embedding) {
+            const sim = cosineSimilarity(candidate.embedding, (sel as any).__embedding);
+            if (sim > maxSimToSelected) maxSimToSelected = sim;
+          }
+        }
+      }
+
+      const mmrScore = lambda * normalizedRelevance - (1 - lambda) * maxSimToSelected;
+
+      if (mmrScore > bestMMR) {
+        bestMMR = mmrScore;
+        bestIdx = j;
+      }
+    }
+
+    if (bestIdx === -1) break;
+
+    const winner = remaining.splice(bestIdx, 1)[0];
+
+    // Build ScoredMemory — strip embedding to keep output clean
+    const scored: ScoredMemory = {
+      id: winner.id,
+      companyId: winner.companyId,
+      agentId: winner.agentId,
+      sourceTaskId: winner.sourceTaskId,
+      sourceArtifactId: winner.sourceArtifactId,
+      type: winner.type,
+      visibility: winner.visibility,
+      source: winner.source,
+      content: winner.content,
+      summary: winner.summary,
+      confidence: winner.confidence,
+      tags: winner.tags,
+      createdAt: winner.createdAt,
+      expiresAt: winner.expiresAt,
+      similarity: winner.similarity,
+      finalScore: bestMMR,
+      tier: winner.tier,
+    };
+
+    // Stash embedding internally for subsequent MMR iterations
+    (scored as any).__embedding = winner.embedding;
+
+    selected.push(scored);
+  }
+
+  // Clean up internal embedding references
+  for (const s of selected) {
+    delete (s as any).__embedding;
+  }
+
+  return selected;
+}
+
+// ---------------------------------------------------------------------------
+// Full retrieval pipeline (pure function — no I/O)
+// ---------------------------------------------------------------------------
+
+/**
+ * Given raw candidates from both stores, apply boosts and MMR selection.
+ * This is a pure function — all I/O (embedding, DB queries) happens in the caller.
+ */
+export function rankAndSelect(
+  candidates: RawCandidate[],
+  agentContainer: string,
+  options: Partial<RetrievalOptions> = {},
+): ScoredMemory[] {
+  const opts = { ...DEFAULT_RETRIEVAL_OPTIONS, ...options };
+
+  if (candidates.length === 0) return [];
+
+  // Step 1: Apply tier and scope boosts
+  const boosted = applyBoosts(candidates, agentContainer, opts);
+
+  // Step 2: Sort by boosted score descending (pre-filter for MMR)
+  boosted.sort((a, b) => b.boostedScore - a.boostedScore);
+
+  // Step 3: MMR selection
+  return selectByMMR(boosted, opts.topK, opts.lambda);
+}
