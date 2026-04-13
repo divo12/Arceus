@@ -3,11 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Arceus – Audit Log</title>
+<title>Arceus – Control Plane Dashboard</title>
 <style>
   :root {
     --bg: #0d1117;
     --bg-header: #161b22;
+    --bg-panel: #0d1117;
+    --bg-card: #161b22;
     --bg-row-hover: #1c2128;
     --border: #30363d;
     --text: #c9d1d9;
@@ -36,7 +38,7 @@
     flex-direction: column;
   }
 
-  /* ── Header / toolbar ───────────────────────────── */
+  /* ── Top bar ────────────────────────────────────── */
   header {
     background: var(--bg-header);
     border-bottom: 1px solid var(--border);
@@ -54,25 +56,35 @@
     white-space: nowrap;
   }
 
-  .controls {
+  .tab-bar {
     display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-    flex: 1;
+    gap: 2px;
   }
 
-  .controls select, .controls input {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-family: var(--font);
+  .tab {
+    padding: 4px 14px;
+    border-radius: 6px 6px 0 0;
     font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid transparent;
+    border-bottom: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    background: var(--bg);
+    color: var(--cyan);
+    border-color: var(--border);
   }
 
-  .controls input[type="text"] { width: 200px; }
+  .header-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
 
   .badge {
     display: inline-flex;
@@ -83,28 +95,171 @@
     font-size: 11px;
     font-weight: 600;
   }
-
   .badge.connected { background: rgba(63,185,80,0.15); color: var(--green); }
   .badge.disconnected { background: rgba(248,81,73,0.15); color: var(--red); }
-
-  .badge .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
   .badge.connected .dot { background: var(--green); }
   .badge.disconnected .dot { background: var(--red); }
 
-  .stats {
-    margin-left: auto;
-    color: var(--text-dim);
-    font-size: 11px;
-    white-space: nowrap;
+  .stats { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+
+  /* ── Main content (tabbed panels) ───────────────── */
+  .panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+  .panel.active { display: flex; }
+
+  /* ── Panel: Overview ────────────────────────────── */
+  .overview-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 12px;
+    padding: 12px 16px;
+    overflow-y: auto;
+    flex: 1;
   }
 
-  .controls label {
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+
+  .card h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .card h3 .icon { font-size: 14px; }
+
+  .card .metric {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .card .metric.ok { color: var(--green); }
+  .card .metric.warn { color: var(--yellow); }
+  .card .metric.err { color: var(--red); }
+  .card .metric.info { color: var(--cyan); }
+
+  .card .sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+  .component-list {
+    list-style: none;
+    margin-top: 8px;
+  }
+  .component-list li {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+    font-size: 12px;
+  }
+  .component-list li:last-child { border-bottom: none; }
+  .component-list .label { color: var(--text-dim); }
+  .component-list .val { font-weight: 600; }
+  .component-list .val.ok { color: var(--green); }
+  .component-list .val.planned { color: var(--gray); }
+  .component-list .val.executing { color: var(--orange); }
+  .component-list .val.idle { color: var(--text-dim); }
+
+  /* Agent table */
+  .agent-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 8px;
+  }
+  .agent-table th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .agent-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+  }
+  .agent-table .role { color: var(--orange); }
+  .agent-table .name { color: var(--text); }
+  .agent-table .status-active { color: var(--green); }
+  .agent-table .status-idle { color: var(--text-dim); }
+  .agent-table .status-running { color: var(--cyan); }
+  .agent-table .status-error { color: var(--red); }
+
+  /* Task bar chart */
+  .task-bars { margin-top: 8px; }
+  .task-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 3px;
+    font-size: 11px;
+  }
+  .task-bar-label { width: 80px; color: var(--text-dim); text-align: right; }
+  .task-bar-fill {
+    height: 14px;
+    border-radius: 3px;
+    min-width: 2px;
+    transition: width 0.3s;
+  }
+  .task-bar-count { color: var(--text-dim); font-size: 10px; }
+
+  /* Span helpers */
+  .card.span-2 { grid-column: span 2; }
+  .card.span-3 { grid-column: span 3; }
+
+  /* Timeline */
+  .timeline-list {
+    list-style: none;
+    max-height: 200px;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
+  .timeline-list li {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.2);
+    font-size: 11px;
+  }
+  .timeline-list .tl-time { color: var(--text-dim); width: 80px; flex-shrink: 0; }
+  .timeline-list .tl-type { color: var(--cyan); width: 140px; flex-shrink: 0; }
+  .timeline-list .tl-msg { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Panel: Audit Log ───────────────────────────── */
+  .log-toolbar {
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  .log-toolbar select, .log-toolbar input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-family: var(--font);
+    font-size: 12px;
+  }
+  .log-toolbar input[type="text"] { width: 200px; }
+
+  .log-toolbar label {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -125,7 +280,20 @@
   }
   .btn:hover { color: var(--text); border-color: var(--text-dim); }
 
-  /* ── Log container ──────────────────────────────── */
+  .log-header {
+    display: flex;
+    gap: 8px;
+    padding: 4px 16px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+
   #log-container {
     flex: 1;
     overflow-y: auto;
@@ -141,7 +309,6 @@
     align-items: baseline;
     white-space: nowrap;
   }
-
   .log-row:hover { background: var(--bg-row-hover); }
 
   .col-time { color: var(--text-dim); width: 90px; flex-shrink: 0; }
@@ -159,28 +326,6 @@
   .log-row.sev-error { background: rgba(248,81,73,0.05); }
   .log-row.sev-warn  { background: rgba(210,153,34,0.05); }
 
-  /* ── Column headers ─────────────────────────────── */
-  .log-header {
-    display: flex;
-    gap: 8px;
-    padding: 4px 16px;
-    background: var(--bg-header);
-    border-bottom: 1px solid var(--border);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    flex-shrink: 0;
-  }
-
-  /* ── Scrollbar ──────────────────────────────────── */
-  #log-container::-webkit-scrollbar { width: 8px; }
-  #log-container::-webkit-scrollbar-track { background: var(--bg); }
-  #log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  #log-container::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-
-  /* ── Detail expandable ──────────────────────────── */
   .detail-row {
     padding: 4px 16px 8px 106px;
     font-size: 12px;
@@ -192,14 +337,91 @@
     display: none;
   }
   .detail-row.open { display: block; }
+
+  /* ── Scrollbar ──────────────────────────────────── */
+  #log-container::-webkit-scrollbar, .overview-grid::-webkit-scrollbar, .timeline-list::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* ── LLM cost ribbon ────────────────────────────── */
+  .llm-ribbon {
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+  }
+  .llm-stat { text-align: center; }
+  .llm-stat .val { font-size: 20px; font-weight: 700; color: var(--cyan); }
+  .llm-stat .lbl { font-size: 10px; color: var(--text-dim); text-transform: uppercase; }
 </style>
 </head>
 <body>
   <header>
-    <h1>▸ ARCEUS AUDIT LOG</h1>
-    <div class="controls">
+    <h1>&#x25B8; ARCEUS CONTROL PLANE</h1>
+    <div class="tab-bar">
+      <div class="tab active" data-panel="overview">Overview</div>
+      <div class="tab" data-panel="audit">Audit Log</div>
+    </div>
+    <div class="header-right">
       <span id="status" class="badge disconnected"><span class="dot"></span> connecting</span>
+      <div class="stats" id="stats">0 events</div>
+    </div>
+  </header>
 
+  <!-- ═══════════════ OVERVIEW ═══════════════ -->
+  <div class="panel active" id="panel-overview">
+    <div class="overview-grid">
+      <!-- Row 1: Key metrics -->
+      <div class="card" id="card-health">
+        <h3><span class="icon">&#x2B21;</span> Control Plane</h3>
+        <div class="metric ok" id="cp-status">HEALTHY</div>
+        <div class="sub" id="cp-version">v0 &middot; 0 mutations</div>
+        <ul class="component-list" id="cp-components"></ul>
+      </div>
+
+      <div class="card" id="card-execution">
+        <h3><span class="icon">&#x26A1;</span> Execution Substrate</h3>
+        <div class="metric" id="exec-status">IDLE</div>
+        <div class="sub" id="exec-sub">No active execution</div>
+        <div class="llm-ribbon" id="llm-ribbon">
+          <div class="llm-stat"><div class="val" id="llm-calls">0</div><div class="lbl">LLM Calls</div></div>
+          <div class="llm-stat"><div class="val" id="llm-tokens">0</div><div class="lbl">Tokens</div></div>
+          <div class="llm-stat"><div class="val" id="llm-latency">&mdash;</div><div class="lbl">Avg Latency</div></div>
+        </div>
+      </div>
+
+      <div class="card" id="card-tasks">
+        <h3><span class="icon">&#x2630;</span> Tasks</h3>
+        <div class="metric info" id="task-total">0</div>
+        <div class="sub" id="task-sub">No sprint active</div>
+        <div class="task-bars" id="task-bars"></div>
+      </div>
+
+      <!-- Row 2: Agents + Snapshot -->
+      <div class="card span-2" id="card-agents">
+        <h3><span class="icon">&#x25C9;</span> Agents</h3>
+        <table class="agent-table" id="agent-table">
+          <thead><tr><th>Role</th><th>Name</th><th>Status</th></tr></thead>
+          <tbody id="agent-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="card" id="card-snapshot">
+        <h3><span class="icon">&#x25C6;</span> Snapshot</h3>
+        <ul class="component-list" id="snapshot-stats"></ul>
+      </div>
+
+      <!-- Row 3: Recent activity timeline -->
+      <div class="card span-3" id="card-timeline">
+        <h3><span class="icon">&#x25B9;</span> Recent Audit Activity</h3>
+        <ul class="timeline-list" id="timeline"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ AUDIT LOG ═══════════════ -->
+  <div class="panel" id="panel-audit">
+    <div class="log-toolbar">
       <select id="filter-severity">
         <option value="">All severities</option>
         <option value="debug">debug</option>
@@ -240,39 +462,67 @@
 
       <button class="btn" id="btn-clear">Clear</button>
     </div>
-    <div class="stats" id="stats">0 events</div>
-  </header>
 
-  <div class="log-header">
-    <span class="col-time">TIME</span>
-    <span class="col-sev">SEV</span>
-    <span class="col-cat">CATEGORY</span>
-    <span class="col-role">ROLE</span>
-    <span class="col-type">EVENT TYPE</span>
-    <span class="col-msg">SUMMARY</span>
+    <div class="log-header">
+      <span class="col-time">TIME</span>
+      <span class="col-sev">SEV</span>
+      <span class="col-cat">CATEGORY</span>
+      <span class="col-role">ROLE</span>
+      <span class="col-type">EVENT TYPE</span>
+      <span class="col-msg">SUMMARY</span>
+    </div>
+
+    <div id="log-container"></div>
   </div>
-
-  <div id="log-container"></div>
 
 <script>
 (function() {
-  const container = document.getElementById('log-container');
-  const statusBadge = document.getElementById('status');
-  const statsEl = document.getElementById('stats');
-  const filterSev = document.getElementById('filter-severity');
-  const filterCat = document.getElementById('filter-category');
-  const filterRole = document.getElementById('filter-role');
-  const filterSearch = document.getElementById('filter-search');
-  const autoScroll = document.getElementById('auto-scroll');
-  const btnClear = document.getElementById('btn-clear');
+  // ── Tab switching ───────────────────────────────
+  var tabs = document.querySelectorAll('.tab');
+  var panels = document.querySelectorAll('.panel');
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      tabs.forEach(function(t) { t.classList.remove('active'); });
+      panels.forEach(function(p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+    });
+  });
 
-  let allEvents = [];
-  let eventSource = null;
-  let totalCount = 0;
+  // ── State ───────────────────────────────────────
+  var container = document.getElementById('log-container');
+  var statusBadge = document.getElementById('status');
+  var statsEl = document.getElementById('stats');
+  var filterSev = document.getElementById('filter-severity');
+  var filterCat = document.getElementById('filter-category');
+  var filterRole = document.getElementById('filter-role');
+  var filterSearch = document.getElementById('filter-search');
+  var autoScroll = document.getElementById('auto-scroll');
+  var btnClear = document.getElementById('btn-clear');
 
-  // ── Render a single event row ───────────────────
+  var allEvents = [];
+  var eventSource = null;
+  var totalCount = 0;
+  var llmCallCount = 0;
+  var llmTotalTokens = 0;
+  var llmTotalLatency = 0;
+
+  // ── Helpers ─────────────────────────────────────
+  function esc(s) {
+    var d = document.createElement('span');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function fmtNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  // ── Audit Log rendering ─────────────────────────
   function renderRow(ev) {
-    const row = document.createElement('div');
+    var row = document.createElement('div');
     row.className = 'log-row sev-' + ev.severity;
     row.dataset.severity = ev.severity;
     row.dataset.category = ev.category;
@@ -280,44 +530,34 @@
     row.dataset.summary = (ev.summary || '').toLowerCase();
     row.dataset.eventType = (ev.eventType || '').toLowerCase();
 
-    const time = (ev.occurredAt || '').slice(11, 23) || '--:--:--.---';
+    var time = (ev.occurredAt || '').slice(11, 23) || '--:--:--.---';
     row.innerHTML =
       '<span class="col-time">' + esc(time) + '</span>' +
       '<span class="col-sev sev-' + ev.severity + '">' + esc(ev.severity) + '</span>' +
       '<span class="col-cat">' + esc(ev.category) + '</span>' +
-      '<span class="col-role">' + esc(ev.agentRole || '—') + '</span>' +
+      '<span class="col-role">' + esc(ev.agentRole || '\u2014') + '</span>' +
       '<span class="col-type">' + esc(ev.eventType) + '</span>' +
       '<span class="col-msg">' + esc(ev.summary) + '</span>';
 
-    // Click to expand detail
     if (ev.detail) {
-      const detail = document.createElement('div');
+      var detail = document.createElement('div');
       detail.className = 'detail-row';
       detail.textContent = JSON.stringify(ev.detail, null, 2);
       row.style.cursor = 'pointer';
-      row.addEventListener('click', () => detail.classList.toggle('open'));
-      const frag = document.createDocumentFragment();
+      row.addEventListener('click', function() { detail.classList.toggle('open'); });
+      var frag = document.createDocumentFragment();
       frag.appendChild(row);
       frag.appendChild(detail);
       return frag;
     }
-
     return row;
   }
 
-  function esc(s) {
-    const d = document.createElement('span');
-    d.textContent = s;
-    return d.innerHTML;
-  }
-
-  // ── Filtering ──────────────────────────────────
   function matchesFilter(ev) {
-    const sev = filterSev.value;
-    const cat = filterCat.value;
-    const role = filterRole.value;
-    const search = filterSearch.value.toLowerCase();
-
+    var sev = filterSev.value;
+    var cat = filterCat.value;
+    var role = filterRole.value;
+    var search = filterSearch.value.toLowerCase();
     if (sev && ev.severity !== sev) return false;
     if (cat && ev.category !== cat) return false;
     if (role && ev.agentRole !== role) return false;
@@ -327,11 +567,9 @@
 
   function rerender() {
     container.innerHTML = '';
-    const frag = document.createDocumentFragment();
-    for (const ev of allEvents) {
-      if (matchesFilter(ev)) {
-        frag.appendChild(renderRow(ev));
-      }
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < allEvents.length; i++) {
+      if (matchesFilter(allEvents[i])) frag.appendChild(renderRow(allEvents[i]));
     }
     container.appendChild(frag);
     maybeScroll();
@@ -341,68 +579,261 @@
   function addEvent(ev) {
     allEvents.push(ev);
     totalCount++;
+    if (ev.eventType === 'llm_call_completed' && ev.detail) {
+      llmCallCount++;
+      llmTotalTokens += ev.detail.totalTokens || 0;
+      llmTotalLatency += ev.detail.latencyMs || 0;
+      updateLlmRibbon();
+    }
     if (matchesFilter(ev)) {
       container.appendChild(renderRow(ev));
       maybeScroll();
     }
     updateStats();
+    addTimelineEntry(ev);
   }
 
   function maybeScroll() {
-    if (autoScroll.checked) {
-      container.scrollTop = container.scrollHeight;
-    }
+    if (autoScroll.checked) container.scrollTop = container.scrollHeight;
   }
 
   function updateStats() {
-    const visible = container.querySelectorAll('.log-row').length;
+    var visible = container.querySelectorAll('.log-row').length;
     statsEl.textContent = visible + ' / ' + totalCount + ' events';
   }
 
-  // ── Controls ──────────────────────────────────
+  // ── Controls ────────────────────────────────────
   filterSev.addEventListener('change', rerender);
   filterCat.addEventListener('change', rerender);
   filterRole.addEventListener('change', rerender);
   filterSearch.addEventListener('input', rerender);
-  btnClear.addEventListener('click', () => {
+  btnClear.addEventListener('click', function() {
     allEvents = [];
     totalCount = 0;
+    llmCallCount = 0;
+    llmTotalTokens = 0;
+    llmTotalLatency = 0;
     container.innerHTML = '';
     updateStats();
+    updateLlmRibbon();
+    document.getElementById('timeline').innerHTML = '';
   });
 
-  // ── SSE connection ────────────────────────────
-  function connect() {
-    if (eventSource) { eventSource.close(); }
+  // ── Overview panel rendering ────────────────────
 
-    // Load initial events
+  function updateLlmRibbon() {
+    document.getElementById('llm-calls').textContent = fmtNum(llmCallCount);
+    document.getElementById('llm-tokens').textContent = fmtNum(llmTotalTokens);
+    document.getElementById('llm-latency').textContent = llmCallCount > 0
+      ? Math.round(llmTotalLatency / llmCallCount) + 'ms'
+      : '\u2014';
+  }
+
+  function addTimelineEntry(ev) {
+    var list = document.getElementById('timeline');
+    var li = document.createElement('li');
+    var time = (ev.occurredAt || '').slice(11, 23) || '--:--:--.---';
+    li.innerHTML =
+      '<span class="tl-time">' + esc(time) + '</span>' +
+      '<span class="tl-type">' + esc(ev.eventType) + '</span>' +
+      '<span class="tl-msg">' + esc(ev.summary) + '</span>';
+    list.appendChild(li);
+    while (list.children.length > 50) list.removeChild(list.firstChild);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function renderControlPlane(data) {
+    var el = document.getElementById('cp-status');
+    el.textContent = data.healthy ? 'HEALTHY' : 'DEGRADED';
+    el.className = 'metric ' + (data.healthy ? 'ok' : 'warn');
+
+    document.getElementById('cp-version').textContent =
+      'v' + data.version + ' \u00B7 ' + data.mutationCount + ' mutations \u00B7 up since ' + (data.upSince || '').slice(11, 19);
+
+    var list = document.getElementById('cp-components');
+    list.innerHTML = '';
+    var comps = data.components || {};
+    var keys = Object.keys(comps);
+    for (var i = 0; i < keys.length; i++) {
+      var name = keys[i];
+      var info = comps[name];
+      var li = document.createElement('li');
+      var displayName = name.replace(/([A-Z])/g, ' $1').trim();
+      var status = info.status || 'unknown';
+      var cls = 'val';
+      if (status === 'ok') cls += ' ok';
+      else if (status === 'planned') cls += ' planned';
+      else if (status === 'executing') cls += ' executing';
+      else cls += ' idle';
+      li.innerHTML = '<span class="label">' + esc(displayName) + '</span><span class="' + cls + '">' + esc(status) + (info.note ? ' \u2014 ' + esc(info.note) : '') + '</span>';
+      list.appendChild(li);
+    }
+  }
+
+  function renderSnapshot(data) {
+    var execEl = document.getElementById('exec-status');
+    var execSub = document.getElementById('exec-sub');
+    if (data.companyId === 'company_pending') {
+      execEl.textContent = 'NO COMPANY';
+      execEl.className = 'metric';
+      execSub.textContent = 'Bootstrap a company to begin';
+    }
+
+    document.getElementById('task-total').textContent = data.taskStats ? data.taskStats.total : 0;
+    var sprint = data.sprint;
+    document.getElementById('task-sub').textContent = sprint
+      ? 'Sprint ' + sprint.number + ': ' + (sprint.title || '').slice(0, 40)
+      : 'No sprint active';
+
+    // Task bars
+    var barsEl = document.getElementById('task-bars');
+    barsEl.innerHTML = '';
+    if (data.taskStats) {
+      var ts = data.taskStats;
+      var max = Math.max(ts.total, 1);
+      var bars = [
+        { label: 'In Progress', count: ts.inProgress, color: 'var(--cyan)' },
+        { label: 'Completed',   count: ts.completed,  color: 'var(--green)' },
+        { label: 'Created',     count: ts.created,     color: 'var(--text-dim)' },
+        { label: 'Failed',      count: ts.failed,      color: 'var(--red)' },
+        { label: 'Blocked',     count: ts.blocked,     color: 'var(--yellow)' }
+      ];
+      for (var b = 0; b < bars.length; b++) {
+        if (bars[b].count === 0) continue;
+        var row = document.createElement('div');
+        row.className = 'task-bar-row';
+        row.innerHTML =
+          '<span class="task-bar-label">' + esc(bars[b].label) + '</span>' +
+          '<div class="task-bar-fill" style="width:' + Math.max(2, (bars[b].count / max) * 150) + 'px;background:' + bars[b].color + '"></div>' +
+          '<span class="task-bar-count">' + bars[b].count + '</span>';
+        barsEl.appendChild(row);
+      }
+    }
+
+    // Agents
+    var tbody = document.getElementById('agent-tbody');
+    tbody.innerHTML = '';
+    if (data.agents && data.agents.length > 0) {
+      for (var a = 0; a < data.agents.length; a++) {
+        var agent = data.agents[a];
+        var tr = document.createElement('tr');
+        var statusCls = 'status-' + (agent.status || 'idle');
+        tr.innerHTML =
+          '<td class="role">' + esc(agent.role) + '</td>' +
+          '<td class="name">' + esc(agent.name) + '</td>' +
+          '<td class="' + statusCls + '">' + esc(agent.status) + '</td>';
+        tbody.appendChild(tr);
+      }
+    } else {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="3" style="color:var(--text-dim)">No agents provisioned</td>';
+      tbody.appendChild(tr);
+    }
+
+    // Snapshot stats
+    var statsList = document.getElementById('snapshot-stats');
+    statsList.innerHTML = '';
+    var items = [
+      ['Company', data.companyName || data.companyId],
+      ['Status', data.companyStatus || '\u2014'],
+      ['Version', 'v' + (data.version || 0)],
+      ['Memories', data.memories ? data.memories.totalUnits + ' units' : '0'],
+      ['Meetings', String(data.meetings || 0)],
+      ['Approvals', data.approvals ? data.approvals.pending + ' pending / ' + data.approvals.total + ' total' : '0'],
+      ['Artifacts', String(data.artifacts || 0)],
+      ['Chat msgs', String(data.chatMessageCount || 0)],
+      ['Transitions', String(data.transitions || 0)]
+    ];
+    for (var s = 0; s < items.length; s++) {
+      var li = document.createElement('li');
+      li.innerHTML = '<span class="label">' + esc(items[s][0]) + '</span><span class="val">' + esc(items[s][1]) + '</span>';
+      statsList.appendChild(li);
+    }
+  }
+
+  function renderExecStatus(data) {
+    var el = document.getElementById('exec-status');
+    var sub = document.getElementById('exec-sub');
+    var status = data.executionStatus || 'idle';
+    el.textContent = status.toUpperCase().replace(/_/g, ' ');
+    if (status === 'idle' || status === 'stopped') {
+      el.className = 'metric';
+      sub.textContent = 'No active execution';
+    } else if (status === 'executing' || status === 'planning') {
+      el.className = 'metric';
+      el.style.color = 'var(--orange)';
+      var sessions = data.agentSessions || [];
+      sub.textContent = sessions.length + ' agent session(s) active';
+    } else if (status === 'verifying' || status === 'awaiting_board_review') {
+      el.className = 'metric info';
+      sub.textContent = status.replace(/_/g, ' ');
+    } else {
+      el.className = 'metric';
+      sub.textContent = status;
+    }
+  }
+
+  // ── Polling for overview data ───────────────────
+  function pollOverview() {
+    Promise.all([
+      fetch('/api/control-plane/status').then(function(r) { return r.json(); }).catch(function() { return null; }),
+      fetch('/api/control-plane/snapshot-summary').then(function(r) { return r.json(); }).catch(function() { return null; }),
+      fetch('/api/orchestrator/status').then(function(r) { return r.json(); }).catch(function() { return null; })
+    ]).then(function(results) {
+      if (results[0]) renderControlPlane(results[0]);
+      if (results[1]) renderSnapshot(results[1]);
+      if (results[2]) renderExecStatus(results[2]);
+    }).catch(function() {});
+  }
+
+  pollOverview();
+  setInterval(pollOverview, 4000);
+
+  // ── SSE connection ──────────────────────────────
+  function connect() {
+    if (eventSource) eventSource.close();
+
     fetch('/api/audit/events?limit=500')
-      .then(r => r.json())
-      .then(events => {
+      .then(function(r) { return r.json(); })
+      .then(function(events) {
         allEvents = events;
         totalCount = events.length;
+        llmCallCount = 0;
+        llmTotalTokens = 0;
+        llmTotalLatency = 0;
+        for (var i = 0; i < events.length; i++) {
+          if (events[i].eventType === 'llm_call_completed' && events[i].detail) {
+            llmCallCount++;
+            llmTotalTokens += events[i].detail.totalTokens || 0;
+            llmTotalLatency += events[i].detail.latencyMs || 0;
+          }
+        }
+        updateLlmRibbon();
         rerender();
+        var timeline = document.getElementById('timeline');
+        timeline.innerHTML = '';
+        var start = Math.max(0, events.length - 30);
+        for (var j = start; j < events.length; j++) addTimelineEntry(events[j]);
       })
-      .catch(() => {});
+      .catch(function() {});
 
     eventSource = new EventSource('/api/audit/stream');
 
-    eventSource.onopen = () => {
+    eventSource.onopen = function() {
       statusBadge.className = 'badge connected';
       statusBadge.innerHTML = '<span class="dot"></span> live';
     };
 
-    eventSource.onmessage = (msg) => {
+    eventSource.onmessage = function(msg) {
       try {
-        const ev = JSON.parse(msg.data);
+        var ev = JSON.parse(msg.data);
         addEvent(ev);
-      } catch {}
+      } catch(e) {}
     };
 
-    eventSource.onerror = () => {
+    eventSource.onerror = function() {
       statusBadge.className = 'badge disconnected';
       statusBadge.innerHTML = '<span class="dot"></span> reconnecting';
-      // EventSource auto-reconnects
     };
   }
 

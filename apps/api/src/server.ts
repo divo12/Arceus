@@ -25,6 +25,7 @@ import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
+import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } from "./control-plane";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -772,6 +773,34 @@ app.get("/api/audit/stream", async (request, reply) => {
 
   // Don't let Fastify auto-close the reply
   await new Promise(() => {});
+});
+
+// ── Control Plane routes (Spec 11 Phase 2) ──
+
+app.get("/api/control-plane/status", async () => {
+  return cpGetStatus(getExecutionStatus());
+});
+
+app.get("/api/control-plane/version", async () => {
+  return cpGetVersion();
+});
+
+app.get("/api/control-plane/snapshot-summary", async () => {
+  return cpGetSnapshotSummary();
+});
+
+app.post("/api/control-plane/mutations", async (request, reply) => {
+  try {
+    const body = z.object({
+      companyId: z.string(),
+      mutations: z.array(z.record(z.string(), z.unknown())),
+      causation: z.object({ eventId: z.string().optional(), summary: z.string().optional() }).optional(),
+    }).parse(request.body);
+    return cpApplyMutations(body.companyId, body.mutations as any, body.causation);
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : "Invalid mutation payload" };
+  }
 });
 
 // ── Start audit ledger ──

@@ -16,6 +16,7 @@ import type {
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
 import type { StrategyOutput } from "./ceo";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
+import { cpNotifyStateChange } from "./control-plane";
 
 type BootstrapInput = {
   companyName: string;
@@ -37,6 +38,7 @@ function replaceState(nextSnapshot: CompanySnapshot, nextEvents = events) {
   snapshot = nextSnapshot;
   events = nextEvents;
   persistState();
+  cpNotifyStateChange();
   return snapshot;
 }
 
