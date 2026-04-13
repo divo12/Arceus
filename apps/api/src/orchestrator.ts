@@ -2386,6 +2386,16 @@ async function continueExecutionFromCurrentState(checkpoint: string) {
     );
 
     if (yieldedTask) {
+      // If the router skipped the PM acceptance phase, run it now before Developer
+      if (activeExecution.planText && !activeExecution.acceptanceText) {
+        const freshSnap = getSnapshot();
+        const acceptanceTask = freshSnap.tasks.find((t) => t.id === activeExecution!.acceptanceTaskId);
+        if (acceptanceTask && !["completed", "failed"].includes(acceptanceTask.status)) {
+          emitEmployeeActivity("system", "info", "Running PM acceptance phase before Developer (router skipped it).");
+          await runAcceptancePhase(freshSnap);
+        }
+      }
+
       // Sprint 1 path: full rework loop when we have a CTO plan + acceptance spec
       if (activeExecution.planText && activeExecution.acceptanceText) {
         activeExecution.buildTaskId = yieldedTask.id;
