@@ -3079,7 +3079,7 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
   await stopLocalPreview();
   await workspaceManager.ensureLocal(snapshot.company.id);
 
-  const devSession = await ensureAgentSession(snapshot, "developer");
+  let devSession = await ensureAgentSession(snapshot, "developer");
   const devSoul = getRoleSoul("developer");
   if (!devSoul.canWriteCode || !devSoul.canEditFiles) {
     throw new Error("Developer role lacks required code/file permissions in typed policy");
@@ -3155,12 +3155,13 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
 
   const allSteps = [scaffoldStep, ...implSteps];
   const totalSteps = allSteps.length;
+  const skippedSteps: Array<{ index: number; title: string; error: string }> = [];
 
   emitEmployeeActivity("developer", "info",
     `Execution plan: ${totalSteps} steps — ${allSteps.map(s => s.title).join(" → ")}`,
     { taskId: activeExecution.buildTaskId });
 
-  // ── Step loop ──
+  // ── Step loop with per-step error recovery ──
   // NOTE: developerStepLoopActive is managed by the caller
   // (runBuildPreviewReviewLoop) to prevent event-bridge race conditions.
   await startDeveloperWorkspaceMonitor();
@@ -3177,25 +3178,50 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
         `Step ${step.index}/${totalSteps}: ${step.title}`,
         { taskId: activeExecution.buildTaskId });
 
-      // EXEC
-      const stepPrompt = buildStepPrompt(step, totalSteps);
-      await runDeveloperStep(devSession.sessionId, devSystemPrompt, stepPrompt);
+      // Per-step error recovery: attempt 1 = normal, attempt 2 = fresh session.
+      // If both fail, skip step and continue to the next one.
+      let stepSucceeded = false;
+      for (let attempt = 1; attempt <= 2 && !stepSucceeded; attempt++) {
+        try {
+          // EXEC
+          const stepPrompt = buildStepPrompt(step, totalSteps);
+          await runDeveloperStep(devSession.sessionId, devSystemPrompt, stepPrompt);
 
-      // VERIFY
-      let verification = verifyStep(step, productDir);
-      for (let retry = 0; retry < orchestratorConfig.developer.maxRetriesPerStep && !verification.passed; retry++) {
-        emitEmployeeActivity("developer", "error",
-          `Step ${step.index} verify failed (retry ${retry + 1}): ${verification.reason}`,
-          { taskId: activeExecution.buildTaskId });
+          // VERIFY
+          let verification = verifyStep(step, productDir);
+          for (let retry = 0; retry < orchestratorConfig.developer.maxRetriesPerStep && !verification.passed; retry++) {
+            emitEmployeeActivity("developer", "error",
+              `Step ${step.index} verify failed (retry ${retry + 1}): ${verification.reason}`,
+              { taskId: activeExecution.buildTaskId });
 
-        const retryPrompt = buildRetryPrompt(step, verification);
-        await runDeveloperStep(devSession.sessionId, devSystemPrompt, retryPrompt);
-        verification = verifyStep(step, productDir);
+            const retryPrompt = buildRetryPrompt(step, verification);
+            await runDeveloperStep(devSession.sessionId, devSystemPrompt, retryPrompt);
+            verification = verifyStep(step, productDir);
+          }
+
+          stepSucceeded = true;
+          emitEmployeeActivity("developer", "info",
+            `Step ${step.index} ${verification.passed ? "verified" : "moved on"}: ${step.title}`,
+            { taskId: activeExecution.buildTaskId });
+        } catch (stepError: unknown) {
+          const errMsg = stepError instanceof Error ? stepError.message : String(stepError);
+          if (attempt === 1) {
+            // First failure — reset connection, get fresh session, retry once
+            emitEmployeeActivity("developer", "error",
+              `Step ${step.index} failed (retrying with fresh session): ${errMsg}`,
+              { taskId: activeExecution.buildTaskId });
+            resetOpencodeConnection();
+            agentSessions.delete("developer");
+            devSession = await ensureAgentSession(snapshot, "developer");
+          } else {
+            // Second failure — skip step and continue
+            emitEmployeeActivity("developer", "error",
+              `Step ${step.index} failed after retry — skipping: ${errMsg}`,
+              { taskId: activeExecution.buildTaskId });
+            skippedSteps.push({ index: step.index, title: step.title, error: errMsg });
+          }
+        }
       }
-
-      emitEmployeeActivity("developer", "info",
-        `Step ${step.index} ${verification.passed ? "verified" : "moved on"}: ${step.title}`,
-        { taskId: activeExecution.buildTaskId });
     }
   } finally {
     clearDeveloperWatchdog();
@@ -3203,18 +3229,23 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
   }
 
   // ── Post-loop: mark done ──
+  const skipSummary = skippedSteps.length > 0
+    ? ` (${skippedSteps.length} step(s) skipped: ${skippedSteps.map(s => s.title).join(", ")})`
+    : "";
   touchAgentSession("developer", "done");
   updateAgentSessionState("developer", {
     awaiting: "idle",
     promptCompletedAt: nowIso(),
     lastProgressAt: nowIso(),
     activeTaskId: activeExecution.previewTaskId,
-    lastEventSummary: "Implementation finished. Handing off to preview validation.",
+    lastEventSummary: `Implementation finished${skipSummary}. Handing off to preview validation.`,
   });
-  emitEmployeeActivity("developer", "idle", "All steps complete. Routing to next phase.", {
+  emitEmployeeActivity("developer", "idle",
+    `All steps complete${skipSummary}. Routing to next phase.`, {
     taskId: activeExecution.buildTaskId,
   });
-  setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished via step loop.");
+  setTaskStatus(activeExecution.buildTaskId, "completed",
+    `Implementation finished via step loop${skipSummary}.`);
 }
 
 // ---------------------------------------------------------------------------
