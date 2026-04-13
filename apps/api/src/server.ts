@@ -23,6 +23,7 @@ import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifa
 import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
+import { warmUpOpencode } from "./opencode";
 
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
@@ -725,3 +726,8 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 await app.listen({ port, host });
+
+// ── Pre-warm OpenCode after server is listening ──
+// This triggers the SQLite migration + server spawn early so agent
+// execution doesn't hit the cold-start delay.
+void warmUpOpencode();
