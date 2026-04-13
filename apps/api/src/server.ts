@@ -706,4 +706,22 @@ await flushStorePersistence();
 if (orchestratorConfig.demoMode) {
   console.warn("[ARCEUS] ⚠ DEMO MODE ACTIVE — frontend-only constraints enabled for all agents");
 }
+
+// ── Graceful shutdown ──
+async function shutdown(signal: string) {
+  console.log(`[ARCEUS] ${signal} received — shutting down gracefully…`);
+  try {
+    await flushStorePersistence();
+    await app.close();
+    console.log("[ARCEUS] Server closed cleanly.");
+    process.exit(0);
+  } catch (err) {
+    console.error("[ARCEUS] Error during shutdown:", err);
+    process.exit(1);
+  }
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
 await app.listen({ port, host });
