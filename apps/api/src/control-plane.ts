@@ -1,13 +1,13 @@
 /**
- * Control Plane Facade — Spec 11 Phase 2
+ * Control Plane Facade — Spec 11 Phase 2 + Phase 4
  *
  * Wraps existing company-state.ts / store.ts into the Control Plane
  * interface. All state reads go through loadSnapshot(), all writes
  * through applyMutations(). The audit ledger records every mutation.
  *
- * This is Phase 2 (incremental wrap) — store.ts still holds live state
- * in memory, but every mutation now flows through here and gets audited.
- * Phase 4 will flip store.ts to a pure read-cache.
+ * Phase 4: store.ts is now a read-cache with explicit lifecycle
+ * (hydrate/flush/teardown). The CP reports cache staleness and
+ * handles all mutation types including agent_status/company_status.
  */
 
 import type {
@@ -22,6 +22,7 @@ import { getRegistryStats } from "./service-registry";
 import {
   getSnapshot,
   getEvents,
+  getStoreLifecycleState,
   upsertTask,
   updateTask,
   upsertSprint,
@@ -32,6 +33,8 @@ import {
   appendChatMessage,
   appendTransition,
   updateTransition,
+  updateAgentStatus,
+  updateCompanyStatus,
 } from "./store";
 
 // ── Version tracking ───────────────────────────────────────
@@ -74,9 +77,7 @@ export function cpGetVersion(): SnapshotVersion {
 
 /**
  * Called by store.ts on every replaceState().
- * Bumps the version counter so the CP tracks all mutations,
- * even those not yet routed through cpApplyMutations().
- * Phase 4 will eliminate this in favor of direct CP writes.
+ * Bumps the version counter so the CP tracks all mutations.
  */
 export function cpNotifyStateChange() {
   bumpVersion();
@@ -207,9 +208,11 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
       break;
 
     case "agent_status":
+      updateAgentStatus(mutation.agentId, mutation.status);
+      break;
+
     case "company_status":
-      // These go through store's replaceState — skip for now,
-      // handled by orchestrator directly. Will wire in Phase 4.
+      updateCompanyStatus(mutation.status);
       break;
 
     default:
@@ -227,7 +230,7 @@ export type ControlPlaneStatus = {
   companyId: string;
   snapshotStale: boolean;
   components: {
-    stateStore: { status: "ok" | "degraded"; inMemory: boolean; dbPersist: boolean };
+    stateStore: { status: "ok" | "degraded"; inMemory: boolean; dbPersist: boolean; dirty: boolean; mutationsSinceHydrate: number; lastHydratedAt: string | null; lastFlushedAt: string | null };
     auditLedger: { status: "ok" | "degraded" };
     serviceRegistry: { status: "ok" | "empty"; toolCount: number; bySource: Record<string, number>; byBlastRadius: Record<string, number> };
     executionSubstrate: { status: "ok" | "idle" | "executing" };
@@ -238,6 +241,7 @@ export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
   const snap = getSnapshot();
   const isPending = snap.company.id === "company_pending";
   const regStats = getRegistryStats(snap.company.id);
+  const lifecycle = getStoreLifecycleState();
 
   return {
     healthy: true,
@@ -245,12 +249,16 @@ export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
     mutationCount,
     upSince: startedAt,
     companyId: snap.company.id,
-    snapshotStale: false, // Phase 4: detect stale cache
+    snapshotStale: lifecycle.dirty,
     components: {
       stateStore: {
         status: "ok",
         inMemory: true,
         dbPersist: !isPending,
+        dirty: lifecycle.dirty,
+        mutationsSinceHydrate: lifecycle.mutationsSinceHydrate,
+        lastHydratedAt: lifecycle.lastHydratedAt,
+        lastFlushedAt: lifecycle.lastFlushedAt,
       },
       auditLedger: {
         status: "ok",

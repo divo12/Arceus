@@ -9,7 +9,7 @@ process.on("uncaughtException", (err) => {
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
-import { clearPersistedStoreState, flushStorePersistence, getEvents, getSnapshot, hydrateStoreFromPersistence, resetCompany, applyStrategy } from "./store";
+import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
 import { approveBoardReview, approveSprintProposal, rejectSprintProposal, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution, hippocampus } from "./orchestrator";
@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
 
-await hydrateStoreFromPersistence();
+await hydrate();
 
 const bootstrapSchema = z.object({
   companyName: z.string().min(2),
@@ -847,7 +847,7 @@ startAuditLedger();
 
 const { port, host } = serverConfig;
 
-await flushStorePersistence();
+await flush();
 if (orchestratorConfig.demoMode) {
   console.warn("[ARCEUS] ⚠ DEMO MODE ACTIVE — frontend-only constraints enabled for all agents");
 }
@@ -857,7 +857,7 @@ async function shutdown(signal: string) {
   console.log(`[ARCEUS] ${signal} received — shutting down gracefully…`);
   try {
     await drainAuditLedger();
-    await flushStorePersistence();
+    await teardown();
     await app.close();
     console.log("[ARCEUS] Server closed cleanly.");
     process.exit(0);

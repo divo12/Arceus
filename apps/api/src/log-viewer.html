@@ -847,6 +847,7 @@
       var extra = '';
       if (info.note) extra = ' \u2014 ' + esc(info.note);
       else if (info.toolCount !== undefined) extra = ' \u2014 ' + info.toolCount + ' tools';
+      else if (info.dirty !== undefined) extra = ' \u2014 ' + (info.dirty ? 'dirty (' + (info.mutationsSinceHydrate || 0) + ' mutations)' : 'clean');
       li.innerHTML = '<span class="label">' + esc(displayName) + '</span><span class="' + cls + '">' + esc(status) + extra + '</span>';
       list.appendChild(li);
     }
