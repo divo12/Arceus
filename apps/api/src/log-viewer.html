@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Arceus – Audit Log</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-header: #161b22;
+    --bg-row-hover: #1c2128;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --cyan: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --orange: #f0883e;
+    --gray: #6e7681;
+    --font: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header / toolbar ───────────────────────────── */
+  header {
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+
+  header h1 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cyan);
+    white-space: nowrap;
+  }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1;
+  }
+
+  .controls select, .controls input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-family: var(--font);
+    font-size: 12px;
+  }
+
+  .controls input[type="text"] { width: 200px; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .badge.connected { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge.disconnected { background: rgba(248,81,73,0.15); color: var(--red); }
+
+  .badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .badge.connected .dot { background: var(--green); }
+  .badge.disconnected .dot { background: var(--red); }
+
+  .stats {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .controls label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .btn {
+    background: var(--bg);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-family: var(--font);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn:hover { color: var(--text); border-color: var(--text-dim); }
+
+  /* ── Log container ──────────────────────────────── */
+  #log-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+    scroll-behavior: smooth;
+  }
+
+  .log-row {
+    display: flex;
+    gap: 8px;
+    padding: 2px 16px;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+    align-items: baseline;
+    white-space: nowrap;
+  }
+
+  .log-row:hover { background: var(--bg-row-hover); }
+
+  .col-time { color: var(--text-dim); width: 90px; flex-shrink: 0; }
+  .col-sev  { width: 50px; flex-shrink: 0; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .col-cat  { width: 130px; flex-shrink: 0; color: var(--purple); }
+  .col-role { width: 100px; flex-shrink: 0; color: var(--orange); }
+  .col-type { width: 180px; flex-shrink: 0; color: var(--cyan); }
+  .col-msg  { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+
+  .sev-debug { color: var(--gray); }
+  .sev-info  { color: var(--green); }
+  .sev-warn  { color: var(--yellow); }
+  .sev-error { color: var(--red); }
+
+  .log-row.sev-error { background: rgba(248,81,73,0.05); }
+  .log-row.sev-warn  { background: rgba(210,153,34,0.05); }
+
+  /* ── Column headers ─────────────────────────────── */
+  .log-header {
+    display: flex;
+    gap: 8px;
+    padding: 4px 16px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+
+  /* ── Scrollbar ──────────────────────────────────── */
+  #log-container::-webkit-scrollbar { width: 8px; }
+  #log-container::-webkit-scrollbar-track { background: var(--bg); }
+  #log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  #log-container::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* ── Detail expandable ──────────────────────────── */
+  .detail-row {
+    padding: 4px 16px 8px 106px;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--bg-header);
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    white-space: pre-wrap;
+    word-break: break-all;
+    display: none;
+  }
+  .detail-row.open { display: block; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>▸ ARCEUS AUDIT LOG</h1>
+    <div class="controls">
+      <span id="status" class="badge disconnected"><span class="dot"></span> connecting</span>
+
+      <select id="filter-severity">
+        <option value="">All severities</option>
+        <option value="debug">debug</option>
+        <option value="info">info</option>
+        <option value="warn">warn</option>
+        <option value="error">error</option>
+      </select>
+
+      <select id="filter-category">
+        <option value="">All categories</option>
+        <option value="agent_action">agent_action</option>
+        <option value="task_lifecycle">task_lifecycle</option>
+        <option value="sprint_lifecycle">sprint_lifecycle</option>
+        <option value="system">system</option>
+        <option value="board">board</option>
+        <option value="policy_eval">policy_eval</option>
+        <option value="error">error</option>
+      </select>
+
+      <select id="filter-role">
+        <option value="">All roles</option>
+        <option value="ceo">ceo</option>
+        <option value="cto">cto</option>
+        <option value="pm">pm</option>
+        <option value="developer">developer</option>
+        <option value="tester">tester</option>
+        <option value="ui_designer">ui_designer</option>
+        <option value="marketing">marketing</option>
+        <option value="skills_lead">skills_lead</option>
+      </select>
+
+      <input type="text" id="filter-search" placeholder="Search..." />
+
+      <label>
+        <input type="checkbox" id="auto-scroll" checked />
+        Auto-scroll
+      </label>
+
+      <button class="btn" id="btn-clear">Clear</button>
+    </div>
+    <div class="stats" id="stats">0 events</div>
+  </header>
+
+  <div class="log-header">
+    <span class="col-time">TIME</span>
+    <span class="col-sev">SEV</span>
+    <span class="col-cat">CATEGORY</span>
+    <span class="col-role">ROLE</span>
+    <span class="col-type">EVENT TYPE</span>
+    <span class="col-msg">SUMMARY</span>
+  </div>
+
+  <div id="log-container"></div>
+
+<script>
+(function() {
+  const container = document.getElementById('log-container');
+  const statusBadge = document.getElementById('status');
+  const statsEl = document.getElementById('stats');
+  const filterSev = document.getElementById('filter-severity');
+  const filterCat = document.getElementById('filter-category');
+  const filterRole = document.getElementById('filter-role');
+  const filterSearch = document.getElementById('filter-search');
+  const autoScroll = document.getElementById('auto-scroll');
+  const btnClear = document.getElementById('btn-clear');
+
+  let allEvents = [];
+  let eventSource = null;
+  let totalCount = 0;
+
+  // ── Render a single event row ───────────────────
+  function renderRow(ev) {
+    const row = document.createElement('div');
+    row.className = 'log-row sev-' + ev.severity;
+    row.dataset.severity = ev.severity;
+    row.dataset.category = ev.category;
+    row.dataset.role = ev.agentRole || '';
+    row.dataset.summary = (ev.summary || '').toLowerCase();
+    row.dataset.eventType = (ev.eventType || '').toLowerCase();
+
+    const time = (ev.occurredAt || '').slice(11, 23) || '--:--:--.---';
+    row.innerHTML =
+      '<span class="col-time">' + esc(time) + '</span>' +
+      '<span class="col-sev sev-' + ev.severity + '">' + esc(ev.severity) + '</span>' +
+      '<span class="col-cat">' + esc(ev.category) + '</span>' +
+      '<span class="col-role">' + esc(ev.agentRole || '—') + '</span>' +
+      '<span class="col-type">' + esc(ev.eventType) + '</span>' +
+      '<span class="col-msg">' + esc(ev.summary) + '</span>';
+
+    // Click to expand detail
+    if (ev.detail) {
+      const detail = document.createElement('div');
+      detail.className = 'detail-row';
+      detail.textContent = JSON.stringify(ev.detail, null, 2);
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', () => detail.classList.toggle('open'));
+      const frag = document.createDocumentFragment();
+      frag.appendChild(row);
+      frag.appendChild(detail);
+      return frag;
+    }
+
+    return row;
+  }
+
+  function esc(s) {
+    const d = document.createElement('span');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  // ── Filtering ──────────────────────────────────
+  function matchesFilter(ev) {
+    const sev = filterSev.value;
+    const cat = filterCat.value;
+    const role = filterRole.value;
+    const search = filterSearch.value.toLowerCase();
+
+    if (sev && ev.severity !== sev) return false;
+    if (cat && ev.category !== cat) return false;
+    if (role && ev.agentRole !== role) return false;
+    if (search && !(ev.summary || '').toLowerCase().includes(search) && !(ev.eventType || '').toLowerCase().includes(search)) return false;
+    return true;
+  }
+
+  function rerender() {
+    container.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    for (const ev of allEvents) {
+      if (matchesFilter(ev)) {
+        frag.appendChild(renderRow(ev));
+      }
+    }
+    container.appendChild(frag);
+    maybeScroll();
+    updateStats();
+  }
+
+  function addEvent(ev) {
+    allEvents.push(ev);
+    totalCount++;
+    if (matchesFilter(ev)) {
+      container.appendChild(renderRow(ev));
+      maybeScroll();
+    }
+    updateStats();
+  }
+
+  function maybeScroll() {
+    if (autoScroll.checked) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  function updateStats() {
+    const visible = container.querySelectorAll('.log-row').length;
+    statsEl.textContent = visible + ' / ' + totalCount + ' events';
+  }
+
+  // ── Controls ──────────────────────────────────
+  filterSev.addEventListener('change', rerender);
+  filterCat.addEventListener('change', rerender);
+  filterRole.addEventListener('change', rerender);
+  filterSearch.addEventListener('input', rerender);
+  btnClear.addEventListener('click', () => {
+    allEvents = [];
+    totalCount = 0;
+    container.innerHTML = '';
+    updateStats();
+  });
+
+  // ── SSE connection ────────────────────────────
+  function connect() {
+    if (eventSource) { eventSource.close(); }
+
+    // Load initial events
+    fetch('/api/audit/events?limit=500')
+      .then(r => r.json())
+      .then(events => {
+        allEvents = events;
+        totalCount = events.length;
+        rerender();
+      })
+      .catch(() => {});
+
+    eventSource = new EventSource('/api/audit/stream');
+
+    eventSource.onopen = () => {
+      statusBadge.className = 'badge connected';
+      statusBadge.innerHTML = '<span class="dot"></span> live';
+    };
+
+    eventSource.onmessage = (msg) => {
+      try {
+        const ev = JSON.parse(msg.data);
+        addEvent(ev);
+      } catch {}
+    };
+
+    eventSource.onerror = () => {
+      statusBadge.className = 'badge disconnected';
+      statusBadge.innerHTML = '<span class="dot"></span> reconnecting';
+      // EventSource auto-reconnects
+    };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import "./load-env";
-import { integer, jsonb, pgSchema, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgSchema, pgTable, real, serial, text, timestamp } from "drizzle-orm/pg-core";
 
 const configuredSchemaName = process.env.ARCEUS_DB_SCHEMA?.trim() || process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA?.trim() || "public";
 const arceusSchema = configuredSchemaName === "public" ? null : pgSchema(configuredSchemaName);
@@ -120,12 +120,43 @@ export const assetsTable = arceusSchema ? arceusSchema.table("assets", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const auditEventsTable = arceusSchema ? arceusSchema.table("audit_events", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  category: text("category").notNull(),
+  severity: text("severity").notNull().default("info"),
+  eventType: text("event_type").notNull(),
+  agentId: text("agent_id"),
+  agentRole: text("agent_role"),
+  summary: text("summary").notNull(),
+  detail: jsonb("detail"),
+  correlationId: text("correlation_id"),
+  causationId: text("causation_id"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("audit_events", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  category: text("category").notNull(),
+  severity: text("severity").notNull().default("info"),
+  eventType: text("event_type").notNull(),
+  agentId: text("agent_id"),
+  agentRole: text("agent_role"),
+  summary: text("summary").notNull(),
+  detail: jsonb("detail"),
+  correlationId: text("correlation_id"),
+  causationId: text("causation_id"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const workspaceStorageTables = {
   workspaces: workspacesTable,
   sprintSnapshots: sprintSnapshotsTable,
   artifacts: artifactsTable,
   companyStates: companyStatesTable,
   assets: assetsTable,
+  auditEvents: auditEventsTable,
 };
 
 export const arceusDatabaseSchemaName = configuredSchemaName;

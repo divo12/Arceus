@@ -6,6 +6,7 @@ import { getOpencode, resetOpencodeConnection } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
+import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
 import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
 import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
@@ -1416,6 +1417,8 @@ function appendTaskCommand(taskId: string, command: string) {
 }
 
 function setTaskStatus(taskId: string, status: Task["status"], feedback?: string | null) {
+  const prev = getSnapshot().tasks.find((t) => t.id === taskId);
+  const prevStatus = prev?.status ?? "unknown";
   updateTask(taskId, (task) => ({
     ...task,
     status,
@@ -1431,6 +1434,18 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
             feedback: feedback ?? task.verifierState.feedback,
           },
   }));
+
+  // Audit task transitions
+  audit({
+    companyId: prev?.companyId ?? getSnapshot().company.id,
+    category: "task_lifecycle",
+    severity: status === "failed" ? "warn" : "info",
+    eventType: `task_${status}`,
+    agentRole: prev?.assignedRole ?? null,
+    summary: `Task "${prev?.title ?? taskId}" ${prevStatus} → ${status}`,
+    detail: { taskId, previousStatus: prevStatus, feedback: feedback ?? null },
+    correlationId: taskId,
+  });
 
   // Auto-promote downstream tasks when a task completes
   if (status === "completed") {
@@ -3787,6 +3802,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
   if (["idle", "done", "error", "paused"].includes(executionStatus) && !activeExecution) {
     throw new Error("No active company execution is running.");
   }
+  auditSystem(getSnapshot().company.id, "execution_stopped", `Execution stopped: ${reason}`, { severity: "warn" });
 
   clearDeveloperWatchdog();
   stopDeveloperWorkspaceMonitor();
@@ -4136,6 +4152,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
   }
 
   executionStatus = "planning";
+  auditSystem(snapshot.company.id, "execution_started", `Execution started for "${snapshot.company.name}"`, { detail: { sprintCount: snapshot.sprints.length } });
 
   // Create Sprint 1 record — all tasks created below will inherit this sprintId
   const sprint = createSprintRecord(

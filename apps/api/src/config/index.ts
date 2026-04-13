@@ -1,4 +1,5 @@
 export { readAliasedOptionalEnv, readAliasedRequiredEnv, readListEnv, readNumberEnv, readOptionalEnv, readRequiredEnv } from "./env";
+export { auditConfig } from "./audit";
 export { orchestratorConfig } from "./orchestrator";
 export { persistenceConfig, getConfiguredDatabaseUrl, isPersistenceConfigured, isSupabaseConfigured } from "./persistence";
 export { plannerConfig } from "./planner";

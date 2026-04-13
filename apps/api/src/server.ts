@@ -23,6 +23,11 @@ import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifa
 import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
+import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
+import { auditConfig } from "./config/audit";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
@@ -132,6 +137,7 @@ app.get("/api/runtime", async () => {
 app.post("/api/company/bootstrap", async (request, reply) => {
   const body = bootstrapSchema.parse(request.body);
   const { snapshot, warnings } = await bootstrapCompanyWithWorkspace(body);
+  audit({ companyId: snapshot.company.id, category: "system", eventType: "company_bootstrapped", summary: `Company "${body.companyName}" bootstrapped by ${body.boardOwner}`, detail: { idea: body.idea, budgetCents: body.budgetCents, warnings } });
   if (warnings.length > 0) {
     request.log?.warn({ warnings }, "Workspace provision completed with warnings");
   }
@@ -141,6 +147,7 @@ app.post("/api/company/bootstrap", async (request, reply) => {
 
 app.post("/api/company/strategy", async (request, reply) => {
   try {
+    audit({ companyId: getSnapshot().company.id, category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
     return await sendBoardMessageToCeo(getSnapshot().company.goal || "Refine the current idea into a demoable first release.");
   } catch (error) {
     request.log?.error?.(error);
@@ -154,6 +161,7 @@ app.post("/api/company/strategy", async (request, reply) => {
 app.post("/api/chat/ceo", async (request, reply) => {
   try {
     const body = chatSchema.parse(request.body);
+    audit({ companyId: getSnapshot().company.id, category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
     return await sendBoardMessageToCeo(body.message);
   } catch (error) {
     request.log?.error?.(error);
@@ -700,6 +708,75 @@ app.post("/api/quick-execute", async (request, reply) => {
   }
 });
 
+// ── Audit Ledger routes (Spec 11) ──
+
+const __audit_dirname = dirname(fileURLToPath(import.meta.url));
+let logViewerHtml: string | null = null;
+
+if (auditConfig.logViewerEnabled) {
+  app.get("/logs", async (_request, reply) => {
+    if (!logViewerHtml) {
+      logViewerHtml = readFileSync(join(__audit_dirname, "log-viewer.html"), "utf-8");
+    }
+    reply.type("text/html").send(logViewerHtml);
+  });
+}
+
+app.get("/api/audit/events", async (request) => {
+  const query = request.query as Record<string, string>;
+  return getAuditEvents({
+    limit: query.limit ? parseInt(query.limit, 10) : undefined,
+    category: (query.category as any) || undefined,
+    severity: (query.severity as any) || undefined,
+    companyId: query.companyId || undefined,
+    agentRole: query.agentRole || undefined,
+  });
+});
+
+app.get("/api/audit/stats", async () => {
+  return getAuditStats();
+});
+
+app.get("/api/audit/stream", async (request, reply) => {
+  reply.raw.setHeader("Content-Type", "text/event-stream");
+  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin || "*");
+  reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+
+  // Send any recent events as initial burst
+  const recent = getAuditEvents({ limit: 50 });
+  for (const event of recent) {
+    reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+
+  // Subscribe to live events
+  const unsubscribe = subscribeSse((event) => {
+    try {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      unsubscribe();
+    }
+  });
+
+  // Keep-alive ping
+  const keepAlive = setInterval(() => {
+    try { reply.raw.write(": ping\n\n"); } catch { clearInterval(keepAlive); unsubscribe(); }
+  }, auditConfig.sseKeepAliveMs);
+
+  // Cleanup on disconnect
+  request.raw.on("close", () => {
+    clearInterval(keepAlive);
+    unsubscribe();
+  });
+
+  // Don't let Fastify auto-close the reply
+  await new Promise(() => {});
+});
+
+// ── Start audit ledger ──
+startAuditLedger();
+
 const { port, host } = serverConfig;
 
 await flushStorePersistence();
@@ -711,6 +788,7 @@ if (orchestratorConfig.demoMode) {
 async function shutdown(signal: string) {
   console.log(`[ARCEUS] ${signal} received — shutting down gracefully…`);
   try {
+    await drainAuditLedger();
     await flushStorePersistence();
     await app.close();
     console.log("[ARCEUS] Server closed cleanly.");
