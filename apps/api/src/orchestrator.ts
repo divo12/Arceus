@@ -26,6 +26,22 @@ import { z } from "zod";
 // Hippocampus — singleton memory service (in-memory stores for now)
 // ---------------------------------------------------------------------------
 
+/** Sanitize tool arguments for audit logging — scrub potential secrets. */
+function sanitizeToolArgs(args: Record<string, any>): Record<string, unknown> {
+  const SECRET_KEYS = /key|secret|token|password|auth|credential|api.?key/i;
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (SECRET_KEYS.test(k)) {
+      result[k] = "[REDACTED]";
+    } else if (typeof v === "string" && v.length > 500) {
+      result[k] = v.slice(0, 500) + `…[${v.length} chars]`;
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
+
 const extractedFactSchema = z.object({
   facts: z.array(z.object({
     content: z.string(),
@@ -983,6 +999,35 @@ function applyTaskModification(modification: TaskModificationInput) {
 
     return nextTask;
   });
+
+  // ── Audit: task modification (assign, reassign, cancel, etc.) ──
+  if (modification.modificationType === "assign" || modification.modificationType === "reassign") {
+    const companyId = getSnapshot().company.id;
+    audit({
+      companyId,
+      category: "task_lifecycle",
+      eventType: "task_assigned",
+      summary: `Task "${modification.taskId}" ${modification.modificationType} → ${modification.assignedRole ?? "unassigned"}`,
+      detail: {
+        taskId: modification.taskId,
+        modificationType: modification.modificationType,
+        assignedRole: modification.assignedRole ?? null,
+        details: modification.details,
+      },
+      correlationId: modification.taskId,
+    });
+  } else if (modification.modificationType === "cancel") {
+    const companyId = getSnapshot().company.id;
+    audit({
+      companyId,
+      category: "task_lifecycle",
+      severity: "warn",
+      eventType: "task_cancelled",
+      summary: `Task "${modification.taskId}" cancelled: ${modification.details.slice(0, 100)}`,
+      detail: { taskId: modification.taskId, reason: modification.details },
+      correlationId: modification.taskId,
+    });
+  }
 }
 
 function applyMemoryModification(modification: MemoryModificationInput) {
@@ -4590,6 +4635,26 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           awaiting: isInvocation ? `waiting for ${toolName} result` : "processing tool result",
           toolInvocationCount: isInvocation ? (agentSessions.get(role)?.toolInvocationCount ?? 0) + 1 : agentSessions.get(role)?.toolInvocationCount ?? 0,
         });
+      }
+
+      // ── Audit: tool invocation / completion ──
+      if (toolName && activeExecution) {
+        const companyId = activeExecution.companyId;
+        const taskId = activeExecution.buildTaskId;
+        const sanitizedArgs = sanitizeToolArgs(args);
+        if (isInvocation) {
+          auditAgent(companyId, role, "tool_invoked", `${role} invoked ${toolName}`, {
+            detail: { toolName, args: sanitizedArgs, taskId },
+            correlationId: taskId,
+            severity: "debug",
+          });
+        } else {
+          auditAgent(companyId, role, "tool_completed", `${role} ${toolName} → ${toolStatus || "done"}`, {
+            detail: { toolName, status: toolStatus || "completed", taskId },
+            correlationId: taskId,
+            severity: "debug",
+          });
+        }
       }
 
       if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {

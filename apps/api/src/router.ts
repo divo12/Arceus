@@ -8,6 +8,7 @@
 
 import { routerConfig } from "./config/index";
 import { structuredCompletion } from "./azure-openai";
+import { auditSystem } from "./audit-ledger";
 import { routerDecisionSchema, type CompanySnapshot, type RouterDecision, type Task, type Transition, type TransitionProposal, type FeedbackRound } from "@arceus/contracts";
 import { appendTransition, updateTransition, appendFeedbackRound, updateTask, getSnapshot } from "./store";
 
@@ -286,6 +287,18 @@ export async function runRouterLoop(
 
     // ask the LLM Router
     const decision = await proposeNextTransitions(snapshot, executionStatus, currentEvent);
+
+    // ── Audit: router cycle decision ──
+    auditSystem(snapshot.company.id, "router_cycle_completed", `Router cycle ${cycle}: ${decision.transitions.length} proposals, pause=${decision.shouldPause}`, {
+      detail: {
+        cycle,
+        transitionCount: decision.transitions.length,
+        shouldPause: decision.shouldPause,
+        pauseReason: decision.pauseReason ?? null,
+        proposals: decision.transitions.map((t) => ({ taskId: t.toTaskId, status: t.toStatus, role: t.triggeredByRole, confidence: t.confidence })),
+      },
+      severity: "debug",
+    });
 
     console.log(`[Router] Cycle ${cycle}: shouldPause=${decision.shouldPause}, transitions=${decision.transitions.length}, pauseReason=${decision.pauseReason ?? "none"}`);
     for (const t of decision.transitions) {
