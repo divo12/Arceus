@@ -52,10 +52,18 @@ function broadcast(event: AuditEvent) {
 
 let pendingFlush: AuditEvent[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
+let consecutiveDbFailures = 0;
+const MAX_DB_FAILURES = 3;
+let dbFlushDisabled = false;
 
 async function flushToDb() {
   if (pendingFlush.length === 0) return;
-  if (!auditConfig.dbEnabled || !isDatabaseConfigured()) return;
+  if (!auditConfig.dbEnabled || !isDatabaseConfigured()) {
+    // DB not configured — silently discard pending writes (events live in memory)
+    pendingFlush.length = 0;
+    return;
+  }
+  if (dbFlushDisabled) return;
 
   const batch = pendingFlush.splice(0, auditConfig.dbFlushBatchSize);
   try {
@@ -77,10 +85,23 @@ async function flushToDb() {
         occurredAt: new Date(e.occurredAt),
       }))
     );
+    // Reset failure counter on success
+    if (consecutiveDbFailures > 0) {
+      console.log("[AUDIT] DB flush recovered after", consecutiveDbFailures, "failures");
+      consecutiveDbFailures = 0;
+    }
   } catch (err) {
-    // DB write failed — events stay in memory, don't lose them
-    console.error("[AUDIT] DB flush failed, events kept in memory:", err instanceof Error ? err.message : err);
-    pendingFlush.unshift(...batch);
+    consecutiveDbFailures++;
+    if (consecutiveDbFailures >= MAX_DB_FAILURES) {
+      // Stop retrying — events are safe in the in-memory ring buffer
+      dbFlushDisabled = true;
+      pendingFlush.length = 0; // discard pending queue
+      console.warn(`[AUDIT] DB flush disabled after ${MAX_DB_FAILURES} consecutive failures. Events remain in memory. Last error: ${err instanceof Error ? err.message : err}`);
+    } else {
+      // Retry next interval — put batch back
+      console.warn(`[AUDIT] DB flush failed (attempt ${consecutiveDbFailures}/${MAX_DB_FAILURES}), will retry: ${err instanceof Error ? err.message : err}`);
+      pendingFlush.unshift(...batch);
+    }
   }
 }
 
@@ -251,7 +272,8 @@ export function getAuditStats() {
     bufferSize: buffer.length,
     bufferCapacity: maxBuffer,
     pendingDbFlush: pendingFlush.length,
-    dbEnabled: auditConfig.dbEnabled && isDatabaseConfigured(),
+    dbEnabled: auditConfig.dbEnabled && isDatabaseConfigured() && !dbFlushDisabled,
+    dbFlushDisabled,
     sseSubscribers: subscribers.size,
     sequenceCounters: Object.fromEntries(sequenceCounters),
   };
