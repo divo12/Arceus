@@ -278,10 +278,10 @@ let developerWorkspaceMonitor: NodeJS.Timeout | null = null;
 let developerWorkspaceSnapshot = new Map<string, number>();
 let developerStepLoopActive = false;
 const workspaceRoot = resolve(process.cwd(), "..", "..");
-const configuredWorkspaceRoot = persistenceConfig.workspace.root;
-const productDir = configuredWorkspaceRoot.startsWith("/tmp")
-  ? resolve(configuredWorkspaceRoot, "product")
-  : resolve(workspaceRoot, "workspace");
+// In Docker /app is cwd, so workspaceRoot resolves to "/" — use cwd-relative instead
+const productDir = existsSync(resolve(workspaceRoot, "workspace")) || !process.cwd().startsWith("/app")
+  ? resolve(workspaceRoot, "workspace")
+  : resolve(process.cwd(), "workspace");
 const DEVELOPER_STALL_TIMEOUT_MINUTES = orchestratorConfig.developer.stallTimeoutMinutes;
 const DEVELOPER_STALL_TIMEOUT_MS = DEVELOPER_STALL_TIMEOUT_MINUTES * 60 * 1000;
 const WORKSPACE_MONITOR_INTERVAL_MS = orchestratorConfig.developer.workspaceMonitorIntervalMs;

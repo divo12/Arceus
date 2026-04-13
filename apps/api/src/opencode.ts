@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
-import { ensureDeployment, persistenceConfig, runtimeConfig } from "./config/index";
+import { ensureDeployment, runtimeConfig } from "./config/index";
 import { resilientCall, breakers, isRetryableError } from "./resilience";
 
 type OpencodeInstance = {
@@ -12,10 +12,8 @@ type OpencodeInstance = {
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
-const configuredRoot = persistenceConfig.workspace.root;
-const workspaceRoot = configuredRoot.startsWith("/tmp")
-  ? resolve(configuredRoot, "product")
-  : process.cwd();
+// OpenCode cwd must be where opencode.json lives (project root)
+const workspaceRoot = process.cwd();
 
 function ensureAzureRuntimeEnvironment() {
   process.env.AZURE_RESOURCE_NAME = runtimeConfig.azureResourceName;
