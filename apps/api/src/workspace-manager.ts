@@ -19,7 +19,12 @@ type WorkspaceFileEntry = {
 type WorkspaceManifestEntry = WorkspaceFileManifestEntry;
 
 const repoRoot = resolve(process.cwd(), "..", "..");
-const legacyProductDir = resolve(repoRoot, "workspace");
+const configuredRoot = persistenceConfig.workspace.root;
+// In Docker (ARCEUS_WORKSPACE_ROOT=/tmp/workspaces), use the configured root.
+// In local dev, use the legacy /workspace dir relative to repo root.
+const legacyProductDir = configuredRoot.startsWith("/tmp")
+  ? resolve(configuredRoot, "product")
+  : resolve(repoRoot, "workspace");
 const legacyApiWorkspaceDir = resolve(repoRoot, "apps", "api", "workspace");
 const fallbackWorkspaceState = new Map<string, WorkspaceInfo>();
 const fallbackSprintSnapshots = new Map<string, SprintSnapshot[]>();
