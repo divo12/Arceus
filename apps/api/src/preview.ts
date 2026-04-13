@@ -255,6 +255,16 @@ async function collectCandidateWorkspaces(rootDir: string, currentDir = rootDir,
   return results;
 }
 
+/** Use bun if available, fall back to npm */
+function detectNodeRunner(): string {
+  try {
+    execSync("bun --version", { stdio: "ignore" });
+    return "bun";
+  } catch {
+    return "npm";
+  }
+}
+
 async function detectLaunchCommand(productDir: string, preference?: CandidatePreference): Promise<LaunchCommand | null> {
   const candidates = await collectCandidateWorkspaces(productDir);
   sortCandidates(candidates, productDir, preference);
@@ -277,12 +287,13 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
       const scripts = parsed.scripts ?? {};
       const profile = detectNodePreviewProfile(parsed);
 
+      const runner = detectNodeRunner();
       const npmScriptArgs = ["--", "--port", String(previewState.port), "--host", previewConfig.host];
       const targetPath = relative(productDir, candidate.dir) || ".";
 
-      if (scripts.dev) return { command: "npm", args: ["run", "dev", ...npmScriptArgs], kind: "npm-dev", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
-      if (scripts.start) return { command: "npm", args: ["run", "start", ...npmScriptArgs], kind: "npm-start", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
-      if (scripts.preview) return { command: "npm", args: ["run", "preview", ...npmScriptArgs], kind: "npm-preview", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
+      if (scripts.dev) return { command: runner, args: ["run", "dev", ...npmScriptArgs], kind: "npm-dev", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
+      if (scripts.start) return { command: runner, args: ["run", "start", ...npmScriptArgs], kind: "npm-start", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
+      if (scripts.preview) return { command: runner, args: ["run", "preview", ...npmScriptArgs], kind: "npm-preview", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
     }
 
     // Static index.html without a dev server is NOT a valid preview candidate.
