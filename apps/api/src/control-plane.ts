@@ -18,6 +18,7 @@ import type {
 } from "@arceus/contracts";
 import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
 import { audit, auditSystem } from "./audit-ledger";
+import { getRegistryStats } from "./service-registry";
 import {
   getSnapshot,
   getEvents,
@@ -228,7 +229,7 @@ export type ControlPlaneStatus = {
   components: {
     stateStore: { status: "ok" | "degraded"; inMemory: boolean; dbPersist: boolean };
     auditLedger: { status: "ok" | "degraded" };
-    serviceRegistry: { status: "planned"; note: string };
+    serviceRegistry: { status: "ok" | "empty"; toolCount: number; bySource: Record<string, number>; byBlastRadius: Record<string, number> };
     executionSubstrate: { status: "ok" | "idle" | "executing" };
   };
 };
@@ -236,6 +237,7 @@ export type ControlPlaneStatus = {
 export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
   const snap = getSnapshot();
   const isPending = snap.company.id === "company_pending";
+  const regStats = getRegistryStats(snap.company.id);
 
   return {
     healthy: true,
@@ -254,8 +256,10 @@ export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
         status: "ok",
       },
       serviceRegistry: {
-        status: "planned",
-        note: "Spec 11 Phase 3 — not yet implemented",
+        status: regStats.total > 0 ? "ok" : "empty",
+        toolCount: regStats.total,
+        bySource: regStats.bySource,
+        byBlastRadius: regStats.byBlastRadius,
       },
       executionSubstrate: {
         status: executionStatus === "idle" ? "idle" : executionStatus === "stopped" ? "idle" : "executing",

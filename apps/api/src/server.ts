@@ -26,6 +26,7 @@ import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } from "./control-plane";
+import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,6 +140,7 @@ app.post("/api/company/bootstrap", async (request, reply) => {
   const body = bootstrapSchema.parse(request.body);
   const { snapshot, warnings } = await bootstrapCompanyWithWorkspace(body);
   audit({ companyId: snapshot.company.id, category: "system", eventType: "company_bootstrapped", summary: `Company "${body.companyName}" bootstrapped by ${body.boardOwner}`, detail: { idea: body.idea, budgetCents: body.budgetCents, warnings } });
+  await seedRegistry(snapshot.company.id);
   if (warnings.length > 0) {
     request.log?.warn({ warnings }, "Workspace provision completed with warnings");
   }
@@ -213,6 +215,7 @@ app.delete("/api/company", async (request, reply) => {
     }
 
     resetEmployeeActivityLog();
+    clearRegistry(companyId);
     return resetCompany();
   } catch (error) {
     request.log?.error?.(error);
@@ -775,7 +778,7 @@ app.get("/api/audit/stream", async (request, reply) => {
   await new Promise(() => {});
 });
 
-// ── Control Plane routes (Spec 11 Phase 2) ──
+// ── Control Plane routes (Spec 11 Phase 2+3) ──
 
 app.get("/api/control-plane/status", async () => {
   return cpGetStatus(getExecutionStatus());
@@ -801,6 +804,42 @@ app.post("/api/control-plane/mutations", async (request, reply) => {
     reply.code(400);
     return { error: error instanceof Error ? error.message : "Invalid mutation payload" };
   }
+});
+
+// ── Service Registry routes (Spec 11 Phase 3) ──
+
+app.get("/api/service-registry", async () => {
+  const companyId = getSnapshot().company.id;
+  return getRegistrySnapshot(companyId);
+});
+
+app.get("/api/service-registry/stats", async () => {
+  const companyId = getSnapshot().company.id;
+  return getRegistryStats(companyId);
+});
+
+app.get("/api/service-registry/role/:role", async (request) => {
+  const { role } = request.params as { role: string };
+  const companyId = getSnapshot().company.id;
+  return getToolsForRole(companyId, role);
+});
+
+app.get("/api/service-registry/tool/:toolName", async (request) => {
+  const { toolName } = request.params as { toolName: string };
+  const companyId = getSnapshot().company.id;
+  const snap = getRegistrySnapshot(companyId);
+  const entry = snap.find((e) => e.toolName === toolName);
+  if (!entry) return { error: "Tool not found" };
+  return entry;
+});
+
+app.get("/api/service-registry/check/:role/:toolName", async (request) => {
+  const { role, toolName } = request.params as { role: string; toolName: string };
+  const companyId = getSnapshot().company.id;
+  return {
+    allowed: isToolAvailable(companyId, role, toolName),
+    blastRadius: getBlastRadius(companyId, toolName),
+  };
 });
 
 // ── Start audit ledger ──

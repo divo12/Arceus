@@ -82,3 +82,34 @@ export const snapshotVersionSchema = z.object({
 });
 
 export type SnapshotVersion = z.infer<typeof snapshotVersionSchema>;
+
+// ── Service Registry (Spec 11 Phase 3) ─────────────────────
+
+export const blastRadiusSchema = z.enum(["green", "yellow", "red"]);
+
+export const toolParameterSchema = z.object({
+  name: z.string(),
+  type: z.enum(["string", "number", "boolean", "object"]),
+  required: z.boolean(),
+  description: z.string(),
+  constraints: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const serviceRegistryEntrySchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  toolName: z.string(),
+  description: z.string(),
+  allowedRoles: z.array(z.string()),
+  blastRadius: blastRadiusSchema,
+  requiresApproval: z.boolean(),
+  version: z.number().int().positive(),
+  parameters: z.array(toolParameterSchema),
+  source: z.enum(["opencode", "arceus", "skill"]),  // where the tool lives
+  addedAt: z.string(),
+  addedBy: z.string(),    // "system" | agentId
+});
+
+export type BlastRadius = z.infer<typeof blastRadiusSchema>;
+export type ToolParameter = z.infer<typeof toolParameterSchema>;
+export type ServiceRegistryEntry = z.infer<typeof serviceRegistryEntrySchema>;
