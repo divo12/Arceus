@@ -73,15 +73,15 @@ COPY --from=build --chown=arceus:arceus /app/tsconfig.base.json ./
 COPY --from=build --chown=arceus:arceus /app/opencode.json ./
 COPY --from=build --chown=arceus:arceus /app/.opencode ./.opencode
 
-# Create workspace directory
-RUN mkdir -p /tmp/workspaces && chown arceus:arceus /tmp/workspaces
+# Create workspace directories (both legacy and configured)
+RUN mkdir -p /tmp/workspaces /app/workspace && \
+    chown -R arceus:arceus /tmp/workspaces /app/workspace
 
 USER arceus
 
 ENV NODE_ENV=production
 ENV PORT=4000
 ENV HOST=0.0.0.0
-ENV ARCEUS_WORKSPACE_ROOT=/tmp/workspaces
 
 EXPOSE 4000
 
