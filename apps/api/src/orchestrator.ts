@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
-import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
+import { ensureDeployment, orchestratorConfig, persistenceConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
 import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
 import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
@@ -278,7 +278,10 @@ let developerWorkspaceMonitor: NodeJS.Timeout | null = null;
 let developerWorkspaceSnapshot = new Map<string, number>();
 let developerStepLoopActive = false;
 const workspaceRoot = resolve(process.cwd(), "..", "..");
-const productDir = resolve(workspaceRoot, "workspace");
+const configuredWorkspaceRoot = persistenceConfig.workspace.root;
+const productDir = configuredWorkspaceRoot.startsWith("/tmp")
+  ? resolve(configuredWorkspaceRoot, "product")
+  : resolve(workspaceRoot, "workspace");
 const DEVELOPER_STALL_TIMEOUT_MINUTES = orchestratorConfig.developer.stallTimeoutMinutes;
 const DEVELOPER_STALL_TIMEOUT_MS = DEVELOPER_STALL_TIMEOUT_MINUTES * 60 * 1000;
 const WORKSPACE_MONITOR_INTERVAL_MS = orchestratorConfig.developer.workspaceMonitorIntervalMs;
