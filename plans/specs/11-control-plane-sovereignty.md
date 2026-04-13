@@ -1,9 +1,64 @@
 # Spec 11: Control Plane Sovereignty & Separation of Concerns
 
-> Status: DRAFT
-> Last updated: 2026-04-13
+> Status: IMPLEMENTED
+> Last updated: 2026-04-14
 > Depends on: Spec 04 (Persistence), Spec 00 (System Architecture)
 > Enables: Spec 12 (Heartbeat), Spec 13 (Governance Gateway)
+> Branch: dev/spec-11-audit-ledger
+> Commits: Phase 1a (audit core), Phase 1b (f6faaaa), Phase 2 (44ac6ef), Phase 3 (12bd16a), Phase 4 (8329ed6)
+
+## Implementation Review
+
+### What Was Implemented (Spec 11 scope)
+
+| Component | Status | Files | Notes |
+|-----------|--------|-------|-------|
+| Audit Ledger — in-memory ring buffer | ✅ | `audit-ledger.ts` | 2000-event buffer, per-company sequence, FIFO eviction |
+| Audit Ledger — DB persistence | ✅ | `audit-ledger.ts`, migration 002 | Batched flush, 3-failure circuit breaker |
+| Audit Ledger — SSE streaming | ✅ | `audit-ledger.ts`, `log-viewer.html` | Real-time streaming + tabbed dashboard |
+| Audit Ledger — query/filter API | ✅ | `audit-ledger.ts` | By category, severity, agentRole, companyId, limit |
+| Audit Ledger — deep instrumentation | ✅ | `ceo.ts`, `orchestrator.ts`, `runtime.ts`, `task-planner.ts`, etc. | All major code paths emit audit events |
+| Control Plane — facade + version tracking | ✅ | `control-plane.ts` | cpLoadSnapshot, cpApplyMutations, cpGetVersion, cpNotifyStateChange |
+| Control Plane — mutation pipeline | ✅ | `control-plane.ts` | All 13 StateMutation types wired through applyOneMutation() |
+| Control Plane — status/health endpoint | ✅ | `control-plane.ts` | Components: stateStore, auditLedger, serviceRegistry, executionSubstrate |
+| Service Registry — OpenCode SDK discovery | ✅ | `service-registry.ts` | client.tool.list() → 12 tools, fallback to tool.ids() |
+| Service Registry — Arceus platform tools | ✅ | `service-registry.ts` | 7 tools: deploy_preview, git_commit, git_push, task_update, etc. |
+| Service Registry — role-based access | ✅ | `service-registry.ts` | classifyAllowedRoles(), getToolsForRole(), isToolAvailable() |
+| Service Registry — blast-radius classification | ✅ | `service-registry.ts` | green/yellow/red, classifyBlastRadius() |
+| Service Registry — DB persistence | ✅ | `service-registry.ts`, migration 003 | Upsert on seed, GIN index on allowed_roles |
+| Service Registry — registerTool() | ✅ | `service-registry.ts` | For Spec 14 skill-evolved tools, version bumps, audited |
+| Store Decoupling — dirty tracking | ✅ | `store.ts` | dirty flag, mutationsSinceHydrate counter |
+| Store Decoupling — lifecycle methods | ✅ | `store.ts` | hydrate(), flush(), teardown() |
+| Store Decoupling — CP lifecycle reporting | ✅ | `store.ts`, `control-plane.ts` | getStoreLifecycleState(), snapshotStale derived from dirty |
+| Store Decoupling — server wiring | ✅ | `server.ts` | Boot → hydrate(), shutdown → teardown() |
+| Contracts — StateMutation types | ✅ | `events.ts` | 13 types discriminated union |
+| Contracts — AuditEvent schema | ✅ | `events.ts` | Full Zod schema with all fields |
+| Contracts — ServiceRegistryEntry schema | ✅ | `events.ts` | blastRadius, allowedRoles, toolParameter |
+| Contracts — SnapshotVersion schema | ✅ | `events.ts` | companyId, version, updatedAt, mutationCount |
+| Dashboard — log viewer | ✅ | `log-viewer.html` | 3-tab: Overview + Audit Log + Registry |
+
+### What Was Deferred (requires other specs)
+
+See the `## Deferred from Spec 11` section in each downstream spec:
+
+| Gap | Owning Spec | Why Deferred |
+|-----|-------------|-------------|
+| `loadAgentContext()` — minimal context for a specific agent's beat | Spec 12 | Requires heartbeat beat lifecycle to define what minimal context means |
+| `loadActiveSprint()` — sprint with dependency graph | Spec 12 | Called at beat start; meaningless without beat scheduler |
+| `commitBeatRecord()` + `beat_records` table | Spec 12 | Beat records only exist when beats exist |
+| `commitTaskResult()` — artifacts + memory extraction trigger | Spec 12 | Task completion is bound to beat lifecycle |
+| Optimistic concurrency (version conflict detection) | Spec 12 | Conflicts only occur with concurrent beats |
+| `beatId` field in audit_events | Spec 12 | No beats yet → no beat IDs to record |
+| `stageMutation()` — collect mutations for batch flush | Spec 12 | Mutation staging is a beat-scoped pattern |
+| Audit: LLM call recording (model, tokens, cost, latency) | Spec 10 | Cost tracking infrastructure defined in Spec 10 |
+| Audit: `tool_call` / `llm_call` category columns in DB | Spec 10 + 13 | Tool-call-level recording requires governance interception |
+| Policy rule binding on registry entries | Spec 13 | PolicyRule type doesn't exist yet |
+| Policy evaluation recording (`policy_eval` category) | Spec 13 | Governance Gateway produces these events |
+| `getSnapshotAtVersion()` — historical reconstruction | Spec 15 | Event-sourcing replay for debugging/rollback is a long-horizon concern |
+| `snapshot_version` column on companies table | Spec 12 | DB-level version tracking tied to beat concurrency model |
+| Roadmap/OKR mutation types | Spec 15 | Roadmap entity doesn't exist yet |
+| Skill mutation types (skill_mutated, skill_tested) | Spec 14 | Self-evolution pipeline not built yet |
+| Memory unit mutation types | Spec 05a | Hippocampus write-path not integrated with CP mutation pipeline |
 
 ## What This Is
 

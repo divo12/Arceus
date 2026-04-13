@@ -580,6 +580,61 @@ Compared to today:
 Optimization: Pause heartbeats for idle companies (no active sprint).
 ```
 
+## Deferred from Spec 11
+
+The following Control Plane interfaces were specified in Spec 11 but deferred because they only make sense once heartbeat scheduling exists. **This spec must implement them.**
+
+### 1. `loadAgentContext()` — Minimal Beat Context
+
+Spec 11 defines `ControlPlane.loadAgentContext(companyId, agentId)` returning `AgentBeatContext` — the minimal context an agent needs for one beat cycle. Currently `cpLoadSnapshot()` returns the full snapshot. This spec must:
+
+- Define the `AgentBeatContext` type (agent identity + assigned tasks + relevant memories + policies)
+- Implement `cpLoadAgentContext()` that assembles only what the agent needs
+- Call it in Phase 1 (WAKE + CONTEXT ASSEMBLY) of every heartbeat cycle
+
+### 2. `loadActiveSprint()` — Sprint with Dependency Graph
+
+Spec 11 defines `ControlPlane.loadActiveSprint(companyId)` returning `Sprint & { tasks: Task[] }`. This is called at beat start to determine what work is available. Implement it when building the beat scheduler's task selection logic.
+
+### 3. `commitBeatRecord()` + `beat_records` Table
+
+Spec 11 specifies a `beat_records` table (see Spec 11 Database Changes section) and a `commitBeatRecord()` method. Each heartbeat cycle must produce one row capturing:
+
+- `beat_number` (monotonic per agent), `started_at`, `ended_at`, `status`
+- `snapshot_version_read` / `snapshot_version_written` (for concurrency tracking)
+- `actions_taken`, `tool_calls`, `llm_calls`, `total_tokens`, `cost_cents`
+- `outcome` (HEARTBEAT_OK | WORK_DONE | ERROR | SKIPPED), `summary`
+
+**Migration required:** Create the `beat_records` table (DDL is in Spec 11 § Database Changes).
+
+### 4. `commitTaskResult()` — Artifacts + Memory Extraction
+
+Spec 11 defines `commitTaskResult(companyId, taskId, result, causation)` which records task completion along with artifacts and triggers Hippocampus memory extraction. Implement when building the beat's Phase 3 (EXECUTE + RECORD) action handler.
+
+### 5. Optimistic Concurrency — Version Conflict Detection
+
+Spec 11 specifies optimistic concurrency: when a beat reads snapshot version N and another beat writes version N+1 before it commits, the late writer must fail and retry on next cycle. Currently `cpApplyMutations()` always succeeds. This spec must:
+
+- Pass `expectedVersion` to `cpApplyMutations()`
+- Detect conflicts and return a structured error
+- Handle conflicts in the beat lifecycle (skip remaining mutations, mark beat as CONFLICT, retry next tick)
+
+### 6. `beatId` in Audit Events
+
+Spec 11's `AuditEvent` schema includes a `beatId` field that links events to specific heartbeat cycles. Currently not captured. This spec must:
+
+- Add `beat_id TEXT` column to `audit_events` table (ALTER TABLE migration)
+- Pass `beatId` to all `audit()` calls made within a beat's scope
+- Add index: `CREATE INDEX idx_audit_beat ON audit_events(beat_id) WHERE beat_id IS NOT NULL`
+
+### 7. `stageMutation()` — Batch Mutation Collection
+
+Spec 11 describes a `stageMutation()` pattern where mutations are collected locally during a beat and flushed atomically at beat end (rather than persisting on every mutation). This changes the write path from immediate `replaceState()` → `persistState()` to staged collection → `flush()`. Implement as part of the beat's Phase 4 (SERIALIZE + PUSH).
+
+### 8. `snapshot_version` Column on Companies Table
+
+Spec 11 specifies `ALTER TABLE companies ADD COLUMN IF NOT EXISTS snapshot_version INTEGER NOT NULL DEFAULT 0`. This DB-persisted version counter is needed for the optimistic concurrency model. Currently version tracking is ephemeral (resets on process restart). Wire this when implementing concurrency detection.
+
 ## Configuration
 
 ```typescript

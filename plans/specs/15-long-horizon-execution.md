@@ -725,3 +725,13 @@ This is negligible compared to execution costs ($3-7 per sprint).
 | MODIFY: `packages/company-runtime/src/policies/base-policies.ts` | Add roadmap-phase-gate policy, lifecycle blast-radius policy |
 | MODIFY: `apps/api/src/orchestrator.ts` | Integrate sprint completion → roadmap evaluation flow |
 | MODIFY: `apps/web/components/` | Strategic dashboard panel (roadmap view, OKR bars, lifecycle badge) |
+
+## Deferred from Spec 11
+
+### 1. `getSnapshotAtVersion()` — Historical Snapshot Reconstruction
+
+Spec 11 defines `ControlPlane.getSnapshotAtVersion(companyId, version)` to reconstruct the company snapshot at any prior version. This requires event-sourcing replay capability — replaying the audit ledger's state mutations from version 0 to the target version. This is primarily useful for debugging, rollback, and CEO strategic retrospectives ("what did the company look like at Sprint 2 start?"). Implement as part of this spec's roadmap-aware state management.
+
+### 2. Roadmap/OKR Mutation Types
+
+Spec 11's `StateMutation` discriminated union does not include types for roadmap/OKR mutations (e.g., `roadmap_create`, `roadmap_phase_transition`, `okr_update`). This spec must extend the mutation union in `packages/contracts/src/events.ts` and add corresponding handlers in `control-plane.ts`'s `applyOneMutation()` switch.

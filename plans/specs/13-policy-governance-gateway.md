@@ -640,6 +640,30 @@ CREATE TABLE policy_violations (
   trust_score_before REAL NOT NULL,
   trust_score_after REAL NOT NULL,
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+
+## Deferred from Spec 11
+
+The following were specified in Spec 11 but deferred because they require the Governance Gateway to produce them.
+
+### 1. Policy Rule Binding on Service Registry Entries
+
+Spec 11 states that `ServiceRegistryEntry` should reference governance rules ("Policy-as-code (S13)"). The registry currently has `requiresApproval` as a boolean but no `policyRuleIds` field linking to specific policy rules. This spec must:
+
+- Add `policyRuleIds: string[]` (or equivalent) to `ServiceRegistryEntry`
+- Populate it during gateway initialization from compiled policy rules
+- Ensure the registry's `isToolAvailable()` check considers policy state, not just role membership
+
+### 2. Policy Evaluation Audit Recording
+
+Spec 11's `AuditEvent` schema includes `category: "policy_eval"` with fields `policyRule`, `policyDecision` (allow | deny | escalate), and `policyReason`. The audit ledger infrastructure exists but no code path emits these events. This spec must:
+
+- Emit `audit({ category: "policy_eval", ... })` for every gateway evaluation
+- Include `policyRule`, `policyDecision`, `policyReason` in the event detail
+- Record `tool_denied` events when the gateway blocks a tool call
+
+### 3. Tool-Call-Level Audit Columns
+
+Spec 11 specifies dedicated columns on `audit_events` for tool calls: `tool_name`, `tool_parameters`, `tool_result_status`, `tool_duration_ms`. Currently these are stored inside the `detail` JSONB field. This spec should add these as top-level columns (ALTER TABLE migration) for fast querying of tool call patterns across agents.
 );
 
 CREATE INDEX idx_violations_agent ON policy_violations(agent_id, occurred_at DESC);

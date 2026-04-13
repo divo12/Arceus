@@ -657,3 +657,13 @@ Per-sprint evolution budget: $0.25 (covers 5 mutations — the max per sprint)
 | MODIFY: `packages/company-runtime/src/heartbeat-checklist.ts` | Add Skills Lead checklist items |
 | MODIFY: `apps/api/src/orchestrator.ts` | Integrate failure attribution into task completion path |
 | MODIFY: `packages/company-runtime/skills/` | Existing Markdown files preserved (seeded into registry on first boot) |
+
+## Deferred from Spec 11
+
+### 1. Skill Mutation Types in Contracts
+
+Spec 11's `AuditEventType` enum includes `skill_mutated`, `skill_tested`, `skill_merged` event types. These are not yet defined in the `StateMutation` discriminated union or the `AuditEventType` type in `packages/contracts/src/events.ts`. This spec must add them when building the skill mutation pipeline.
+
+### 2. Service Registry `registerTool()` Integration
+
+Spec 11 implemented `registerTool()` in the Service Registry specifically for this spec's use case — skill-evolved tools. When a skill mutation produces a new tool capability, call `registerTool()` to add it to the registry with `source: "skill"` and `addedBy: agentId`. The infrastructure is ready.

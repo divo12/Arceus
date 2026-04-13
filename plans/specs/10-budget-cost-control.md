@@ -581,3 +581,20 @@ Budget routes. Dashboard widget. Breakdown views.
 | 8 | Warning at 50/75/90%, stop at 100% | Progressive alerts. Board is never surprised by a sudden halt. |
 | 9 | Sprint limits are soft | Hard-stopping mid-sprint leaves broken state. Company limit is the real safety net. |
 | 10 | Resume from halt, don't restart | Tasks stay assigned. Only dispatch is blocked. Minimal state loss. |
+
+## Deferred from Spec 11
+
+The following were specified in Spec 11's Audit Ledger schema but deferred because they require cost tracking infrastructure defined in this spec.
+
+### 1. LLM Call Recording in Audit Ledger
+
+Spec 11's `AuditEvent` schema includes `category: "llm_call"` with fields: `model`, `promptTokens`, `completionTokens`, `costCents`, `latencyMs`. The audit ledger infrastructure exists and the Zod schema defines these fields, but no code path currently records LLM call events. This spec must:
+
+- Hook into Azure OpenAI call sites to capture token counts and latency
+- Emit `audit({ category: "llm_call", detail: { model, promptTokens, completionTokens, costCents, latencyMs } })` for every LLM invocation
+- Add dedicated columns to `audit_events` table if needed for fast cost queries (currently everything goes in `detail` JSONB)
+- Feed these events into the cost tracking pipeline (`cost_events` table defined in this spec)
+
+### 2. `getBeatSummary()` — Per-Beat Cost Rollup
+
+Spec 11 defines `AuditLedger.getBeatSummary(beatId)` returning `BeatAuditSummary` with aggregated token/cost data for a single heartbeat cycle. Implement this once LLM cost tracking is in place and Spec 12's beat lifecycle produces `beatId` tags on audit events.
