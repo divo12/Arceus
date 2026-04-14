@@ -46,6 +46,7 @@ export const auditEventSchema = z.object({
   detail: z.record(z.string(), z.unknown()).nullable(),  // structured payload
   correlationId: z.string().nullable(),    // links related events (e.g. same task)
   causationId: z.string().nullable(),      // what triggered this event
+  beatId: z.string().nullable(),           // links to heartbeat cycle (Spec 12)
   occurredAt: z.string(),                  // ISO timestamp
 });
 
@@ -69,6 +70,7 @@ export const stateMutationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("company_status"),   status: z.string() }),
   z.object({ type: z.literal("transition_append"), transition: z.record(z.string(), z.unknown()) }),
   z.object({ type: z.literal("transition_update"), transitionId: z.string(), changes: z.record(z.string(), z.unknown()) }),
+  z.object({ type: z.literal("task_progress"),     taskId: z.string(), progress: z.record(z.string(), z.unknown()) }),
 ]);
 
 export type StateMutation = z.infer<typeof stateMutationSchema>;

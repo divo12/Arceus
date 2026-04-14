@@ -1,0 +1,4 @@
+- approvals never work - havent seen one
+- ceo chat does not have context of all agents work - never tested
+- ceo chat unaware of observability
+- ceo chat takes a lot of time - have sse

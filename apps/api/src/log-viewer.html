@@ -479,6 +479,100 @@
     color: var(--cyan);
     margin: 1px 2px;
   }
+
+  /* ── Panel: Heartbeat ───────────────────────────── */
+  .hb-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+  .hb-grid .card.span-full { grid-column: 1 / -1; }
+
+  .hb-controls {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .hb-controls .btn.active { background: rgba(63,185,80,0.15); color: var(--green); border-color: var(--green); }
+  .hb-controls .btn.danger { color: var(--red); border-color: var(--red); }
+  .hb-controls .btn.danger:hover { background: rgba(248,81,73,0.15); }
+
+  .hb-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+  .hb-table th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg-card);
+    z-index: 1;
+  }
+  .hb-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+    white-space: nowrap;
+  }
+  .hb-table tr:hover td { background: var(--bg-row-hover); }
+
+  .hb-status-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .hb-status-badge.completed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .hb-status-badge.running { background: rgba(88,166,255,0.15); color: var(--cyan); }
+  .hb-status-badge.failed { background: rgba(248,81,73,0.15); color: var(--red); }
+  .hb-status-badge.skipped { background: rgba(110,118,129,0.15); color: var(--gray); }
+  .hb-status-badge.timed_out { background: rgba(210,153,34,0.15); color: var(--yellow); }
+
+  .hb-phase-bar {
+    display: flex;
+    height: 10px;
+    border-radius: 3px;
+    overflow: hidden;
+    min-width: 80px;
+  }
+  .hb-phase-bar .seg { height: 100%; min-width: 1px; }
+  .hb-phase-bar .seg.observe { background: var(--cyan); }
+  .hb-phase-bar .seg.orient { background: var(--purple); }
+  .hb-phase-bar .seg.decide { background: var(--yellow); }
+  .hb-phase-bar .seg.act { background: var(--green); }
+
+  .hb-scroll { max-height: calc(100vh - 250px); overflow-y: auto; }
+
+  .phase-legend {
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .phase-legend span::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .phase-legend .leg-observe::before { background: var(--cyan); }
+  .phase-legend .leg-orient::before { background: var(--purple); }
+  .phase-legend .leg-decide::before { background: var(--yellow); }
+  .phase-legend .leg-act::before { background: var(--green); }
 </style>
 </head>
 <body>
@@ -486,6 +580,7 @@
     <h1>&#x25B8; ARCEUS CONTROL PLANE</h1>
     <div class="tab-bar">
       <div class="tab active" data-panel="overview">Overview</div>
+      <div class="tab" data-panel="heartbeat">Heartbeat</div>
       <div class="tab" data-panel="registry">Registry</div>
       <div class="tab" data-panel="audit">Audit Log</div>
     </div>
@@ -542,6 +637,79 @@
       <div class="card span-3" id="card-timeline">
         <h3><span class="icon">&#x25B9;</span> Recent Audit Activity</h3>
         <ul class="timeline-list" id="timeline"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ HEARTBEAT ═══════════════ -->
+  <div class="panel" id="panel-heartbeat">
+    <div class="hb-grid">
+      <!-- Status card -->
+      <div class="card">
+        <h3><span class="icon">&#x2665;</span> Engine Status</h3>
+        <div class="metric" id="hb-running">OFF</div>
+        <div class="sub" id="hb-sub">Not started</div>
+        <div class="hb-controls">
+          <button class="btn" id="hb-btn-start">&#x25B6; Start</button>
+          <button class="btn danger" id="hb-btn-stop">&#x25A0; Stop</button>
+        </div>
+      </div>
+
+      <!-- Active beats -->
+      <div class="card">
+        <h3><span class="icon">&#x26A1;</span> Active Beats</h3>
+        <div class="metric info" id="hb-active">0</div>
+        <div class="sub" id="hb-semaphore">0 slots available</div>
+      </div>
+
+      <!-- Total beats -->
+      <div class="card">
+        <h3><span class="icon">&#x2630;</span> Total Beats</h3>
+        <div class="metric info" id="hb-total">0</div>
+        <div class="sub" id="hb-totals-sub">—</div>
+      </div>
+
+      <!-- Cost summary -->
+      <div class="card">
+        <h3><span class="icon">&#x24;</span> Beat Costs</h3>
+        <div class="metric" id="hb-cost" style="color:var(--green)">0¢</div>
+        <div class="sub" id="hb-tokens-sub">0 tokens</div>
+      </div>
+
+      <!-- Last-beat-at per-role -->
+      <div class="card span-full">
+        <h3><span class="icon">&#x25C9;</span> Last Beat Per Agent</h3>
+        <div id="hb-last-beat-list" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;"></div>
+      </div>
+
+      <!-- Beat history table -->
+      <div class="card span-full">
+        <h3><span class="icon">&#x25B9;</span> Beat History</h3>
+        <div class="phase-legend">
+          <span class="leg-observe">Observe</span>
+          <span class="leg-orient">Orient</span>
+          <span class="leg-decide">Decide</span>
+          <span class="leg-act">Act</span>
+        </div>
+        <div class="hb-scroll">
+          <table class="hb-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Agent</th>
+                <th>Status</th>
+                <th>Trigger</th>
+                <th>Phases</th>
+                <th>Tokens</th>
+                <th>Cost</th>
+                <th>Duration</th>
+                <th>Started</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody id="hb-history-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -1045,6 +1213,143 @@
   pollRegistry();
   setInterval(pollOverview, 4000);
   setInterval(pollRegistry, 6000);
+
+  // ── Heartbeat panel ─────────────────────────────
+  document.getElementById('hb-btn-start').addEventListener('click', function() {
+    fetch('/api/heartbeat/start', { method: 'POST' }).then(function() { pollHeartbeat(); });
+  });
+  document.getElementById('hb-btn-stop').addEventListener('click', function() {
+    fetch('/api/heartbeat/stop', { method: 'POST' }).then(function() { pollHeartbeat(); });
+  });
+
+  function renderHbStatus(data) {
+    var el = document.getElementById('hb-running');
+    if (data.running) {
+      el.textContent = 'RUNNING';
+      el.className = 'metric ok';
+      document.getElementById('hb-sub').textContent = 'Scheduler active';
+    } else {
+      el.textContent = 'STOPPED';
+      el.className = 'metric';
+      document.getElementById('hb-sub').textContent = 'Engine idle';
+    }
+
+    document.getElementById('hb-active').textContent = String(data.activeLocks || 0);
+    document.getElementById('hb-semaphore').textContent = (data.semaphoreAvailable || 0) + ' slots available';
+    document.getElementById('hb-total').textContent = fmtNum(data.totalBeats || 0);
+
+    // Last beat per agent
+    var container = document.getElementById('hb-last-beat-list');
+    container.innerHTML = '';
+    var lastMap = data.lastBeatAt || {};
+    var keys = Object.keys(lastMap);
+    if (keys.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-dim);font-size:11px">No beats recorded yet</span>';
+    } else {
+      for (var i = 0; i < keys.length; i++) {
+        var agentId = keys[i];
+        var ts = lastMap[agentId];
+        var ago = ts ? Math.round((Date.now() - ts) / 1000) : 0;
+        var agoStr = ago < 60 ? ago + 's ago' : Math.round(ago / 60) + 'm ago';
+        var chip = document.createElement('div');
+        chip.style.cssText = 'padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-size:11px;';
+        chip.innerHTML = '<span style="color:var(--orange)">' + esc(agentId.replace('agent_', '').slice(0, 12)) +
+          '</span> <span style="color:var(--text-dim)">' + esc(agoStr) + '</span>';
+        container.appendChild(chip);
+      }
+    }
+  }
+
+  function renderHbHistory(records) {
+    var tbody = document.getElementById('hb-history-tbody');
+    tbody.innerHTML = '';
+    var totalCost = 0;
+    var totalTokens = 0;
+
+    // Show newest first
+    var sorted = records.slice().reverse();
+    for (var i = 0; i < sorted.length; i++) {
+      var r = sorted[i];
+      totalCost += r.costCents || 0;
+      totalTokens += r.totalTokens || 0;
+
+      var tr = document.createElement('tr');
+      var statusCls = r.status || 'running';
+
+      // Phase bar
+      var phaseHtml = '';
+      if (r.phases) {
+        var pNames = ['observe', 'orient', 'decide', 'act'];
+        var totalMs = 0;
+        for (var p = 0; p < pNames.length; p++) {
+          var ph = r.phases[pNames[p]];
+          if (ph && ph.durationMs) totalMs += ph.durationMs;
+        }
+        if (totalMs > 0) {
+          phaseHtml = '<div class="hb-phase-bar" title="';
+          for (var p = 0; p < pNames.length; p++) {
+            var ph = r.phases[pNames[p]];
+            if (ph) phaseHtml += pNames[p] + ': ' + (ph.durationMs || 0) + 'ms  ';
+          }
+          phaseHtml += '">';
+          for (var p = 0; p < pNames.length; p++) {
+            var ph = r.phases[pNames[p]];
+            var pct = ph && ph.durationMs ? Math.max(1, (ph.durationMs / totalMs) * 100) : 0;
+            if (pct > 0) phaseHtml += '<div class="seg ' + pNames[p] + '" style="width:' + pct + '%"></div>';
+          }
+          phaseHtml += '</div>';
+        } else {
+          phaseHtml = '<span style="color:var(--text-dim)">—</span>';
+        }
+      } else {
+        phaseHtml = '<span style="color:var(--text-dim)">—</span>';
+      }
+
+      // Duration
+      var dur = '—';
+      if (r.startedAt && r.endedAt) {
+        var ms = new Date(r.endedAt).getTime() - new Date(r.startedAt).getTime();
+        dur = ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's';
+      }
+
+      var time = (r.startedAt || '').slice(11, 19) || '—';
+      var summary = r.summary ? esc(r.summary).slice(0, 80) : (r.errorMessage ? '<span style="color:var(--red)">' + esc(r.errorMessage).slice(0, 60) + '</span>' : '—');
+
+      tr.innerHTML =
+        '<td style="color:var(--text-dim)">' + (r.beatNumber || 0) + '</td>' +
+        '<td style="color:var(--orange)">' + esc((r.agentId || '').replace('agent_', '').slice(0, 14)) + '</td>' +
+        '<td><span class="hb-status-badge ' + statusCls + '">' + esc(r.status || '?') + '</span></td>' +
+        '<td style="color:var(--text-dim)">' + esc(r.trigger ? r.trigger.type : '?') + '</td>' +
+        '<td>' + phaseHtml + '</td>' +
+        '<td>' + fmtNum(r.totalTokens || 0) + '</td>' +
+        '<td>' + (r.costCents || 0).toFixed(2) + '¢</td>' +
+        '<td style="color:var(--text-dim)">' + dur + '</td>' +
+        '<td style="color:var(--text-dim)">' + esc(time) + '</td>' +
+        '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">' + summary + '</td>';
+
+      tbody.appendChild(tr);
+    }
+
+    document.getElementById('hb-cost').textContent = totalCost.toFixed(1) + '¢';
+    document.getElementById('hb-tokens-sub').textContent = fmtNum(totalTokens) + ' tokens total';
+
+    var completed = records.filter(function(r) { return r.status === 'completed'; }).length;
+    var failed = records.filter(function(r) { return r.status === 'failed'; }).length;
+    document.getElementById('hb-totals-sub').textContent = completed + ' ok / ' + failed + ' failed';
+  }
+
+  function pollHeartbeat() {
+    Promise.all([
+      fetch('/api/heartbeat/status').then(function(r) { return r.json(); }).catch(function() { return null; }),
+      fetch('/api/heartbeat/history').then(function(r) { return r.json(); }).catch(function() { return null; })
+    ]).then(function(results) {
+      if (results[0]) renderHbStatus(results[0]);
+      if (results[1] && Array.isArray(results[1])) renderHbHistory(results[1]);
+    }).catch(function() {});
+  }
+
+  pollHeartbeat();
+  setInterval(pollHeartbeat, 3000);
 
   // ── SSE connection ──────────────────────────────
   function connect() {

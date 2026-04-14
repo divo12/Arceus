@@ -1,0 +1,281 @@
+/**
+ * Heartbeat Role Checklists — Spec 12 Phase 2
+ *
+ * Each role has a checklist that runs during the Observation phase
+ * of every beat. The checklist determines whether the agent has
+ * actionable work (action_needed) or can skip (ok).
+ *
+ * CheckResult.status:
+ *   ok             → nothing to do for this check
+ *   action_needed  → work available, beat should proceed to Execute
+ *   blocked        → cannot proceed, beat should record and skip
+ */
+
+import type {
+  AgentBeatContext,
+  CheckResult,
+  AgentIdentity,
+} from "@arceus/contracts";
+
+// ── Individual check functions ─────────────────────────────
+
+function checkPendingApprovals(ctx: AgentBeatContext): CheckResult {
+  const pending = ctx.approvals.filter((a) => a.status === "pending");
+  if (pending.length === 0) return { status: "ok", detail: "No pending approvals" };
+  return {
+    status: "action_needed",
+    detail: `${pending.length} pending approval(s)`,
+    suggestedAction: `Review approval: ${pending[0].title}`,
+  };
+}
+
+function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
+  if (ctx.companyBudgetRemainingCents <= 0) {
+    return { status: "blocked", detail: "Budget exhausted", suggestedAction: "Pause work — budget is 0" };
+  }
+  const usedPct = ((ctx.company.spentCents / ctx.company.budgetCents) * 100).toFixed(1);
+  if (ctx.company.spentCents > ctx.company.budgetCents * 0.9) {
+    return { status: "action_needed", detail: `Budget at ${usedPct}%`, suggestedAction: "Review spending" };
+  }
+  return { status: "ok", detail: `Budget at ${usedPct}%` };
+}
+
+function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
+  if (!ctx.currentSprint) {
+    return { status: "ok", detail: "No active sprint" };
+  }
+  const blocked = ctx.tasks.filter((t) => t.status === "blocked");
+  const failed = ctx.tasks.filter((t) => t.status === "failed");
+  if (blocked.length > 0 || failed.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `Sprint has ${blocked.length} blocked, ${failed.length} failed tasks`,
+      suggestedAction: "Investigate blocked/failed tasks",
+    };
+  }
+  return { status: "ok", detail: "Sprint healthy" };
+}
+
+function checkRoadmap(ctx: AgentBeatContext): CheckResult {
+  // CEO proactive: if sprint is complete or no sprint, propose next
+  if (!ctx.currentSprint) {
+    return { status: "action_needed", detail: "No active sprint", suggestedAction: "Propose new sprint" };
+  }
+  if (ctx.currentSprint.status === "completed" || ctx.currentSprint.status === "reviewing") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${ctx.currentSprint.number} is ${ctx.currentSprint.status}`,
+      suggestedAction: "Propose next sprint or summarize results",
+    };
+  }
+  // Detect all tasks terminal even if sprint status hasn't been updated yet
+  const sprintTasks = ctx.tasks.filter((t) => t.sprintId === ctx.currentSprint!.id);
+  if (sprintTasks.length > 0 && sprintTasks.every((t) => ["completed", "failed", "cancelled", "blocked"].includes(t.status))) {
+    return {
+      status: "action_needed",
+      detail: `All ${sprintTasks.length} tasks in sprint ${ctx.currentSprint.number} are terminal`,
+      suggestedAction: "Propose next sprint",
+    };
+  }
+  return { status: "ok", detail: "Sprint in progress" };
+}
+
+function checkReviewQueue(ctx: AgentBeatContext): CheckResult {
+  // CTO: check for tasks in verifying state that need review
+  const verifying = ctx.tasks.filter((t) => t.status === "verifying");
+  if (verifying.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${verifying.length} task(s) awaiting review`,
+      suggestedAction: `Review task: ${verifying[0].title}`,
+    };
+  }
+  return { status: "ok", detail: "No tasks awaiting review" };
+}
+
+function checkBuildStatus(_ctx: AgentBeatContext): CheckResult {
+  // Placeholder: Phase 3+ will integrate actual build checks
+  return { status: "ok", detail: "Build check not yet wired" };
+}
+
+function checkDevProgress(ctx: AgentBeatContext): CheckResult {
+  const inProgress = ctx.tasks.filter(
+    (t) => t.status === "in_progress" && t.assignedRole === "developer"
+  );
+  const stale = inProgress.filter((t) => {
+    // Consider stale if no progress tracked and started > 10 min ago
+    if (!t.startedAt) return false;
+    const elapsed = Date.now() - new Date(t.startedAt).getTime();
+    return elapsed > 10 * 60 * 1000;
+  });
+  if (stale.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${stale.length} dev task(s) possibly stale`,
+      suggestedAction: "Check on developer progress",
+    };
+  }
+  return { status: "ok", detail: `${inProgress.length} dev task(s) in progress` };
+}
+
+function checkAssignedTasks(ctx: AgentBeatContext): CheckResult {
+  const actionable = ctx.tasks.filter(
+    (t) => t.status === "planned" || t.status === "created" || t.status === "in_progress"
+  );
+  if (actionable.length === 0) {
+    return { status: "ok", detail: "No actionable tasks" };
+  }
+  // Prioritize: in_progress first, then planned, then created
+  const next =
+    actionable.find((t) => t.status === "in_progress") ??
+    actionable.find((t) => t.status === "planned") ??
+    actionable[0];
+  return {
+    status: "action_needed",
+    detail: `${actionable.length} actionable task(s)`,
+    suggestedAction: `Work on: ${next.title} (${next.status})`,
+  };
+}
+
+function checkDependenciesMet(ctx: AgentBeatContext): CheckResult {
+  // Check if any of this agent's tasks have unmet dependencies
+  const blocked = ctx.tasks.filter((t) => {
+    if (t.status !== "planned" && t.status !== "created") return false;
+    return t.dependsOnTaskIds.some((depId) => {
+      const dep = ctx.tasks.find((d) => d.id === depId);
+      // If dep is not in our task list, look it up in the broader context
+      return dep ? dep.status !== "completed" : false;
+    });
+  });
+  if (blocked.length > 0) {
+    return {
+      status: "blocked",
+      detail: `${blocked.length} task(s) waiting on dependencies`,
+      suggestedAction: "Wait for upstream tasks to complete",
+    };
+  }
+  return { status: "ok", detail: "All dependencies met" };
+}
+
+function checkBoardMessages(ctx: AgentBeatContext): CheckResult {
+  if (ctx.recentBoardMessages.length === 0) return { status: "ok", detail: "No recent board messages" };
+  // Check for unanswered board messages (board role only)
+  const boardOnly = ctx.recentBoardMessages.filter((m) => m.role === "board");
+  if (boardOnly.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${boardOnly.length} recent board message(s)`,
+      suggestedAction: "Respond to board",
+    };
+  }
+  return { status: "ok", detail: "Board messages handled" };
+}
+
+function checkScopeControl(ctx: AgentBeatContext): CheckResult {
+  // PM: ensure no unplanned tasks or scope creep
+  const unplanned = ctx.tasks.filter((t) => !t.sprintId && t.status !== "cancelled");
+  if (unplanned.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${unplanned.length} task(s) not assigned to any sprint`,
+      suggestedAction: "Triage unplanned tasks",
+    };
+  }
+  return { status: "ok", detail: "Scope is clean" };
+}
+
+function checkTestQueue(ctx: AgentBeatContext): CheckResult {
+  const readyForTest = ctx.tasks.filter(
+    (t) => t.status === "verifying" && t.assignedRole === "tester"
+  );
+  if (readyForTest.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${readyForTest.length} task(s) ready for testing`,
+      suggestedAction: `Test: ${readyForTest[0].title}`,
+    };
+  }
+  return { status: "ok", detail: "No tasks to test" };
+}
+
+function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
+  const designTasks = ctx.tasks.filter(
+    (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "ui_designer"
+  );
+  if (designTasks.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${designTasks.length} design task(s)`,
+      suggestedAction: `Design: ${designTasks[0].title}`,
+    };
+  }
+  return { status: "ok", detail: "No design work queued" };
+}
+
+function checkContentQueue(ctx: AgentBeatContext): CheckResult {
+  const contentTasks = ctx.tasks.filter(
+    (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "marketing"
+  );
+  if (contentTasks.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${contentTasks.length} content task(s)`,
+      suggestedAction: `Create: ${contentTasks[0].title}`,
+    };
+  }
+  return { status: "ok", detail: "No marketing tasks" };
+}
+
+function checkSkillQueue(ctx: AgentBeatContext): CheckResult {
+  const skillTasks = ctx.tasks.filter(
+    (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "skills_lead"
+  );
+  if (skillTasks.length > 0) {
+    return {
+      status: "action_needed",
+      detail: `${skillTasks.length} skill task(s)`,
+      suggestedAction: `Author: ${skillTasks[0].title}`,
+    };
+  }
+  return { status: "ok", detail: "No skill tasks" };
+}
+
+// ── Role checklist definitions ─────────────────────────────
+
+type CheckFn = (ctx: AgentBeatContext) => CheckResult;
+
+const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
+  ceo: [checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
+  cto: [checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  pm: [checkScopeControl, checkSprintHealth, checkAssignedTasks],
+  developer: [checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
+  tester: [checkTestQueue, checkAssignedTasks],
+  ui_designer: [checkDesignQueue, checkAssignedTasks],
+  marketing: [checkContentQueue, checkAssignedTasks],
+  skills_lead: [checkSkillQueue, checkAssignedTasks],
+};
+
+// ── Public API ─────────────────────────────────────────────
+
+export interface ChecklistResult {
+  results: CheckResult[];
+  hasActionNeeded: boolean;
+  hasBlocked: boolean;
+  /** The first action_needed result, if any. Useful for selecting the next task. */
+  primaryAction: CheckResult | null;
+}
+
+/**
+ * Run the role-specific checklist for an agent's beat context.
+ * Returns aggregated results.
+ */
+export function runChecklist(ctx: AgentBeatContext): ChecklistResult {
+  const checks = ROLE_CHECKLISTS[ctx.role] ?? [checkAssignedTasks];
+  const results = checks.map((check) => check(ctx));
+
+  const hasActionNeeded = results.some((r) => r.status === "action_needed");
+  const hasBlocked = results.some((r) => r.status === "blocked");
+  const primaryAction = results.find((r) => r.status === "action_needed") ?? null;
+
+  return { results, hasActionNeeded, hasBlocked, primaryAction };
+}

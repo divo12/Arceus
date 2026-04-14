@@ -247,11 +247,13 @@ function buildSeedEntry(companyId: string, seed: ToolSeed): ServiceRegistryEntry
  * Idempotent — skips tools already registered for this company.
  */
 export async function seedRegistry(companyId: string): Promise<{ seeded: number; skipped: number }> {
+  console.log(`[SERVICE-REGISTRY] seedRegistry called for company=${companyId}`);
   const co = getCompanyRegistry(companyId);
   let seeded = 0;
   let skipped = 0;
 
   const opencodeTools = await fetchOpencodeTools();
+  console.log(`[SERVICE-REGISTRY] opencodeTools=${opencodeTools.length}, ARCEUS_TOOLS=${ARCEUS_TOOLS.length}`);
   const allTools = [...opencodeTools, ...ARCEUS_TOOLS];
 
   for (const seed of allTools) {

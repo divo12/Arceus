@@ -15,10 +15,15 @@ import type {
   EventEnvelope,
   StateMutation,
   SnapshotVersion,
+  AgentBeatContext,
+  BeatRecord,
+  TaskProgress,
 } from "@arceus/contracts";
 import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
 import { audit, auditSystem } from "./audit-ledger";
-import { getRegistryStats } from "./service-registry";
+import { getRegistryStats, getToolsForRole } from "./service-registry";
+import { isDatabaseConfigured, getDb } from "@arceus/db";
+import { beatRecordsTable } from "@arceus/db";
 import {
   getSnapshot,
   getEvents,
@@ -35,6 +40,7 @@ import {
   updateTransition,
   updateAgentStatus,
   updateCompanyStatus,
+  updateTaskProgress,
 } from "./store";
 
 // ── Version tracking ───────────────────────────────────────
@@ -94,8 +100,18 @@ export function cpNotifyStateChange() {
 export function cpApplyMutations(
   companyId: string,
   mutations: StateMutation[],
-  causation?: { eventId?: string; summary?: string }
+  causation?: { eventId?: string; summary?: string },
+  expectedVersion?: number
 ): { version: number; applied: number; errors: string[] } {
+  // Optimistic concurrency check
+  if (expectedVersion !== undefined && expectedVersion !== snapshotVersion) {
+    return {
+      version: snapshotVersion,
+      applied: 0,
+      errors: [`Optimistic concurrency conflict: expected v${expectedVersion}, current v${snapshotVersion}`],
+    };
+  }
+
   const errors: string[] = [];
   let applied = 0;
 
@@ -215,6 +231,10 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
       updateCompanyStatus(mutation.status);
       break;
 
+    case "task_progress":
+      updateTaskProgress(mutation.taskId, mutation.progress as TaskProgress);
+      break;
+
     default:
       throw new Error(`Unknown mutation type: ${(mutation as any).type}`);
   }
@@ -324,4 +344,150 @@ export function cpGetSnapshotSummary() {
     chatMessageCount: snap.chatMessages.length,
     transitions: snap.transitions?.length ?? 0,
   };
+}
+
+// ── Heartbeat / Beat lifecycle (Spec 12 Phase 2) ──────────
+
+/**
+ * Assemble the AgentBeatContext for a given agent.
+ * This is the "Phase 1 — Wake" data payload.
+ */
+export function cpLoadAgentContext(
+  agentId: string,
+  beatId: string,
+  beatNumber: number,
+  trigger: BeatRecord["trigger"],
+  config: { beatTokenBudget: number; beatCostCeilingCents: number }
+): AgentBeatContext | null {
+  const snap = getSnapshot();
+  const agent = snap.agents.find((a) => a.id === agentId);
+  if (!agent) return null;
+
+  const currentSprint = snap.sprints.find((s) => s.id === snap.company.currentSprintId) ?? null;
+  // CEO/PM get all sprint tasks (for sprint completion detection); others get only their own
+  const agentTasks = (agent.role === "ceo" || agent.role === "pm")
+    ? snap.tasks.filter((t) => t.sprintId === currentSprint?.id)
+    : snap.tasks.filter(
+        (t) =>
+          t.assignedAgentId === agentId ||
+          (t.assignedRole === agent.role && !t.assignedAgentId)
+      );
+
+  // Collect artifact ids referenced by this agent's tasks
+  const artifactIds = new Set(agentTasks.flatMap((t) => [...t.artifactIds, ...t.incomingArtifactIds]));
+  const artifacts = snap.artifacts.filter((a) => artifactIds.has(a.id));
+
+  // Tools from service registry
+  const tools = getToolsForRole(snap.company.id, agent.role);
+  const toolNames = tools.map((t) => t.toolName);
+
+  // Memory/priming context
+  const agentMemory = snap.memories.find((m) => m.agentId === agentId);
+  const agentHabits = snap.habits.filter((h) => h.agentId === agentId && h.status === "active");
+  const agentPriming = snap.priming.find((p) => p.agentId === agentId);
+
+  // Recent board messages (last 10)
+  const recentBoardMessages = snap.chatMessages
+    .filter((m) => m.role === "board" || m.role === "ceo")
+    .slice(-10);
+
+  // Recent meetings (last 5)
+  const recentMeetings = snap.meetings
+    .filter((m) => m.status === "completed")
+    .slice(-5);
+
+  // Pending approvals
+  const pendingApprovals = snap.approvals.filter((a) => a.status === "pending");
+
+  return {
+    beatId,
+    beatNumber,
+    trigger,
+    startedAt: new Date().toISOString(),
+
+    agentId: agent.id,
+    agentName: agent.name,
+    role: agent.role,
+    soul: agent.soul,
+
+    company: snap.company,
+    currentSprint,
+
+    hierarchy: snap.hierarchy,
+    managerAgentId: agent.managerAgentId,
+    reportAgentIds: agent.reportAgentIds,
+
+    tasks: agentTasks,
+    taskProgress: [], // Phase 2: populated when task_progress mutations exist
+
+    artifacts,
+
+    memories: agentMemory
+      ? [
+          ...agentMemory.currentFocus,
+          ...agentMemory.recentLearnings,
+          ...agentMemory.activePatterns,
+        ]
+      : [],
+    habits: agentHabits.map((h) => h.name),
+    priming: agentPriming?.lastDisposition ?? "",
+
+    availableTools: toolNames,
+    trustFactor: 1.0, // Spec 13 Governance Gateway will refine this
+
+    approvals: pendingApprovals,
+    recentBoardMessages,
+    recentMeetings,
+
+    beatTokenBudget: config.beatTokenBudget,
+    beatCostCeilingCents: config.beatCostCeilingCents,
+    companyBudgetRemainingCents: snap.company.budgetCents - snap.company.spentCents,
+  };
+}
+
+/** Load the active sprint from the snapshot (convenience). */
+export function cpLoadActiveSprint() {
+  const snap = getSnapshot();
+  return snap.sprints.find((s) => s.id === snap.company.currentSprintId) ?? null;
+}
+
+/**
+ * Commit a BeatRecord to the DB. Non-blocking — logs warning on failure.
+ * Returns true if committed successfully.
+ */
+export async function cpCommitBeatRecord(record: BeatRecord): Promise<boolean> {
+  if (!isDatabaseConfigured()) {
+    return false;
+  }
+
+  try {
+    const db = getDb();
+    await db.insert(beatRecordsTable).values({
+      id: record.id,
+      companyId: record.companyId,
+      agentId: record.agentId,
+      beatNumber: record.beatNumber,
+      trigger: record.trigger,
+      startedAt: new Date(record.startedAt),
+      endedAt: record.endedAt ? new Date(record.endedAt) : null,
+      status: record.status,
+      snapshotVersionRead: record.snapshotVersionRead,
+      snapshotVersionWritten: record.snapshotVersionWritten,
+      phases: record.phases,
+      outcome: record.outcome,
+      totalTokens: record.totalTokens,
+      costCents: String(record.costCents),
+      errorMessage: record.errorMessage,
+      summary: record.summary,
+    });
+    return true;
+  } catch (err) {
+    console.warn("[CP] Failed to commit beat record:", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
+/** Get the current snapshot version (for optimistic concurrency). */
+export function cpGetSnapshotVersion(): number {
+  return snapshotVersion;
 }

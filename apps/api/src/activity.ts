@@ -4,10 +4,11 @@ export type EmployeeActivityEntry = {
   id: string;
   timestamp: string;
   employee: string;
-  type: "working" | "file_edit" | "shell" | "error" | "idle" | "info";
+  type: "working" | "file_edit" | "shell" | "error" | "idle" | "info" | "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
   content: string;
   meetingId?: string | null;
   taskId?: string | null;
+  beatId?: string | null;
 };
 
 export type ActivityEvent = EmployeeActivityEntry;
@@ -23,7 +24,7 @@ export function emitEmployeeActivity(
   employee: string,
   type: EmployeeActivityEntry["type"],
   content: string,
-  meta?: { meetingId?: string | null; taskId?: string | null },
+  meta?: { meetingId?: string | null; taskId?: string | null; beatId?: string | null },
 ) {
   const e: EmployeeActivityEntry = {
     id: crypto.randomUUID(),
@@ -33,6 +34,7 @@ export function emitEmployeeActivity(
     content,
     meetingId: meta?.meetingId ?? null,
     taskId: meta?.taskId ?? null,
+    beatId: meta?.beatId ?? null,
   };
   log.push(e);
   if (log.length > 500) log.splice(0, log.length - 500);

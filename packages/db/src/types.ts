@@ -3,6 +3,7 @@ import type {
   AssetRecord,
   Approval,
   Artifact,
+  BeatRecord,
   ChatMessage,
   Company,
   EventEnvelope,
@@ -42,7 +43,8 @@ export type EntityName =
   | "memorySummaries"
   | "memoryUnits"
   | "habits"
-  | "primingStates";
+  | "primingStates"
+  | "beatRecords";
 
 export type EntityRecordMap = {
   companies: Company;
@@ -65,6 +67,7 @@ export type EntityRecordMap = {
   memoryUnits: MemoryUnit;
   habits: Habit;
   primingStates: PrimingState;
+  beatRecords: BeatRecord;
 };
 
 export type DatabaseHealth = {

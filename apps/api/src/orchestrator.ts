@@ -11,6 +11,7 @@ import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, update
 import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
+import { isCeoStreaming } from "./chat";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
@@ -653,13 +654,30 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
  * approved immediately without waiting for the board.
  */
 async function triggerCeoSprintProposal(): Promise<void> {
+  // Ensure the current sprint is marked complete before proposing a new one
+  await checkSprintCompletion();
+
   const snapshot = getSnapshot();
 
-  // Duplicate guard: skip if sprint_proposal card already exists for current sprint
+  // Duplicate guard: if a sprint_proposal card already exists for the current sprint,
+  // try to auto-approve it instead of generating a new one.
   const existingProposal = snapshot.chatMessages.find(
     (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
   );
-  if (existingProposal) return;
+  if (existingProposal) {
+    const card = existingProposal.cardData as CeoCard | null;
+    if (card?.sprint_proposal && orchestratorConfig.sprint.autoApproveProposals) {
+      const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
+      const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
+      const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
+      if (!needsBoardReview) {
+        executionStatus = "done";
+        emitEmployeeActivity("ceo", "info", `Re-approving existing Sprint ${nextSprintNumber} proposal.`);
+        await approveSprintProposal(card);
+      }
+    }
+    return;
+  }
 
   // Set execution status so CEO stage infers as "between_sprints"
   executionStatus = "done";
@@ -4782,4 +4800,205 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       taskId: role === "developer" ? activeExecution?.buildTaskId ?? null : null,
     });
   }
+}
+
+// ── Heartbeat integration (Spec 12 Phase 3) ────────────────
+
+/**
+ * Execute a task within beat context (no activeExecution global required).
+ * Called by BeatDependencies.executeTask().
+ */
+export async function executeBeatTask(
+  ctx: import("@arceus/contracts").AgentBeatContext,
+  taskId: string,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number; completed: boolean }> {
+  const snapshot = getSnapshot();
+  const task = snapshot.tasks.find((t) => t.id === taskId);
+  if (!task) {
+    return { summary: `Task ${taskId} not found`, tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false };
+  }
+
+  const role = ctx.role;
+
+  // ── CEO beat: sprint lifecycle detection ──────────────────
+  if (role === "ceo") {
+    // Don't conflict with live CEO chat streaming
+    if (isCeoStreaming()) {
+      return {
+        summary: "CEO beat skipped — live chat streaming in progress",
+        tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+      };
+    }
+    // Check if all sprint tasks are terminal → trigger next sprint proposal
+    const sprintId = snapshot.company.currentSprintId;
+    if (sprintId) {
+      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      const allTerminal = sprintTasks.length > 0 && sprintTasks.every((t) =>
+        ["completed", "failed", "cancelled", "blocked"].includes(t.status)
+      );
+      if (allTerminal) {
+        try {
+          await triggerCeoSprintProposal();
+          return {
+            summary: `CEO detected all tasks terminal in sprint ${sprintId} — triggered next sprint proposal`,
+            tokensUsed: 0, actionsCount: 1, toolCalls: 1, completed: true,
+          };
+        } catch (err) {
+          return {
+            summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
+            tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+          };
+        }
+      }
+    }
+
+    // CEO proactive governance: budget alert, stale task detection
+    const budgetPct = snapshot.company.budgetCents > 0
+      ? (snapshot.company.spentCents / snapshot.company.budgetCents) * 100
+      : 0;
+    if (budgetPct >= 90) {
+      emitEmployeeActivity("ceo", "info", `Budget alert: ${budgetPct.toFixed(0)}% spent (${snapshot.company.spentCents}¢ / ${snapshot.company.budgetCents}¢)`, { beatId });
+    }
+
+    // Detect stale in-progress tasks (older than 10 minutes)
+    const staleThreshold = Date.now() - 10 * 60 * 1000;
+    const staleTasks = snapshot.tasks.filter((t) =>
+      t.status === "in_progress" && new Date(t.startedAt ?? t.createdAt ?? new Date().toISOString()).getTime() < staleThreshold
+    );
+    if (staleTasks.length > 0) {
+      emitEmployeeActivity("ceo", "info", `Stale task detection: ${staleTasks.length} task(s) in_progress for >10min`, { beatId });
+    }
+
+    return {
+      summary: `CEO governance beat: budget=${budgetPct.toFixed(0)}%, stale=${staleTasks.length}`,
+      tokensUsed: 0, actionsCount: 1, toolCalls: 0, completed: true,
+    };
+  }
+
+  // For specialist roles, delegate to existing executeSpecialistTask
+  if (["tester", "ui_designer", "marketing", "skills_lead"].includes(role)) {
+    try {
+      await executeSpecialistTask(taskId);
+      const updated = getSnapshot().tasks.find((t) => t.id === taskId);
+      return {
+        summary: updated?.title || `${role} completed ${task.title}`,
+        tokensUsed: 0, // We don't track per-prompt tokens yet
+        actionsCount: 1,
+        toolCalls: 1,
+        completed: updated?.status === "completed",
+      };
+    } catch (err) {
+      return {
+        summary: `${role} task failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+      };
+    }
+  }
+
+  // For CTO/PM/developer — run a single prompt cycle via runPromptText
+  const soul = getRoleSoul(role);
+  const taskPrompt = buildSpecialistTaskPrompt(task);
+
+  try {
+    const roleSession = await ensureAgentSession(snapshot, role);
+    touchAgentSession(role, "working");
+    setTaskStatus(task.id, "in_progress");
+    emitEmployeeActivity(role, "working", `Beat ${beatId}: executing ${task.title}`, { taskId, beatId });
+
+    const output = await runPromptText(role, roleSession.sessionId, soul.systemPrompt, taskPrompt);
+
+    touchAgentSession(role, "idle");
+
+    // Mark task completed after successful LLM execution — beat tasks are single-shot
+    const updated = getSnapshot().tasks.find((t) => t.id === taskId);
+    if (updated && updated.status !== "completed") {
+      setTaskStatus(task.id, "completed", output?.slice(0, 300) || `${role} completed ${task.title} via beat ${beatId}`);
+    }
+    const isComplete = true;
+
+    return {
+      summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
+      tokensUsed: 0,
+      actionsCount: 1,
+      toolCalls: 1,
+      completed: isComplete,
+    };
+  } catch (err) {
+    touchAgentSession(role, "idle");
+    return {
+      summary: `Beat task execution failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+    };
+  }
+}
+
+/**
+ * Trigger the CEO to propose the next sprint (exposed for beat context).
+ */
+export const triggerCeoSprintProposalFromBeat = () => triggerCeoSprintProposal();
+
+/**
+ * Execute a checklist-driven action when no task exists.
+ * Routes by role: CEO proposes sprints, CTO/PM/others run LLM prompts.
+ * Called by BeatDependencies.executeChecklistAction().
+ */
+export async function executeChecklistAction(
+  ctx: import("@arceus/contracts").AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const role = ctx.role;
+
+  // ── CEO: propose sprint when none exists ──
+  if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
+    if (isCeoStreaming()) {
+      return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: 0, actionsCount: 0, toolCalls: 0 };
+    }
+    try {
+      emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
+      await triggerCeoSprintProposal();
+      return {
+        summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
+        tokensUsed: 0, actionsCount: 1, toolCalls: 1,
+      };
+    } catch (err) {
+      return {
+        summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+      };
+    }
+  }
+
+  // ── PM: scope triage, board response ──
+  if (role === "pm" || role === "cto") {
+    try {
+      const snapshot = getSnapshot();
+      const soul = getRoleSoul(role);
+      const session = await ensureAgentSession(snapshot, role);
+      touchAgentSession(role, "working");
+      emitEmployeeActivity(role, "working", `Beat ${beatId}: ${action.suggestedAction}`, { beatId });
+
+      const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
+      const output = await runPromptText(role, session.sessionId, soul.systemPrompt, prompt);
+      touchAgentSession(role, "idle");
+
+      return {
+        summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
+        tokensUsed: 0, actionsCount: 1, toolCalls: 1,
+      };
+    } catch (err) {
+      touchAgentSession(role, "idle");
+      return {
+        summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+      };
+    }
+  }
+
+  // ── Fallback: log the action without executing ──
+  return {
+    summary: `${role}: ${action.suggestedAction} (no handler)`,
+    tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+  };
 }

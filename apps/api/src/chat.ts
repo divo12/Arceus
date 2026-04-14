@@ -6,6 +6,11 @@ import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "./open
 import { getExecutionStatus, recordCeoCardMeeting } from "./orchestrator";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { bootstrapIdeaWithWorkspace } from "./bootstrap";
+import { emitBeatEvent } from "@arceus/company-runtime";
+
+/** Guard: set while CEO is streaming a live chat response. */
+let ceoStreaming = false;
+export function isCeoStreaming(): boolean { return ceoStreaming; }
 
 type OpenCodeEvent = {
   type: string;
@@ -104,7 +109,9 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     throw new Error("CEO chat message cannot be empty.");
   }
 
-  let snapshot = getSnapshot();
+  ceoStreaming = true;
+  try {
+    let snapshot = getSnapshot();
 
   if (snapshot.company.id === "company_pending") {
     snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
@@ -211,6 +218,18 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   } finally {
     reader.releaseLock();
     try { reply.raw.end(); } catch { /* already ended */ }
+  }
+
+  // Emit board_message event so heartbeat can react
+  emitBeatEvent({
+    type: "board_message",
+    beatId: "chat_" + Date.now(),
+    agentId: "board",
+    role: "ceo",
+    data: { message: trimmedMessage.slice(0, 200) },
+  });
+  } finally {
+    ceoStreaming = false;
   }
 }
 

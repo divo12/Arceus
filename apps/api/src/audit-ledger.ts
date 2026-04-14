@@ -82,6 +82,7 @@ async function flushToDb() {
         detail: e.detail,
         correlationId: e.correlationId,
         causationId: e.causationId,
+        beatId: e.beatId,
         occurredAt: new Date(e.occurredAt),
       }))
     );
@@ -130,6 +131,7 @@ export interface AuditAppendInput {
   detail?: Record<string, unknown> | null;
   correlationId?: string | null;
   causationId?: string | null;
+  beatId?: string | null;
 }
 
 /** Append a single audit event. Fast (in-memory), non-blocking DB flush. */
@@ -180,6 +182,7 @@ function buildEvent(input: AuditAppendInput, severity: AuditSeverity): AuditEven
     detail: input.detail ?? null,
     correlationId: input.correlationId ?? null,
     causationId: input.causationId ?? null,
+    beatId: input.beatId ?? null,
     occurredAt: new Date().toISOString(),
   };
 }
@@ -190,7 +193,7 @@ export function auditAgent(
   agentRole: string,
   eventType: string,
   summary: string,
-  opts?: { agentId?: string; detail?: Record<string, unknown>; severity?: AuditSeverity; correlationId?: string; causationId?: string }
+  opts?: { agentId?: string; detail?: Record<string, unknown>; severity?: AuditSeverity; correlationId?: string; causationId?: string; beatId?: string }
 ) {
   return audit({
     companyId,
@@ -203,6 +206,7 @@ export function auditAgent(
     detail: opts?.detail,
     correlationId: opts?.correlationId,
     causationId: opts?.causationId,
+    beatId: opts?.beatId,
   });
 }
 
@@ -211,7 +215,7 @@ export function auditSystem(
   companyId: string,
   eventType: string,
   summary: string,
-  opts?: { detail?: Record<string, unknown>; severity?: AuditSeverity; correlationId?: string }
+  opts?: { detail?: Record<string, unknown>; severity?: AuditSeverity; correlationId?: string; beatId?: string }
 ) {
   return audit({
     companyId,
@@ -221,6 +225,7 @@ export function auditSystem(
     summary,
     detail: opts?.detail,
     correlationId: opts?.correlationId,
+    beatId: opts?.beatId,
   });
 }
 
@@ -230,7 +235,7 @@ export function auditError(
   eventType: string,
   summary: string,
   error?: unknown,
-  opts?: { agentId?: string; agentRole?: string; correlationId?: string }
+  opts?: { agentId?: string; agentRole?: string; correlationId?: string; beatId?: string }
 ) {
   return audit({
     companyId,
@@ -244,6 +249,7 @@ export function auditError(
       error: error instanceof Error ? { message: error.message, stack: error.stack?.split("\n").slice(0, 5) } : String(error),
     },
     correlationId: opts?.correlationId,
+    beatId: opts?.beatId,
   });
 }
 
@@ -294,6 +300,38 @@ export function startAuditLedger() {
     eventType: "audit_ledger_started",
     summary: `Audit ledger started (buffer=${maxBuffer}, dbFlush=${auditConfig.dbFlushIntervalMs}ms, db=${auditConfig.dbEnabled && isDatabaseConfigured() ? "ON" : "OFF"})`,
   });
+}
+
+// ── Beat-scoped audit helpers (Spec 12) ────────────────────
+
+/**
+ * Returns audit functions pre-bound with a beatId.
+ * Use inside a beat executor to tag all events to the current beat.
+ */
+export function withBeatScope(beatId: string) {
+  return {
+    audit: (input: AuditAppendInput) => audit({ ...input, beatId }),
+    auditAgent: (
+      companyId: string,
+      agentRole: string,
+      eventType: string,
+      summary: string,
+      opts?: Parameters<typeof auditAgent>[4]
+    ) => auditAgent(companyId, agentRole, eventType, summary, { ...opts, beatId }),
+    auditSystem: (
+      companyId: string,
+      eventType: string,
+      summary: string,
+      opts?: Parameters<typeof auditSystem>[3]
+    ) => auditSystem(companyId, eventType, summary, { ...opts, beatId }),
+    auditError: (
+      companyId: string,
+      eventType: string,
+      summary: string,
+      error?: unknown,
+      opts?: Parameters<typeof auditError>[4]
+    ) => auditError(companyId, eventType, summary, error, { ...opts, beatId }),
+  };
 }
 
 // ── Console pretty-print ───────────────────────────────────

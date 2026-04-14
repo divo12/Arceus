@@ -11,6 +11,7 @@ import type {
   SessionBinding,
   Sprint,
   Task,
+  TaskProgress,
   Transition
 } from "@arceus/contracts";
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
@@ -217,6 +218,28 @@ export function updateTask(taskId: string, updater: (task: Task) => Task) {
   const next = updater(current);
   upsertTask(next);
   return next;
+}
+
+// ── Task progress (multi-beat tracking) ────────────────────
+// taskProgress is stored per-task alongside the snapshot. It
+// tracks incremental progress across beats for long-running tasks.
+
+const taskProgressMap = new Map<string, TaskProgress>();
+
+export function updateTaskProgress(taskId: string, progress: TaskProgress) {
+  taskProgressMap.set(taskId, progress);
+}
+
+export function getTaskProgress(taskId: string): TaskProgress | null {
+  return taskProgressMap.get(taskId) ?? null;
+}
+
+export function getAllTaskProgress(): TaskProgress[] {
+  return Array.from(taskProgressMap.values());
+}
+
+export function clearTaskProgress(taskId: string) {
+  taskProgressMap.delete(taskId);
 }
 
 export function upsertSprint(sprint: Sprint) {

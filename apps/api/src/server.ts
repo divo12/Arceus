@@ -12,10 +12,11 @@ import { z } from "zod";
 import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, approveSprintProposal, rejectSprintProposal, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution, hippocampus } from "./orchestrator";
-import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "./activity";
+import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat } from "./orchestrator";
+import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity, emitEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
+import { heartbeatConfig } from "./config/heartbeat";
 import { getLocalPreviewState } from "./preview";
 import { workspaceManager } from "./workspace-manager";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./bootstrap";
@@ -25,8 +26,10 @@ import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
-import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } from "./control-plane";
+import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent } from "@arceus/company-runtime";
+import type { BeatDependencies } from "@arceus/company-runtime";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +38,60 @@ const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
 
 await hydrate();
+
+// ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
+
+const beatDeps: BeatDependencies = {
+  loadAgentContext: (agentId, beatId, beatNumber, trigger, config) =>
+    cpLoadAgentContext(agentId, beatId, beatNumber, trigger, config),
+  getSnapshotVersion: () => cpGetSnapshotVersion(),
+  applyMutations: (companyId, mutations, causation, expectedVersion) =>
+    cpApplyMutations(companyId, mutations as any, causation, expectedVersion),
+  commitBeatRecord: (record) => cpCommitBeatRecord(record),
+  flushStore: () => flush(),
+  audit: {
+    auditAgent: (companyId, agentRole, eventType, summary, opts) =>
+      audit({ companyId, category: "agent_action", eventType, summary, agentRole, ...opts }),
+    auditSystem: (companyId, eventType, summary, opts) =>
+      audit({ companyId, category: "system", eventType, summary, ...opts }),
+    auditError: (companyId, eventType, summary, error, opts) =>
+      audit({ companyId, category: "error", severity: "error", eventType, summary, detail: { error: error instanceof Error ? error.message : error }, ...opts }),
+  },
+  executeTask: (ctx, taskId, beatId) => executeBeatTask(ctx, taskId, beatId),
+  executeChecklistAction: (ctx, action, beatId) => executeChecklistAction(ctx, action, beatId),
+  getAgentRoster: () => {
+    const snap = getSnapshot();
+    if (snap.company.id === "company_pending") return [];
+    return snap.agents.map((a) => ({ agentId: a.id, role: a.role, companyId: snap.company.id }));
+  },
+  emitBeatEvent: (event) => emitBeatEvent(event),
+};
+
+const heartbeatEngine = new HeartbeatEngine(heartbeatConfig, beatDeps);
+
+// Re-seed service registry on startup if a company already exists (survives server restarts)
+{
+  const snap = getSnapshot();
+  console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
+  if (snap.company.id !== "company_pending") {
+    try {
+      const { seeded, skipped } = await seedRegistry(snap.company.id);
+      console.log(`[STARTUP] Re-seeded service registry: ${seeded} tools seeded, ${skipped} skipped`);
+    } catch (err) {
+      console.warn("[STARTUP] Registry re-seed failed:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log("[STARTUP] No company hydrated — skipping registry seed");
+  }
+}
+
+// Wire beat event bus → activity stream SSE
+onBeatEvent((event) => {
+  const type = event.type as "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
+  emitEmployeeActivity(event.role, type, `${event.type}: ${event.data?.summary || event.beatId}`, {
+    beatId: event.beatId,
+  });
+});
 
 const bootstrapSchema = z.object({
   companyName: z.string().min(2),
@@ -261,11 +318,9 @@ app.post("/api/strategy/execute", async (request, reply) => {
     const body = strategyOutputSchema.parse(request.body);
     const snapshot = applyStrategy(body);
 
-    beginExecution(snapshot).catch((err) => {
-      request.log?.error?.(err);
-    });
+    heartbeatEngine.start();
 
-    return { snapshot, status: "execution_started" };
+    return { snapshot, status: "heartbeat_started", mode: "heartbeat" };
   } catch (error) {
     request.log?.error?.(error);
     reply.code(400);
@@ -587,17 +642,14 @@ app.post("/api/orchestrator/execute", async (request, reply) => {
     return { error: "No agents available. Generate a strategy first." };
   }
 
-  // Fire and forget — execution runs in the background
-  beginExecution(snapshot).catch((err) => {
-    request.log?.error?.(err);
-  });
-
-  return { status: "execution_started" };
+  heartbeatEngine.start();
+  return { status: "heartbeat_started", mode: "heartbeat" };
 });
 
 app.post("/api/orchestrator/stop", async (request, reply) => {
   try {
-    return await stopExecution();
+    heartbeatEngine.stop();
+    return { status: "stopped", ...heartbeatEngine.getStatus() };
   } catch (error) {
     request.log?.error?.(error);
     reply.code(400);
@@ -689,6 +741,7 @@ app.post("/api/quick-execute", async (request, reply) => {
     let snapshot = getSnapshot();
     if (snapshot.company.id === "company_pending") {
       snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
+      await seedRegistry(snapshot.company.id);
     }
 
     // 2. Generate strategy (structured output — no CEO chat)
@@ -697,12 +750,10 @@ app.post("/api/quick-execute", async (request, reply) => {
     // 3. Apply strategy → builds hierarchy + agents
     snapshot = applyStrategy(strategy);
 
-    // 4. Fire execution (CTO plans → developer builds)
-    beginExecution(snapshot).catch((err) => {
-      request.log?.error?.(err);
-    });
+    // 4. Fire heartbeat execution
+    heartbeatEngine.start();
 
-    return { snapshot, strategy, status: "execution_started" };
+    return { snapshot, strategy, status: "heartbeat_started", mode: "heartbeat" };
   } catch (error) {
     request.log?.error?.(error);
     reply.code(400);
@@ -806,6 +857,71 @@ app.post("/api/control-plane/mutations", async (request, reply) => {
   }
 });
 
+// ── Heartbeat API routes (Spec 12 Phase 3) ──
+
+app.post("/api/heartbeat/start", async () => {
+  heartbeatEngine.start();
+  return { status: "started", ...heartbeatEngine.getStatus() };
+});
+
+app.post("/api/heartbeat/stop", async () => {
+  heartbeatEngine.stop();
+  return { status: "stopped", ...heartbeatEngine.getStatus() };
+});
+
+app.post("/api/heartbeat/trigger", async (request, reply) => {
+  const body = z.object({
+    agentId: z.string(),
+    role: z.string(),
+  }).parse(request.body);
+
+  const snapshot = getSnapshot();
+  if (snapshot.company.id === "company_pending") {
+    reply.code(400);
+    return { error: "No company bootstrapped yet." };
+  }
+
+  const record = await heartbeatEngine.triggerBeat({
+    companyId: snapshot.company.id,
+    agentId: body.agentId,
+    role: body.role as any,
+    trigger: { type: "interval", scheduledAt: new Date().toISOString() },
+  });
+
+  return record ?? { status: "skipped", reason: "Beat was skipped (locked, paused, or at capacity)" };
+});
+
+app.get("/api/heartbeat/status", async () => {
+  return {
+    ...heartbeatEngine.getStatus(),
+    config: {
+      executionMode: heartbeatConfig.executionMode,
+      schedulerIntervalMs: heartbeatConfig.schedulerIntervalMs,
+      maxConcurrentBeats: heartbeatConfig.maxConcurrentBeats,
+    },
+  };
+});
+
+app.get("/api/heartbeat/history", async () => {
+  const companyId = getSnapshot().company.id;
+  return heartbeatEngine.getHistory(companyId === "company_pending" ? undefined : companyId);
+});
+
+app.patch("/api/heartbeat/config", async (request) => {
+  const body = request.body as Record<string, unknown>;
+  const allowed: (keyof import("@arceus/company-runtime").HeartbeatConfig)[] = [
+    "schedulerIntervalMs", "maxConcurrentBeats", "beatTimeoutMs",
+    "beatTokenBudget", "beatCostCeilingCents", "pauseWhenNoActiveSprint",
+    "pauseWhenBudgetExhausted",
+  ];
+  const patch: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in body) patch[key] = body[key];
+  }
+  heartbeatEngine.patchConfig(patch as any);
+  return { config: heartbeatEngine.getConfig() };
+});
+
 // ── Service Registry routes (Spec 11 Phase 3) ──
 
 app.get("/api/service-registry", async () => {
@@ -842,6 +958,13 @@ app.get("/api/service-registry/check/:role/:toolName", async (request) => {
   };
 });
 
+app.post("/api/service-registry/seed", async () => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") return { error: "No company bootstrapped" };
+  const result = await seedRegistry(companyId);
+  return result;
+});
+
 // ── Start audit ledger ──
 startAuditLedger();
 
@@ -856,6 +979,7 @@ if (orchestratorConfig.demoMode) {
 async function shutdown(signal: string) {
   console.log(`[ARCEUS] ${signal} received — shutting down gracefully…`);
   try {
+    heartbeatEngine.stop();
     await drainAuditLedger();
     await teardown();
     await app.close();

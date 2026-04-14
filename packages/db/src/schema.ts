@@ -140,5 +140,12 @@ export const arceusTableDefinitions: Record<EntityName, TableDefinition> = {
     primaryKey: "id",
     notes: "Agent confidence, caution, and morale state.",
     indexes: ["agent_id", "updated_at"]
+  },
+  beatRecords: {
+    entity: "beatRecords",
+    tableName: "beat_records",
+    primaryKey: "id",
+    notes: "Heartbeat cycle records (Spec 12). One row per agent beat with timing, cost, and outcome.",
+    indexes: ["company_id", "agent_id", "started_at", "beat_number", "status"]
   }
 };

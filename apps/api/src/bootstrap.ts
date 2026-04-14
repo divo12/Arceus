@@ -22,6 +22,6 @@ export async function bootstrapIdeaWithWorkspace(idea: string) {
     companyName: deriveCompanyNameFromIdea(idea),
     boardOwner: "Board",
     idea,
-    budgetCents: 0,
+    budgetCents: 999_999_999,
   });
 }
