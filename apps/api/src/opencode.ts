@@ -12,6 +12,7 @@ type OpencodeInstance = {
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
+// OpenCode cwd must be where opencode.json lives (project root)
 const workspaceRoot = process.cwd();
 
 function ensureAzureRuntimeEnvironment() {
@@ -149,8 +150,8 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reject(new Error("Timeout waiting for OpenCode server to start after 15000ms"));
-    }, 15000);
+      reject(new Error("Timeout waiting for OpenCode server to start after 45000ms"));
+    }, 45000);
 
     let output = "";
 
@@ -227,6 +228,25 @@ export async function getOpencode() {
  */
 export function resetOpencodeConnection() {
   opencodePromise = null;
+}
+
+/**
+ * Pre-warm OpenCode server at startup so agent execution doesn't
+ * hit the cold-start SQLite migration + spawn delay. Call once after
+ * the Fastify server is listening. Failures are non-fatal.
+ */
+export async function warmUpOpencode(): Promise<boolean> {
+  try {
+    console.log("[OpenCode] Pre-warming server (this may take 30-45s on first run)…");
+    const instance = await getOpencode();
+    console.log(`[OpenCode] Warm — server ready at ${instance.server.url}`);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[OpenCode] Warm-up failed (non-fatal, will retry on first use): ${msg}`);
+    opencodePromise = null; // clear so next call retries
+    return false;
+  }
 }
 
 export async function postOpencodeJson<T>(path: string, body: unknown): Promise<T> {

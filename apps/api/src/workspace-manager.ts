@@ -1,4 +1,5 @@
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CompanySnapshot, ExportResult, SprintSnapshot, WorkspaceFileManifestEntry, WorkspaceInfo } from "@arceus/contracts";
 import { getDb, isDatabaseConfigured, sprintSnapshotsTable, workspacesTable } from "@arceus/db";
@@ -19,7 +20,10 @@ type WorkspaceFileEntry = {
 type WorkspaceManifestEntry = WorkspaceFileManifestEntry;
 
 const repoRoot = resolve(process.cwd(), "..", "..");
-const legacyProductDir = resolve(repoRoot, "workspace");
+// In Docker /app is cwd, repoRoot resolves to "/" — use cwd-relative instead
+const legacyProductDir = existsSync(resolve(repoRoot, "workspace")) || !process.cwd().startsWith("/app")
+  ? resolve(repoRoot, "workspace")
+  : resolve(process.cwd(), "workspace");
 const legacyApiWorkspaceDir = resolve(repoRoot, "apps", "api", "workspace");
 const fallbackWorkspaceState = new Map<string, WorkspaceInfo>();
 const fallbackSprintSnapshots = new Map<string, SprintSnapshot[]>();

@@ -1121,3 +1121,8 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 await app.listen({ port, host });
+
+// ── Pre-warm OpenCode after server is listening ──
+// This triggers the SQLite migration + server spawn early so agent
+// execution doesn't hit the cold-start delay.
+void warmUpOpencode();
