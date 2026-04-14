@@ -12,7 +12,7 @@ import { z } from "zod";
 import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat } from "./orchestrator";
+import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter } from "./orchestrator";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity, emitEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
@@ -26,7 +26,7 @@ import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
-import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion } from "./control-plane";
+import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
+cpSetBuildCheckDir(productDir);
 
 await hydrate();
 
@@ -68,6 +69,11 @@ const beatDeps: BeatDependencies = {
 };
 
 const heartbeatEngine = new HeartbeatEngine(heartbeatConfig, beatDeps);
+
+// Wire reactive events: orchestrator mutations → heartbeat engine event-triggered beats
+setReactiveEventEmitter((companyId, agentId, role, event) =>
+  heartbeatEngine.emitEvent(companyId, agentId, role, event)
+);
 
 // Re-seed service registry on startup if a company already exists (survives server restarts)
 {
@@ -873,6 +879,10 @@ app.post("/api/heartbeat/trigger", async (request, reply) => {
   const body = z.object({
     agentId: z.string(),
     role: z.string(),
+    trigger: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("interval"), scheduledAt: z.string().optional() }),
+      z.object({ type: z.literal("event"), event: z.string() }),
+    ]).optional(),
   }).parse(request.body);
 
   const snapshot = getSnapshot();
@@ -881,11 +891,16 @@ app.post("/api/heartbeat/trigger", async (request, reply) => {
     return { error: "No company bootstrapped yet." };
   }
 
+  const trigger = body.trigger ?? { type: "interval" as const, scheduledAt: new Date().toISOString() };
+  if (trigger.type === "interval" && !trigger.scheduledAt) {
+    (trigger as any).scheduledAt = new Date().toISOString();
+  }
+
   const record = await heartbeatEngine.triggerBeat({
     companyId: snapshot.company.id,
     agentId: body.agentId,
     role: body.role as any,
-    trigger: { type: "interval", scheduledAt: new Date().toISOString() },
+    trigger: trigger as any,
   });
 
   return record ?? { status: "skipped", reason: "Beat was skipped (locked, paused, or at capacity)" };
@@ -902,9 +917,15 @@ app.get("/api/heartbeat/status", async () => {
   };
 });
 
-app.get("/api/heartbeat/history", async () => {
+app.get("/api/heartbeat/history", async (request) => {
   const companyId = getSnapshot().company.id;
-  return heartbeatEngine.getHistory(companyId === "company_pending" ? undefined : companyId);
+  if (companyId === "company_pending") return [];
+  const query = request.query as Record<string, string>;
+  const limit = query.limit ? Math.min(Number(query.limit), 500) : 100;
+  const agentId = query.agentId || undefined;
+  // Try DB first; fall back to in-memory
+  const dbHistory = await cpGetBeatHistory(companyId, { limit, agentId });
+  return dbHistory.length > 0 ? dbHistory : heartbeatEngine.getHistory(companyId);
 });
 
 app.patch("/api/heartbeat/config", async (request) => {

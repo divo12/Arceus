@@ -2,7 +2,7 @@ import { mkdir, readdir, stat, writeFile, readFile } from "node:fs/promises";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
-import { getOpencode, resetOpencodeConnection } from "./opencode";
+import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
@@ -17,11 +17,42 @@ import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
 import { persistRuntimeArtifact } from "./artifact-persistence";
 import { workspaceManager } from "./workspace-manager";
-import { structuredCompletion } from "./azure-openai";
+import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "./azure-openai";
+import { cpCommitTaskResult } from "./control-plane";
 import { withRetry, isRetryableError } from "./resilience";
 import { createHippocampusService, EXTRACTION_SYSTEM_PROMPT, buildExtractionUserPrompt, ACTION_DECISION_SYSTEM_PROMPT, buildActionDecisionUserPrompt, HABIT_MATCHER_SYSTEM_PROMPT, buildHabitMatcherUserPrompt, PRIMING_GENERATOR_SYSTEM_PROMPT, buildPrimingGeneratorUserPrompt, createPgVectorStores } from "@arceus/hippocampus";
 import type { PreparedAgentContext, ExtractedFact, MemoryAction } from "@arceus/hippocampus";
+import type { BeatEventTrigger } from "@arceus/contracts";
 import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Reactive event emitter — wired to HeartbeatEngine.emitEvent() by server.ts
+// ---------------------------------------------------------------------------
+
+let reactiveEventEmitter: ((companyId: string, agentId: string, role: AgentIdentity["role"], event: BeatEventTrigger) => void) | null = null;
+
+/** Called by server.ts after HeartbeatEngine is created. */
+export function setReactiveEventEmitter(fn: typeof reactiveEventEmitter) {
+  reactiveEventEmitter = fn;
+}
+
+/** Emit a reactive event for a specific role (resolves agentId from snapshot). */
+function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger) {
+  if (!reactiveEventEmitter) return;
+  const snapshot = getSnapshot();
+  const agent = getAgentByRole(snapshot, role);
+  if (!agent) return;
+  reactiveEventEmitter(snapshot.company.id, agent.id, role, event);
+}
+
+/** Emit a reactive event to ALL agents (used for broadcast events like sprint_started). */
+function emitReactiveBroadcast(event: BeatEventTrigger) {
+  if (!reactiveEventEmitter) return;
+  const snapshot = getSnapshot();
+  for (const agent of snapshot.agents) {
+    reactiveEventEmitter(snapshot.company.id, agent.id, agent.role, event);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Hippocampus — singleton memory service (in-memory stores for now)
@@ -645,6 +676,10 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
 
   upsertSprint(sprint);
   updateCompanySprint(sprint.id, number);
+
+  // Reactive: wake all agents — a new sprint has started
+  emitReactiveBroadcast("sprint_started");
+
   return sprint;
 }
 
@@ -1034,6 +1069,11 @@ function applyTaskModification(modification: TaskModificationInput) {
       },
       correlationId: modification.taskId,
     });
+
+    // Reactive: wake the assigned agent
+    if (modification.assignedRole) {
+      emitReactive(modification.assignedRole, "task_assigned");
+    }
   } else if (modification.modificationType === "cancel") {
     const companyId = getSnapshot().company.id;
     audit({
@@ -1282,6 +1322,11 @@ export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoTex
       })),
     ],
   });
+
+  // Reactive: wake each participant agent (board directive)
+  for (const role of participantRoles) {
+    if (role !== "ceo") emitReactive(role, "board_message");
+  }
 }
 
 function recordMeeting(params: {
@@ -1354,6 +1399,15 @@ function recordMeeting(params: {
 
   upsertMeeting(meeting);
   applyMeetingEffects(params.taskModifications ?? [], meetingMemoryModifications);
+
+  // Reactive: escalation meetings wake participant agents
+  if (params.type === "escalation") {
+    for (const role of params.participantRoles) {
+      if (role !== params.facilitatorRole) {
+        emitReactive(role, "escalation_received");
+      }
+    }
+  }
 
   emitEmployeeActivity(
     params.facilitatorRole,
@@ -1523,6 +1577,10 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
       });
       if (allDepsMet) {
         updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+        // Reactive: wake the assignee — their dependency is now met
+        if (task.assignedRole) {
+          emitReactive(task.assignedRole, "task_dependency_met");
+        }
       }
     }
   }
@@ -1859,6 +1917,13 @@ function approvePendingBoardApprovals() {
         ? "Board approved the recommended external action. No automated outbound action was executed by Arceus."
         : "Board approved the pending request during CTO handoff review.",
     }));
+
+    // Reactive: wake the agent who requested the approval
+    const snap = getSnapshot();
+    const requestor = snap.agents.find((a: { id: string; role: AgentIdentity["role"] }) => a.id === approval.requestedByAgentId);
+    if (requestor) {
+      emitReactive(requestor.role, "approval_granted");
+    }
   }
 
   return pendingApprovals;
@@ -4813,10 +4878,11 @@ export async function executeBeatTask(
   taskId: string,
   beatId: string,
 ): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number; completed: boolean }> {
+  startBeatTokenAccumulator(beatId);
   const snapshot = getSnapshot();
   const task = snapshot.tasks.find((t) => t.id === taskId);
   if (!task) {
-    return { summary: `Task ${taskId} not found`, tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false };
+    return { summary: `Task ${taskId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false };
   }
 
   const role = ctx.role;
@@ -4827,7 +4893,7 @@ export async function executeBeatTask(
     if (isCeoStreaming()) {
       return {
         summary: "CEO beat skipped — live chat streaming in progress",
-        tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
       };
     }
     // Check if all sprint tasks are terminal → trigger next sprint proposal
@@ -4842,12 +4908,12 @@ export async function executeBeatTask(
           await triggerCeoSprintProposal();
           return {
             summary: `CEO detected all tasks terminal in sprint ${sprintId} — triggered next sprint proposal`,
-            tokensUsed: 0, actionsCount: 1, toolCalls: 1, completed: true,
+            tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1, completed: true,
           };
         } catch (err) {
           return {
             summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
-            tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+            tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
           };
         }
       }
@@ -4872,7 +4938,7 @@ export async function executeBeatTask(
 
     return {
       summary: `CEO governance beat: budget=${budgetPct.toFixed(0)}%, stale=${staleTasks.length}`,
-      tokensUsed: 0, actionsCount: 1, toolCalls: 0, completed: true,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0, completed: true,
     };
   }
 
@@ -4883,7 +4949,7 @@ export async function executeBeatTask(
       const updated = getSnapshot().tasks.find((t) => t.id === taskId);
       return {
         summary: updated?.title || `${role} completed ${task.title}`,
-        tokensUsed: 0, // We don't track per-prompt tokens yet
+        tokensUsed: drainBeatTokenAccumulator(beatId),
         actionsCount: 1,
         toolCalls: 1,
         completed: updated?.status === "completed",
@@ -4891,7 +4957,7 @@ export async function executeBeatTask(
     } catch (err) {
       return {
         summary: `${role} task failed: ${err instanceof Error ? err.message : String(err)}`,
-        tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
       };
     }
   }
@@ -4899,37 +4965,50 @@ export async function executeBeatTask(
   // For CTO/PM/developer — run a single prompt cycle via runPromptText
   const soul = getRoleSoul(role);
   const taskPrompt = buildSpecialistTaskPrompt(task);
+  let beatSession: import("@opencode-ai/sdk").Session | null = null;
 
   try {
-    const roleSession = await ensureAgentSession(snapshot, role);
+    // Use ephemeral per-beat session to avoid context bleed (Spec 12 Phase 4)
+    beatSession = await createBeatSession(role, beatId);
     touchAgentSession(role, "working");
     setTaskStatus(task.id, "in_progress");
     emitEmployeeActivity(role, "working", `Beat ${beatId}: executing ${task.title}`, { taskId, beatId });
 
-    const output = await runPromptText(role, roleSession.sessionId, soul.systemPrompt, taskPrompt);
+    const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt);
 
     touchAgentSession(role, "idle");
 
-    // Mark task completed after successful LLM execution — beat tasks are single-shot
+    // Commit structured task result via control plane
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
     const updated = getSnapshot().tasks.find((t) => t.id === taskId);
     if (updated && updated.status !== "completed") {
-      setTaskStatus(task.id, "completed", output?.slice(0, 300) || `${role} completed ${task.title} via beat ${beatId}`);
+      cpCommitTaskResult(snapshot.company.id, task.id, {
+        summary: output?.slice(0, 300) || `${role} completed ${task.title} via beat ${beatId}`,
+        artifacts: [],
+        filesModified: [],
+        tokensUsed,
+        beatId,
+      });
     }
-    const isComplete = true;
 
     return {
       summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
-      tokensUsed: 0,
+      tokensUsed,
       actionsCount: 1,
       toolCalls: 1,
-      completed: isComplete,
+      completed: true,
     };
   } catch (err) {
     touchAgentSession(role, "idle");
     return {
       summary: `Beat task execution failed: ${err instanceof Error ? err.message : String(err)}`,
-      tokensUsed: 0, actionsCount: 0, toolCalls: 0, completed: false,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
     };
+  } finally {
+    // Destroy ephemeral session — best-effort cleanup (Spec 12 Phase 4 Step 5)
+    if (beatSession) {
+      destroyBeatSession(beatSession.id).catch(() => {});
+    }
   }
 }
 
@@ -4953,19 +5032,19 @@ export async function executeChecklistAction(
   // ── CEO: propose sprint when none exists ──
   if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
     if (isCeoStreaming()) {
-      return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: 0, actionsCount: 0, toolCalls: 0 };
+      return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
     try {
       emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
       await triggerCeoSprintProposal();
       return {
         summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
-        tokensUsed: 0, actionsCount: 1, toolCalls: 1,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
       return {
         summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
-        tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
       };
     }
   }
@@ -4985,13 +5064,13 @@ export async function executeChecklistAction(
 
       return {
         summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
-        tokensUsed: 0, actionsCount: 1, toolCalls: 1,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
       touchAgentSession(role, "idle");
       return {
         summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
-        tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
       };
     }
   }
@@ -4999,6 +5078,6 @@ export async function executeChecklistAction(
   // ── Fallback: log the action without executing ──
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
-    tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
   };
 }

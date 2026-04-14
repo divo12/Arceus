@@ -18,12 +18,14 @@ import type {
   AgentBeatContext,
   BeatRecord,
   TaskProgress,
+  TaskResult,
 } from "@arceus/contracts";
 import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
 import { audit, auditSystem } from "./audit-ledger";
 import { getRegistryStats, getToolsForRole } from "./service-registry";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
 import { beatRecordsTable } from "@arceus/db";
+import { desc, eq, and } from "drizzle-orm";
 import {
   getSnapshot,
   getEvents,
@@ -46,6 +48,12 @@ import {
 // ── Version tracking ───────────────────────────────────────
 
 let snapshotVersion = 0;
+let buildCheckProductDir: string | null = null;
+
+/** Set the product directory for build status checks. */
+export function cpSetBuildCheckDir(dir: string) {
+  buildCheckProductDir = dir;
+}
 let mutationCount = 0;
 const startedAt = new Date().toISOString();
 
@@ -399,6 +407,14 @@ export function cpLoadAgentContext(
   // Pending approvals
   const pendingApprovals = snap.approvals.filter((a) => a.status === "pending");
 
+  // Refresh build check for CTO/developer roles if stale (>2 min)
+  if ((agent.role === "cto" || agent.role === "developer") && buildCheckProductDir) {
+    const staleMs = Date.now() - new Date(lastBuildCheck.checkedAt).getTime();
+    if (staleMs > 120_000 || lastBuildCheck.status === "unknown") {
+      cpRunBuildCheck(buildCheckProductDir);
+    }
+  }
+
   return {
     beatId,
     beatNumber,
@@ -442,6 +458,7 @@ export function cpLoadAgentContext(
     beatTokenBudget: config.beatTokenBudget,
     beatCostCeilingCents: config.beatCostCeilingCents,
     companyBudgetRemainingCents: snap.company.budgetCents - snap.company.spentCents,
+    lastBuildCheck: lastBuildCheck.status !== "unknown" ? lastBuildCheck : undefined,
   };
 }
 
@@ -487,7 +504,155 @@ export async function cpCommitBeatRecord(record: BeatRecord): Promise<boolean> {
   }
 }
 
+/**
+ * Retrieve beat history from DB. Falls back to empty array if DB is unavailable.
+ */
+export async function cpGetBeatHistory(
+  companyId: string,
+  opts?: { limit?: number; agentId?: string },
+): Promise<BeatRecord[]> {
+  if (!isDatabaseConfigured()) return [];
+
+  try {
+    const db = getDb();
+    const limit = opts?.limit ?? 100;
+    const conditions = [eq(beatRecordsTable.companyId, companyId)];
+    if (opts?.agentId) conditions.push(eq(beatRecordsTable.agentId, opts.agentId));
+
+    const rows = await db
+      .select()
+      .from(beatRecordsTable)
+      .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      .orderBy(desc(beatRecordsTable.startedAt))
+      .limit(limit);
+
+    return rows.map((r) => ({
+      id: r.id,
+      companyId: r.companyId,
+      agentId: r.agentId ?? null,
+      beatNumber: r.beatNumber,
+      trigger: r.trigger as BeatRecord["trigger"],
+      startedAt: r.startedAt?.toISOString() ?? new Date().toISOString(),
+      endedAt: r.endedAt?.toISOString() ?? null,
+      status: r.status as BeatRecord["status"],
+      snapshotVersionRead: r.snapshotVersionRead ?? null,
+      snapshotVersionWritten: r.snapshotVersionWritten ?? null,
+      phases: (r.phases ?? {}) as BeatRecord["phases"],
+      outcome: (r.outcome as BeatRecord["outcome"]) ?? null,
+      totalTokens: r.totalTokens ?? 0,
+      costCents: Number(r.costCents) || 0,
+      errorMessage: r.errorMessage ?? null,
+      summary: r.summary ?? null,
+    }));
+  } catch (err) {
+    console.warn("[CP] Failed to load beat history from DB:", err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
 /** Get the current snapshot version (for optimistic concurrency). */
 export function cpGetSnapshotVersion(): number {
   return snapshotVersion;
+}
+
+/**
+ * Commit a structured task result when a beat completes a task.
+ * Sets task status to completed, stores result artifacts in executorState,
+ * and emits an audit event.
+ */
+export function cpCommitTaskResult(
+  companyId: string,
+  taskId: string,
+  result: TaskResult,
+): void {
+  const snap = getSnapshot();
+  const task = snap.tasks.find((t) => t.id === taskId);
+  if (!task) {
+    console.warn(`[CP] cpCommitTaskResult: task ${taskId} not found`);
+    return;
+  }
+
+  // Store structured result in executorState.results (capped at 50 entries)
+  const existingResults = task.executorState.results ?? [];
+  const resultEntry = `[${result.beatId}] ${result.summary}`;
+  const updatedResults = [...existingResults, resultEntry].slice(-50);
+
+  updateTask(taskId, (t) => ({
+    ...t,
+    status: "completed" as const,
+    completedAt: new Date().toISOString(),
+    executorState: {
+      ...t.executorState,
+      results: updatedResults,
+    },
+    verifierState: {
+      ...t.verifierState,
+      isVerified: true,
+      feedback: result.summary.slice(0, 300),
+    },
+  }));
+
+  audit({
+    companyId,
+    category: "agent_action",
+    eventType: "task_result_committed",
+    summary: `Task ${taskId} completed via beat ${result.beatId}: ${result.summary.slice(0, 200)}`,
+    detail: {
+      taskId,
+      beatId: result.beatId,
+      artifacts: result.artifacts,
+      filesModified: result.filesModified,
+      tokensUsed: result.tokensUsed,
+    },
+  });
+}
+
+// ── Build Status Check (for heartbeat checklist) ───────────
+
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+/** Cached last build check result (refreshed on demand). */
+let lastBuildCheck: { status: "ok" | "error" | "unknown"; detail: string; checkedAt: string } = {
+  status: "unknown", detail: "Not yet checked", checkedAt: new Date().toISOString(),
+};
+
+/**
+ * Run a build check in the product workspace directory.
+ * Updates the cached result and returns it.
+ * Called periodically or before beats for CTO/developer roles.
+ */
+export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
+  if (!existsSync(productDir)) {
+    lastBuildCheck = { status: "unknown", detail: `Product dir does not exist: ${productDir}`, checkedAt: new Date().toISOString() };
+    return lastBuildCheck;
+  }
+
+  const pkgPath = join(productDir, "package.json");
+  if (!existsSync(pkgPath)) {
+    lastBuildCheck = { status: "ok", detail: "No package.json — no build check applicable", checkedAt: new Date().toISOString() };
+    return lastBuildCheck;
+  }
+
+  try {
+    // Prefer `npm run build` if it exists, otherwise `npx tsc --noEmit`
+    let cmd = "npx tsc --noEmit";
+    try {
+      const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf-8"));
+      if (pkg.scripts?.build) cmd = "npm run build";
+    } catch { /* use default */ }
+
+    execSync(cmd, { cwd: productDir, timeout: 30_000, stdio: "pipe", shell: true as any });
+    lastBuildCheck = { status: "ok", detail: `Build passed (${cmd})`, checkedAt: new Date().toISOString() };
+  } catch (err: unknown) {
+    const stderr = (err as any)?.stderr?.toString?.()?.slice(0, 500) ?? "";
+    lastBuildCheck = { status: "error", detail: stderr || "Build failed", checkedAt: new Date().toISOString() };
+  }
+
+  return lastBuildCheck;
+}
+
+export function cpGetLastBuildCheck() {
+  return lastBuildCheck;
 }

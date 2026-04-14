@@ -573,6 +573,14 @@ export const taskProgressSchema = z.object({
   notes: z.string(),
 });
 
+export const taskResultSchema = z.object({
+  summary: z.string(),
+  artifacts: z.array(z.string()),
+  filesModified: z.array(z.string()),
+  tokensUsed: z.number().int().nonnegative(),
+  beatId: z.string(),
+});
+
 export const agentBeatContextSchema = z.object({
   // Beat metadata
   beatId: z.string(),
@@ -620,6 +628,13 @@ export const agentBeatContextSchema = z.object({
   beatTokenBudget: z.number().int().positive(),
   beatCostCeilingCents: z.number().nonnegative(),
   companyBudgetRemainingCents: z.number().int(),
+
+  // Build status injected by API layer (for checkBuildStatus checklist item)
+  lastBuildCheck: z.object({
+    status: z.enum(["ok", "error", "unknown"]),
+    detail: z.string(),
+    checkedAt: z.string(),
+  }).optional(),
 });
 
 export const companySnapshotSchema = z.object({
@@ -685,4 +700,5 @@ export type BeatPhaseTiming = z.infer<typeof beatPhaseTimingSchema>;
 export type BeatPhases = z.infer<typeof beatPhasesSchema>;
 export type BeatRecord = z.infer<typeof beatRecordSchema>;
 export type TaskProgress = z.infer<typeof taskProgressSchema>;
+export type TaskResult = z.infer<typeof taskResultSchema>;
 export type AgentBeatContext = z.infer<typeof agentBeatContextSchema>;

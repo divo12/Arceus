@@ -20,6 +20,7 @@ import type {
   BeatPhases,
   BeatStatus,
   BeatTrigger,
+  BeatEventTrigger,
 } from "@arceus/contracts";
 import { runChecklist, type ChecklistResult } from "./heartbeat-checklist";
 
@@ -166,6 +167,10 @@ export class HeartbeatEngine {
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
+  // ── Reactive event queue (Spec 12 Phase 3) ───────────────
+  // Events queued while an agent is locked (mid-beat). Drained after beat completion.
+  private readonly eventQueue = new Map<string, Array<{ companyId: string; role: AgentIdentity["role"]; event: BeatEventTrigger }>>();
+
   // ── Staged mutations (P4.3) ──────────────────────────────
   // Beats stage mutations during Phase 3 (Execute) and flush
   // them atomically in Phase 4 (Serialize).
@@ -281,7 +286,57 @@ export class HeartbeatEngine {
     } finally {
       this.locks.release(request.agentId);
       this.semaphore.release();
+      // Drain any events that were queued while this agent was mid-beat
+      this.drainEventQueue(request.agentId);
     }
+  }
+
+  // ── Reactive event dispatch ───────────────────────────────
+
+  /**
+   * Emit a reactive event for a specific agent. If the agent is idle (not
+   * mid-beat), an immediate event-triggered beat fires. If the agent is
+   * locked, the event is queued and drained after the current beat completes.
+   */
+  emitEvent(companyId: string, agentId: string, role: AgentIdentity["role"], event: BeatEventTrigger): void {
+    if (this.locks.isLocked(agentId)) {
+      // Agent is mid-beat — queue and drain after lock release
+      const queue = this.eventQueue.get(agentId) ?? [];
+      queue.push({ companyId, role, event });
+      this.eventQueue.set(agentId, queue);
+      return;
+    }
+
+    // Agent is idle — trigger immediately (fire-and-forget)
+    this.triggerBeat({
+      companyId, agentId, role,
+      trigger: { type: "event", event },
+    }).catch((err) => {
+      console.error(`[HEARTBEAT] Reactive beat failed for ${role} (${event}):`, err instanceof Error ? err.message : err);
+    });
+  }
+
+  /** Drain queued events for an agent after its beat completes. */
+  private drainEventQueue(agentId: string): void {
+    const queue = this.eventQueue.get(agentId);
+    if (!queue || queue.length === 0) return;
+    this.eventQueue.delete(agentId);
+
+    // Fire a beat for the first queued event (subsequent events re-queue if needed)
+    const next = queue.shift()!;
+    // Re-queue remaining so they aren't lost
+    if (queue.length > 0) {
+      this.eventQueue.set(agentId, queue);
+    }
+
+    this.triggerBeat({
+      companyId: next.companyId,
+      agentId,
+      role: next.role,
+      trigger: { type: "event", event: next.event },
+    }).catch((err) => {
+      console.error(`[HEARTBEAT] Queued reactive beat failed for ${next.role} (${next.event}):`, err instanceof Error ? err.message : err);
+    });
   }
 
   // ── Status ───────────────────────────────────────────────
@@ -562,6 +617,20 @@ export class HeartbeatEngine {
         { eventId: beatId, summary: `Beat ${beatId} serialize` },
         snapshotVersionRead ?? undefined
       );
+
+      // Optimistic concurrency conflict — another beat mutated state under us
+      if (heartbeatResult.errors.length > 0 && heartbeatResult.applied === 0) {
+        const conflictMsg = heartbeatResult.errors.join("; ");
+        deps.audit.auditAgent(
+          request.companyId, request.role,
+          "beat_conflict", `Beat ${beatId} OCC conflict: ${conflictMsg}`,
+          { beatId, detail: { snapshotVersionRead, currentVersion: heartbeatResult.version } }
+        );
+        return this.buildRecord(beatId, request, startedAt, phases, "completed", "CONFLICT",
+          totalTokens, conflictMsg, `OCC conflict — mutations discarded (read v${snapshotVersionRead}, current v${heartbeatResult.version})`,
+          snapshotVersionRead, null);
+      }
+
       mutationCount += heartbeatResult.applied;
       snapshotVersionWritten = heartbeatResult.version;
 

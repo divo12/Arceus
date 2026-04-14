@@ -22,6 +22,30 @@ function deploymentUrl(deployment: string) {
 
 type AzureOpenAIUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 
+// ── Per-beat token accumulator ─────────────────────────────
+// Tracks total tokens consumed during a beat window so the heartbeat
+// engine can record actual cost instead of hardcoded 0.
+const beatTokenAccumulators = new Map<string, number>();
+
+/** Start accumulating tokens for a beat. */
+export function startBeatTokenAccumulator(beatId: string) {
+  beatTokenAccumulators.set(beatId, 0);
+}
+
+/** Read and clear the accumulated token count for a beat. */
+export function drainBeatTokenAccumulator(beatId: string): number {
+  const tokens = beatTokenAccumulators.get(beatId) ?? 0;
+  beatTokenAccumulators.delete(beatId);
+  return tokens;
+}
+
+function accumulateBeatTokens(totalTokens: number) {
+  // Add tokens to all active accumulators (usually just one active beat per agent).
+  for (const [beatId, current] of beatTokenAccumulators) {
+    beatTokenAccumulators.set(beatId, current + totalTokens);
+  }
+}
+
 function auditLlmCall(
   deployment: string,
   usage: AzureOpenAIUsage | undefined,
@@ -34,6 +58,8 @@ function auditLlmCall(
   const completionTokens = usage?.completion_tokens ?? 0;
   const totalTokens = usage?.total_tokens ?? (promptTokens + completionTokens);
   const label = ctx?.label ?? schemaName ?? deployment;
+
+  accumulateBeatTokens(totalTokens);
 
   audit({
     companyId,

@@ -93,9 +93,19 @@ function checkReviewQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No tasks awaiting review" };
 }
 
-function checkBuildStatus(_ctx: AgentBeatContext): CheckResult {
-  // Placeholder: Phase 3+ will integrate actual build checks
-  return { status: "ok", detail: "Build check not yet wired" };
+function checkBuildStatus(ctx: AgentBeatContext): CheckResult {
+  const build = ctx.lastBuildCheck;
+  if (!build || build.status === "unknown") {
+    return { status: "ok", detail: "Build check not yet run" };
+  }
+  if (build.status === "error") {
+    return {
+      status: "action_needed",
+      detail: `Build failing: ${build.detail.slice(0, 200)}`,
+      suggestedAction: "Fix build errors before continuing",
+    };
+  }
+  return { status: "ok", detail: build.detail };
 }
 
 function checkDevProgress(ctx: AgentBeatContext): CheckResult {
