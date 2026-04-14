@@ -1,9 +1,24 @@
 # Spec 15: Long-Horizon Strategic Execution
 
 > Status: DRAFT
-> Last updated: 2026-04-13
+> Last updated: 2026-04-14
 > Depends on: Spec 11 (Control Plane), Spec 12 (Heartbeat), Spec 13 (Governance), Spec 14 (Self-Evolution)
 > Enables: Full autonomous company lifecycle
+
+## Carried Forward from Spec 12
+
+> The following items were deferred from Spec 12 (Heartbeat) because they relate to
+> multi-sprint, long-running task lifecycles that only make sense with strategic execution:
+>
+> 1. **TaskProgress tracking across beats** — `TaskProgress` type exists in `contracts/domain.ts`
+>    but `agentBeatContext.taskProgress` is always `[]`. Developer tasks span multiple beats
+>    via `in_progress` status but have no structured step tracking (totalSteps, completedSteps,
+>    currentStepDescription, filesModified, notes). Populate TaskProgress in `cpLoadAgentContext()`
+>    and persist it via `commitTaskResult()` or task metadata mutations.
+>
+> 2. **CEO roadmap alignment checklist** — `checkRoadmap()` in `heartbeat-checklist.ts` checks
+>    sprint completion but returns `{ status: "ok" }` for roadmap alignment. Wire to the
+>    CompanyRoadmap and RoadmapPhase structures once they exist.
 
 ## What This Is
 

@@ -1,9 +1,27 @@
 # Spec 13: Policy-as-Code Governance Gateway
 
 > Status: DRAFT
-> Last updated: 2026-04-13
+> Last updated: 2026-04-14
 > Depends on: Spec 11 (Control Plane — Audit Ledger, Service Registry), Spec 12 (Heartbeat)
 > Enables: Spec 14 (Self-Evolution — policy-gated mutation), Spec 15 (Long-Horizon — auto-approval)
+
+## Carried Forward from Spec 12
+
+> The following items were deferred from Spec 12 (Heartbeat) because they require
+> the Governance Gateway to be meaningful:
+>
+> 1. **Tool call routing through Governance Gateway** — Spec 12 Phase 3 (Execute) states
+>    "All tool calls go through Governance Gateway (Spec 13)". Currently tool calls go
+>    directly to OpenCode/service registry with no policy enforcement. Wire the gateway
+>    as an interceptor between agent LLM sessions and tool execution.
+>
+> 2. **trustFactor refinement** — `AgentBeatContext.trustFactor` is hardcoded to `1.0` in
+>    `cpLoadAgentContext()`. Populate from the Governance Gateway's trust scoring system
+>    based on agent policy violation history.
+>
+> 3. **checkBuildStatus integration** — CTO and Developer checklists have a stub
+>    `checkBuildStatus()` that returns "Build check not yet wired". This needs workspace
+>    integration (shell exec `npm run build`) which should route through the gateway.
 
 ## What This Is
 

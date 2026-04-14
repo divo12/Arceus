@@ -1,9 +1,44 @@
 # Spec 12: Heartbeat Scheduling Engine
 
-> Status: DRAFT
-> Last updated: 2026-04-13
+> Status: PARTIAL — see Implementation Status below
+> Last updated: 2026-04-14
 > Depends on: Spec 11 (Control Plane Sovereignty)
 > Enables: Spec 13 (Governance Gateway), Spec 14 (Self-Evolution), Spec 15 (Long-Horizon)
+
+## Implementation Status
+
+> **Implemented (✅):**
+> - HeartbeatEngine class with 4-phase lifecycle (wake → observe → execute → serialize)
+> - Beat scheduler with per-role intervals, role priority ordering (CEO first)
+> - BeatLockManager + Semaphore concurrency control
+> - All 8 role checklists (CEO, CTO, PM, Dev, Tester, UI, Marketing, Skills)
+> - AgentBeatContext type + cpLoadAgentContext() assembly
+> - Configuration: heartbeat.json defaults + env var overrides
+> - All 6 API endpoints: start/stop/trigger/status/history/config
+> - beat_records table (migration 004) + cpCommitBeatRecord()
+> - beatId column in audit_events + withBeatScope() wiring
+> - stageMutation() + batch flush in Phase 4
+> - snapshot_version column on company_states
+> - BeatEventBus pub/sub for SSE streaming
+> - Budget enforcement: pauseWhenBudgetExhausted, beatTokenBudget ceiling
+> - Sprint lifecycle: CEO detects completion → checkSprintCompletion → propose next → auto-approve
+>
+> **Not implemented (❌) — deferred to Spec 12 Phase 2:**
+> - Event Triggers (Reactive dispatch): types exist but no event queue or reactive beat scheduling
+> - commitTaskResult(): structured task completion + artifact + Hippocampus extraction
+> - Optimistic Concurrency: expectedVersion plumbing exists but cpApplyMutations does not check it
+> - TaskProgress: type exists, agentBeatContext.taskProgress always `[]`
+> - Per-beat cost tracking: BeatRecord.costCents always 0
+> - getBeatHistory from DB: only in-memory history (200 cap)
+> - store.teardown() per beat: store persists across beats
+> - OpenCode session destruction per beat
+> - checkBuildStatus: returns stub — needs workspace integration
+>
+> **Deferred to future specs:**
+> - Governance Gateway tool routing → Spec 13
+> - trustFactor refinement → Spec 13
+> - Roadmap alignment check → Spec 15
+> - TaskProgress tracking across multi-beat tasks → Spec 15
 
 ## What This Is
 
@@ -178,6 +213,12 @@ export const heartbeatConfig = {
 ```
 
 ### 2. Event Trigger (Reactive)
+
+<!-- ❌ NOT IMPLEMENTED — Spec 12 Phase 2
+     Types BeatTrigger and BeatEventTrigger are defined in contracts/domain.ts,
+     but no reactive dispatch exists. Currently only interval triggers fire.
+     Needs: event queue per agent, wiring from task/chat/approval mutations
+     to call heartbeatEngine.triggerBeat() with event-type triggers. -->
 
 Some events should wake an agent immediately, regardless of interval:
 
@@ -520,6 +561,13 @@ The LLM routing logic moves into the CTO's and CEO's Phase 2 (Observe) — they 
 
 ## Long-Running Tasks Within A Beat
 
+<!-- ❌ NOT IMPLEMENTED — Deferred to Spec 15 (Long-Horizon Execution)
+     TaskProgress type exists in contracts/domain.ts but agentBeatContext.taskProgress
+     is always []. No progress tracking, step counting, or progress notes across beats.
+     The workspace DOES persist (git-tracked), and tasks span beats via in_progress status,
+     but there is no structured step-level tracking.
+     See Spec 15 § Carried Forward from Spec 12. -->
+
 Some tasks (e.g., Developer implementation) may take longer than a single beat. The heartbeat handles this by tracking **task progress across beats**:
 
 ```
@@ -560,6 +608,11 @@ interface TaskProgress {
 
 ## Cost Model
 
+<!-- ❌ NOT IMPLEMENTED — Spec 12 Phase 2
+     BeatRecord.costCents is always 0. No per-beat cost calculation exists.
+     Token counts are partially tracked (execution phase) but not converted to cost.
+     Needs: LLM response token/cost extraction wired into BeatRecord. -->
+
 ```
 Idle company (8 agents, no work):
   8 agents × 1 beat/min × 60 min = 480 beats/hour
@@ -583,6 +636,16 @@ Optimization: Pause heartbeats for idle companies (no active sprint).
 ## Deferred from Spec 11
 
 The following Control Plane interfaces were specified in Spec 11 but deferred because they only make sense once heartbeat scheduling exists. **This spec must implement them.**
+
+> **Status of each deferred item:**
+> 1. loadAgentContext() — ✅ Implemented
+> 2. loadActiveSprint() — ✅ Implemented
+> 3. commitBeatRecord() + beat_records — ✅ Implemented
+> 4. commitTaskResult() — ❌ Not implemented
+> 5. Optimistic Concurrency — ❌ Plumbing only (not enforced)
+> 6. beatId in Audit Events — ✅ Implemented
+> 7. stageMutation() — ✅ Implemented
+> 8. snapshot_version — ✅ Migration done
 
 ### 1. `loadAgentContext()` — Minimal Beat Context
 
@@ -609,9 +672,23 @@ Spec 11 specifies a `beat_records` table (see Spec 11 Database Changes section) 
 
 ### 4. `commitTaskResult()` — Artifacts + Memory Extraction
 
+<!-- ❌ NOT IMPLEMENTED — Spec 12 Phase 2
+     Task completion is currently ad-hoc: setTaskStatus(taskId, "completed") in
+     orchestrator.ts executeBeatTask(). No structured artifact collection or
+     Hippocampus memory extraction is triggered on task completion.
+     Hippocampus DOES run during beats (habit matching, priming, fact extraction)
+     but not specifically on task completion events. -->
+
 Spec 11 defines `commitTaskResult(companyId, taskId, result, causation)` which records task completion along with artifacts and triggers Hippocampus memory extraction. Implement when building the beat's Phase 3 (EXECUTE + RECORD) action handler.
 
 ### 5. Optimistic Concurrency — Version Conflict Detection
+
+<!-- ❌ NOT ENFORCED — Spec 12 Phase 2
+     The expectedVersion parameter flows through: HeartbeatEngine.flushStagedMutations()
+     passes it to cpApplyMutations(). BUT cpApplyMutations() ignores it — always succeeds.
+     snapshotVersionRead/Written are recorded in BeatRecord for future use.
+     Needs: version check in cpApplyMutations, structured conflict error,
+     retry-on-next-tick behavior in fourPhaseExecutor. -->
 
 Spec 11 specifies optimistic concurrency: when a beat reads snapshot version N and another beat writes version N+1 before it commits, the late writer must fail and retry on next cycle. Currently `cpApplyMutations()` always succeeds. This spec must:
 
