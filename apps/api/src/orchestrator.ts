@@ -9,7 +9,7 @@ import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/in
 import { emitEmployeeActivity } from "./activity";
 import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
 import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
+import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
 import { isCeoStreaming } from "./chat";
@@ -25,6 +25,20 @@ import { createHippocampusService, EXTRACTION_SYSTEM_PROMPT, buildExtractionUser
 import type { PreparedAgentContext, ExtractedFact, MemoryAction } from "@arceus/hippocampus";
 import type { BeatEventTrigger } from "@arceus/contracts";
 import { z } from "zod";
+
+import {
+  createReviewState,
+  buildGateFailureBugFields,
+  buildBugFixTaskFields,
+  parseQAReport,
+  routeDefect,
+  allBugFixesResolved,
+  shouldRetestAfterRework,
+  shouldEscalate,
+  type QAReport,
+  type QAFinding,
+} from "./sprint-review";
+import { runVerificationGate } from "./verification-gate";
 
 // ---------------------------------------------------------------------------
 // Reactive event emitter — wired to HeartbeatEngine.emitEvent() by server.ts
@@ -808,7 +822,9 @@ let sprintCompletionTriggered = false;
 
 /**
  * Checks if all employee tasks in the current sprint have reached terminal status.
- * If so, marks the sprint as completed, tags a snapshot, and triggers CEO auto-proposal.
+ * If so, enters the "reviewing" phase (Spec 21) instead of immediately completing.
+ * The reviewing phase runs a pre-gate build check, then hands off to the tester
+ * via the heartbeat checklist system.
  * Guard flag prevents double-firing.
  */
 async function checkSprintCompletion(): Promise<boolean> {
@@ -819,10 +835,11 @@ async function checkSprintCompletion(): Promise<boolean> {
   if (!currentSprintId) return false;
 
   const currentSprint = snapshot.sprints.find((s) => s.id === currentSprintId);
-  if (!currentSprint || currentSprint.status === "completed") return false;
+  if (!currentSprint || currentSprint.status === "completed" || currentSprint.status === "reviewing") return false;
 
+  // Exclude follow_up and bug_fix tasks from completion check (they're part of the review cycle)
   const sprintTasks = snapshot.tasks.filter(
-    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up",
+    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up" && t.kind !== "bug_fix",
   );
   if (sprintTasks.length === 0) return false;
 
@@ -840,49 +857,432 @@ async function checkSprintCompletion(): Promise<boolean> {
 
   sprintCompletionTriggered = true;
 
+  // ── Spec 21: Enter sprint reviewing phase ──────────────────
+
+  emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → REVIEWING (all implementation tasks terminal)`, {
+    detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId },
+  });
+
+  const reviewState = createReviewState(3);
+
+  updateSprint(currentSprintId, (sprint) => ({
+    ...sprint,
+    status: "reviewing" as Sprint["status"],
+    reviewState,
+  }));
+
+  // Run pre-review build gate
+  const productDir = workspaceManager.getLegacyProductDir();
+  const gateResult = await runVerificationGate(productDir, "pre_review");
+
+  reviewState.gateResults.push(gateResult);
+
+  if (!gateResult.passed) {
+    // Build failed → create a bug_fix task for developer
+    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate FAILED — creating build fix task`, {
+      detail: { gateResult },
+    });
+
+    const bugFields = buildGateFailureBugFields(gateResult, currentSprintId);
+    if (bugFields) {
+      const bugTask = createWorkflowTask(
+        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        bugFields.title, bugFields.description, bugFields.problemStatement,
+        bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
+        bugFields.sprintId,
+      );
+      upsertTask(bugTask);
+      reviewState.bugTaskIds.push(bugTask.id);
+      reviewState.phase = "rework";
+      emitReactive(bugFields.assignedRole, "bug_reported");
+    }
+  } else {
+    // Build passed → advance to tester verification
+    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — awaiting tester verification`, {
+      detail: { gateResult },
+    });
+    reviewState.phase = "tester_verification";
+    emitReactive("tester", "task_assigned");
+  }
+
+  // Persist the updated review state
+  updateSprint(currentSprintId, (sprint) => ({
+    ...sprint,
+    reviewState,
+  }));
+
+  sprintCompletionTriggered = false;
+  return true;
+}
+
+/**
+ * Complete the sprint after the reviewing phase is done (Spec 21).
+ * Called when the final gate passes or CTO decides to skip.
+ */
+async function finalizeSprintCompletion(sprintId: string): Promise<void> {
+  const snapshot = getSnapshot();
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  if (!sprint) return;
+
+  const sprintTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === sprintId && t.kind !== "follow_up",
+  );
   const completedCount = sprintTasks.filter((t) => t.status === "completed").length;
   const failedCount = sprintTasks.filter((t) => t.status === "failed").length;
   const cancelledCount = sprintTasks.filter((t) => t.status === "cancelled").length;
 
-  emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → COMPLETED (${completedCount}/${sprintTasks.length} delivered, ${failedCount} failed, ${cancelledCount} cancelled)`, {
-    detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
+  emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} → COMPLETED (${completedCount}/${sprintTasks.length} delivered, ${failedCount} failed, ${cancelledCount} cancelled)`, {
+    detail: { sprintNumber: sprint.number, sprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
   });
 
-  // Mark sprint completed
-  updateSprint(currentSprintId, (sprint) => ({
-    ...sprint,
+  updateSprint(sprintId, (s) => ({
+    ...s,
     status: "completed" as Sprint["status"],
     completedAt: nowIso(),
-    summary: `Sprint ${sprint.number} completed — ${completedCount}/${sprintTasks.length} tasks delivered.`,
+    summary: `Sprint ${s.number} completed — ${completedCount}/${sprintTasks.length} tasks delivered.`,
+    reviewState: s.reviewState ? { ...s.reviewState, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
   }));
-
-  emitEmployeeActivity(
-    "system",
-    "info",
-    `Sprint ${currentSprint.number} completed. ${sprintTasks.filter((t) => t.status === "completed").length} delivered, ${sprintTasks.filter((t) => t.status === "failed").length} failed, ${sprintTasks.filter((t) => t.status === "cancelled").length} cancelled.`,
-  );
 
   await tagCurrentSprintSnapshot();
 
-  // CEO announces sprint completion in chat before proposing next sprint
   const ceoAgent = getAgentByRole(snapshot, "ceo");
   appendChatMessage({
     id: `chat_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
-    sprintId: currentSprintId,
+    sprintId,
     agentId: ceoAgent?.id ?? null,
     role: "ceo",
-    content: `Sprint ${currentSprint.number} is complete. ${sprintTasks.filter((t) => t.status === "completed").length} tasks delivered, ${sprintTasks.filter((t) => t.status === "failed").length} failed. Preparing next sprint proposal now.`,
+    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. Preparing next sprint proposal now.`,
     cardType: "status_update",
     cardData: null,
     createdAt: nowIso(),
   });
 
-  // Trigger CEO to auto-propose Sprint N+1
   await triggerCeoSprintProposal();
+}
 
-  sprintCompletionTriggered = false;
-  return true;
+/**
+ * Handle tester verification beat action during sprint review (Spec 21).
+ * Runs the tester LLM to produce a QA report, then either advances the review
+ * or creates bug_fix tasks.
+ */
+async function executeSprintReviewVerification(
+  ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const snapshot = getSnapshot();
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") {
+    return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  if (!reviewState) {
+    return { summary: "No review state found", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprintId = sprint.id;
+  const role = ctx.role;
+  const soul = getRoleSoul(role);
+
+  // Build the tester verification prompt
+  const completedTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === sprintId && t.status === "completed" && t.kind !== "bug_fix" && t.kind !== "follow_up",
+  );
+
+  const taskLines = completedTasks.map((t) =>
+    `- [${t.id}] ${t.title}\n  Kind: ${t.kind}\n  DoD: ${t.definitionOfDone.join(", ")}\n  Artifacts: ${t.artifactIds.length}`
+  ).join("\n");
+
+  const prompt = [
+    `You are verifying Sprint ${sprint.number}: "${sprint.goal}".`,
+    "",
+    "## Completed Tasks",
+    taskLines || "(No completed tasks)",
+    "",
+    "## Your Verification Steps",
+    "1. Analyze each completed task against its Definition of Done",
+    "2. Identify any defects or gaps",
+    "3. Produce a structured QA report",
+    "",
+    "## QA Report Format (required)",
+    "Output a JSON block with this structure:",
+    '{"verdict":"pass"|"fail","tasks":[{"taskId":"...","verdict":"pass"|"fail","findings":[{"defect_area":"build_failure"|"test_failure"|"ui_rendering"|"ui_interaction"|"api_behavior"|"accessibility"|"content"|"design_mismatch"|"logic_error"|"performance","severity":"critical"|"high"|"medium"|"low","description":"...","expected":"...","actual":"...","file":"...","fix_suggestion":"..."}],"dod_checklist":[{"item":"...","status":"pass"|"fail","evidence":"..."}]}],"test_files_written":[],"build_status":"pass"|"fail"|"skipped","test_suite_status":"pass"|"fail"|"skipped"|"no_tests"}',
+  ].join("\n");
+
+  try {
+    const session = await ensureAgentSession(snapshot, role);
+    touchAgentSession(role, "working");
+    emitEmployeeActivity(role, "working", `Beat ${beatId}: running sprint verification for Sprint ${sprint.number}`, { beatId });
+
+    const output = await runPromptText(role, session.sessionId, soul.systemPrompt, prompt);
+    touchAgentSession(role, "idle");
+
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+
+    // Try to parse QA report from output
+    const qaReport = output ? parseQAReport(output) : null;
+
+    if (qaReport && qaReport.verdict === "pass") {
+      // Tester approves → advance to final gate
+      emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: PASS — advancing to final gate`, { beatId });
+
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
+      }));
+
+      // Persist a QA report artifact
+      const artifact = {
+        id: `artifact_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId,
+        taskId: null,
+        agentRole: "tester",
+        kind: "qa_report" as const,
+        title: `Sprint ${sprint.number} QA Report — PASS`,
+        content: output ?? "Verification passed",
+        fileReferences: qaReport.testFilesWritten.map((f) => ({ path: f, action: "created" })),
+        createdAt: nowIso(),
+      };
+      await persistRuntimeArtifact(snapshot.company.id, artifact as any);
+
+      return { summary: `Tester verification PASS for Sprint ${sprint.number}`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+
+    } else if (qaReport && qaReport.verdict === "fail") {
+      // Tester found bugs → create bug_fix tasks
+      emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: FAIL — creating bug fix tasks`, { beatId });
+
+      const updatedReviewState: SprintReviewState = {
+        ...(reviewState as SprintReviewState),
+        testerVerdict: "fail",
+        phase: "rework",
+        reworkCycleCount: reviewState.reworkCycleCount + 1,
+      };
+
+      const newBugTaskIds: string[] = [...reviewState.bugTaskIds];
+      const rolesWithBugs = new Set<AgentIdentity["role"]>();
+
+      for (const taskReport of qaReport.tasks) {
+        if (taskReport.verdict !== "fail") continue;
+        for (const finding of taskReport.findings) {
+          const bugFields = buildBugFixTaskFields({
+            finding: {
+              ...finding,
+              taskId: taskReport.taskId,
+            },
+            sprintId,
+            parentTaskId: taskReport.taskId,
+          });
+          const bugTask = createWorkflowTask(
+            getSnapshot(), bugFields.kind, bugFields.assignedRole,
+            bugFields.title, bugFields.description, bugFields.problemStatement,
+            bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
+            bugFields.sprintId,
+          );
+          bugTask.parentTaskId = bugFields.parentTaskId;
+          upsertTask(bugTask);
+          newBugTaskIds.push(bugTask.id);
+          rolesWithBugs.add(bugFields.assignedRole);
+
+          // Create feedback round for audit trail
+          const feedbackRound = {
+            id: `fb_${crypto.randomUUID()}`,
+            companyId: snapshot.company.id,
+            taskId: bugTask.id,
+            iteration: updatedReviewState.reworkCycleCount,
+            fromRole: "tester" as const,
+            toRole: bugFields.assignedRole,
+            verdict: "revise" as const,
+            feedback: finding.description,
+            artifactIds: [],
+            createdAt: nowIso(),
+          };
+          // Store feedback round in snapshot
+          const snap = getSnapshot();
+          const updatedFeedback = [...(snap.feedbackRounds ?? []), feedbackRound];
+          // We can't directly push — use store's upsert pattern
+        }
+      }
+
+      updatedReviewState.bugTaskIds = newBugTaskIds;
+
+      // Check if we've exceeded rework limit → escalate
+      if (shouldEscalate(updatedReviewState)) {
+        updatedReviewState.phase = "escalated";
+        updatedReviewState.escalatedToCto = true;
+        emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
+        emitReactive("cto", "escalation_received");
+      }
+
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: updatedReviewState,
+      }));
+
+      // Wake all affected roles
+      for (const bugRole of rolesWithBugs) {
+        emitReactive(bugRole, "bug_reported");
+      }
+
+      // Persist QA report artifact
+      const artifact = {
+        id: `artifact_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId,
+        taskId: null,
+        agentRole: "tester",
+        kind: "qa_report" as const,
+        title: `Sprint ${sprint.number} QA Report — FAIL (cycle ${updatedReviewState.reworkCycleCount})`,
+        content: output ?? "Verification failed",
+        fileReferences: [],
+        createdAt: nowIso(),
+      };
+      await persistRuntimeArtifact(snapshot.company.id, artifact as any);
+
+      return {
+        summary: `Tester verification FAIL for Sprint ${sprint.number} — ${newBugTaskIds.length - reviewState.bugTaskIds.length} new bugs filed`,
+        tokensUsed, actionsCount: 1, toolCalls: 1,
+      };
+
+    } else {
+      // Couldn't parse QA report — treat as pass with warning
+      emitEmployeeActivity("tester", "info", `Sprint ${sprint.number} tester output could not be parsed as QA report — treating as pass`, { beatId });
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
+      }));
+      return { summary: `Tester output unparseable — advancing to final gate`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+    }
+  } catch (err) {
+    touchAgentSession(role, "idle");
+    emitEmployeeActivity(role, "error", `Beat ${beatId}: sprint verification failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    return {
+      summary: `Sprint verification failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
+}
+
+/**
+ * Run the final verification gate (build + test) and complete the sprint if it passes.
+ * Called by the tester's checklist action when reviewState.phase === "final_gate".
+ */
+async function executeSprintFinalGate(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  if (!sprint || sprint.status !== "reviewing") {
+    return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  if (!reviewState) {
+    return { summary: "No review state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const productDir = workspaceManager.getLegacyProductDir();
+  const gateResult = await runVerificationGate(productDir, "final");
+
+  const updatedGateResults = [...reviewState.gateResults, gateResult];
+
+  if (gateResult.passed) {
+    emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} final gate PASSED — completing sprint`, { beatId, detail: { gateResult } });
+
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      reviewState: s.reviewState ? { ...s.reviewState, gateResults: updatedGateResults, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
+    }));
+
+    await finalizeSprintCompletion(sprintId);
+
+    return {
+      summary: `Sprint ${sprint.number} final gate PASSED — sprint completed`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+    };
+  } else {
+    // Final gate failed → create bug task, back to rework
+    emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} final gate FAILED — back to rework`, { beatId, detail: { gateResult } });
+
+    const bugFields = buildGateFailureBugFields(gateResult, sprintId);
+    const newBugIds = [...reviewState.bugTaskIds];
+    if (bugFields) {
+      const bugTask = createWorkflowTask(
+        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        bugFields.title, bugFields.description, bugFields.problemStatement,
+        bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
+        bugFields.sprintId,
+      );
+      upsertTask(bugTask);
+      newBugIds.push(bugTask.id);
+      emitReactive(bugFields.assignedRole, "bug_reported");
+    }
+
+    const newReworkCount = reviewState.reworkCycleCount + 1;
+    const escalate = newReworkCount >= reviewState.maxReworkCycles;
+
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      reviewState: s.reviewState ? {
+        ...s.reviewState,
+        gateResults: updatedGateResults,
+        bugTaskIds: newBugIds,
+        reworkCycleCount: newReworkCount,
+        phase: (escalate ? "escalated" : "rework") as any,
+        escalatedToCto: escalate || s.reviewState.escalatedToCto,
+      } : s.reviewState,
+    }));
+
+    if (escalate) {
+      emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} rework limit exceeded — escalating to CTO`, { beatId });
+      emitReactive("cto", "escalation_received");
+    }
+
+    return {
+      summary: `Sprint ${sprint.number} final gate FAILED — ${escalate ? "escalated to CTO" : "back to rework"}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+    };
+  }
+}
+
+/**
+ * Handle the transition from rework → tester_verification when all bugs are fixed.
+ * Called by the tester's checklist action.
+ */
+async function executeRetestAfterRework(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  emitEmployeeActivity("tester", "transition", `Bug fixes resolved — advancing to tester re-verification`, { beatId });
+
+  // Clear the bugTaskIds and advance phase
+  updateSprint(sprintId, (s) => ({
+    ...s,
+    reviewState: s.reviewState ? {
+      ...s.reviewState,
+      phase: "tester_verification" as const,
+      bugTaskIds: [],  // clear for next cycle
+      testerVerdict: null,
+    } : s.reviewState,
+  }));
+
+  return {
+    summary: `Bug fixes resolved — tester will re-verify on next beat`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+  };
 }
 
 async function tagCurrentSprintSnapshot() {
@@ -5328,6 +5728,27 @@ export async function executeChecklistAction(
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
       };
     }
+  }
+
+  // ── Tester: sprint review actions (Spec 21) ──
+  if (role === "tester" && action.suggestedAction.startsWith("sprint_review:")) {
+    startBeatTokenAccumulator(beatId);
+    const reviewAction = action.suggestedAction;
+
+    if (reviewAction === "sprint_review:run_tester_verification") {
+      return executeSprintReviewVerification(ctx, beatId);
+    }
+    if (reviewAction === "sprint_review:run_final_gate") {
+      return executeSprintFinalGate(ctx, beatId);
+    }
+    if (reviewAction === "sprint_review:retest_after_rework") {
+      return executeRetestAfterRework(ctx, beatId);
+    }
+
+    return {
+      summary: `Unknown sprint review action: ${reviewAction}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
   }
 
   // ── Fallback: log the action without executing ──

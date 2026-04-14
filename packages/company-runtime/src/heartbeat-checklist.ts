@@ -208,6 +208,75 @@ function checkTestQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No tasks to test" };
 }
 
+// ── Spec 21: Sprint Verification Checks ────────────────────
+
+/**
+ * Tester check: is the sprint in "reviewing" and waiting for tester verification?
+ * Fires when reviewState.phase is "tester_verification" or "final_gate".
+ */
+function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+
+  const reviewState = (sprint as any).reviewState;
+  if (!reviewState) return { status: "ok", detail: "No review state" };
+
+  if (reviewState.phase === "tester_verification") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} awaiting tester verification (cycle ${reviewState.reworkCycleCount})`,
+      suggestedAction: "sprint_review:run_tester_verification",
+    };
+  }
+
+  if (reviewState.phase === "final_gate") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} awaiting final gate`,
+      suggestedAction: "sprint_review:run_final_gate",
+    };
+  }
+
+  return { status: "ok", detail: `Review phase: ${reviewState.phase}` };
+}
+
+/**
+ * Tester check: have all bug_fix tasks been resolved?
+ * When the sprint is in "rework" phase and all bug_fix tasks are terminal,
+ * triggers the tester to re-verify.
+ */
+function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+
+  const reviewState = (sprint as any).reviewState;
+  if (!reviewState || reviewState.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
+
+  const bugTaskIds: string[] = reviewState.bugTaskIds ?? [];
+  if (bugTaskIds.length === 0) return { status: "ok", detail: "No bug tasks tracked" };
+
+  // Check if ALL bug_fix tasks are terminal
+  const allResolved = bugTaskIds.every((id: string) => {
+    const task = ctx.tasks.find((t) => t.id === id);
+    if (!task) return true; // missing counts as resolved
+    return ["completed", "cancelled", "failed"].includes(task.status);
+  });
+
+  if (allResolved) {
+    return {
+      status: "action_needed",
+      detail: `All ${bugTaskIds.length} bug fix(es) resolved — ready for re-verification`,
+      suggestedAction: "sprint_review:retest_after_rework",
+    };
+  }
+
+  const remaining = bugTaskIds.filter((id: string) => {
+    const task = ctx.tasks.find((t) => t.id === id);
+    return task && !["completed", "cancelled", "failed"].includes(task.status);
+  });
+  return { status: "ok", detail: `${remaining.length} bug fix(es) still pending` };
+}
+
 function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
   const designTasks = ctx.tasks.filter(
     (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "ui_designer"
@@ -259,7 +328,7 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   cto: [checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
-  tester: [checkTestQueue, checkAssignedTasks],
+  tester: [checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
   ui_designer: [checkDesignQueue, checkAssignedTasks],
   marketing: [checkContentQueue, checkAssignedTasks],
   skills_lead: [checkSkillQueue, checkAssignedTasks],

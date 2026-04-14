@@ -26,7 +26,8 @@ export const taskKindSchema = z.enum([
   "distribution_campaign",
   "skill_authoring",
   "board_handoff",
-  "follow_up"
+  "follow_up",
+  "bug_fix"
 ]);
 export const artifactKindSchema = z.enum([
   "architecture",
@@ -114,6 +115,7 @@ export const sprintSchema = z.object({
   status: sprintStatusSchema,
   plannedByAgentId: z.string().nullable(),
   summary: z.string().nullable(),
+  reviewState: z.lazy(() => sprintReviewStateSchema).nullable().optional(),
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable()
@@ -509,6 +511,7 @@ export const beatEventTriggerSchema = z.enum([
   "feedback_received",
   "sprint_started",
   "escalation_received",
+  "bug_reported",
 ]);
 
 export const beatTriggerSchema = z.discriminatedUnion("type", [
@@ -658,6 +661,60 @@ export const companySnapshotSchema = z.object({
   feedbackRounds: z.array(feedbackRoundSchema).default([])
 });
 
+// ── Spec 21: Sprint Verification & QA Framework ─────────────
+
+export const verificationGateResultSchema = z.object({
+  passed: z.boolean(),
+  buildResult: z.object({
+    exitCode: z.number(),
+    stdout: z.string(),
+    stderr: z.string(),
+  }).nullable(),
+  testResult: z.object({
+    exitCode: z.number(),
+    stdout: z.string(),
+    stderr: z.string(),
+    summary: z.string(),
+  }).nullable(),
+  phase: z.enum(["pre_review", "final"]),
+  timestamp: z.string(),
+});
+
+export const sprintReviewPhaseSchema = z.enum([
+  "pre_gate",
+  "tester_verification",
+  "rework",
+  "final_gate",
+  "complete",
+  "escalated",
+]);
+
+export const sprintReviewStateSchema = z.object({
+  phase: sprintReviewPhaseSchema,
+  gateResults: z.array(verificationGateResultSchema),
+  bugTaskIds: z.array(z.string()),
+  reworkCycleCount: z.number().int().nonnegative(),
+  maxReworkCycles: z.number().int().positive().default(3),
+  testerVerdict: z.enum(["pending", "pass", "fail"]).nullable(),
+  escalatedToCto: z.boolean(),
+  ctoDecision: z.enum(["fix", "skip", "abort"]).nullable(),
+  startedAt: z.string(),
+  completedAt: z.string().nullable(),
+});
+
+export const defectAreaSchema = z.enum([
+  "build_failure",
+  "test_failure",
+  "ui_rendering",
+  "ui_interaction",
+  "api_behavior",
+  "accessibility",
+  "content",
+  "design_mismatch",
+  "logic_error",
+  "performance",
+]);
+
 // ── Spec 13: Policy Governance Gateway ──────────────────────
 
 export const policyDecisionKindSchema = z.enum(["allow", "deny", "escalate"]);
@@ -794,3 +851,9 @@ export type TrustEventKind = z.infer<typeof trustEventKindSchema>;
 export type TrustEvent = z.infer<typeof trustEventSchema>;
 export type PolicySeverity = z.infer<typeof policySeveritySchema>;
 export type PolicyViolation = z.infer<typeof policyViolationSchema>;
+
+// Sprint Verification types (Spec 21)
+export type VerificationGateResult = z.infer<typeof verificationGateResultSchema>;
+export type SprintReviewPhase = z.infer<typeof sprintReviewPhaseSchema>;
+export type SprintReviewState = z.infer<typeof sprintReviewStateSchema>;
+export type DefectArea = z.infer<typeof defectAreaSchema>;

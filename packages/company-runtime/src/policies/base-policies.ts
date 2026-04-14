@@ -54,6 +54,7 @@ const budgetExhausted: PolicyRule = rule({
   toolPatterns: ["*"],
   decision: "deny",
   priority: 1000,
+  enabled: false,  // Evaluated externally via budget context flag, not via rule engine
 });
 
 /**
@@ -168,17 +169,33 @@ const ctoNoRawCode: PolicyRule = rule({
 });
 
 /**
- * Rule 10 – Tester: no code writing.
- * Testers can read files and run shell (for test commands) but not write code.
+ * Rule 10 – Tester: no code writing (production code).
+ * Testers can read files and run shell (for test commands) but not write production code.
+ * See Rule 10b for the test-file carve-out.
  */
 const testerNoCodeWrite: PolicyRule = rule({
   id: "tester-no-code-write",
-  name: "Tester: No Code Writing",
+  name: "Tester: No Production Code Writing",
   description: "Testers validate via shell and file reading; they must not write production code.",
   appliesTo: ["tester"],
   toolPatterns: ["write", "apply_patch"],
   decision: "deny",
   priority: 500,
+});
+
+/**
+ * Rule 10b – Tester: allow writing test files only (Spec 21).
+ * Higher priority than Rule 10, creates a carve-out for *.test.* and *.spec.* files.
+ * Runtime enforcement checks file path against test patterns.
+ */
+const testerWriteTestsOnly: PolicyRule = rule({
+  id: "tester-write-tests-only",
+  name: "Tester: Write Tests Only",
+  description: "Tester can write/edit only test files (*.test.*, *.spec.*). Production code is denied by Rule 10.",
+  appliesTo: ["tester"],
+  toolPatterns: ["write", "edit", "apply_patch"],
+  decision: "allow",
+  priority: 550,
 });
 
 /**
@@ -207,6 +224,7 @@ export const BASE_POLICY_RULES: PolicyRule[] = [
   criticalTrustLockout,
   restrictedTrustShellEscalation,
   standardTrustPatchEscalation,
+  testerWriteTestsOnly,
   ctoNoRawCode,
   testerNoCodeWrite,
   readToolsAlwaysAllowed,
