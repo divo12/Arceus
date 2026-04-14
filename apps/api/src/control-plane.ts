@@ -25,8 +25,19 @@ import { audit, auditSystem } from "./audit-ledger";
 import { emitEmployeeActivity } from "./activity";
 import { getRegistryStats, getToolsForRole } from "./service-registry";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
-import { beatRecordsTable } from "@arceus/db";
-import { desc, eq, and } from "drizzle-orm";
+import { beatRecordsTable, trustScoresTable, policyViolationsTable } from "@arceus/db";
+import { desc, eq, and, sql } from "drizzle-orm";
+import {
+  createInitialTrust,
+  adjustTrust,
+  buildTrustEvent,
+  getTrustTier,
+  filterToolsForAgent,
+  summarizeFilterResult,
+  BASE_POLICY_RULES,
+  TRUST_CONFIG,
+} from "@arceus/company-runtime";
+import type { TrustScore, TrustEvent, PolicyViolation } from "@arceus/contracts";
 import {
   getSnapshot,
   getEvents,
@@ -391,6 +402,31 @@ export function cpLoadAgentContext(
   const tools = getToolsForRole(snap.company.id, agent.role);
   const toolNames = tools.map((t) => t.toolName);
 
+  // ── Governance: load trust score and filter tools (Spec 13) ──
+  const agentTrustScore = trustScoreCache.get(agentId)?.score ?? TRUST_CONFIG.initialScore;
+  const budgetRemaining = snap.company.budgetCents - snap.company.spentCents;
+  let filteredToolNames = toolNames;
+  if (budgetRemaining <= 0) {
+    filteredToolNames = [];
+    emitEmployeeActivity(agent.role, "decision", `Beat ${beatId}: budget exhausted — all tools denied`, { beatId, detail: { budgetRemaining, agentId } });
+  } else {
+    const filterResult = filterToolsForAgent(
+      agent.role, agentTrustScore, toolNames, BASE_POLICY_RULES,
+      snap.company.id, agentId, beatId,
+    );
+    filteredToolNames = filterResult.allowed;
+    const summary = summarizeFilterResult(filterResult, agent.role);
+    emitEmployeeActivity(agent.role, "decision", `Beat ${beatId}: ${summary}`, {
+      beatId, detail: {
+        trustScore: agentTrustScore,
+        trustTier: getTrustTier(agentTrustScore),
+        allowed: filterResult.allowed,
+        denied: filterResult.denied.map(d => ({ tool: d.tool, rule: d.decision.ruleId })),
+        escalated: filterResult.escalated.map(e => ({ tool: e.tool, rule: e.decision.ruleId })),
+      },
+    });
+  }
+
   // Memory/priming context
   const agentMemory = snap.memories.find((m) => m.agentId === agentId);
   const agentHabits = snap.habits.filter((h) => h.agentId === agentId && h.status === "active");
@@ -417,7 +453,7 @@ export function cpLoadAgentContext(
     }
   }
 
-  emitEmployeeActivity(agent.role, "context", `Beat ${beatId}: context assembled — ${agentTasks.length} tasks, ${artifacts.length} artifacts, ${toolNames.length} tools, ${agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0} memories, ${agentHabits.length} habits, ${recentMeetings.length} meetings, ${pendingApprovals.length} approvals`, {
+  emitEmployeeActivity(agent.role, "context", `Beat ${beatId}: context assembled — ${agentTasks.length} tasks, ${artifacts.length} artifacts, ${filteredToolNames.length}/${toolNames.length} tools (trust=${agentTrustScore.toFixed(2)}), ${agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0} memories, ${agentHabits.length} habits, ${recentMeetings.length} meetings, ${pendingApprovals.length} approvals`, {
     beatId,
     detail: {
       agentId: agent.id,
@@ -470,8 +506,8 @@ export function cpLoadAgentContext(
     habits: agentHabits.map((h) => h.name),
     priming: agentPriming?.lastDisposition ?? "",
 
-    availableTools: toolNames,
-    trustFactor: 1.0, // Spec 13 Governance Gateway will refine this
+    availableTools: filteredToolNames,
+    trustFactor: agentTrustScore,
 
     approvals: pendingApprovals,
     recentBoardMessages,
@@ -678,3 +714,188 @@ export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
 export function cpGetLastBuildCheck() {
   return lastBuildCheck;
 }
+
+// ── Spec 13: Trust Score CRUD ───────────────────────────────
+
+/** In-memory cache for trust scores (populated from DB on first load). */
+const trustScoreCache = new Map<string, TrustScore>();
+
+/** Load trust score from cache or DB. Returns initial score if not found. */
+export async function cpLoadTrustScore(agentId: string): Promise<TrustScore> {
+  if (trustScoreCache.has(agentId)) {
+    return trustScoreCache.get(agentId)!;
+  }
+
+  if (isDatabaseConfigured()) {
+    try {
+      const db = getDb();
+      const rows = await db.select().from(trustScoresTable).where(eq(trustScoresTable.agentId, agentId)).limit(1);
+      if (rows.length > 0) {
+        const row = rows[0];
+        const ts: TrustScore = {
+          agentId: row.agentId,
+          score: row.score,
+          history: (row.history as TrustScore["history"]) ?? [],
+          updatedAt: row.updatedAt?.toISOString() ?? new Date().toISOString(),
+        };
+        trustScoreCache.set(agentId, ts);
+        return ts;
+      }
+    } catch (err) {
+      console.warn(`[Governance] Failed to load trust score for ${agentId}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Create initial trust score
+  const initial = createInitialTrust(agentId, new Date().toISOString());
+  trustScoreCache.set(agentId, initial);
+  return initial;
+}
+
+/** Update trust score: apply event, persist to cache + DB. */
+export async function cpUpdateTrustScore(event: TrustEvent): Promise<TrustScore> {
+  const current = await cpLoadTrustScore(event.agentId);
+  const updated = adjustTrust(current, event);
+  trustScoreCache.set(event.agentId, updated);
+
+  emitEmployeeActivity("system", "decision", `Trust updated for ${event.agentId}: ${current.score.toFixed(3)} → ${updated.score.toFixed(3)} (${event.kind}: ${event.reason})`, {
+    detail: {
+      agentId: event.agentId,
+      previousScore: current.score,
+      newScore: updated.score,
+      delta: updated.score - current.score,
+      kind: event.kind,
+      tier: getTrustTier(updated.score),
+    },
+  });
+
+  // Persist to DB (non-blocking)
+  if (isDatabaseConfigured()) {
+    try {
+      const db = getDb();
+      await db.insert(trustScoresTable).values({
+        agentId: updated.agentId,
+        score: updated.score,
+        history: updated.history as any,
+        updatedAt: new Date(updated.updatedAt),
+      }).onConflictDoUpdate({
+        target: trustScoresTable.agentId,
+        set: {
+          score: updated.score,
+          history: updated.history as any,
+          updatedAt: new Date(updated.updatedAt),
+        },
+      });
+    } catch (err) {
+      console.warn(`[Governance] Failed to persist trust score for ${event.agentId}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return updated;
+}
+
+/** Record a policy violation to cache + DB. */
+export async function cpRecordPolicyViolation(violation: PolicyViolation): Promise<void> {
+  // Push to recent violations cache
+  recentViolationsCache.push(violation);
+  if (recentViolationsCache.length > 500) recentViolationsCache.splice(0, recentViolationsCache.length - 500);
+
+  emitEmployeeActivity("system", "decision", `Policy violation recorded: agent=${violation.agentId} tool=${violation.tool} rule=${violation.ruleId} severity=${violation.severity}`, {
+    detail: {
+      violationId: violation.id,
+      agentId: violation.agentId,
+      tool: violation.tool,
+      ruleId: violation.ruleId,
+      decision: violation.decision,
+      severity: violation.severity,
+      detail: violation.detail,
+    },
+  });
+
+  if (isDatabaseConfigured()) {
+    try {
+      const db = getDb();
+      await db.insert(policyViolationsTable).values({
+        id: violation.id,
+        companyId: violation.companyId,
+        agentId: violation.agentId,
+        ruleId: violation.ruleId,
+        tool: violation.tool,
+        decision: violation.decision,
+        severity: violation.severity,
+        detail: violation.detail,
+        beatId: violation.beatId,
+        resolvedAt: violation.resolvedAt ? new Date(violation.resolvedAt) : null,
+        createdAt: new Date(violation.createdAt),
+      });
+    } catch (err) {
+      console.warn(`[Governance] Failed to persist policy violation:`, err instanceof Error ? err.message : err);
+    }
+  }
+}
+
+/** Get recent policy violations (from cache or DB). */
+export async function cpGetPolicyViolations(opts?: { agentId?: string; limit?: number }): Promise<PolicyViolation[]> {
+  const limit = opts?.limit ?? 50;
+
+  if (isDatabaseConfigured()) {
+    try {
+      const db = getDb();
+      const conditions = opts?.agentId
+        ? eq(policyViolationsTable.agentId, opts.agentId)
+        : undefined;
+      const rows = await db.select().from(policyViolationsTable)
+        .where(conditions)
+        .orderBy(desc(policyViolationsTable.createdAt))
+        .limit(limit);
+      return rows.map((r) => ({
+        id: r.id,
+        companyId: r.companyId,
+        agentId: r.agentId,
+        ruleId: r.ruleId,
+        tool: r.tool,
+        decision: r.decision as PolicyViolation["decision"],
+        severity: r.severity as PolicyViolation["severity"],
+        detail: r.detail,
+        beatId: r.beatId,
+        resolvedAt: r.resolvedAt?.toISOString() ?? null,
+        createdAt: r.createdAt.toISOString(),
+      }));
+    } catch (err) {
+      console.warn(`[Governance] Failed to load violations from DB:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Fallback: return from cache
+  let results = [...recentViolationsCache];
+  if (opts?.agentId) results = results.filter((v) => v.agentId === opts.agentId);
+  return results.slice(-limit).reverse();
+}
+
+/** Get all cached trust scores. */
+export function cpGetAllTrustScores(): TrustScore[] {
+  return Array.from(trustScoreCache.values());
+}
+
+/** Load all trust scores from DB into cache. Called at startup. */
+export async function cpHydrateTrustScores(): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  try {
+    const db = getDb();
+    const rows = await db.select().from(trustScoresTable);
+    for (const row of rows) {
+      trustScoreCache.set(row.agentId, {
+        agentId: row.agentId,
+        score: row.score,
+        history: (row.history as TrustScore["history"]) ?? [],
+        updatedAt: row.updatedAt?.toISOString() ?? new Date().toISOString(),
+      });
+    }
+    emitEmployeeActivity("system", "info", `Governance: hydrated ${rows.length} trust scores from DB`);
+  } catch (err) {
+    console.warn(`[Governance] Failed to hydrate trust scores:`, err instanceof Error ? err.message : err);
+  }
+}
+
+/** In-memory recent violations cache. */
+const recentViolationsCache: PolicyViolation[] = [];

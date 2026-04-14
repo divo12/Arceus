@@ -9,6 +9,7 @@ import {
   Users,
   Inbox,
   Eye,
+  Shield,
   Settings,
   Sun,
   Moon,
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { href: "/agents", icon: Users, label: "Agents" },
   { href: "/inbox", icon: Inbox, label: "Inbox" },
   { href: "/preview", icon: Eye, label: "Preview" },
+  { href: "/governance", icon: Shield, label: "Governance" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ] as const;
 

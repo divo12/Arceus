@@ -3,7 +3,8 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG } from "@arceus/company-runtime";
+import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
 import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
@@ -18,7 +19,7 @@ import { runRouterLoop, type RouterLoopResult } from "./router";
 import { persistRuntimeArtifact } from "./artifact-persistence";
 import { workspaceManager } from "./workspace-manager";
 import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "./azure-openai";
-import { cpCommitTaskResult } from "./control-plane";
+import { cpCommitTaskResult, cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "./control-plane";
 import { withRetry, isRetryableError } from "./resilience";
 import { createHippocampusService, EXTRACTION_SYSTEM_PROMPT, buildExtractionUserPrompt, ACTION_DECISION_SYSTEM_PROMPT, buildActionDecisionUserPrompt, HABIT_MATCHER_SYSTEM_PROMPT, buildHabitMatcherUserPrompt, PRIMING_GENERATOR_SYSTEM_PROMPT, buildPrimingGeneratorUserPrompt, createPgVectorStores } from "@arceus/hippocampus";
 import type { PreparedAgentContext, ExtractedFact, MemoryAction } from "@arceus/hippocampus";
@@ -4851,6 +4852,37 @@ async function processEvent(event: { type: string; properties?: Record<string, a
             correlationId: taskId,
             severity: "debug",
           });
+
+          // ── Governance post-hoc enforcement (Spec 13 Step 8) ──
+          const snap = getSnapshot();
+          const agent = getAgentByRole(snap, role as AgentIdentity["role"]);
+          if (agent) {
+            const trustData = await cpLoadTrustScore(agent.id);
+            const policyCtx: PolicyEvalContext = {
+              role: role as PolicyEvalContext["role"], tool: toolName, trustScore: trustData.score,
+              companyId, agentId: agent.id,
+            };
+            const decision = evaluatePolicy(policyCtx, BASE_POLICY_RULES);
+            if (decision.decision === "deny") {
+              emitEmployeeActivity(role, "error", `Post-hoc violation: ${toolName} denied by rule ${decision.ruleId} — ${decision.reason}`, {
+                taskId, detail: { toolName, ruleId: decision.ruleId, decision: decision.decision, trustScore: trustData.score },
+              });
+              const violationId = `viol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              cpRecordPolicyViolation({
+                id: violationId, companyId, agentId: agent.id, ruleId: decision.ruleId,
+                tool: toolName, decision: decision.decision, severity: "high",
+                detail: `Agent ${role} invoked denied tool ${toolName}: ${decision.reason}`,
+                beatId: null,
+                resolvedAt: null, createdAt: new Date().toISOString(),
+              });
+              const trustEvent = buildTrustEvent(agent.id, "violation", `Invoked denied tool ${toolName}`, new Date().toISOString());
+              cpUpdateTrustScore(trustEvent);
+            } else if (decision.decision === "escalate") {
+              emitEmployeeActivity(role, "decision", `Post-hoc escalation: ${toolName} requires approval — rule ${decision.ruleId}`, {
+                taskId, detail: { toolName, ruleId: decision.ruleId, trustScore: trustData.score },
+              });
+            }
+          }
         } else {
           auditAgent(companyId, role, "tool_completed", `${role} ${toolName} → ${toolStatus || "done"}`, {
             detail: { toolName, status: toolStatus || "completed", taskId },
@@ -5090,7 +5122,56 @@ export async function executeBeatTask(
   // For CTO/PM/developer — run a single prompt cycle via runPromptText
   const soul = getRoleSoul(role);
   const taskPrompt = role === "developer" ? buildDeveloperBeatPrompt(task) : buildSpecialistTaskPrompt(task);
-  const tools = getToolsForPrompt(role);
+  const roleTools = getToolsForPrompt(role);
+
+  // ── Governance pre-filter (Spec 13 Step 7) ──────────────────
+  const trustScore = await cpLoadTrustScore(ctx.agentId);
+  const roleToolNames = roleTools ? Object.keys(roleTools).filter(k => (roleTools as any)[k]) : [];
+  const filterResult = filterToolsForAgent(
+    role, trustScore.score, roleToolNames, BASE_POLICY_RULES,
+    snapshot.company.id, ctx.agentId, beatId,
+  );
+  const governedToolsParam = toOpenCodeToolsParam(filterResult);
+  const tools = governedToolsParam ?? roleTools;
+  const filterSummary = summarizeFilterResult(filterResult, role);
+  emitEmployeeActivity(role, "decision", `Beat ${beatId}: governance pre-filter — ${filterSummary}`, {
+    beatId, taskId, detail: {
+      trustScore: trustScore.score,
+      trustTier: getTrustTier(trustScore.score),
+      roleToolNames,
+      allowed: filterResult.allowed,
+      denied: filterResult.denied.map(d => d.tool),
+      escalated: filterResult.escalated.map(e => e.tool),
+    },
+  });
+
+  // ── Governance escalation (Spec 13 Step 9) ──────────────
+  if (filterResult.escalated.length > 0) {
+    const escalatedTools = filterResult.escalated.map(e => e.tool);
+    const escalationReasons = filterResult.escalated.map(e => `${e.tool}: ${e.decision.reason}`).join("; ");
+    emitEmployeeActivity(role, "decision", `Beat ${beatId}: escalation required for tools [${escalatedTools.join(", ")}]`, {
+      beatId, taskId, detail: { escalatedTools, reasons: escalationReasons },
+    });
+    upsertApproval({
+      id: `gov-esc-${beatId}-${Date.now()}`,
+      companyId: snapshot.company.id,
+      type: "tool_governance",
+      requestedByAgentId: ctx.agentId,
+      status: "pending",
+      title: `Tool escalation: ${escalatedTools.join(", ")}`,
+      description: `Agent ${role} (trust=${trustScore.score.toFixed(2)}, tier=${filterResult.tier}) requests access to tools: ${escalationReasons}`,
+      meetingId: null,
+      agendaItemId: null,
+      resolutionSummary: null,
+    });
+    auditAgent(snapshot.company.id, role, "tool_escalation", `Governance escalation: ${escalatedTools.join(", ")} (trust=${trustScore.score.toFixed(2)})`, {
+      detail: { escalatedTools, trustScore: trustScore.score, tier: filterResult.tier, beatId },
+      correlationId: taskId,
+      severity: "warn",
+    });
+  }
+
+  let beatViolationCount = 0;
   let beatSession: import("@opencode-ai/sdk").Session | null = null;
 
   emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt constructed (${taskPrompt.length} chars), tools=${tools ? Object.keys(tools).filter(k => (tools as any)[k]).join(",") : "none"}`, {
@@ -5134,6 +5215,17 @@ export async function executeBeatTask(
       tryAutoPreview().catch(() => {});
     }
 
+    // ── Governance: trust lifecycle — success (Spec 13 Step 10) ──
+    const completionEvent = buildTrustEvent(ctx.agentId, "task_completed", `Beat ${beatId}: ${task.title}`, new Date().toISOString());
+    await cpUpdateTrustScore(completionEvent);
+    if (beatViolationCount === 0) {
+      const complianceEvent = buildTrustEvent(ctx.agentId, "manual_adjustment", `Beat ${beatId}: clean beat compliance bonus`, new Date().toISOString(), TRUST_CONFIG.complianceBonus);
+      await cpUpdateTrustScore(complianceEvent);
+    }
+    emitEmployeeActivity(role, "decision", `Beat ${beatId}: trust lifecycle updated — task_completed${beatViolationCount === 0 ? " + compliance_bonus" : ""} (violations=${beatViolationCount})`, {
+      beatId, taskId, detail: { beatViolationCount },
+    });
+
     return {
       summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
       tokensUsed,
@@ -5146,6 +5238,11 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "error", `Beat ${beatId}: execution failed — ${err instanceof Error ? err.message : String(err)}`, {
       beatId, taskId, detail: { error: err instanceof Error ? err.message : String(err) },
     });
+
+    // ── Governance: trust lifecycle — failure (Spec 13 Step 10) ──
+    const failEvent = buildTrustEvent(ctx.agentId, "task_failed", `Beat ${beatId}: ${err instanceof Error ? err.message : "unknown error"}`, new Date().toISOString());
+    cpUpdateTrustScore(failEvent).catch(() => {});
+
     return {
       summary: `Beat task execution failed: ${err instanceof Error ? err.message : String(err)}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,

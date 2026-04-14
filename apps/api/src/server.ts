@@ -26,9 +26,9 @@ import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
-import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir } from "./control-plane";
+import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -1003,8 +1003,96 @@ app.post("/api/service-registry/seed", async () => {
   return result;
 });
 
+// ── Governance API (Spec 13 Phase 5 Step 11) ──────────────
+
+/** GET /api/governance/trust-scores — all agent trust scores */
+app.get("/api/governance/trust-scores", async () => {
+  const scores = cpGetAllTrustScores();
+  return scores.map((s) => ({
+    ...s,
+    tier: getTrustTier(s.score),
+  }));
+});
+
+/** GET /api/governance/trust-scores/:agentId — single agent trust score */
+app.get("/api/governance/trust-scores/:agentId", async (request) => {
+  const { agentId } = request.params as { agentId: string };
+  const score = await cpLoadTrustScore(agentId);
+  return { ...score, tier: getTrustTier(score.score) };
+});
+
+/** POST /api/governance/trust-scores/:agentId/adjust — manual trust adjustment */
+app.post("/api/governance/trust-scores/:agentId/adjust", async (request) => {
+  const { agentId } = request.params as { agentId: string };
+  const body = request.body as { kind: string; reason: string; delta?: number };
+  if (!body.kind || !body.reason) return { error: "kind and reason are required" };
+  const event = buildTrustEvent(
+    agentId,
+    body.kind as any,
+    `Manual: ${body.reason}`,
+    new Date().toISOString(),
+    body.delta,
+  );
+  const updated = await cpUpdateTrustScore(event);
+  return { ...updated, tier: getTrustTier(updated.score) };
+});
+
+/** GET /api/governance/violations — recent policy violations */
+app.get("/api/governance/violations", async (request) => {
+  const query = request.query as { agentId?: string; limit?: string };
+  return cpGetPolicyViolations({
+    agentId: query.agentId,
+    limit: query.limit ? parseInt(query.limit, 10) : undefined,
+  });
+});
+
+/** GET /api/governance/policies — list active policy rules */
+app.get("/api/governance/policies", async () => {
+  return BASE_POLICY_RULES.map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    priority: r.priority,
+    appliesTo: r.appliesTo,
+    toolPatterns: r.toolPatterns,
+    minTrust: r.minTrust,
+    decision: r.decision,
+  }));
+});
+
+/** GET /api/governance/stats — aggregate governance stats */
+app.get("/api/governance/stats", async () => {
+  const scores = cpGetAllTrustScores();
+  const violations = await cpGetPolicyViolations({ limit: 200 });
+  const snap = getSnapshot();
+  const agents = snap.agents ?? [];
+  return {
+    agentCount: agents.length,
+    trustScoreCount: scores.length,
+    averageTrust: scores.length > 0 ? scores.reduce((s, t) => s + t.score, 0) / scores.length : 0,
+    tierDistribution: {
+      autonomous: scores.filter((s) => getTrustTier(s.score) === "autonomous").length,
+      trusted: scores.filter((s) => getTrustTier(s.score) === "trusted").length,
+      standard: scores.filter((s) => getTrustTier(s.score) === "standard").length,
+      restricted: scores.filter((s) => getTrustTier(s.score) === "restricted").length,
+      critical: scores.filter((s) => getTrustTier(s.score) === "critical").length,
+    },
+    recentViolations: violations.length,
+    violationsBySeverity: {
+      low: violations.filter((v) => v.severity === "low").length,
+      medium: violations.filter((v) => v.severity === "medium").length,
+      high: violations.filter((v) => v.severity === "high").length,
+      critical: violations.filter((v) => v.severity === "critical").length,
+    },
+    policyCount: BASE_POLICY_RULES.length,
+  };
+});
+
 // ── Start audit ledger ──
 startAuditLedger();
+
+// ── Hydrate governance trust scores ──
+await cpHydrateTrustScores();
 
 const { port, host } = serverConfig;
 
