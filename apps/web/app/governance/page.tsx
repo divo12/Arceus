@@ -37,7 +37,7 @@ interface PolicyRule {
   name: string;
   description: string;
   priority: number;
-  targetRoles: string[];
+  appliesTo: string[];
   toolPatterns: string[];
   minTrust: number;
   decision: string;
@@ -277,7 +277,7 @@ export default function GovernancePage() {
                     {p.decision}
                   </Badge>
                   <span className="shrink-0 text-[0.625rem] text-[var(--swiss-gray-300)]">
-                    {p.targetRoles.length > 0 ? p.targetRoles.join(", ") : "all"} · trust≥{p.minTrust}
+                    {(p.appliesTo?.length ?? 0) > 0 ? p.appliesTo.join(", ") : "all"} · trust≥{p.minTrust}
                   </span>
                 </CardContent>
               </Card>
