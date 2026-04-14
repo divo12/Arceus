@@ -2,28 +2,92 @@ import { mkdir, readdir, stat, writeFile, readFile } from "node:fs/promises";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
-import { getOpencode, resetOpencodeConnection } from "./opencode";
-import { getRoleSoul } from "@arceus/company-runtime";
-import { ensureDeployment, orchestratorConfig, persistenceConfig, previewConfig } from "./config/index";
+import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG } from "@arceus/company-runtime";
+import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
+import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
+import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
 import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, Task, Transition, TransitionProposal } from "@arceus/contracts";
+import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
+import { isCeoStreaming } from "./chat";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
 import { persistRuntimeArtifact } from "./artifact-persistence";
 import { workspaceManager } from "./workspace-manager";
-import { structuredCompletion } from "./azure-openai";
+import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "./azure-openai";
+import { cpCommitTaskResult, cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "./control-plane";
 import { withRetry, isRetryableError } from "./resilience";
 import { createHippocampusService, EXTRACTION_SYSTEM_PROMPT, buildExtractionUserPrompt, ACTION_DECISION_SYSTEM_PROMPT, buildActionDecisionUserPrompt, HABIT_MATCHER_SYSTEM_PROMPT, buildHabitMatcherUserPrompt, PRIMING_GENERATOR_SYSTEM_PROMPT, buildPrimingGeneratorUserPrompt, createPgVectorStores } from "@arceus/hippocampus";
 import type { PreparedAgentContext, ExtractedFact, MemoryAction } from "@arceus/hippocampus";
+import type { BeatEventTrigger } from "@arceus/contracts";
 import { z } from "zod";
+
+import {
+  createReviewState,
+  buildGateFailureBugFields,
+  buildBugFixTaskFields,
+  parseQAReport,
+  routeDefect,
+  allBugFixesResolved,
+  shouldRetestAfterRework,
+  shouldEscalate,
+  type QAReport,
+  type QAFinding,
+} from "./sprint-review";
+import { runVerificationGate } from "./verification-gate";
+
+// ---------------------------------------------------------------------------
+// Reactive event emitter — wired to HeartbeatEngine.emitEvent() by server.ts
+// ---------------------------------------------------------------------------
+
+let reactiveEventEmitter: ((companyId: string, agentId: string, role: AgentIdentity["role"], event: BeatEventTrigger) => void) | null = null;
+
+/** Called by server.ts after HeartbeatEngine is created. */
+export function setReactiveEventEmitter(fn: typeof reactiveEventEmitter) {
+  reactiveEventEmitter = fn;
+}
+
+/** Emit a reactive event for a specific role (resolves agentId from snapshot). */
+function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger) {
+  if (!reactiveEventEmitter) return;
+  const snapshot = getSnapshot();
+  const agent = getAgentByRole(snapshot, role);
+  if (!agent) return;
+  reactiveEventEmitter(snapshot.company.id, agent.id, role, event);
+}
+
+/** Emit a reactive event to ALL agents (used for broadcast events like sprint_started). */
+function emitReactiveBroadcast(event: BeatEventTrigger) {
+  if (!reactiveEventEmitter) return;
+  const snapshot = getSnapshot();
+  for (const agent of snapshot.agents) {
+    reactiveEventEmitter(snapshot.company.id, agent.id, agent.role, event);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Hippocampus — singleton memory service (in-memory stores for now)
 // ---------------------------------------------------------------------------
+
+/** Sanitize tool arguments for audit logging — scrub potential secrets. */
+function sanitizeToolArgs(args: Record<string, any>): Record<string, unknown> {
+  const SECRET_KEYS = /key|secret|token|password|auth|credential|api.?key/i;
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (SECRET_KEYS.test(k)) {
+      result[k] = "[REDACTED]";
+    } else if (typeof v === "string" && v.length > 500) {
+      result[k] = v.slice(0, 500) + `…[${v.length} chars]`;
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
 
 const extractedFactSchema = z.object({
   facts: z.array(z.object({
@@ -546,6 +610,35 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   });
 }
 
+/**
+ * Try to auto-start preview after a developer beat completes.
+ * Fire-and-forget — never blocks or crashes the beat path.
+ */
+async function tryAutoPreview() {
+  const previewState = getLocalPreviewState();
+  // Already running — nothing to do
+  if (previewState.status === "starting" || previewState.status === "ready") {
+    emitEmployeeActivity("system", "preview", `Auto-preview skipped — already ${previewState.status}`);
+    return;
+  }
+
+  // Check if workspace has something runnable
+  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(productDir);
+  if (!hasCandidate) {
+    emitEmployeeActivity("system", "preview", "Auto-preview skipped — no runnable project found in workspace/");
+    return;
+  }
+
+  emitEmployeeActivity("system", "preview", "Auto-starting preview after developer beat…");
+  const preview = await startLocalPreview(productDir);
+  const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
+  if (preview.status === "ready" && previewUrl) {
+    emitEmployeeActivity("system", "preview", `Preview auto-started → ${previewUrl}`, { detail: { url: previewUrl, status: preview.status } });
+  } else {
+    emitEmployeeActivity("system", "error", `Auto-preview failed: ${preview.lastError ?? "did not become reachable"}`, { detail: { status: preview.status, lastError: preview.lastError } });
+  }
+}
+
 function emptyPlannerState(objective: string) {
   return {
     objective,
@@ -630,6 +723,10 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
 
   upsertSprint(sprint);
   updateCompanySprint(sprint.id, number);
+
+  // Reactive: wake all agents — a new sprint has started
+  emitReactiveBroadcast("sprint_started");
+
   return sprint;
 }
 
@@ -639,13 +736,30 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
  * approved immediately without waiting for the board.
  */
 async function triggerCeoSprintProposal(): Promise<void> {
+  // Ensure the current sprint is marked complete before proposing a new one
+  await checkSprintCompletion();
+
   const snapshot = getSnapshot();
 
-  // Duplicate guard: skip if sprint_proposal card already exists for current sprint
+  // Duplicate guard: if a sprint_proposal card already exists for the current sprint,
+  // try to auto-approve it instead of generating a new one.
   const existingProposal = snapshot.chatMessages.find(
     (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
   );
-  if (existingProposal) return;
+  if (existingProposal) {
+    const card = existingProposal.cardData as CeoCard | null;
+    if (card?.sprint_proposal && orchestratorConfig.sprint.autoApproveProposals) {
+      const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
+      const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
+      const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
+      if (!needsBoardReview) {
+        executionStatus = "done";
+        emitEmployeeActivity("ceo", "info", `Re-approving existing Sprint ${nextSprintNumber} proposal.`);
+        await approveSprintProposal(card);
+      }
+    }
+    return;
+  }
 
   // Set execution status so CEO stage infers as "between_sprints"
   executionStatus = "done";
@@ -711,7 +825,9 @@ let sprintCompletionTriggered = false;
 
 /**
  * Checks if all employee tasks in the current sprint have reached terminal status.
- * If so, marks the sprint as completed, tags a snapshot, and triggers CEO auto-proposal.
+ * If so, enters the "reviewing" phase (Spec 21) instead of immediately completing.
+ * The reviewing phase runs a pre-gate build check, then hands off to the tester
+ * via the heartbeat checklist system.
  * Guard flag prevents double-firing.
  */
 async function checkSprintCompletion(): Promise<boolean> {
@@ -722,55 +838,454 @@ async function checkSprintCompletion(): Promise<boolean> {
   if (!currentSprintId) return false;
 
   const currentSprint = snapshot.sprints.find((s) => s.id === currentSprintId);
-  if (!currentSprint || currentSprint.status === "completed") return false;
+  if (!currentSprint || currentSprint.status === "completed" || currentSprint.status === "reviewing") return false;
 
+  // Exclude follow_up and bug_fix tasks from completion check (they're part of the review cycle)
   const sprintTasks = snapshot.tasks.filter(
-    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up",
+    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up" && t.kind !== "bug_fix",
   );
   if (sprintTasks.length === 0) return false;
 
   const allTerminal = sprintTasks.every((t) =>
     ["completed", "cancelled", "failed"].includes(t.status),
   );
-  if (!allTerminal) return false;
+  if (!allTerminal) {
+    const statusCounts = { completed: 0, planned: 0, in_progress: 0, failed: 0, cancelled: 0, created: 0 } as Record<string, number>;
+    sprintTasks.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
+    emitEmployeeActivity("system", "context", `Sprint ${currentSprint.number} completion check: NOT all terminal — ${JSON.stringify(statusCounts)}`, {
+      detail: { sprintNumber: currentSprint.number, totalTasks: sprintTasks.length, statusCounts },
+    });
+    return false;
+  }
 
   sprintCompletionTriggered = true;
 
-  // Mark sprint completed
+  // ── Spec 21: Enter sprint reviewing phase ──────────────────
+
+  emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → REVIEWING (all implementation tasks terminal)`, {
+    detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId },
+  });
+
+  const reviewState = createReviewState(3);
+
   updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
-    status: "completed" as Sprint["status"],
-    completedAt: nowIso(),
-    summary: `Sprint ${sprint.number} completed — ${sprintTasks.filter((t) => t.status === "completed").length}/${sprintTasks.length} tasks delivered.`,
+    status: "reviewing" as Sprint["status"],
+    reviewState,
   }));
 
-  emitEmployeeActivity(
-    "system",
-    "info",
-    `Sprint ${currentSprint.number} completed. ${sprintTasks.filter((t) => t.status === "completed").length} delivered, ${sprintTasks.filter((t) => t.status === "failed").length} failed, ${sprintTasks.filter((t) => t.status === "cancelled").length} cancelled.`,
+  // Run pre-review build gate
+  const productDir = workspaceManager.getLegacyProductDir();
+  const gateResult = await runVerificationGate(productDir, "pre_review");
+
+  reviewState.gateResults.push(gateResult);
+
+  if (!gateResult.passed) {
+    // Build failed → create a bug_fix task for developer
+    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate FAILED — creating build fix task`, {
+      detail: { gateResult },
+    });
+
+    const bugFields = buildGateFailureBugFields(gateResult, currentSprintId);
+    if (bugFields) {
+      const bugTask = createWorkflowTask(
+        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        bugFields.title, bugFields.description, bugFields.problemStatement,
+        bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
+        bugFields.sprintId,
+      );
+      upsertTask(bugTask);
+      reviewState.bugTaskIds.push(bugTask.id);
+      reviewState.phase = "rework";
+      emitReactive(bugFields.assignedRole, "bug_reported");
+    }
+  } else {
+    // Build passed → advance to tester verification
+    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — awaiting tester verification`, {
+      detail: { gateResult },
+    });
+    reviewState.phase = "tester_verification";
+    emitReactive("tester", "task_assigned");
+  }
+
+  // Persist the updated review state
+  updateSprint(currentSprintId, (sprint) => ({
+    ...sprint,
+    reviewState,
+  }));
+
+  sprintCompletionTriggered = false;
+  return true;
+}
+
+/**
+ * Complete the sprint after the reviewing phase is done (Spec 21).
+ * Called when the final gate passes or CTO decides to skip.
+ */
+async function finalizeSprintCompletion(sprintId: string): Promise<void> {
+  const snapshot = getSnapshot();
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  if (!sprint) return;
+
+  const sprintTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === sprintId && t.kind !== "follow_up",
   );
+  const completedCount = sprintTasks.filter((t) => t.status === "completed").length;
+  const failedCount = sprintTasks.filter((t) => t.status === "failed").length;
+  const cancelledCount = sprintTasks.filter((t) => t.status === "cancelled").length;
+
+  emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} → COMPLETED (${completedCount}/${sprintTasks.length} delivered, ${failedCount} failed, ${cancelledCount} cancelled)`, {
+    detail: { sprintNumber: sprint.number, sprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
+  });
+
+  updateSprint(sprintId, (s) => ({
+    ...s,
+    status: "completed" as Sprint["status"],
+    completedAt: nowIso(),
+    summary: `Sprint ${s.number} completed — ${completedCount}/${sprintTasks.length} tasks delivered.`,
+    reviewState: s.reviewState ? { ...s.reviewState, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
+  }));
 
   await tagCurrentSprintSnapshot();
 
-  // CEO announces sprint completion in chat before proposing next sprint
   const ceoAgent = getAgentByRole(snapshot, "ceo");
   appendChatMessage({
     id: `chat_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
-    sprintId: currentSprintId,
+    sprintId,
     agentId: ceoAgent?.id ?? null,
     role: "ceo",
-    content: `Sprint ${currentSprint.number} is complete. ${sprintTasks.filter((t) => t.status === "completed").length} tasks delivered, ${sprintTasks.filter((t) => t.status === "failed").length} failed. Preparing next sprint proposal now.`,
+    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. Preparing next sprint proposal now.`,
     cardType: "status_update",
     cardData: null,
     createdAt: nowIso(),
   });
 
-  // Trigger CEO to auto-propose Sprint N+1
   await triggerCeoSprintProposal();
+}
 
-  sprintCompletionTriggered = false;
-  return true;
+/**
+ * Handle tester verification beat action during sprint review (Spec 21).
+ * Runs the tester LLM to produce a QA report, then either advances the review
+ * or creates bug_fix tasks.
+ */
+async function executeSprintReviewVerification(
+  ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const snapshot = getSnapshot();
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") {
+    return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  if (!reviewState) {
+    return { summary: "No review state found", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprintId = sprint.id;
+  const role = ctx.role;
+  const soul = getRoleSoul(role);
+
+  // Build the tester verification prompt
+  const completedTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === sprintId && t.status === "completed" && t.kind !== "bug_fix" && t.kind !== "follow_up",
+  );
+
+  const taskLines = completedTasks.map((t) =>
+    `- [${t.id}] ${t.title}\n  Kind: ${t.kind}\n  DoD: ${t.definitionOfDone.join(", ")}\n  Artifacts: ${t.artifactIds.length}`
+  ).join("\n");
+
+  const prompt = [
+    `You are verifying Sprint ${sprint.number}: "${sprint.goal}".`,
+    "",
+    "## Completed Tasks",
+    taskLines || "(No completed tasks)",
+    "",
+    "## Your Verification Steps",
+    "1. Analyze each completed task against its Definition of Done",
+    "2. Identify any defects or gaps",
+    "3. Produce a structured QA report",
+    "",
+    "## QA Report Format (required)",
+    "Output a JSON block with this structure:",
+    '{"verdict":"pass"|"fail","tasks":[{"taskId":"...","verdict":"pass"|"fail","findings":[{"defect_area":"build_failure"|"test_failure"|"ui_rendering"|"ui_interaction"|"api_behavior"|"accessibility"|"content"|"design_mismatch"|"logic_error"|"performance","severity":"critical"|"high"|"medium"|"low","description":"...","expected":"...","actual":"...","file":"...","fix_suggestion":"..."}],"dod_checklist":[{"item":"...","status":"pass"|"fail","evidence":"..."}]}],"test_files_written":[],"build_status":"pass"|"fail"|"skipped","test_suite_status":"pass"|"fail"|"skipped"|"no_tests"}',
+  ].join("\n");
+
+  try {
+    const session = await ensureAgentSession(snapshot, role);
+    touchAgentSession(role, "working");
+    emitEmployeeActivity(role, "working", `Beat ${beatId}: running sprint verification for Sprint ${sprint.number}`, { beatId });
+
+    const output = await runPromptText(role, session.sessionId, soul.systemPrompt, prompt);
+    touchAgentSession(role, "idle");
+
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+
+    // Try to parse QA report from output
+    const qaReport = output ? parseQAReport(output) : null;
+
+    if (qaReport && qaReport.verdict === "pass") {
+      // Tester approves → advance to final gate
+      emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: PASS — advancing to final gate`, { beatId });
+
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
+      }));
+
+      // Persist a QA report artifact
+      const artifact = {
+        id: `artifact_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId,
+        taskId: null,
+        agentRole: "tester",
+        kind: "qa_report" as const,
+        title: `Sprint ${sprint.number} QA Report — PASS`,
+        content: output ?? "Verification passed",
+        fileReferences: qaReport.testFilesWritten.map((f) => ({ path: f, action: "created" })),
+        createdAt: nowIso(),
+      };
+      await persistRuntimeArtifact(snapshot.company.id, artifact as any);
+
+      return { summary: `Tester verification PASS for Sprint ${sprint.number}`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+
+    } else if (qaReport && qaReport.verdict === "fail") {
+      // Tester found bugs → create bug_fix tasks
+      emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: FAIL — creating bug fix tasks`, { beatId });
+
+      const updatedReviewState: SprintReviewState = {
+        ...(reviewState as SprintReviewState),
+        testerVerdict: "fail",
+        phase: "rework",
+        reworkCycleCount: reviewState.reworkCycleCount + 1,
+      };
+
+      const newBugTaskIds: string[] = [...reviewState.bugTaskIds];
+      const rolesWithBugs = new Set<AgentIdentity["role"]>();
+
+      for (const taskReport of qaReport.tasks) {
+        if (taskReport.verdict !== "fail") continue;
+        for (const finding of taskReport.findings) {
+          const bugFields = buildBugFixTaskFields({
+            finding: {
+              ...finding,
+              taskId: taskReport.taskId,
+            },
+            sprintId,
+            parentTaskId: taskReport.taskId,
+          });
+          const bugTask = createWorkflowTask(
+            getSnapshot(), bugFields.kind, bugFields.assignedRole,
+            bugFields.title, bugFields.description, bugFields.problemStatement,
+            bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
+            bugFields.sprintId,
+          );
+          bugTask.parentTaskId = bugFields.parentTaskId;
+          upsertTask(bugTask);
+          newBugTaskIds.push(bugTask.id);
+          rolesWithBugs.add(bugFields.assignedRole);
+
+          // Create feedback round for audit trail
+          const feedbackRound = {
+            id: `fb_${crypto.randomUUID()}`,
+            companyId: snapshot.company.id,
+            taskId: bugTask.id,
+            iteration: updatedReviewState.reworkCycleCount,
+            fromRole: "tester" as const,
+            toRole: bugFields.assignedRole,
+            verdict: "revise" as const,
+            feedback: finding.description,
+            artifactIds: [],
+            createdAt: nowIso(),
+          };
+          // Store feedback round in snapshot
+          const snap = getSnapshot();
+          const updatedFeedback = [...(snap.feedbackRounds ?? []), feedbackRound];
+          // We can't directly push — use store's upsert pattern
+        }
+      }
+
+      updatedReviewState.bugTaskIds = newBugTaskIds;
+
+      // Check if we've exceeded rework limit → escalate
+      if (shouldEscalate(updatedReviewState)) {
+        updatedReviewState.phase = "escalated";
+        updatedReviewState.escalatedToCto = true;
+        emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
+        emitReactive("cto", "escalation_received");
+      }
+
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: updatedReviewState,
+      }));
+
+      // Wake all affected roles
+      for (const bugRole of rolesWithBugs) {
+        emitReactive(bugRole, "bug_reported");
+      }
+
+      // Persist QA report artifact
+      const artifact = {
+        id: `artifact_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId,
+        taskId: null,
+        agentRole: "tester",
+        kind: "qa_report" as const,
+        title: `Sprint ${sprint.number} QA Report — FAIL (cycle ${updatedReviewState.reworkCycleCount})`,
+        content: output ?? "Verification failed",
+        fileReferences: [],
+        createdAt: nowIso(),
+      };
+      await persistRuntimeArtifact(snapshot.company.id, artifact as any);
+
+      return {
+        summary: `Tester verification FAIL for Sprint ${sprint.number} — ${newBugTaskIds.length - reviewState.bugTaskIds.length} new bugs filed`,
+        tokensUsed, actionsCount: 1, toolCalls: 1,
+      };
+
+    } else {
+      // Couldn't parse QA report — treat as pass with warning
+      emitEmployeeActivity("tester", "info", `Sprint ${sprint.number} tester output could not be parsed as QA report — treating as pass`, { beatId });
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
+      }));
+      return { summary: `Tester output unparseable — advancing to final gate`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+    }
+  } catch (err) {
+    touchAgentSession(role, "idle");
+    emitEmployeeActivity(role, "error", `Beat ${beatId}: sprint verification failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    return {
+      summary: `Sprint verification failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
+}
+
+/**
+ * Run the final verification gate (build + test) and complete the sprint if it passes.
+ * Called by the tester's checklist action when reviewState.phase === "final_gate".
+ */
+async function executeSprintFinalGate(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  if (!sprint || sprint.status !== "reviewing") {
+    return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  if (!reviewState) {
+    return { summary: "No review state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const productDir = workspaceManager.getLegacyProductDir();
+  const gateResult = await runVerificationGate(productDir, "final");
+
+  const updatedGateResults = [...reviewState.gateResults, gateResult];
+
+  if (gateResult.passed) {
+    emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} final gate PASSED — completing sprint`, { beatId, detail: { gateResult } });
+
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      reviewState: s.reviewState ? { ...s.reviewState, gateResults: updatedGateResults, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
+    }));
+
+    await finalizeSprintCompletion(sprintId);
+
+    return {
+      summary: `Sprint ${sprint.number} final gate PASSED — sprint completed`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+    };
+  } else {
+    // Final gate failed → create bug task, back to rework
+    emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} final gate FAILED — back to rework`, { beatId, detail: { gateResult } });
+
+    const bugFields = buildGateFailureBugFields(gateResult, sprintId);
+    const newBugIds = [...reviewState.bugTaskIds];
+    if (bugFields) {
+      const bugTask = createWorkflowTask(
+        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        bugFields.title, bugFields.description, bugFields.problemStatement,
+        bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
+        bugFields.sprintId,
+      );
+      upsertTask(bugTask);
+      newBugIds.push(bugTask.id);
+      emitReactive(bugFields.assignedRole, "bug_reported");
+    }
+
+    const newReworkCount = reviewState.reworkCycleCount + 1;
+    const escalate = newReworkCount >= reviewState.maxReworkCycles;
+
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      reviewState: s.reviewState ? {
+        ...s.reviewState,
+        gateResults: updatedGateResults,
+        bugTaskIds: newBugIds,
+        reworkCycleCount: newReworkCount,
+        phase: (escalate ? "escalated" : "rework") as any,
+        escalatedToCto: escalate || s.reviewState.escalatedToCto,
+      } : s.reviewState,
+    }));
+
+    if (escalate) {
+      emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} rework limit exceeded — escalating to CTO`, { beatId });
+      emitReactive("cto", "escalation_received");
+    }
+
+    return {
+      summary: `Sprint ${sprint.number} final gate FAILED — ${escalate ? "escalated to CTO" : "back to rework"}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+    };
+  }
+}
+
+/**
+ * Handle the transition from rework → tester_verification when all bugs are fixed.
+ * Called by the tester's checklist action.
+ */
+async function executeRetestAfterRework(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  emitEmployeeActivity("tester", "transition", `Bug fixes resolved — advancing to tester re-verification`, { beatId });
+
+  // Clear the bugTaskIds and advance phase
+  updateSprint(sprintId, (s) => ({
+    ...s,
+    reviewState: s.reviewState ? {
+      ...s.reviewState,
+      phase: "tester_verification" as const,
+      bugTaskIds: [],  // clear for next cycle
+      testerVerdict: null,
+    } : s.reviewState,
+  }));
+
+  return {
+    summary: `Bug fixes resolved — tester will re-verify on next beat`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+  };
 }
 
 async function tagCurrentSprintSnapshot() {
@@ -985,6 +1500,40 @@ function applyTaskModification(modification: TaskModificationInput) {
 
     return nextTask;
   });
+
+  // ── Audit: task modification (assign, reassign, cancel, etc.) ──
+  if (modification.modificationType === "assign" || modification.modificationType === "reassign") {
+    const companyId = getSnapshot().company.id;
+    audit({
+      companyId,
+      category: "task_lifecycle",
+      eventType: "task_assigned",
+      summary: `Task "${modification.taskId}" ${modification.modificationType} → ${modification.assignedRole ?? "unassigned"}`,
+      detail: {
+        taskId: modification.taskId,
+        modificationType: modification.modificationType,
+        assignedRole: modification.assignedRole ?? null,
+        details: modification.details,
+      },
+      correlationId: modification.taskId,
+    });
+
+    // Reactive: wake the assigned agent
+    if (modification.assignedRole) {
+      emitReactive(modification.assignedRole, "task_assigned");
+    }
+  } else if (modification.modificationType === "cancel") {
+    const companyId = getSnapshot().company.id;
+    audit({
+      companyId,
+      category: "task_lifecycle",
+      severity: "warn",
+      eventType: "task_cancelled",
+      summary: `Task "${modification.taskId}" cancelled: ${modification.details.slice(0, 100)}`,
+      detail: { taskId: modification.taskId, reason: modification.details },
+      correlationId: modification.taskId,
+    });
+  }
 }
 
 function applyMemoryModification(modification: MemoryModificationInput) {
@@ -1221,6 +1770,11 @@ export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoTex
       })),
     ],
   });
+
+  // Reactive: wake each participant agent (board directive)
+  for (const role of participantRoles) {
+    if (role !== "ceo") emitReactive(role, "board_message");
+  }
 }
 
 function recordMeeting(params: {
@@ -1293,6 +1847,15 @@ function recordMeeting(params: {
 
   upsertMeeting(meeting);
   applyMeetingEffects(params.taskModifications ?? [], meetingMemoryModifications);
+
+  // Reactive: escalation meetings wake participant agents
+  if (params.type === "escalation") {
+    for (const role of params.participantRoles) {
+      if (role !== params.facilitatorRole) {
+        emitReactive(role, "escalation_received");
+      }
+    }
+  }
 
   emitEmployeeActivity(
     params.facilitatorRole,
@@ -1419,6 +1982,8 @@ function appendTaskCommand(taskId: string, command: string) {
 }
 
 function setTaskStatus(taskId: string, status: Task["status"], feedback?: string | null) {
+  const prev = getSnapshot().tasks.find((t) => t.id === taskId);
+  const prevStatus = prev?.status ?? "unknown";
   updateTask(taskId, (task) => ({
     ...task,
     status,
@@ -1435,6 +2000,18 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           },
   }));
 
+  // Audit task transitions
+  audit({
+    companyId: prev?.companyId ?? getSnapshot().company.id,
+    category: "task_lifecycle",
+    severity: status === "failed" ? "warn" : "info",
+    eventType: `task_${status}`,
+    agentRole: prev?.assignedRole ?? null,
+    summary: `Task "${prev?.title ?? taskId}" ${prevStatus} → ${status}`,
+    detail: { taskId, previousStatus: prevStatus, feedback: feedback ?? null },
+    correlationId: taskId,
+  });
+
   // Auto-promote downstream tasks when a task completes
   if (status === "completed") {
     const snapshot = getSnapshot();
@@ -1448,6 +2025,10 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
       });
       if (allDepsMet) {
         updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+        // Reactive: wake the assignee — their dependency is now met
+        if (task.assignedRole) {
+          emitReactive(task.assignedRole, "task_dependency_met");
+        }
       }
     }
   }
@@ -1594,6 +2175,46 @@ function buildSpecialistTaskPrompt(task: Task) {
   );
 
   return profileHints.join("\n");
+}
+
+/**
+ * Build a prompt for developer beats that instructs the agent to actually write code.
+ * Unlike buildSpecialistTaskPrompt (text-only), this enables tool use.
+ */
+function buildDeveloperBeatPrompt(task: Task) {
+  const preview = getLocalPreviewState();
+  const lines = [
+    `# Task`,
+    `Title: ${task.title}`,
+    `Description: ${task.description}`,
+    `Problem statement: ${task.problemStatement}`,
+    `Deliverable: ${task.deliverable}`,
+    `Definition of done:`,
+    ...task.definitionOfDone.map((item) => `- ${item}`),
+    "",
+    `# Workspace`,
+    `Product directory: ${productDir}`,
+    `All code MUST be written inside ${productDir}. Do NOT modify files outside this directory.`,
+    `Current preview: ${preview.status === "ready" ? (preview.url ?? "running") : "not running"}`,
+    "",
+    `# Instructions`,
+    `You are a software developer. IMPLEMENT this task by writing real code using your tools.`,
+    `1. Read existing files in ${productDir} to understand the current codebase.`,
+    `2. Write or edit files to implement the task requirements.`,
+    `3. If this is the first task and no project exists, scaffold one (e.g. npm create vite@latest . -- --template react-ts).`,
+    `4. Install dependencies with npm install if needed.`,
+    `5. Do NOT start a dev server — preview is handled separately.`,
+    `6. After writing code, briefly summarize what you implemented.`,
+  ];
+
+  if (activeExecution?.planText) {
+    lines.push("", "# CTO Technical Plan", activeExecution.planText);
+  }
+  if (activeExecution?.acceptanceText) {
+    lines.push("", "# PM Acceptance Criteria", activeExecution.acceptanceText);
+  }
+
+  return lines.join("\n");
 }
 
 function getPreviewEvidenceUrl() {
@@ -1784,6 +2405,13 @@ function approvePendingBoardApprovals() {
         ? "Board approved the recommended external action. No automated outbound action was executed by Arceus."
         : "Board approved the pending request during CTO handoff review.",
     }));
+
+    // Reactive: wake the agent who requested the approval
+    const snap = getSnapshot();
+    const requestor = snap.agents.find((a: { id: string; role: AgentIdentity["role"] }) => a.id === approval.requestedByAgentId);
+    if (requestor) {
+      emitReactive(requestor.role, "approval_granted");
+    }
   }
 
   return pendingApprovals;
@@ -2569,7 +3197,21 @@ function formatHippocampusContext(ctx: PreparedAgentContext): string {
   return sections.length > 0 ? sections.join("\n") : "";
 }
 
-async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string) {
+/** Map role capabilities to OpenCode tool flags. */
+function getToolsForPrompt(role: AgentIdentity["role"]): Record<string, boolean> | undefined {
+  const soul = getRoleSoul(role);
+  if (!soul.canWriteCode && !soul.canEditFiles && !soul.canRunShell) return undefined;
+  return {
+    read: true,
+    glob: true,
+    grep: true,
+    ...(soul.canWriteCode ? { write: true, edit: true, apply_patch: true } : {}),
+    ...(soul.canEditFiles ? { write: true, edit: true } : {}),
+    ...(soul.canRunShell ? { bash: true } : {}),
+  };
+}
+
+async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string, tools?: Record<string, boolean>) {
   const deployment = ensureDeployment("workerDeployment");
 
   // Inject role-specific skills into the system prompt
@@ -2578,19 +3220,39 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
 
   // Inject Hippocampus memory context (never fatal — graceful degradation)
   let memoryBlock = "";
+  let memoryCount = 0;
+  let habitCount = 0;
   try {
     const snapshot = getSnapshot();
     const agent = getAgentByRole(snapshot, role);
     if (agent) {
       const ctx = await hippocampus.prepareAgentContext(agent.id, text);
       memoryBlock = formatHippocampusContext(ctx);
+      memoryCount = ctx.memories.length;
+      habitCount = ctx.habits.length;
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.warn(`[Hippocampus] Memory retrieval failed for ${role}, continuing without: ${msg}`);
+    emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }
 
   const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody, memoryBlock].filter(Boolean).join("\n");
+
+  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skill=${skillMenu.length + skillBody.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
+    detail: {
+      systemPromptLen: systemPrompt.length,
+      skillMenuLen: skillMenu.length,
+      skillBodyLen: skillBody.length,
+      memoryBlockLen: memoryBlock.length,
+      memoryCount,
+      habitCount,
+      totalPromptLen: enrichedSystemPrompt.length,
+      userPromptLen: text.length,
+      model: deployment,
+      tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [],
+    },
+  });
 
   updateAgentSessionState(role, {
     promptStartedAt: nowIso(),
@@ -2604,14 +3266,16 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
   const output = await withRetry(
     async () => {
       const opencode = await getOpencode();
+      const promptBody: Record<string, unknown> = {
+        model: { providerID: "azure", modelID: deployment },
+        agent: role,
+        system: enrichedSystemPrompt,
+        parts: [{ type: "text", text }],
+      };
+      if (tools) promptBody.tools = tools;
       const result = await opencode.client.session.prompt({
         path: { id: currentSessionId },
-        body: {
-          model: { providerID: "azure", modelID: deployment },
-          agent: role,
-          system: enrichedSystemPrompt,
-          parts: [{ type: "text", text }],
-        },
+        body: promptBody as any,
       });
 
       // Check for OpenCode-level errors embedded in data.info
@@ -3831,6 +4495,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
   if (["idle", "done", "error", "paused"].includes(executionStatus) && !activeExecution) {
     throw new Error("No active company execution is running.");
   }
+  auditSystem(getSnapshot().company.id, "execution_stopped", `Execution stopped: ${reason}`, { severity: "warn" });
 
   clearDeveloperWatchdog();
   stopDeveloperWorkspaceMonitor();
@@ -4180,6 +4845,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
   }
 
   executionStatus = "planning";
+  auditSystem(snapshot.company.id, "execution_started", `Execution started for "${snapshot.company.name}"`, { detail: { sprintCount: snapshot.sprints.length } });
 
   // Create Sprint 1 record — all tasks created below will inherit this sprintId
   const sprint = createSprintRecord(
@@ -4619,6 +5285,57 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         });
       }
 
+      // ── Audit: tool invocation / completion ──
+      if (toolName && activeExecution) {
+        const companyId = activeExecution.companyId;
+        const taskId = activeExecution.buildTaskId;
+        const sanitizedArgs = sanitizeToolArgs(args);
+        if (isInvocation) {
+          auditAgent(companyId, role, "tool_invoked", `${role} invoked ${toolName}`, {
+            detail: { toolName, args: sanitizedArgs, taskId },
+            correlationId: taskId,
+            severity: "debug",
+          });
+
+          // ── Governance post-hoc enforcement (Spec 13 Step 8) ──
+          const snap = getSnapshot();
+          const agent = getAgentByRole(snap, role as AgentIdentity["role"]);
+          if (agent) {
+            const trustData = await cpLoadTrustScore(agent.id);
+            const policyCtx: PolicyEvalContext = {
+              role: role as PolicyEvalContext["role"], tool: toolName, trustScore: trustData.score,
+              companyId, agentId: agent.id,
+            };
+            const decision = evaluatePolicy(policyCtx, BASE_POLICY_RULES);
+            if (decision.decision === "deny") {
+              emitEmployeeActivity(role, "error", `Post-hoc violation: ${toolName} denied by rule ${decision.ruleId} — ${decision.reason}`, {
+                taskId, detail: { toolName, ruleId: decision.ruleId, decision: decision.decision, trustScore: trustData.score },
+              });
+              const violationId = `viol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              cpRecordPolicyViolation({
+                id: violationId, companyId, agentId: agent.id, ruleId: decision.ruleId,
+                tool: toolName, decision: decision.decision, severity: "high",
+                detail: `Agent ${role} invoked denied tool ${toolName}: ${decision.reason}`,
+                beatId: null,
+                resolvedAt: null, createdAt: new Date().toISOString(),
+              });
+              const trustEvent = buildTrustEvent(agent.id, "violation", `Invoked denied tool ${toolName}`, new Date().toISOString());
+              cpUpdateTrustScore(trustEvent);
+            } else if (decision.decision === "escalate") {
+              emitEmployeeActivity(role, "decision", `Post-hoc escalation: ${toolName} requires approval — rule ${decision.ruleId}`, {
+                taskId, detail: { toolName, ruleId: decision.ruleId, trustScore: trustData.score },
+              });
+            }
+          }
+        } else {
+          auditAgent(companyId, role, "tool_completed", `${role} ${toolName} → ${toolStatus || "done"}`, {
+            detail: { toolName, status: toolStatus || "completed", taskId },
+            correlationId: taskId,
+            severity: "debug",
+          });
+        }
+      }
+
       if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {
         const filePath = args.filePath || args.file_path || "unknown file";
         updateAgentSessionState(role, {
@@ -4744,4 +5461,344 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       taskId: role === "developer" ? activeExecution?.buildTaskId ?? null : null,
     });
   }
+}
+
+// ── Heartbeat integration (Spec 12 Phase 3) ────────────────
+
+/**
+ * Execute a task within beat context (no activeExecution global required).
+ * Called by BeatDependencies.executeTask().
+ */
+export async function executeBeatTask(
+  ctx: import("@arceus/contracts").AgentBeatContext,
+  taskId: string,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number; completed: boolean }> {
+  startBeatTokenAccumulator(beatId);
+  const snapshot = getSnapshot();
+  const task = snapshot.tasks.find((t) => t.id === taskId);
+  if (!task) {
+    emitEmployeeActivity("system", "error", `Beat ${beatId}: task ${taskId} not found in snapshot`, { beatId, detail: { taskId, role: ctx.role } });
+    return { summary: `Task ${taskId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false };
+  }
+
+  const role = ctx.role;
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority}`, {
+    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone },
+  });
+
+  // ── CEO beat: sprint lifecycle detection ──────────────────
+  if (role === "ceo") {
+    // Don't conflict with live CEO chat streaming
+    if (isCeoStreaming()) {
+      return {
+        summary: "CEO beat skipped — live chat streaming in progress",
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
+      };
+    }
+    // Check if all sprint tasks are terminal → trigger next sprint proposal
+    const sprintId = snapshot.company.currentSprintId;
+    if (sprintId) {
+      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      const allTerminal = sprintTasks.length > 0 && sprintTasks.every((t) =>
+        ["completed", "failed", "cancelled", "blocked"].includes(t.status)
+      );
+      if (allTerminal) {
+        try {
+          await triggerCeoSprintProposal();
+          return {
+            summary: `CEO detected all tasks terminal in sprint ${sprintId} — triggered next sprint proposal`,
+            tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1, completed: true,
+          };
+        } catch (err) {
+          return {
+            summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
+            tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
+          };
+        }
+      }
+    }
+
+    // CEO proactive governance: budget alert, stale task detection
+    const budgetPct = snapshot.company.budgetCents > 0
+      ? (snapshot.company.spentCents / snapshot.company.budgetCents) * 100
+      : 0;
+    if (budgetPct >= 90) {
+      emitEmployeeActivity("ceo", "info", `Budget alert: ${budgetPct.toFixed(0)}% spent (${snapshot.company.spentCents}¢ / ${snapshot.company.budgetCents}¢)`, { beatId });
+    }
+
+    // Detect stale in-progress tasks (older than 10 minutes)
+    const staleThreshold = Date.now() - 10 * 60 * 1000;
+    const staleTasks = snapshot.tasks.filter((t) =>
+      t.status === "in_progress" && new Date(t.startedAt ?? t.createdAt ?? new Date().toISOString()).getTime() < staleThreshold
+    );
+    if (staleTasks.length > 0) {
+      emitEmployeeActivity("ceo", "info", `Stale task detection: ${staleTasks.length} task(s) in_progress for >10min`, { beatId });
+    }
+
+    return {
+      summary: `CEO governance beat: budget=${budgetPct.toFixed(0)}%, stale=${staleTasks.length}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0, completed: true,
+    };
+  }
+
+  // For specialist roles, delegate to existing executeSpecialistTask
+  if (["tester", "ui_designer", "marketing", "skills_lead"].includes(role)) {
+    emitEmployeeActivity(role, "decision", `Beat ${beatId}: routing to specialist executor`, { beatId, taskId });
+    try {
+      await executeSpecialistTask(taskId);
+      const updated = getSnapshot().tasks.find((t) => t.id === taskId);
+      return {
+        summary: updated?.title || `${role} completed ${task.title}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId),
+        actionsCount: 1,
+        toolCalls: 1,
+        completed: updated?.status === "completed",
+      };
+    } catch (err) {
+      return {
+        summary: `${role} task failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
+      };
+    }
+  }
+
+  // For CTO/PM/developer — run a single prompt cycle via runPromptText
+  const soul = getRoleSoul(role);
+  const taskPrompt = role === "developer" ? buildDeveloperBeatPrompt(task) : buildSpecialistTaskPrompt(task);
+  const roleTools = getToolsForPrompt(role);
+
+  // ── Governance pre-filter (Spec 13 Step 7) ──────────────────
+  const trustScore = await cpLoadTrustScore(ctx.agentId);
+  const roleToolNames = roleTools ? Object.keys(roleTools).filter(k => (roleTools as any)[k]) : [];
+  const filterResult = filterToolsForAgent(
+    role, trustScore.score, roleToolNames, BASE_POLICY_RULES,
+    snapshot.company.id, ctx.agentId, beatId,
+  );
+  const governedToolsParam = toOpenCodeToolsParam(filterResult);
+  const tools = governedToolsParam ?? roleTools;
+  const filterSummary = summarizeFilterResult(filterResult, role);
+  emitEmployeeActivity(role, "decision", `Beat ${beatId}: governance pre-filter — ${filterSummary}`, {
+    beatId, taskId, detail: {
+      trustScore: trustScore.score,
+      trustTier: getTrustTier(trustScore.score),
+      roleToolNames,
+      allowed: filterResult.allowed,
+      denied: filterResult.denied.map(d => d.tool),
+      escalated: filterResult.escalated.map(e => e.tool),
+    },
+  });
+
+  // ── Governance escalation (Spec 13 Step 9) ──────────────
+  if (filterResult.escalated.length > 0) {
+    const escalatedTools = filterResult.escalated.map(e => e.tool);
+    const escalationReasons = filterResult.escalated.map(e => `${e.tool}: ${e.decision.reason}`).join("; ");
+    emitEmployeeActivity(role, "decision", `Beat ${beatId}: escalation required for tools [${escalatedTools.join(", ")}]`, {
+      beatId, taskId, detail: { escalatedTools, reasons: escalationReasons },
+    });
+    upsertApproval({
+      id: `gov-esc-${beatId}-${Date.now()}`,
+      companyId: snapshot.company.id,
+      type: "tool_governance",
+      requestedByAgentId: ctx.agentId,
+      status: "pending",
+      title: `Tool escalation: ${escalatedTools.join(", ")}`,
+      description: `Agent ${role} (trust=${trustScore.score.toFixed(2)}, tier=${filterResult.tier}) requests access to tools: ${escalationReasons}`,
+      meetingId: null,
+      agendaItemId: null,
+      resolutionSummary: null,
+    });
+    auditAgent(snapshot.company.id, role, "tool_escalation", `Governance escalation: ${escalatedTools.join(", ")} (trust=${trustScore.score.toFixed(2)})`, {
+      detail: { escalatedTools, trustScore: trustScore.score, tier: filterResult.tier, beatId },
+      correlationId: taskId,
+      severity: "warn",
+    });
+  }
+
+  let beatViolationCount = 0;
+  let beatSession: import("@opencode-ai/sdk").Session | null = null;
+
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt constructed (${taskPrompt.length} chars), tools=${tools ? Object.keys(tools).filter(k => (tools as any)[k]).join(",") : "none"}`, {
+    beatId, taskId, detail: { promptLength: taskPrompt.length, tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [], promptType: role === "developer" ? "developer_build" : "specialist_text" },
+  });
+
+  try {
+    // Use ephemeral per-beat session to avoid context bleed (Spec 12 Phase 4)
+    beatSession = await createBeatSession(role, beatId);
+    emitEmployeeActivity(role, "context", `Beat ${beatId}: session created ${beatSession.id}`, { beatId, detail: { sessionId: beatSession.id } });
+    touchAgentSession(role, "working");
+    setTaskStatus(task.id, "in_progress");
+    emitEmployeeActivity(role, "working", `Beat ${beatId}: executing "${task.title}"`, { taskId, beatId });
+
+    emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
+      beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
+    });
+    const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt, tools);
+
+    touchAgentSession(role, "idle");
+
+    // Commit structured task result via control plane
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+    emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt complete — ${tokensUsed} tokens, output=${(output?.length ?? 0)} chars`, {
+      beatId, taskId, detail: { tokensUsed, outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
+    });
+    const updated = getSnapshot().tasks.find((t) => t.id === taskId);
+    if (updated && updated.status !== "completed") {
+      cpCommitTaskResult(snapshot.company.id, task.id, {
+        summary: output?.slice(0, 300) || `${role} completed ${task.title} via beat ${beatId}`,
+        artifacts: [],
+        filesModified: [],
+        tokensUsed,
+        beatId,
+      });
+    }
+
+    // Auto-preview: after developer beats, try to start/refresh the preview
+    if (role === "developer") {
+      emitEmployeeActivity("system", "preview", `Beat ${beatId}: developer task done — checking auto-preview`, { beatId });
+      tryAutoPreview().catch(() => {});
+    }
+
+    // ── Governance: trust lifecycle — success (Spec 13 Step 10) ──
+    const completionEvent = buildTrustEvent(ctx.agentId, "task_completed", `Beat ${beatId}: ${task.title}`, new Date().toISOString());
+    await cpUpdateTrustScore(completionEvent);
+    if (beatViolationCount === 0) {
+      const complianceEvent = buildTrustEvent(ctx.agentId, "manual_adjustment", `Beat ${beatId}: clean beat compliance bonus`, new Date().toISOString(), TRUST_CONFIG.complianceBonus);
+      await cpUpdateTrustScore(complianceEvent);
+    }
+    emitEmployeeActivity(role, "decision", `Beat ${beatId}: trust lifecycle updated — task_completed${beatViolationCount === 0 ? " + compliance_bonus" : ""} (violations=${beatViolationCount})`, {
+      beatId, taskId, detail: { beatViolationCount },
+    });
+
+    return {
+      summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
+      tokensUsed,
+      actionsCount: 1,
+      toolCalls: 1,
+      completed: true,
+    };
+  } catch (err) {
+    touchAgentSession(role, "idle");
+    emitEmployeeActivity(role, "error", `Beat ${beatId}: execution failed — ${err instanceof Error ? err.message : String(err)}`, {
+      beatId, taskId, detail: { error: err instanceof Error ? err.message : String(err) },
+    });
+
+    // ── Governance: trust lifecycle — failure (Spec 13 Step 10) ──
+    const failEvent = buildTrustEvent(ctx.agentId, "task_failed", `Beat ${beatId}: ${err instanceof Error ? err.message : "unknown error"}`, new Date().toISOString());
+    cpUpdateTrustScore(failEvent).catch(() => {});
+
+    return {
+      summary: `Beat task execution failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
+    };
+  } finally {
+    // Destroy ephemeral session — best-effort cleanup (Spec 12 Phase 4 Step 5)
+    if (beatSession) {
+      destroyBeatSession(beatSession.id).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Trigger the CEO to propose the next sprint (exposed for beat context).
+ */
+export const triggerCeoSprintProposalFromBeat = () => triggerCeoSprintProposal();
+
+/**
+ * Execute a checklist-driven action when no task exists.
+ * Routes by role: CEO proposes sprints, CTO/PM/others run LLM prompts.
+ * Called by BeatDependencies.executeChecklistAction().
+ */
+export async function executeChecklistAction(
+  ctx: import("@arceus/contracts").AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  const role = ctx.role;
+
+  emitEmployeeActivity(role, "decision", `Beat ${beatId}: checklist action dispatched — "${action.suggestedAction}"`, {
+    beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
+  });
+
+  // ── CEO: propose sprint when none exists ──
+  if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
+    if (isCeoStreaming()) {
+      emitEmployeeActivity("ceo", "info", `Beat ${beatId}: CEO skipped — live chat streaming`, { beatId });
+      return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    try {
+      emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
+      await triggerCeoSprintProposal();
+      emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: CEO sprint proposal completed`, { beatId });
+      return {
+        summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+      };
+    } catch (err) {
+      emitEmployeeActivity("ceo", "error", `Beat ${beatId}: CEO sprint proposal failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      return {
+        summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+      };
+    }
+  }
+
+  // ── PM: scope triage, board response ──
+  if (role === "pm" || role === "cto") {
+    try {
+      const snapshot = getSnapshot();
+      const soul = getRoleSoul(role);
+      const session = await ensureAgentSession(snapshot, role);
+      touchAgentSession(role, "working");
+      emitEmployeeActivity(role, "working", `Beat ${beatId}: ${action.suggestedAction}`, { beatId });
+
+      const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
+      emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending checklist-action prompt (${prompt.length} chars)`, { beatId, detail: { promptLength: prompt.length } });
+      const output = await runPromptText(role, session.sessionId, soul.systemPrompt, prompt);
+      touchAgentSession(role, "idle");
+
+      emitEmployeeActivity(role, "context", `Beat ${beatId}: checklist action completed — output=${(output?.length ?? 0)} chars`, {
+        beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
+      });
+      return {
+        summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+      };
+    } catch (err) {
+      touchAgentSession(role, "idle");
+      emitEmployeeActivity(role, "error", `Beat ${beatId}: ${role} checklist action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      return {
+        summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+      };
+    }
+  }
+
+  // ── Tester: sprint review actions (Spec 21) ──
+  if (role === "tester" && action.suggestedAction.startsWith("sprint_review:")) {
+    startBeatTokenAccumulator(beatId);
+    const reviewAction = action.suggestedAction;
+
+    if (reviewAction === "sprint_review:run_tester_verification") {
+      return executeSprintReviewVerification(ctx, beatId);
+    }
+    if (reviewAction === "sprint_review:run_final_gate") {
+      return executeSprintFinalGate(ctx, beatId);
+    }
+    if (reviewAction === "sprint_review:retest_after_rework") {
+      return executeRetestAfterRework(ctx, beatId);
+    }
+
+    return {
+      summary: `Unknown sprint review action: ${reviewAction}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
+
+  // ── Fallback: log the action without executing ──
+  emitEmployeeActivity(role, "info", `Beat ${beatId}: no handler for checklist action — "${action.suggestedAction}"`, { beatId });
+  return {
+    summary: `${role}: ${action.suggestedAction} (no handler)`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+  };
 }

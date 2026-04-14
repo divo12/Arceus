@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Arceus Heartbeat Scheduling Engine configuration. All values can be overridden by env vars prefixed ARCEUS_HEARTBEAT_*",
+
+  "executionMode": "heartbeat",
+
+  "schedulerIntervalMs": 15000,
+  "maxConcurrentBeats": 4,
+
+  "roleIntervals": {
+    "ceo": 60000,
+    "cto": 45000,
+    "pm": 60000,
+    "developer": 30000,
+    "tester": 45000,
+    "ui_designer": 60000,
+    "marketing": 120000,
+    "skills_lead": 120000
+  },
+
+  "beatTimeoutMs": 300000,
+  "beatTokenBudget": 50000,
+  "beatCostCeilingCents": 50,
+  "idleThresholdTokens": 500,
+
+  "pauseWhenNoActiveSprint": true,
+  "pauseWhenBudgetExhausted": false,
+  "pauseRoles": []
+}

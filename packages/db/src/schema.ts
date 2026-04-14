@@ -140,5 +140,26 @@ export const arceusTableDefinitions: Record<EntityName, TableDefinition> = {
     primaryKey: "id",
     notes: "Agent confidence, caution, and morale state.",
     indexes: ["agent_id", "updated_at"]
+  },
+  beatRecords: {
+    entity: "beatRecords",
+    tableName: "beat_records",
+    primaryKey: "id",
+    notes: "Heartbeat cycle records (Spec 12). One row per agent beat with timing, cost, and outcome.",
+    indexes: ["company_id", "agent_id", "started_at", "beat_number", "status"]
+  },
+  trustScores: {
+    entity: "trustScores",
+    tableName: "trust_scores",
+    primaryKey: "agent_id",
+    notes: "Per-agent trust score and adjustment history (Spec 13 Governance).",
+    indexes: []
+  },
+  policyViolations: {
+    entity: "policyViolations",
+    tableName: "policy_violations",
+    primaryKey: "id",
+    notes: "Audit log of policy violations and escalation events (Spec 13 Governance).",
+    indexes: ["company_id", "agent_id", "created_at"]
   }
 };

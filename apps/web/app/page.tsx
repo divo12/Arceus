@@ -12,6 +12,7 @@ import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 import { apiUrl } from "../lib/api";
 import { useChatMessages } from "../components/chat-context";
+import { ResizableSplit } from "../components/resizable-split";
 
 type RuntimeStatus = {
   ready: boolean;
@@ -218,10 +219,14 @@ type EmployeeActivityEvent = {
   id: string;
   timestamp: string;
   employee: string;
-  type: "working" | "file_edit" | "shell" | "error" | "idle" | "info";
+  type: "working" | "file_edit" | "shell" | "error" | "idle" | "info"
+    | "beat_started" | "beat_completed" | "beat_failed" | "beat_idle"
+    | "prompt" | "tool_call" | "memory" | "preview" | "context" | "decision" | "transition";
   content: string;
   meetingId?: string | null;
   taskId?: string | null;
+  beatId?: string | null;
+  detail?: Record<string, unknown> | null;
 };
 
 type Artifact = {
@@ -1838,34 +1843,13 @@ export default function Page() {
   };
 
   return (
-    <div className="flex h-screen flex-col">
-      {/* ── Top bar ─────────────────────────────────────── */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-5">
-        <div className="flex items-center gap-3">
-          <span className="text-[0.8125rem] font-bold tracking-tight">
+    <div className="flex h-full flex-col">
+      {/* ── Status bar (compact) ────────────────────────── */}
+      <header className="flex h-9 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[0.75rem] font-semibold text-[var(--text-primary)]">
             {snapshot.company.id === "company_pending" ? "Arceus" : snapshot.company.name}
           </span>
-          <span className="mx-1 h-4 w-px bg-[var(--swiss-gray-200)]" />
-          <nav className="flex items-center gap-1">
-            {[
-              { href: "/tasks", label: "Tasks" },
-              { href: "/employees", label: "Team" },
-              { href: "/meetings", label: "Meetings" },
-              { href: "/activity", label: "Activity" },
-              { href: "/workspace", label: "Workspace" },
-              { href: "/preview", label: "Preview" },
-              { href: "/execution", label: "Execution" },
-            ].map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded-md px-2 py-1 text-[0.6875rem] text-[var(--swiss-gray-400)] transition hover:bg-[var(--swiss-gray-100)] hover:text-[var(--swiss-black)]"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-          <span className="mx-1 h-4 w-px bg-[var(--swiss-gray-200)]" />
           {currentSprint ? (
             <Badge variant="outline" className="text-[0.625rem]">Sprint {currentSprint.number}</Badge>
           ) : null}
@@ -1888,7 +1872,7 @@ export default function Page() {
             <Button
               variant="ghost"
               size="sm"
-              className="text-[var(--swiss-red)]"
+              className="text-[var(--status-error)]"
               onClick={() => void handleStopExecution()}
               disabled={stoppingExecution}
             >
@@ -1899,19 +1883,15 @@ export default function Page() {
         </div>
       </header>
 
-      {/* ── Main area ───────────────────────────────────── */}
-      <div className="flex min-h-0 flex-1">
-        {/* ── CEO Chat Panel (left) ─────────────────────── */}
-        <div
-          className={`flex flex-col border-r border-[var(--swiss-gray-100)] ${
-            showCompanyView ? "w-[560px] shrink-0" : "flex-1"
-          }`}
-        >
-          {runtimeError && !isResetting ? (
-            <div className="shrink-0 border-b border-[var(--swiss-red)]/20 bg-[var(--swiss-red)]/5 px-5 py-2">
-              <p className="text-[0.75rem] text-[var(--swiss-red)]">{runtimeError}</p>
-            </div>
-          ) : null}
+      {/* ── Main area — resizable split ───────────────── */}
+      <ResizableSplit
+        left={
+          <div className="flex h-full flex-col">
+            {runtimeError && !isResetting ? (
+              <div className="shrink-0 border-b border-[var(--status-error)]/20 bg-[var(--status-error)]/5 px-5 py-2">
+                <p className="text-[0.75rem] text-[var(--status-error)]">{runtimeError}</p>
+              </div>
+            ) : null}
 
           {/* Chat messages (scrollable) */}
           <div className="flex-1 overflow-y-auto p-4">
@@ -2010,28 +1990,27 @@ export default function Page() {
               </Button>
             </div>
           </div>
-        </div>
-
-        {/* ── Company View (right) ──────────────────────── */}
-        {showCompanyView ? (
-          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          </div>
+        }
+        right={
+          <div className="flex h-full min-w-0 flex-col overflow-y-auto bg-[var(--bg-primary)]">
             <div className="flex-1 space-y-5 p-6">
               {/* ── Inbox ────────────────────────────────── */}
               {inboxCount > 0 ? (
-                <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)]">
+                <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]">
                   <button
                     className="flex w-full items-center justify-between px-5 py-3 text-left"
                     onClick={() => setInboxOpen((prev) => !prev)}
                   >
                     <div className="flex items-center gap-2">
-                      <Inbox className="h-4 w-4 text-[var(--swiss-gray-400)]" />
+                      <Inbox className="h-4 w-4 text-[var(--text-muted)]" />
                       <span className="text-[0.8125rem] font-semibold">Inbox</span>
-                      <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--swiss-blue)] px-1.5 text-[0.625rem] font-semibold text-white">
+                      <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--status-info)] px-1.5 text-[0.625rem] font-semibold text-white">
                         {inboxCount}
                       </span>
                     </div>
                     <ChevronDown
-                      className={`h-4 w-4 text-[var(--swiss-gray-400)] transition-transform ${inboxOpen ? "rotate-180" : ""}`}
+                      className={`h-4 w-4 text-[var(--text-muted)] transition-transform ${inboxOpen ? "rotate-180" : ""}`}
                     />
                   </button>
                   {inboxOpen ? (
@@ -2250,31 +2229,31 @@ export default function Page() {
 
             </div>
           </div>
-        ) : null}
-        </div>
+        }
+      />
 
         {/* ── Status bar ────────────────────────────────── */}
-      <footer className="flex h-8 shrink-0 items-center gap-4 border-t border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-5 font-mono text-[0.6875rem] text-[var(--swiss-gray-400)]">
+      <footer className="flex h-8 shrink-0 items-center gap-4 border-t border-[var(--border)] bg-[var(--bg-secondary)] px-5 font-mono text-[0.6875rem] text-[var(--text-muted)]">
         {currentSprint ? <span>Sprint {currentSprint.number}</span> : null}
         {totalTaskCount > 0 ? <span>{completedTaskCount}/{totalTaskCount} tasks</span> : null}
         {activeAgentCount > 0 ? (
           <span className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--arc-success)]" />
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--status-success)]" />
             {activeAgentCount} active
           </span>
         ) : null}
         <span>Preview: {previewStatus === "ready" ? "✓ running" : previewStatus === "starting" ? "starting…" : "—"}</span>
-        <span className="ml-auto text-[var(--swiss-gray-300)]">{snapshot.company.name || "Arceus"}</span>
+        <span className="ml-auto text-[var(--text-muted)]">{snapshot.company.name || "Arceus"}</span>
       </footer>
 
       {/* ── Artifact modal ──────────────────────────────── */}
       {expandedArtifact ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)]">
-            <div className="flex items-start justify-between gap-3 border-b border-[var(--swiss-gray-100)] px-5 py-4">
+          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-primary)]">
+            <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
               <div>
                 <div className="text-[0.9375rem] font-semibold">{expandedArtifact.title}</div>
-                <div className="swiss-caption mt-1 text-[var(--swiss-gray-400)]">
+                <div className="swiss-caption mt-1 text-[var(--text-muted)]">
                   {expandedArtifact.agent} · {expandedArtifact.kind} · {new Date(expandedArtifact.createdAt).toLocaleTimeString()}
                 </div>
               </div>
@@ -2283,7 +2262,7 @@ export default function Page() {
               </Button>
             </div>
             <div className="overflow-y-auto px-5 py-4">
-              <div className="markdown-content text-[0.8125rem] leading-7 text-[var(--swiss-gray-500)]">
+              <div className="markdown-content text-[0.8125rem] leading-7 text-[var(--text-secondary)]">
                 <ReactMarkdown>{expandedArtifact.content}</ReactMarkdown>
               </div>
             </div>

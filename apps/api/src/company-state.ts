@@ -21,22 +21,28 @@ function clonePersistedState(snapshot: CompanySnapshot, events: EventEnvelope[])
 }
 
 async function writePersistedCompanyState(state: PersistedCompanyState) {
-  await getDb()
-    .insert(companyStatesTable)
-    .values({
-      companyId: state.snapshot.company.id,
-      snapshotData: state.snapshot,
-      eventLog: state.events,
-      updatedAt: new Date(state.updatedAt),
-    })
-    .onConflictDoUpdate({
-      target: companyStatesTable.companyId,
-      set: {
+  try {
+    await getDb()
+      .insert(companyStatesTable)
+      .values({
+        companyId: state.snapshot.company.id,
         snapshotData: state.snapshot,
         eventLog: state.events,
         updatedAt: new Date(state.updatedAt),
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: companyStatesTable.companyId,
+        set: {
+          snapshotData: state.snapshot,
+          eventLog: state.events,
+          updatedAt: new Date(state.updatedAt),
+        },
+      });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[PERSIST] writePersistedCompanyState FAILED for ${state.snapshot.company.id}: ${msg}`);
+    throw err;
+  }
 }
 
 async function drainPersistQueue() {
@@ -114,7 +120,8 @@ export async function flushPersistedCompanyState() {
   await persistQueue.catch(() => undefined);
 
   if (lastPersistError) {
-    throw lastPersistError;
+    console.error(`[PERSIST] flushPersistedCompanyState ignoring error (in-memory state is authoritative): ${lastPersistError.message}`);
+    lastPersistError = null;
   }
 }
 

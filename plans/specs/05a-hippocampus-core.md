@@ -670,3 +670,9 @@ New prompt template: `MEETING_EXTRACTION_PROMPT` (includes `relevant_to` field i
 - Pattern merge synthesis
 - Demotion: probation window (7 days), long-term unused (60 days)
 - 6 additional LLM call sites (all gpt-4o-mini, background only)
+
+## Deferred from Spec 11
+
+### Memory Unit Mutation Types
+
+Spec 11's Control Plane mutation pipeline (`cpApplyMutations`) does not include mutation types for Hippocampus memory operations (e.g., `memory_store`, `memory_prune`, `memory_promote`). Currently memory writes go directly through the Hippocampus module bypassing the CP mutation path. When integrating Hippocampus with the heartbeat lifecycle (Spec 12), add `StateMutation` types for memory operations so they flow through the audit ledger and respect the beat's atomic commit.

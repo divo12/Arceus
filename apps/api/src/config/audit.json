@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Arceus Audit Ledger configuration. All values can be overridden by env vars prefixed ARCEUS_AUDIT_*",
+
+  "memoryBufferSize": 2000,
+  "dbFlushIntervalMs": 5000,
+  "dbFlushBatchSize": 50,
+  "dbEnabled": true,
+  "sseKeepAliveMs": 15000,
+  "logViewerEnabled": true,
+  "logViewerMaxEvents": 500,
+  "severityFilter": "debug",
+  "categories": [
+    "agent_action",
+    "task_lifecycle",
+    "sprint_lifecycle",
+    "system",
+    "board",
+    "policy_eval",
+    "error"
+  ]
+}

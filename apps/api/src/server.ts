@@ -9,26 +9,96 @@ process.on("uncaughtException", (err) => {
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
-import { clearPersistedStoreState, flushStorePersistence, getEvents, getSnapshot, hydrateStoreFromPersistence, resetCompany, applyStrategy } from "./store";
+import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, approveSprintProposal, rejectSprintProposal, beginExecution, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, stopExecution, hippocampus } from "./orchestrator";
-import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "./activity";
+import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter } from "./orchestrator";
+import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity, emitEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
-import { getLocalPreviewState } from "./preview";
+import { heartbeatConfig } from "./config/heartbeat";
+import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "./preview";
 import { workspaceManager } from "./workspace-manager";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./bootstrap";
 import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifacts } from "./artifact-persistence";
 import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
-import { warmUpOpencode } from "./opencode";
+import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
+import { auditConfig } from "./config/audit";
+import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
+import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
+import type { BeatDependencies } from "@arceus/company-runtime";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
+cpSetBuildCheckDir(productDir);
 
-await hydrateStoreFromPersistence();
+await hydrate();
+
+// ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
+
+const beatDeps: BeatDependencies = {
+  loadAgentContext: (agentId, beatId, beatNumber, trigger, config) =>
+    cpLoadAgentContext(agentId, beatId, beatNumber, trigger, config),
+  getSnapshotVersion: () => cpGetSnapshotVersion(),
+  applyMutations: (companyId, mutations, causation, expectedVersion) =>
+    cpApplyMutations(companyId, mutations as any, causation, expectedVersion),
+  commitBeatRecord: (record) => cpCommitBeatRecord(record),
+  flushStore: () => flush(),
+  audit: {
+    auditAgent: (companyId, agentRole, eventType, summary, opts) =>
+      audit({ companyId, category: "agent_action", eventType, summary, agentRole, ...opts }),
+    auditSystem: (companyId, eventType, summary, opts) =>
+      audit({ companyId, category: "system", eventType, summary, ...opts }),
+    auditError: (companyId, eventType, summary, error, opts) =>
+      audit({ companyId, category: "error", severity: "error", eventType, summary, detail: { error: error instanceof Error ? error.message : error }, ...opts }),
+  },
+  executeTask: (ctx, taskId, beatId) => executeBeatTask(ctx, taskId, beatId),
+  executeChecklistAction: (ctx, action, beatId) => executeChecklistAction(ctx, action, beatId),
+  getAgentRoster: () => {
+    const snap = getSnapshot();
+    if (snap.company.id === "company_pending") return [];
+    return snap.agents.map((a) => ({ agentId: a.id, role: a.role, companyId: snap.company.id }));
+  },
+  emitBeatEvent: (event) => emitBeatEvent(event),
+};
+
+const heartbeatEngine = new HeartbeatEngine(heartbeatConfig, beatDeps);
+
+// Wire reactive events: orchestrator mutations → heartbeat engine event-triggered beats
+setReactiveEventEmitter((companyId, agentId, role, event) =>
+  heartbeatEngine.emitEvent(companyId, agentId, role, event)
+);
+
+// Re-seed service registry on startup if a company already exists (survives server restarts)
+{
+  const snap = getSnapshot();
+  console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
+  if (snap.company.id !== "company_pending") {
+    try {
+      const { seeded, skipped } = await seedRegistry(snap.company.id);
+      console.log(`[STARTUP] Re-seeded service registry: ${seeded} tools seeded, ${skipped} skipped`);
+    } catch (err) {
+      console.warn("[STARTUP] Registry re-seed failed:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log("[STARTUP] No company hydrated — skipping registry seed");
+  }
+}
+
+// Wire beat event bus → activity stream SSE
+onBeatEvent((event) => {
+  const type = event.type as "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
+  emitEmployeeActivity(event.role, type, `${event.type}: ${event.data?.summary || event.beatId}`, {
+    beatId: event.beatId,
+    detail: event.data ?? null,
+  });
+});
 
 const bootstrapSchema = z.object({
   companyName: z.string().min(2),
@@ -133,6 +203,8 @@ app.get("/api/runtime", async () => {
 app.post("/api/company/bootstrap", async (request, reply) => {
   const body = bootstrapSchema.parse(request.body);
   const { snapshot, warnings } = await bootstrapCompanyWithWorkspace(body);
+  audit({ companyId: snapshot.company.id, category: "system", eventType: "company_bootstrapped", summary: `Company "${body.companyName}" bootstrapped by ${body.boardOwner}`, detail: { idea: body.idea, budgetCents: body.budgetCents, warnings } });
+  await seedRegistry(snapshot.company.id);
   if (warnings.length > 0) {
     request.log?.warn({ warnings }, "Workspace provision completed with warnings");
   }
@@ -142,6 +214,7 @@ app.post("/api/company/bootstrap", async (request, reply) => {
 
 app.post("/api/company/strategy", async (request, reply) => {
   try {
+    audit({ companyId: getSnapshot().company.id, category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
     return await sendBoardMessageToCeo(getSnapshot().company.goal || "Refine the current idea into a demoable first release.");
   } catch (error) {
     request.log?.error?.(error);
@@ -155,6 +228,7 @@ app.post("/api/company/strategy", async (request, reply) => {
 app.post("/api/chat/ceo", async (request, reply) => {
   try {
     const body = chatSchema.parse(request.body);
+    audit({ companyId: getSnapshot().company.id, category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
     return await sendBoardMessageToCeo(body.message);
   } catch (error) {
     request.log?.error?.(error);
@@ -205,6 +279,7 @@ app.delete("/api/company", async (request, reply) => {
     }
 
     resetEmployeeActivityLog();
+    clearRegistry(companyId);
     return resetCompany();
   } catch (error) {
     request.log?.error?.(error);
@@ -250,11 +325,9 @@ app.post("/api/strategy/execute", async (request, reply) => {
     const body = strategyOutputSchema.parse(request.body);
     const snapshot = applyStrategy(body);
 
-    beginExecution(snapshot).catch((err) => {
-      request.log?.error?.(err);
-    });
+    heartbeatEngine.start();
 
-    return { snapshot, status: "execution_started" };
+    return { snapshot, status: "heartbeat_started", mode: "heartbeat" };
   } catch (error) {
     request.log?.error?.(error);
     reply.code(400);
@@ -435,6 +508,22 @@ app.get("/api/product/overview", async () => {
   };
 });
 
+// ── Preview control ─────────────────────────────────────────
+
+app.post("/api/preview/start", async () => {
+  const state = await startLocalPreview(productDir);
+  return { status: state.status, url: state.url, entryUrl: state.entryUrl, error: state.lastError };
+});
+
+app.post("/api/preview/stop", async () => {
+  await stopLocalPreview();
+  return { status: "stopped" };
+});
+
+app.get("/api/preview", async () => {
+  return getLocalPreviewState();
+});
+
 app.get("/api/persistence/health", async () => {
   return {
     database: await getDatabaseHealth(),
@@ -576,17 +665,14 @@ app.post("/api/orchestrator/execute", async (request, reply) => {
     return { error: "No agents available. Generate a strategy first." };
   }
 
-  // Fire and forget — execution runs in the background
-  beginExecution(snapshot).catch((err) => {
-    request.log?.error?.(err);
-  });
-
-  return { status: "execution_started" };
+  heartbeatEngine.start();
+  return { status: "heartbeat_started", mode: "heartbeat" };
 });
 
 app.post("/api/orchestrator/stop", async (request, reply) => {
   try {
-    return await stopExecution();
+    heartbeatEngine.stop();
+    return { status: "stopped", ...heartbeatEngine.getStatus() };
   } catch (error) {
     request.log?.error?.(error);
     reply.code(400);
@@ -678,6 +764,7 @@ app.post("/api/quick-execute", async (request, reply) => {
     let snapshot = getSnapshot();
     if (snapshot.company.id === "company_pending") {
       snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
+      await seedRegistry(snapshot.company.id);
     }
 
     // 2. Generate strategy (structured output — no CEO chat)
@@ -686,12 +773,10 @@ app.post("/api/quick-execute", async (request, reply) => {
     // 3. Apply strategy → builds hierarchy + agents
     snapshot = applyStrategy(strategy);
 
-    // 4. Fire execution (CTO plans → developer builds)
-    beginExecution(snapshot).catch((err) => {
-      request.log?.error?.(err);
-    });
+    // 4. Fire heartbeat execution
+    heartbeatEngine.start();
 
-    return { snapshot, strategy, status: "execution_started" };
+    return { snapshot, strategy, status: "heartbeat_started", mode: "heartbeat" };
   } catch (error) {
     request.log?.error?.(error);
     reply.code(400);
@@ -701,9 +786,317 @@ app.post("/api/quick-execute", async (request, reply) => {
   }
 });
 
+// ── Audit Ledger routes (Spec 11) ──
+
+const __audit_dirname = dirname(fileURLToPath(import.meta.url));
+let logViewerHtml: string | null = null;
+
+if (auditConfig.logViewerEnabled) {
+  app.get("/logs", async (_request, reply) => {
+    if (!logViewerHtml) {
+      logViewerHtml = readFileSync(join(__audit_dirname, "log-viewer.html"), "utf-8");
+    }
+    reply.type("text/html").send(logViewerHtml);
+  });
+}
+
+app.get("/api/audit/events", async (request) => {
+  const query = request.query as Record<string, string>;
+  return getAuditEvents({
+    limit: query.limit ? parseInt(query.limit, 10) : undefined,
+    category: (query.category as any) || undefined,
+    severity: (query.severity as any) || undefined,
+    companyId: query.companyId || undefined,
+    agentRole: query.agentRole || undefined,
+  });
+});
+
+app.get("/api/audit/stats", async () => {
+  return getAuditStats();
+});
+
+app.get("/api/audit/stream", async (request, reply) => {
+  reply.raw.setHeader("Content-Type", "text/event-stream");
+  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin || "*");
+  reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+
+  // Send any recent events as initial burst
+  const recent = getAuditEvents({ limit: 50 });
+  for (const event of recent) {
+    reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+
+  // Subscribe to live events
+  const unsubscribe = subscribeSse((event) => {
+    try {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      unsubscribe();
+    }
+  });
+
+  // Keep-alive ping
+  const keepAlive = setInterval(() => {
+    try { reply.raw.write(": ping\n\n"); } catch { clearInterval(keepAlive); unsubscribe(); }
+  }, auditConfig.sseKeepAliveMs);
+
+  // Cleanup on disconnect
+  request.raw.on("close", () => {
+    clearInterval(keepAlive);
+    unsubscribe();
+  });
+
+  // Don't let Fastify auto-close the reply
+  await new Promise(() => {});
+});
+
+// ── Control Plane routes (Spec 11 Phase 2+3) ──
+
+app.get("/api/control-plane/status", async () => {
+  return cpGetStatus(getExecutionStatus());
+});
+
+app.get("/api/control-plane/version", async () => {
+  return cpGetVersion();
+});
+
+app.get("/api/control-plane/snapshot-summary", async () => {
+  return cpGetSnapshotSummary();
+});
+
+app.post("/api/control-plane/mutations", async (request, reply) => {
+  try {
+    const body = z.object({
+      companyId: z.string(),
+      mutations: z.array(z.record(z.string(), z.unknown())),
+      causation: z.object({ eventId: z.string().optional(), summary: z.string().optional() }).optional(),
+    }).parse(request.body);
+    return cpApplyMutations(body.companyId, body.mutations as any, body.causation);
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : "Invalid mutation payload" };
+  }
+});
+
+// ── Heartbeat API routes (Spec 12 Phase 3) ──
+
+app.post("/api/heartbeat/start", async () => {
+  heartbeatEngine.start();
+  return { status: "started", ...heartbeatEngine.getStatus() };
+});
+
+app.post("/api/heartbeat/stop", async () => {
+  heartbeatEngine.stop();
+  return { status: "stopped", ...heartbeatEngine.getStatus() };
+});
+
+app.post("/api/heartbeat/trigger", async (request, reply) => {
+  const body = z.object({
+    agentId: z.string(),
+    role: z.string(),
+    trigger: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("interval"), scheduledAt: z.string().optional() }),
+      z.object({ type: z.literal("event"), event: z.string() }),
+    ]).optional(),
+  }).parse(request.body);
+
+  const snapshot = getSnapshot();
+  if (snapshot.company.id === "company_pending") {
+    reply.code(400);
+    return { error: "No company bootstrapped yet." };
+  }
+
+  const trigger = body.trigger ?? { type: "interval" as const, scheduledAt: new Date().toISOString() };
+  if (trigger.type === "interval" && !trigger.scheduledAt) {
+    (trigger as any).scheduledAt = new Date().toISOString();
+  }
+
+  const record = await heartbeatEngine.triggerBeat({
+    companyId: snapshot.company.id,
+    agentId: body.agentId,
+    role: body.role as any,
+    trigger: trigger as any,
+  });
+
+  return record ?? { status: "skipped", reason: "Beat was skipped (locked, paused, or at capacity)" };
+});
+
+app.get("/api/heartbeat/status", async () => {
+  return {
+    ...heartbeatEngine.getStatus(),
+    config: {
+      executionMode: heartbeatConfig.executionMode,
+      schedulerIntervalMs: heartbeatConfig.schedulerIntervalMs,
+      maxConcurrentBeats: heartbeatConfig.maxConcurrentBeats,
+    },
+  };
+});
+
+app.get("/api/heartbeat/history", async (request) => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") return [];
+  const query = request.query as Record<string, string>;
+  const limit = query.limit ? Math.min(Number(query.limit), 500) : 100;
+  const agentId = query.agentId || undefined;
+  // Try DB first; fall back to in-memory
+  const dbHistory = await cpGetBeatHistory(companyId, { limit, agentId });
+  return dbHistory.length > 0 ? dbHistory : heartbeatEngine.getHistory(companyId);
+});
+
+app.patch("/api/heartbeat/config", async (request) => {
+  const body = request.body as Record<string, unknown>;
+  const allowed: (keyof import("@arceus/company-runtime").HeartbeatConfig)[] = [
+    "schedulerIntervalMs", "maxConcurrentBeats", "beatTimeoutMs",
+    "beatTokenBudget", "beatCostCeilingCents", "pauseWhenNoActiveSprint",
+    "pauseWhenBudgetExhausted",
+  ];
+  const patch: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in body) patch[key] = body[key];
+  }
+  heartbeatEngine.patchConfig(patch as any);
+  return { config: heartbeatEngine.getConfig() };
+});
+
+// ── Service Registry routes (Spec 11 Phase 3) ──
+
+app.get("/api/service-registry", async () => {
+  const companyId = getSnapshot().company.id;
+  return getRegistrySnapshot(companyId);
+});
+
+app.get("/api/service-registry/stats", async () => {
+  const companyId = getSnapshot().company.id;
+  return getRegistryStats(companyId);
+});
+
+app.get("/api/service-registry/role/:role", async (request) => {
+  const { role } = request.params as { role: string };
+  const companyId = getSnapshot().company.id;
+  return getToolsForRole(companyId, role);
+});
+
+app.get("/api/service-registry/tool/:toolName", async (request) => {
+  const { toolName } = request.params as { toolName: string };
+  const companyId = getSnapshot().company.id;
+  const snap = getRegistrySnapshot(companyId);
+  const entry = snap.find((e) => e.toolName === toolName);
+  if (!entry) return { error: "Tool not found" };
+  return entry;
+});
+
+app.get("/api/service-registry/check/:role/:toolName", async (request) => {
+  const { role, toolName } = request.params as { role: string; toolName: string };
+  const companyId = getSnapshot().company.id;
+  return {
+    allowed: isToolAvailable(companyId, role, toolName),
+    blastRadius: getBlastRadius(companyId, toolName),
+  };
+});
+
+app.post("/api/service-registry/seed", async () => {
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") return { error: "No company bootstrapped" };
+  const result = await seedRegistry(companyId);
+  return result;
+});
+
+// ── Governance API (Spec 13 Phase 5 Step 11) ──────────────
+
+/** GET /api/governance/trust-scores — all agent trust scores */
+app.get("/api/governance/trust-scores", async () => {
+  const scores = cpGetAllTrustScores();
+  return scores.map((s) => ({
+    ...s,
+    tier: getTrustTier(s.score),
+  }));
+});
+
+/** GET /api/governance/trust-scores/:agentId — single agent trust score */
+app.get("/api/governance/trust-scores/:agentId", async (request) => {
+  const { agentId } = request.params as { agentId: string };
+  const score = await cpLoadTrustScore(agentId);
+  return { ...score, tier: getTrustTier(score.score) };
+});
+
+/** POST /api/governance/trust-scores/:agentId/adjust — manual trust adjustment */
+app.post("/api/governance/trust-scores/:agentId/adjust", async (request) => {
+  const { agentId } = request.params as { agentId: string };
+  const body = request.body as { kind: string; reason: string; delta?: number };
+  if (!body.kind || !body.reason) return { error: "kind and reason are required" };
+  const event = buildTrustEvent(
+    agentId,
+    body.kind as any,
+    `Manual: ${body.reason}`,
+    new Date().toISOString(),
+    body.delta,
+  );
+  const updated = await cpUpdateTrustScore(event);
+  return { ...updated, tier: getTrustTier(updated.score) };
+});
+
+/** GET /api/governance/violations — recent policy violations */
+app.get("/api/governance/violations", async (request) => {
+  const query = request.query as { agentId?: string; limit?: string };
+  return cpGetPolicyViolations({
+    agentId: query.agentId,
+    limit: query.limit ? parseInt(query.limit, 10) : undefined,
+  });
+});
+
+/** GET /api/governance/policies — list active policy rules */
+app.get("/api/governance/policies", async () => {
+  return BASE_POLICY_RULES.map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    priority: r.priority,
+    appliesTo: r.appliesTo,
+    toolPatterns: r.toolPatterns,
+    minTrust: r.minTrust,
+    decision: r.decision,
+  }));
+});
+
+/** GET /api/governance/stats — aggregate governance stats */
+app.get("/api/governance/stats", async () => {
+  const scores = cpGetAllTrustScores();
+  const violations = await cpGetPolicyViolations({ limit: 200 });
+  const snap = getSnapshot();
+  const agents = snap.agents ?? [];
+  return {
+    agentCount: agents.length,
+    trustScoreCount: scores.length,
+    averageTrust: scores.length > 0 ? scores.reduce((s, t) => s + t.score, 0) / scores.length : 0,
+    tierDistribution: {
+      autonomous: scores.filter((s) => getTrustTier(s.score) === "autonomous").length,
+      trusted: scores.filter((s) => getTrustTier(s.score) === "trusted").length,
+      standard: scores.filter((s) => getTrustTier(s.score) === "standard").length,
+      restricted: scores.filter((s) => getTrustTier(s.score) === "restricted").length,
+      critical: scores.filter((s) => getTrustTier(s.score) === "critical").length,
+    },
+    recentViolations: violations.length,
+    violationsBySeverity: {
+      low: violations.filter((v) => v.severity === "low").length,
+      medium: violations.filter((v) => v.severity === "medium").length,
+      high: violations.filter((v) => v.severity === "high").length,
+      critical: violations.filter((v) => v.severity === "critical").length,
+    },
+    policyCount: BASE_POLICY_RULES.length,
+  };
+});
+
+// ── Start audit ledger ──
+startAuditLedger();
+
+// ── Hydrate governance trust scores ──
+await cpHydrateTrustScores();
+
 const { port, host } = serverConfig;
 
-await flushStorePersistence();
+await flush();
 if (orchestratorConfig.demoMode) {
   console.warn("[ARCEUS] ⚠ DEMO MODE ACTIVE — frontend-only constraints enabled for all agents");
 }
@@ -712,7 +1105,9 @@ if (orchestratorConfig.demoMode) {
 async function shutdown(signal: string) {
   console.log(`[ARCEUS] ${signal} received — shutting down gracefully…`);
   try {
-    await flushStorePersistence();
+    heartbeatEngine.stop();
+    await drainAuditLedger();
+    await teardown();
     await app.close();
     console.log("[ARCEUS] Server closed cleanly.");
     process.exit(0);

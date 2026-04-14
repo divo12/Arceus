@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { basename, extname, join, normalize, relative } from "node:path";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { previewConfig } from "./config/index";
 
 type PreviewStatus = "idle" | "starting" | "ready" | "error";
@@ -503,6 +504,18 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
     previewState.status = "error";
     previewState.lastError = "No preview command detected in workspace.";
     return previewState;
+  }
+
+  // Install dependencies if node_modules is missing (Node projects only)
+  if (launch.runtime === "node" && !existsSync(join(launch.cwd, "node_modules"))) {
+    const runner = detectNodeRunner();
+    try {
+      execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: 120_000 });
+    } catch (err) {
+      previewState.status = "error";
+      previewState.lastError = `Dependency installation failed: ${err instanceof Error ? err.message : String(err)}`;
+      return previewState;
+    }
   }
 
   previewState.status = "starting";

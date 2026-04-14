@@ -2,23 +2,95 @@ import { z, type ZodType } from "zod";
 import zodToJsonSchema from "zod-to-json-schema";
 import { runtimeConfig, ensureDeployment } from "./config/index";
 import { resilientCall, breakers, isRetryableError } from "./resilience";
+import { audit } from "./audit-ledger";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+/** Optional context for audit logging LLM calls. */
+export type LlmAuditContext = {
+  companyId: string;
+  agentRole?: string;
+  correlationId?: string;
+  /** Caller label for the summary, e.g. "ceo_classification" */
+  label?: string;
+};
 
 function deploymentUrl(deployment: string) {
   const base = runtimeConfig.azureEndpoint.replace(/\/+$/, "");
   return `${base}/openai/deployments/${deployment}/chat/completions?api-version=${runtimeConfig.azureApiVersion}`;
 }
 
+type AzureOpenAIUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+
+// ── Per-beat token accumulator ─────────────────────────────
+// Tracks total tokens consumed during a beat window so the heartbeat
+// engine can record actual cost instead of hardcoded 0.
+const beatTokenAccumulators = new Map<string, number>();
+
+/** Start accumulating tokens for a beat. */
+export function startBeatTokenAccumulator(beatId: string) {
+  beatTokenAccumulators.set(beatId, 0);
+}
+
+/** Read and clear the accumulated token count for a beat. */
+export function drainBeatTokenAccumulator(beatId: string): number {
+  const tokens = beatTokenAccumulators.get(beatId) ?? 0;
+  beatTokenAccumulators.delete(beatId);
+  return tokens;
+}
+
+function accumulateBeatTokens(totalTokens: number) {
+  // Add tokens to all active accumulators (usually just one active beat per agent).
+  for (const [beatId, current] of beatTokenAccumulators) {
+    beatTokenAccumulators.set(beatId, current + totalTokens);
+  }
+}
+
+function auditLlmCall(
+  deployment: string,
+  usage: AzureOpenAIUsage | undefined,
+  latencyMs: number,
+  ctx?: LlmAuditContext,
+  schemaName?: string,
+) {
+  const companyId = ctx?.companyId ?? "_system";
+  const promptTokens = usage?.prompt_tokens ?? 0;
+  const completionTokens = usage?.completion_tokens ?? 0;
+  const totalTokens = usage?.total_tokens ?? (promptTokens + completionTokens);
+  const label = ctx?.label ?? schemaName ?? deployment;
+
+  accumulateBeatTokens(totalTokens);
+
+  audit({
+    companyId,
+    category: "agent_action",
+    severity: "debug",
+    eventType: "llm_call_completed",
+    agentRole: ctx?.agentRole ?? null,
+    summary: `LLM ${label} → ${totalTokens} tokens (${promptTokens}+${completionTokens}) ${latencyMs}ms`,
+    detail: {
+      deployment,
+      schemaName: schemaName ?? null,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      latencyMs,
+    },
+    correlationId: ctx?.correlationId ?? null,
+  });
+}
+
 export async function chatCompletion(
   deploymentKey: "ceoDeployment" | "workerDeployment",
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  auditCtx?: LlmAuditContext,
 ): Promise<string> {
   const deployment = ensureDeployment(deploymentKey);
   const url = deploymentUrl(deployment);
 
   return resilientCall(
     async () => {
+      const start = performance.now();
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -35,7 +107,11 @@ export async function chatCompletion(
 
       const json = (await response.json()) as {
         choices: Array<{ message: { content: string } }>;
+        usage?: AzureOpenAIUsage;
       };
+      const latencyMs = Math.round(performance.now() - start);
+
+      auditLlmCall(deployment, json.usage, latencyMs, auditCtx);
 
       return json.choices[0]?.message?.content ?? "";
     },
@@ -56,7 +132,8 @@ export async function structuredCompletion<T>(
   messages: ChatMessage[],
   schema: ZodType<T>,
   schemaName: string,
-  options?: { temperature?: number }
+  options?: { temperature?: number },
+  auditCtx?: LlmAuditContext,
 ): Promise<T> {
   const deployment = ensureDeployment(deploymentKey);
   const url = deploymentUrl(deployment);
@@ -69,6 +146,7 @@ export async function structuredCompletion<T>(
 
   return resilientCall(
     async () => {
+      const start = performance.now();
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -96,7 +174,11 @@ export async function structuredCompletion<T>(
 
       const json = (await response.json()) as {
         choices: Array<{ message: { content: string } }>;
+        usage?: AzureOpenAIUsage;
       };
+      const latencyMs = Math.round(performance.now() - start);
+
+      auditLlmCall(deployment, json.usage, latencyMs, auditCtx, schemaName);
 
       const raw = json.choices[0]?.message?.content;
       if (!raw) {
@@ -111,14 +193,15 @@ export async function structuredCompletion<T>(
 
 export async function chatCompletionStream(
   deploymentKey: "ceoDeployment" | "workerDeployment",
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  auditCtx?: LlmAuditContext,
 ): Promise<ReadableStream<Uint8Array>> {
   const deployment = ensureDeployment(deploymentKey);
   const url = deploymentUrl(deployment);
 
-  // Retry the connection attempt; once streaming starts we can't retry mid-stream.
   return resilientCall(
     async () => {
+      const start = performance.now();
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -136,6 +219,20 @@ export async function chatCompletionStream(
       if (!response.body) {
         throw new Error("Azure OpenAI returned no stream body.");
       }
+
+      // For streaming, we can't read usage from the response (it's chunked).
+      // Audit a start event with latency-to-first-byte.
+      const latencyMs = Math.round(performance.now() - start);
+      audit({
+        companyId: auditCtx?.companyId ?? "_system",
+        category: "agent_action",
+        severity: "debug",
+        eventType: "llm_stream_started",
+        agentRole: auditCtx?.agentRole ?? null,
+        summary: `LLM stream ${auditCtx?.label ?? deployment} started (TTFB ${latencyMs}ms)`,
+        detail: { deployment, latencyMs },
+        correlationId: auditCtx?.correlationId ?? null,
+      });
 
       return response.body;
     },

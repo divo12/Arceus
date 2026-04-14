@@ -1,5 +1,5 @@
 import "./load-env";
-import { integer, jsonb, pgSchema, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, jsonb, numeric, pgSchema, pgTable, real, serial, text, timestamp } from "drizzle-orm/pg-core";
 
 const configuredSchemaName = process.env.ARCEUS_DB_SCHEMA?.trim() || process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA?.trim() || "public";
 const arceusSchema = configuredSchemaName === "public" ? null : pgSchema(configuredSchemaName);
@@ -86,11 +86,13 @@ export const companyStatesTable = arceusSchema ? arceusSchema.table("company_sta
   companyId: text("company_id").primaryKey(),
   snapshotData: jsonb("snapshot_data").notNull(),
   eventLog: jsonb("event_log").notNull().default([]),
+  snapshotVersion: integer("snapshot_version").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }) : pgTable("company_states", {
   companyId: text("company_id").primaryKey(),
   snapshotData: jsonb("snapshot_data").notNull(),
   eventLog: jsonb("event_log").notNull().default([]),
+  snapshotVersion: integer("snapshot_version").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -120,12 +122,155 @@ export const assetsTable = arceusSchema ? arceusSchema.table("assets", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const auditEventsTable = arceusSchema ? arceusSchema.table("audit_events", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  category: text("category").notNull(),
+  severity: text("severity").notNull().default("info"),
+  eventType: text("event_type").notNull(),
+  agentId: text("agent_id"),
+  agentRole: text("agent_role"),
+  summary: text("summary").notNull(),
+  detail: jsonb("detail"),
+  correlationId: text("correlation_id"),
+  causationId: text("causation_id"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  beatId: text("beat_id"),
+}) : pgTable("audit_events", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  category: text("category").notNull(),
+  severity: text("severity").notNull().default("info"),
+  eventType: text("event_type").notNull(),
+  agentId: text("agent_id"),
+  agentRole: text("agent_role"),
+  summary: text("summary").notNull(),
+  detail: jsonb("detail"),
+  correlationId: text("correlation_id"),
+  causationId: text("causation_id"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  beatId: text("beat_id"),
+});
+
+export const serviceRegistryTable = arceusSchema ? arceusSchema.table("service_registry", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  toolName: text("tool_name").notNull(),
+  description: text("description").notNull(),
+  allowedRoles: text("allowed_roles").array().notNull(),
+  blastRadius: text("blast_radius").notNull().default("green"),
+  requiresApproval: integer("requires_approval").notNull().default(0),
+  parameters: jsonb("parameters").notNull().default([]),
+  source: text("source").notNull().default("system"),
+  version: integer("version").notNull().default(1),
+  addedBy: text("added_by").notNull().default("system"),
+  addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("service_registry", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  toolName: text("tool_name").notNull(),
+  description: text("description").notNull(),
+  allowedRoles: text("allowed_roles").array().notNull(),
+  blastRadius: text("blast_radius").notNull().default("green"),
+  requiresApproval: integer("requires_approval").notNull().default(0),
+  parameters: jsonb("parameters").notNull().default([]),
+  source: text("source").notNull().default("system"),
+  version: integer("version").notNull().default(1),
+  addedBy: text("added_by").notNull().default("system"),
+  addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const beatRecordsTable = arceusSchema ? arceusSchema.table("beat_records", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  agentId: text("agent_id"),
+  beatNumber: integer("beat_number").notNull(),
+  trigger: jsonb("trigger").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  status: text("status").notNull().default("running"),
+  snapshotVersionRead: integer("snapshot_version_read"),
+  snapshotVersionWritten: integer("snapshot_version_written"),
+  phases: jsonb("phases").notNull().default({}),
+  outcome: text("outcome"),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  costCents: numeric("cost_cents", { precision: 12, scale: 4 }).notNull().default("0"),
+  errorMessage: text("error_message"),
+  summary: text("summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("beat_records", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  agentId: text("agent_id"),
+  beatNumber: integer("beat_number").notNull(),
+  trigger: jsonb("trigger").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  status: text("status").notNull().default("running"),
+  snapshotVersionRead: integer("snapshot_version_read"),
+  snapshotVersionWritten: integer("snapshot_version_written"),
+  phases: jsonb("phases").notNull().default({}),
+  outcome: text("outcome"),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  costCents: numeric("cost_cents", { precision: 12, scale: 4 }).notNull().default("0"),
+  errorMessage: text("error_message"),
+  summary: text("summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── Spec 13: Governance tables ──────────────────────────────
+
+export const trustScoresTable = arceusSchema ? arceusSchema.table("trust_scores", {
+  agentId: text("agent_id").primaryKey(),
+  score: real("score").notNull().default(0.7),
+  history: jsonb("history").notNull().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("trust_scores", {
+  agentId: text("agent_id").primaryKey(),
+  score: real("score").notNull().default(0.7),
+  history: jsonb("history").notNull().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const policyViolationsTable = arceusSchema ? arceusSchema.table("policy_violations", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  agentId: text("agent_id").notNull(),
+  ruleId: text("rule_id").notNull(),
+  tool: text("tool").notNull(),
+  decision: text("decision").notNull(),
+  severity: text("severity").notNull().default("medium"),
+  detail: text("detail").notNull().default(""),
+  beatId: text("beat_id"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("policy_violations", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  agentId: text("agent_id").notNull(),
+  ruleId: text("rule_id").notNull(),
+  tool: text("tool").notNull(),
+  decision: text("decision").notNull(),
+  severity: text("severity").notNull().default("medium"),
+  detail: text("detail").notNull().default(""),
+  beatId: text("beat_id"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const workspaceStorageTables = {
   workspaces: workspacesTable,
   sprintSnapshots: sprintSnapshotsTable,
   artifacts: artifactsTable,
   companyStates: companyStatesTable,
   assets: assetsTable,
+  auditEvents: auditEventsTable,
+  serviceRegistry: serviceRegistryTable,
+  beatRecords: beatRecordsTable,
+  trustScores: trustScoresTable,
+  policyViolations: policyViolationsTable,
 };
 
 export const arceusDatabaseSchemaName = configuredSchemaName;

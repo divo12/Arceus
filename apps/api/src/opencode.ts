@@ -319,3 +319,32 @@ export async function getCeoSession() {
 
   return ceoSessionPromise;
 }
+
+/**
+ * Create an ephemeral session for a single beat execution.
+ * Unlike getCeoSession(), this creates a fresh session each time
+ * to avoid context bleed across beats (Spec 12 Phase 4).
+ */
+export async function createBeatSession(role: string, beatId: string): Promise<Session> {
+  const opencode = await getOpencode();
+  const sessionResponse = await opencode.client.session.create({
+    body: { title: `Beat ${beatId} — ${role}` },
+  });
+  if (!sessionResponse.data) {
+    throw new Error(`OpenCode did not return a beat session for ${role} beat ${beatId}`);
+  }
+  return sessionResponse.data;
+}
+
+/**
+ * Destroy a beat session after execution completes.
+ * Best-effort — failure to destroy should not fail the beat.
+ */
+export async function destroyBeatSession(sessionId: string): Promise<void> {
+  try {
+    const opencode = await getOpencode();
+    await fetch(`${opencode.server.url}/session/${sessionId}`, { method: "DELETE" });
+  } catch {
+    // Silently swallow — session cleanup is best-effort
+  }
+}

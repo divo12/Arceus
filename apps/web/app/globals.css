@@ -1,34 +1,109 @@
 @import "tailwindcss";
 
-/* ── Arceus — Light Engineering Theme ───────────────── */
+/* ── Arceus — Themeable Design System ───────────────── */
 
-:root {
+/* Dark theme (default) */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-primary:    #0a0a0b;
+  --bg-secondary:  #141416;
+  --bg-tertiary:   #1c1c1f;
+  --border:        #27272a;
+  --border-subtle: #1c1c1f;
+  --text-primary:  #fafafa;
+  --text-secondary:#a1a1aa;
+  --text-muted:    #71717a;
+
+  /* Legacy aliases (for existing components) */
+  --swiss-black:   #fafafa;
+  --swiss-white:   #0a0a0b;
+  --swiss-gray-50: #141416;
+  --swiss-gray-100:#1c1c1f;
+  --swiss-gray-200:#27272a;
+  --swiss-gray-300:#3f3f46;
+  --swiss-gray-400:#71717a;
+  --swiss-gray-500:#a1a1aa;
+  --swiss-red:     #ef4444;
+  --swiss-blue:    #3b82f6;
+
+  --arc-success:   #22c55e;
+  --arc-warning:   #eab308;
+  --arc-surface:   #141416;
+  --arc-elevated:  #1c1c1f;
+  --arc-glow:      rgba(59, 130, 246, 0.06);
+  --arc-preview-bg:#141416;
+
+  /* Status colors */
+  --status-success: #22c55e;
+  --status-warning: #eab308;
+  --status-error:   #ef4444;
+  --status-info:    #3b82f6;
+  --status-idle:    #71717a;
+
+  /* Role colors */
+  --role-ceo:         #eab308;
+  --role-cto:         #3b82f6;
+  --role-pm:          #8b5cf6;
+  --role-developer:   #22c55e;
+  --role-tester:      #f97316;
+  --role-ui-designer: #ec4899;
+  --role-marketing:   #06b6d4;
+  --role-skills-lead: #a78bfa;
+}
+
+/* Light theme */
+[data-theme="light"] {
   color-scheme: light;
 
-  --swiss-black: #111827;
-  --swiss-white: #FFFFFF;
-  --swiss-gray-50: #F8F9FB;
-  --swiss-gray-100: #EEF0F4;
-  --swiss-gray-200: #DDE1E9;
-  --swiss-gray-300: #B8BFCC;
-  --swiss-gray-400: #7C8598;
-  --swiss-gray-500: #4B5563;
-  --swiss-red: #DC2626;
-  --swiss-blue: #2563EB;
+  --bg-primary:    #ffffff;
+  --bg-secondary:  #f8f9fb;
+  --bg-tertiary:   #f1f3f7;
+  --border:        #e4e4e7;
+  --border-subtle: #eef0f4;
+  --text-primary:  #111827;
+  --text-secondary:#6b7280;
+  --text-muted:    #9ca3af;
 
-  /* Extended semantic tokens */
-  --arc-success: #059669;
-  --arc-warning: #D97706;
-  --arc-surface: #F8F9FB;
-  --arc-elevated: #FFFFFF;
-  --arc-glow: rgba(37, 99, 235, 0.04);
-  --arc-preview-bg: #F1F3F7;
+  --swiss-black:   #111827;
+  --swiss-white:   #ffffff;
+  --swiss-gray-50: #f8f9fb;
+  --swiss-gray-100:#eef0f4;
+  --swiss-gray-200:#dde1e9;
+  --swiss-gray-300:#b8bfcc;
+  --swiss-gray-400:#7c8598;
+  --swiss-gray-500:#4b5563;
+  --swiss-red:     #dc2626;
+  --swiss-blue:    #2563eb;
+
+  --arc-success:   #059669;
+  --arc-warning:   #d97706;
+  --arc-surface:   #f8f9fb;
+  --arc-elevated:  #ffffff;
+  --arc-glow:      rgba(37, 99, 235, 0.04);
+  --arc-preview-bg:#f1f3f7;
+
+  --status-success: #22c55e;
+  --status-warning: #eab308;
+  --status-error:   #ef4444;
+  --status-info:    #3b82f6;
+  --status-idle:    #71717a;
+
+  --role-ceo:         #ca8a04;
+  --role-cto:         #2563eb;
+  --role-pm:          #7c3aed;
+  --role-developer:   #16a34a;
+  --role-tester:      #ea580c;
+  --role-ui-designer: #db2777;
+  --role-marketing:   #0891b2;
+  --role-skills-lead: #7c3aed;
 }
 
 body {
   min-height: 100vh;
-  background-color: var(--swiss-white);
-  color: var(--swiss-black);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
   font-family: var(--font-body), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -123,12 +198,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--swiss-gray-200);
+  background: var(--border);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--swiss-gray-300);
+  background: var(--text-muted);
 }
 
 /* ── Markdown Content ───────────────────────────────── */
@@ -140,7 +215,7 @@ body {
   margin-top: 1rem;
   margin-bottom: 0.5rem;
   font-weight: 700;
-  color: var(--swiss-black);
+  color: var(--text-primary);
 }
 
 .markdown-content h1 { font-size: 1.5rem; letter-spacing: -0.02em; }
@@ -165,7 +240,7 @@ body {
 
 .markdown-content code {
   border-radius: 3px;
-  background: var(--swiss-gray-50);
+  background: var(--bg-tertiary);
   padding: 0.15rem 0.4rem;
   font-size: 0.875em;
   color: var(--swiss-blue);
@@ -174,10 +249,10 @@ body {
 .markdown-content pre {
   overflow-x: auto;
   border-radius: 6px;
-  background: var(--swiss-black);
-  color: #e2e8f0;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   padding: 1rem;
-  border: 1px solid var(--swiss-gray-100);
+  border: 1px solid var(--border);
 }
 
 .markdown-content pre code {
@@ -187,8 +262,8 @@ body {
 }
 
 .markdown-content blockquote {
-  border-left: 2px solid var(--swiss-black);
+  border-left: 2px solid var(--border);
   padding-left: 1rem;
-  color: var(--swiss-gray-500);
+  color: var(--text-secondary);
 }
 

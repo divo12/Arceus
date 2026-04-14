@@ -11,11 +11,13 @@ import type {
   SessionBinding,
   Sprint,
   Task,
+  TaskProgress,
   Transition
 } from "@arceus/contracts";
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
 import type { StrategyOutput } from "./ceo";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
+import { cpNotifyStateChange } from "./control-plane";
 
 type BootstrapInput = {
   companyName: string;
@@ -24,8 +26,17 @@ type BootstrapInput = {
   budgetCents: number;
 };
 
+// ── Cache lifecycle state ──────────────────────────────────
+// Phase 4: store.ts is now an explicit read-cache, not the
+// source of truth. State is hydrated from DB at startup (or
+// beat start in Spec 12), mutated in-memory, and flushed back.
+
 let snapshot = createEmptyCompanySnapshot();
 let events: EventEnvelope[] = [];
+let dirty = false;
+let lastHydratedAt: string | null = null;
+let lastFlushedAt: string | null = null;
+let mutationsSinceHydrate = 0;
 
 function persistState() {
   void schedulePersistedCompanyState(snapshot, events).catch((error) => {
@@ -36,7 +47,10 @@ function persistState() {
 function replaceState(nextSnapshot: CompanySnapshot, nextEvents = events) {
   snapshot = nextSnapshot;
   events = nextEvents;
+  dirty = true;
+  mutationsSinceHydrate++;
   persistState();
+  cpNotifyStateChange();
   return snapshot;
 }
 
@@ -83,27 +97,84 @@ export function getEvents() {
 export function resetCompany() {
   snapshot = createEmptyCompanySnapshot();
   events = [];
+  dirty = false;
+  mutationsSinceHydrate = 0;
   return snapshot;
 }
 
-export async function hydrateStoreFromPersistence() {
-  const persisted = await loadPersistedCompanyState();
+// ── Lifecycle: hydrate / flush / teardown ──────────────────
+// These methods form the cache lifecycle that Spec 12 (Heartbeat)
+// will call at beat boundaries. Today they're called at server
+// startup and shutdown.
+
+/**
+ * Hydrate the in-memory cache from persisted DB state.
+ * Resets dirty tracking. Returns true if state was loaded.
+ */
+export async function hydrate(companyId?: string): Promise<boolean> {
+  const persisted = await loadPersistedCompanyState(companyId);
   if (!persisted) {
     return false;
   }
 
   snapshot = persisted.snapshot;
   events = persisted.events;
+  dirty = false;
+  mutationsSinceHydrate = 0;
+  lastHydratedAt = new Date().toISOString();
   return true;
 }
 
+/**
+ * Flush dirty in-memory state to the DB.
+ * No-op if the cache is clean.
+ */
+export async function flush(): Promise<void> {
+  await flushPersistedCompanyState();
+  if (dirty) {
+    dirty = false;
+    lastFlushedAt = new Date().toISOString();
+  }
+}
+
+/**
+ * Teardown: flush pending writes and clear the in-memory cache.
+ * Called on graceful shutdown or when releasing a company's resources.
+ */
+export async function teardown(): Promise<void> {
+  await flush();
+  snapshot = createEmptyCompanySnapshot();
+  events = [];
+  dirty = false;
+  mutationsSinceHydrate = 0;
+  lastHydratedAt = null;
+  lastFlushedAt = null;
+}
+
+/** Delete persisted state for a company from the DB. */
 export async function clearPersistedStoreState(companyId: string) {
   await deletePersistedCompanyState(companyId);
 }
 
-export async function flushStorePersistence() {
-  await flushPersistedCompanyState();
+/** Get cache lifecycle diagnostics for the Control Plane. */
+export function getStoreLifecycleState() {
+  return {
+    dirty,
+    mutationsSinceHydrate,
+    lastHydratedAt,
+    lastFlushedAt,
+    companyId: snapshot.company.id,
+    isPending: snapshot.company.id === "company_pending",
+  };
 }
+
+// ── Legacy aliases (backward compat) ───────────────────────
+
+/** @deprecated Use hydrate() */
+export const hydrateStoreFromPersistence = hydrate;
+
+/** @deprecated Use flush() */
+export const flushStorePersistence = flush;
 
 export function appendChatMessage(message: ChatMessage) {
   replaceState({
@@ -147,6 +218,28 @@ export function updateTask(taskId: string, updater: (task: Task) => Task) {
   const next = updater(current);
   upsertTask(next);
   return next;
+}
+
+// ── Task progress (multi-beat tracking) ────────────────────
+// taskProgress is stored per-task alongside the snapshot. It
+// tracks incremental progress across beats for long-running tasks.
+
+const taskProgressMap = new Map<string, TaskProgress>();
+
+export function updateTaskProgress(taskId: string, progress: TaskProgress) {
+  taskProgressMap.set(taskId, progress);
+}
+
+export function getTaskProgress(taskId: string): TaskProgress | null {
+  return taskProgressMap.get(taskId) ?? null;
+}
+
+export function getAllTaskProgress(): TaskProgress[] {
+  return Array.from(taskProgressMap.values());
+}
+
+export function clearTaskProgress(taskId: string) {
+  taskProgressMap.delete(taskId);
 }
 
 export function upsertSprint(sprint: Sprint) {
@@ -270,6 +363,23 @@ export function appendFeedbackRound(round: FeedbackRound) {
     feedbackRounds: [...(snapshot.feedbackRounds ?? []), round],
   });
   return round;
+}
+
+// ── Status mutations (Phase 4: wired from control-plane) ───
+
+export function updateAgentStatus(agentId: string, status: string) {
+  const agents = snapshot.agents.map((a) =>
+    a.id === agentId ? { ...a, status: status as AgentIdentity["status"] } : a,
+  );
+  replaceState({ ...snapshot, agents });
+  return agents.find((a) => a.id === agentId) ?? null;
+}
+
+export function updateCompanyStatus(status: string) {
+  replaceState({
+    ...snapshot,
+    company: { ...snapshot.company, status: status as CompanySnapshot["company"]["status"] },
+  });
 }
 
 export function bootstrapCompany(input: BootstrapInput) {

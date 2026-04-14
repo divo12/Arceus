@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import { ChatProvider } from "../components/chat-context";
+import { ThemeProvider } from "../components/theme-provider";
+import { LayoutShell } from "../components/layout-shell";
 import "./globals.css";
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -22,11 +24,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${plusJakarta.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${plusJakarta.variable} ${jetbrainsMono.variable}`} data-theme="dark" suppressHydrationWarning>
       <body>
-        <ChatProvider>
-          {children}
-        </ChatProvider>
+        <ThemeProvider>
+          <ChatProvider>
+            <LayoutShell>
+              {children}
+            </LayoutShell>
+          </ChatProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
