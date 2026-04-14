@@ -592,6 +592,35 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   });
 }
 
+/**
+ * Try to auto-start preview after a developer beat completes.
+ * Fire-and-forget — never blocks or crashes the beat path.
+ */
+async function tryAutoPreview() {
+  const previewState = getLocalPreviewState();
+  // Already running — nothing to do
+  if (previewState.status === "starting" || previewState.status === "ready") {
+    emitEmployeeActivity("system", "preview", `Auto-preview skipped — already ${previewState.status}`);
+    return;
+  }
+
+  // Check if workspace has something runnable
+  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(productDir);
+  if (!hasCandidate) {
+    emitEmployeeActivity("system", "preview", "Auto-preview skipped — no runnable project found in workspace/");
+    return;
+  }
+
+  emitEmployeeActivity("system", "preview", "Auto-starting preview after developer beat…");
+  const preview = await startLocalPreview(productDir);
+  const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
+  if (preview.status === "ready" && previewUrl) {
+    emitEmployeeActivity("system", "preview", `Preview auto-started → ${previewUrl}`, { detail: { url: previewUrl, status: preview.status } });
+  } else {
+    emitEmployeeActivity("system", "error", `Auto-preview failed: ${preview.lastError ?? "did not become reachable"}`, { detail: { status: preview.status, lastError: preview.lastError } });
+  }
+}
+
 function emptyPlannerState(objective: string) {
   return {
     objective,
@@ -799,16 +828,31 @@ async function checkSprintCompletion(): Promise<boolean> {
   const allTerminal = sprintTasks.every((t) =>
     ["completed", "cancelled", "failed"].includes(t.status),
   );
-  if (!allTerminal) return false;
+  if (!allTerminal) {
+    const statusCounts = { completed: 0, planned: 0, in_progress: 0, failed: 0, cancelled: 0, created: 0 } as Record<string, number>;
+    sprintTasks.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
+    emitEmployeeActivity("system", "context", `Sprint ${currentSprint.number} completion check: NOT all terminal — ${JSON.stringify(statusCounts)}`, {
+      detail: { sprintNumber: currentSprint.number, totalTasks: sprintTasks.length, statusCounts },
+    });
+    return false;
+  }
 
   sprintCompletionTriggered = true;
+
+  const completedCount = sprintTasks.filter((t) => t.status === "completed").length;
+  const failedCount = sprintTasks.filter((t) => t.status === "failed").length;
+  const cancelledCount = sprintTasks.filter((t) => t.status === "cancelled").length;
+
+  emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → COMPLETED (${completedCount}/${sprintTasks.length} delivered, ${failedCount} failed, ${cancelledCount} cancelled)`, {
+    detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
+  });
 
   // Mark sprint completed
   updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
     status: "completed" as Sprint["status"],
     completedAt: nowIso(),
-    summary: `Sprint ${sprint.number} completed — ${sprintTasks.filter((t) => t.status === "completed").length}/${sprintTasks.length} tasks delivered.`,
+    summary: `Sprint ${sprint.number} completed — ${completedCount}/${sprintTasks.length} tasks delivered.`,
   }));
 
   emitEmployeeActivity(
@@ -1727,6 +1771,46 @@ function buildSpecialistTaskPrompt(task: Task) {
   );
 
   return profileHints.join("\n");
+}
+
+/**
+ * Build a prompt for developer beats that instructs the agent to actually write code.
+ * Unlike buildSpecialistTaskPrompt (text-only), this enables tool use.
+ */
+function buildDeveloperBeatPrompt(task: Task) {
+  const preview = getLocalPreviewState();
+  const lines = [
+    `# Task`,
+    `Title: ${task.title}`,
+    `Description: ${task.description}`,
+    `Problem statement: ${task.problemStatement}`,
+    `Deliverable: ${task.deliverable}`,
+    `Definition of done:`,
+    ...task.definitionOfDone.map((item) => `- ${item}`),
+    "",
+    `# Workspace`,
+    `Product directory: ${productDir}`,
+    `All code MUST be written inside ${productDir}. Do NOT modify files outside this directory.`,
+    `Current preview: ${preview.status === "ready" ? (preview.url ?? "running") : "not running"}`,
+    "",
+    `# Instructions`,
+    `You are a software developer. IMPLEMENT this task by writing real code using your tools.`,
+    `1. Read existing files in ${productDir} to understand the current codebase.`,
+    `2. Write or edit files to implement the task requirements.`,
+    `3. If this is the first task and no project exists, scaffold one (e.g. npm create vite@latest . -- --template react-ts).`,
+    `4. Install dependencies with npm install if needed.`,
+    `5. Do NOT start a dev server — preview is handled separately.`,
+    `6. After writing code, briefly summarize what you implemented.`,
+  ];
+
+  if (activeExecution?.planText) {
+    lines.push("", "# CTO Technical Plan", activeExecution.planText);
+  }
+  if (activeExecution?.acceptanceText) {
+    lines.push("", "# PM Acceptance Criteria", activeExecution.acceptanceText);
+  }
+
+  return lines.join("\n");
 }
 
 function getPreviewEvidenceUrl() {
@@ -2699,7 +2783,21 @@ function formatHippocampusContext(ctx: PreparedAgentContext): string {
   return sections.length > 0 ? sections.join("\n") : "";
 }
 
-async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string) {
+/** Map role capabilities to OpenCode tool flags. */
+function getToolsForPrompt(role: AgentIdentity["role"]): Record<string, boolean> | undefined {
+  const soul = getRoleSoul(role);
+  if (!soul.canWriteCode && !soul.canEditFiles && !soul.canRunShell) return undefined;
+  return {
+    read: true,
+    glob: true,
+    grep: true,
+    ...(soul.canWriteCode ? { write: true, edit: true, apply_patch: true } : {}),
+    ...(soul.canEditFiles ? { write: true, edit: true } : {}),
+    ...(soul.canRunShell ? { bash: true } : {}),
+  };
+}
+
+async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string, tools?: Record<string, boolean>) {
   const deployment = ensureDeployment("workerDeployment");
 
   // Inject role-specific skills into the system prompt
@@ -2708,19 +2806,39 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
 
   // Inject Hippocampus memory context (never fatal — graceful degradation)
   let memoryBlock = "";
+  let memoryCount = 0;
+  let habitCount = 0;
   try {
     const snapshot = getSnapshot();
     const agent = getAgentByRole(snapshot, role);
     if (agent) {
       const ctx = await hippocampus.prepareAgentContext(agent.id, text);
       memoryBlock = formatHippocampusContext(ctx);
+      memoryCount = ctx.memories.length;
+      habitCount = ctx.habits.length;
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.warn(`[Hippocampus] Memory retrieval failed for ${role}, continuing without: ${msg}`);
+    emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }
 
   const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody, memoryBlock].filter(Boolean).join("\n");
+
+  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skill=${skillMenu.length + skillBody.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
+    detail: {
+      systemPromptLen: systemPrompt.length,
+      skillMenuLen: skillMenu.length,
+      skillBodyLen: skillBody.length,
+      memoryBlockLen: memoryBlock.length,
+      memoryCount,
+      habitCount,
+      totalPromptLen: enrichedSystemPrompt.length,
+      userPromptLen: text.length,
+      model: deployment,
+      tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [],
+    },
+  });
 
   updateAgentSessionState(role, {
     promptStartedAt: nowIso(),
@@ -2734,14 +2852,16 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
   const output = await withRetry(
     async () => {
       const opencode = await getOpencode();
+      const promptBody: Record<string, unknown> = {
+        model: { providerID: "azure", modelID: deployment },
+        agent: role,
+        system: enrichedSystemPrompt,
+        parts: [{ type: "text", text }],
+      };
+      if (tools) promptBody.tools = tools;
       const result = await opencode.client.session.prompt({
         path: { id: currentSessionId },
-        body: {
-          model: { providerID: "azure", modelID: deployment },
-          agent: role,
-          system: enrichedSystemPrompt,
-          parts: [{ type: "text", text }],
-        },
+        body: promptBody as any,
       });
 
       // Check for OpenCode-level errors embedded in data.info
@@ -4882,10 +5002,14 @@ export async function executeBeatTask(
   const snapshot = getSnapshot();
   const task = snapshot.tasks.find((t) => t.id === taskId);
   if (!task) {
+    emitEmployeeActivity("system", "error", `Beat ${beatId}: task ${taskId} not found in snapshot`, { beatId, detail: { taskId, role: ctx.role } });
     return { summary: `Task ${taskId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false };
   }
 
   const role = ctx.role;
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority}`, {
+    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone },
+  });
 
   // ── CEO beat: sprint lifecycle detection ──────────────────
   if (role === "ceo") {
@@ -4944,6 +5068,7 @@ export async function executeBeatTask(
 
   // For specialist roles, delegate to existing executeSpecialistTask
   if (["tester", "ui_designer", "marketing", "skills_lead"].includes(role)) {
+    emitEmployeeActivity(role, "decision", `Beat ${beatId}: routing to specialist executor`, { beatId, taskId });
     try {
       await executeSpecialistTask(taskId);
       const updated = getSnapshot().tasks.find((t) => t.id === taskId);
@@ -4964,22 +5089,34 @@ export async function executeBeatTask(
 
   // For CTO/PM/developer — run a single prompt cycle via runPromptText
   const soul = getRoleSoul(role);
-  const taskPrompt = buildSpecialistTaskPrompt(task);
+  const taskPrompt = role === "developer" ? buildDeveloperBeatPrompt(task) : buildSpecialistTaskPrompt(task);
+  const tools = getToolsForPrompt(role);
   let beatSession: import("@opencode-ai/sdk").Session | null = null;
+
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt constructed (${taskPrompt.length} chars), tools=${tools ? Object.keys(tools).filter(k => (tools as any)[k]).join(",") : "none"}`, {
+    beatId, taskId, detail: { promptLength: taskPrompt.length, tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [], promptType: role === "developer" ? "developer_build" : "specialist_text" },
+  });
 
   try {
     // Use ephemeral per-beat session to avoid context bleed (Spec 12 Phase 4)
     beatSession = await createBeatSession(role, beatId);
+    emitEmployeeActivity(role, "context", `Beat ${beatId}: session created ${beatSession.id}`, { beatId, detail: { sessionId: beatSession.id } });
     touchAgentSession(role, "working");
     setTaskStatus(task.id, "in_progress");
-    emitEmployeeActivity(role, "working", `Beat ${beatId}: executing ${task.title}`, { taskId, beatId });
+    emitEmployeeActivity(role, "working", `Beat ${beatId}: executing "${task.title}"`, { taskId, beatId });
 
-    const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt);
+    emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
+      beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
+    });
+    const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt, tools);
 
     touchAgentSession(role, "idle");
 
     // Commit structured task result via control plane
     const tokensUsed = drainBeatTokenAccumulator(beatId);
+    emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt complete — ${tokensUsed} tokens, output=${(output?.length ?? 0)} chars`, {
+      beatId, taskId, detail: { tokensUsed, outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
+    });
     const updated = getSnapshot().tasks.find((t) => t.id === taskId);
     if (updated && updated.status !== "completed") {
       cpCommitTaskResult(snapshot.company.id, task.id, {
@@ -4991,6 +5128,12 @@ export async function executeBeatTask(
       });
     }
 
+    // Auto-preview: after developer beats, try to start/refresh the preview
+    if (role === "developer") {
+      emitEmployeeActivity("system", "preview", `Beat ${beatId}: developer task done — checking auto-preview`, { beatId });
+      tryAutoPreview().catch(() => {});
+    }
+
     return {
       summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
       tokensUsed,
@@ -5000,6 +5143,9 @@ export async function executeBeatTask(
     };
   } catch (err) {
     touchAgentSession(role, "idle");
+    emitEmployeeActivity(role, "error", `Beat ${beatId}: execution failed — ${err instanceof Error ? err.message : String(err)}`, {
+      beatId, taskId, detail: { error: err instanceof Error ? err.message : String(err) },
+    });
     return {
       summary: `Beat task execution failed: ${err instanceof Error ? err.message : String(err)}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
@@ -5029,19 +5175,26 @@ export async function executeChecklistAction(
 ): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
   const role = ctx.role;
 
+  emitEmployeeActivity(role, "decision", `Beat ${beatId}: checklist action dispatched — "${action.suggestedAction}"`, {
+    beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
+  });
+
   // ── CEO: propose sprint when none exists ──
   if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
     if (isCeoStreaming()) {
+      emitEmployeeActivity("ceo", "info", `Beat ${beatId}: CEO skipped — live chat streaming`, { beatId });
       return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
     try {
       emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
       await triggerCeoSprintProposal();
+      emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: CEO sprint proposal completed`, { beatId });
       return {
         summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
+      emitEmployeeActivity("ceo", "error", `Beat ${beatId}: CEO sprint proposal failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
       return {
         summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -5059,15 +5212,20 @@ export async function executeChecklistAction(
       emitEmployeeActivity(role, "working", `Beat ${beatId}: ${action.suggestedAction}`, { beatId });
 
       const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
+      emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending checklist-action prompt (${prompt.length} chars)`, { beatId, detail: { promptLength: prompt.length } });
       const output = await runPromptText(role, session.sessionId, soul.systemPrompt, prompt);
       touchAgentSession(role, "idle");
 
+      emitEmployeeActivity(role, "context", `Beat ${beatId}: checklist action completed — output=${(output?.length ?? 0)} chars`, {
+        beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
+      });
       return {
         summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
       touchAgentSession(role, "idle");
+      emitEmployeeActivity(role, "error", `Beat ${beatId}: ${role} checklist action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
       return {
         summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -5076,6 +5234,7 @@ export async function executeChecklistAction(
   }
 
   // ── Fallback: log the action without executing ──
+  emitEmployeeActivity(role, "info", `Beat ${beatId}: no handler for checklist action — "${action.suggestedAction}"`, { beatId });
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,

@@ -12,12 +12,14 @@ import type {
   Meeting,
   MemorySummary,
   MemoryUnit,
+  PolicyViolation,
   PrimingState,
   SessionBinding,
   Sprint,
   SprintSnapshot,
   StrategyBrief,
   Task,
+  TrustScore,
   FundamentalIdea,
   HierarchyNode,
   WorkspaceInfo,
@@ -44,7 +46,9 @@ export type EntityName =
   | "memoryUnits"
   | "habits"
   | "primingStates"
-  | "beatRecords";
+  | "beatRecords"
+  | "trustScores"
+  | "policyViolations";
 
 export type EntityRecordMap = {
   companies: Company;
@@ -68,6 +72,8 @@ export type EntityRecordMap = {
   habits: Habit;
   primingStates: PrimingState;
   beatRecords: BeatRecord;
+  trustScores: TrustScore;
+  policyViolations: PolicyViolation;
 };
 
 export type DatabaseHealth = {
@@ -97,7 +103,7 @@ export interface DatabaseAdapter {
 export type TableDefinition<K extends EntityName = EntityName> = {
   entity: K;
   tableName: string;
-  primaryKey: "id";
+  primaryKey: string;
   notes: string;
   indexes: string[];
 };

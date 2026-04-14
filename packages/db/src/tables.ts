@@ -220,6 +220,46 @@ export const beatRecordsTable = arceusSchema ? arceusSchema.table("beat_records"
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ── Spec 13: Governance tables ──────────────────────────────
+
+export const trustScoresTable = arceusSchema ? arceusSchema.table("trust_scores", {
+  agentId: text("agent_id").primaryKey(),
+  score: real("score").notNull().default(0.7),
+  history: jsonb("history").notNull().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("trust_scores", {
+  agentId: text("agent_id").primaryKey(),
+  score: real("score").notNull().default(0.7),
+  history: jsonb("history").notNull().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const policyViolationsTable = arceusSchema ? arceusSchema.table("policy_violations", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  agentId: text("agent_id").notNull(),
+  ruleId: text("rule_id").notNull(),
+  tool: text("tool").notNull(),
+  decision: text("decision").notNull(),
+  severity: text("severity").notNull().default("medium"),
+  detail: text("detail").notNull().default(""),
+  beatId: text("beat_id"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}) : pgTable("policy_violations", {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  agentId: text("agent_id").notNull(),
+  ruleId: text("rule_id").notNull(),
+  tool: text("tool").notNull(),
+  decision: text("decision").notNull(),
+  severity: text("severity").notNull().default("medium"),
+  detail: text("detail").notNull().default(""),
+  beatId: text("beat_id"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const workspaceStorageTables = {
   workspaces: workspacesTable,
   sprintSnapshots: sprintSnapshotsTable,
@@ -229,6 +269,8 @@ export const workspaceStorageTables = {
   auditEvents: auditEventsTable,
   serviceRegistry: serviceRegistryTable,
   beatRecords: beatRecordsTable,
+  trustScores: trustScoresTable,
+  policyViolations: policyViolationsTable,
 };
 
 export const arceusDatabaseSchemaName = configuredSchemaName;

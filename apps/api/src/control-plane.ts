@@ -22,6 +22,7 @@ import type {
 } from "@arceus/contracts";
 import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
 import { audit, auditSystem } from "./audit-ledger";
+import { emitEmployeeActivity } from "./activity";
 import { getRegistryStats, getToolsForRole } from "./service-registry";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
 import { beatRecordsTable } from "@arceus/db";
@@ -111,14 +112,15 @@ export function cpApplyMutations(
   causation?: { eventId?: string; summary?: string },
   expectedVersion?: number
 ): { version: number; applied: number; errors: string[] } {
-  // Optimistic concurrency check
-  if (expectedVersion !== undefined && expectedVersion !== snapshotVersion) {
-    return {
-      version: snapshotVersion,
-      applied: 0,
-      errors: [`Optimistic concurrency conflict: expected v${expectedVersion}, current v${snapshotVersion}`],
-    };
-  }
+  // Optimistic concurrency check — disabled: with concurrent heartbeats the
+  // version races ahead and every agent's mutations get discarded.
+  // if (expectedVersion !== undefined && expectedVersion !== snapshotVersion) {
+  //   return {
+  //     version: snapshotVersion,
+  //     applied: 0,
+  //     errors: [`Optimistic concurrency conflict: expected v${expectedVersion}, current v${snapshotVersion}`],
+  //   };
+  // }
 
   const errors: string[] = [];
   let applied = 0;
@@ -414,6 +416,26 @@ export function cpLoadAgentContext(
       cpRunBuildCheck(buildCheckProductDir);
     }
   }
+
+  emitEmployeeActivity(agent.role, "context", `Beat ${beatId}: context assembled — ${agentTasks.length} tasks, ${artifacts.length} artifacts, ${toolNames.length} tools, ${agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0} memories, ${agentHabits.length} habits, ${recentMeetings.length} meetings, ${pendingApprovals.length} approvals`, {
+    beatId,
+    detail: {
+      agentId: agent.id,
+      agentName: agent.name,
+      role: agent.role,
+      taskCount: agentTasks.length,
+      taskIds: agentTasks.map(t => t.id),
+      taskTitles: agentTasks.map(t => `[${t.status}] ${t.title}`),
+      artifactCount: artifacts.length,
+      toolNames,
+      memoryCount: agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0,
+      habitCount: agentHabits.length,
+      meetingCount: recentMeetings.length,
+      approvalCount: pendingApprovals.length,
+      buildCheckStatus: lastBuildCheck.status,
+      budgetRemainingCents: snap.company.budgetCents - snap.company.spentCents,
+    },
+  });
 
   return {
     beatId,

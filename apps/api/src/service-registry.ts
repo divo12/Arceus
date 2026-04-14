@@ -143,8 +143,8 @@ async function fetchOpencodeTools(): Promise<ToolSeed[]> {
 
 const ARCEUS_TOOLS: ToolSeed[] = [
   {
-    toolName: "deploy_preview",
-    description: "Build and serve a live preview of the workspace product",
+    toolName: "run_preview",
+    description: "Smart preview launcher — auto-detects project, installs deps, starts dev server. Agents can also run: node scripts/start-preview.mjs",
     blastRadius: "yellow",
     requiresApproval: false,
     source: "arceus",

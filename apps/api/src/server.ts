@@ -17,7 +17,7 @@ import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivit
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
 import { heartbeatConfig } from "./config/heartbeat";
-import { getLocalPreviewState } from "./preview";
+import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "./preview";
 import { workspaceManager } from "./workspace-manager";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./bootstrap";
 import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifacts } from "./artifact-persistence";
@@ -96,6 +96,7 @@ onBeatEvent((event) => {
   const type = event.type as "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
   emitEmployeeActivity(event.role, type, `${event.type}: ${event.data?.summary || event.beatId}`, {
     beatId: event.beatId,
+    detail: event.data ?? null,
   });
 });
 
@@ -505,6 +506,22 @@ app.get("/api/product/overview", async () => {
     preview: getLocalPreviewState(),
     files,
   };
+});
+
+// ── Preview control ─────────────────────────────────────────
+
+app.post("/api/preview/start", async () => {
+  const state = await startLocalPreview(productDir);
+  return { status: state.status, url: state.url, entryUrl: state.entryUrl, error: state.lastError };
+});
+
+app.post("/api/preview/stop", async () => {
+  await stopLocalPreview();
+  return { status: "stopped" };
+});
+
+app.get("/api/preview", async () => {
+  return getLocalPreviewState();
 });
 
 app.get("/api/persistence/health", async () => {

@@ -219,10 +219,14 @@ type EmployeeActivityEvent = {
   id: string;
   timestamp: string;
   employee: string;
-  type: "working" | "file_edit" | "shell" | "error" | "idle" | "info";
+  type: "working" | "file_edit" | "shell" | "error" | "idle" | "info"
+    | "beat_started" | "beat_completed" | "beat_failed" | "beat_idle"
+    | "prompt" | "tool_call" | "memory" | "preview" | "context" | "decision" | "transition";
   content: string;
   meetingId?: string | null;
   taskId?: string | null;
+  beatId?: string | null;
+  detail?: Record<string, unknown> | null;
 };
 
 type Artifact = {

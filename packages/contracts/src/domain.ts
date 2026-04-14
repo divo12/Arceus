@@ -290,7 +290,7 @@ export const meetingSchema = z.object({
 export const approvalSchema = z.object({
   id: z.string(),
   companyId: z.string(),
-  type: z.enum(["strategy", "hire", "meeting_blocker", "external_action"]),
+  type: z.enum(["strategy", "hire", "meeting_blocker", "external_action", "tool_governance"]),
   status: approvalStatusSchema,
   title: z.string(),
   description: z.string(),
@@ -658,6 +658,87 @@ export const companySnapshotSchema = z.object({
   feedbackRounds: z.array(feedbackRoundSchema).default([])
 });
 
+// ── Spec 13: Policy Governance Gateway ──────────────────────
+
+export const policyDecisionKindSchema = z.enum(["allow", "deny", "escalate"]);
+
+export const policyRuleSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  /** Which roles this rule applies to; empty = all */
+  appliesTo: z.array(roleTypeSchema).default([]),
+  /** Tool name patterns this rule governs (glob-like, e.g. "file_*") */
+  toolPatterns: z.array(z.string()).default([]),
+  /** Minimum trust score required; below this the rule fires */
+  minTrust: z.number().min(0).max(1).default(0),
+  /** What happens when the rule fires */
+  decision: policyDecisionKindSchema,
+  /** If true, rule is currently active */
+  enabled: z.boolean().default(true),
+  priority: z.number().int().default(0),
+});
+
+export const policyEvalContextSchema = z.object({
+  agentId: z.string(),
+  role: roleTypeSchema,
+  tool: z.string(),
+  trustScore: z.number().min(0).max(1),
+  beatId: z.string().optional(),
+  companyId: z.string(),
+});
+
+export const policyDecisionSchema = z.object({
+  ruleId: z.string(),
+  ruleName: z.string(),
+  decision: policyDecisionKindSchema,
+  reason: z.string(),
+  evaluatedAt: z.string(),
+});
+
+export const trustScoreSchema = z.object({
+  agentId: z.string(),
+  score: z.number().min(0).max(1),
+  history: z.array(z.object({
+    delta: z.number(),
+    reason: z.string(),
+    timestamp: z.string(),
+  })).default([]),
+  updatedAt: z.string(),
+});
+
+export const trustEventKindSchema = z.enum([
+  "task_completed",
+  "task_failed",
+  "violation",
+  "escalation_resolved",
+  "manual_adjustment",
+]);
+
+export const trustEventSchema = z.object({
+  agentId: z.string(),
+  kind: trustEventKindSchema,
+  delta: z.number(),
+  reason: z.string(),
+  timestamp: z.string(),
+});
+
+export const policySeveritySchema = z.enum(["low", "medium", "high", "critical"]);
+
+export const policyViolationSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  agentId: z.string(),
+  ruleId: z.string(),
+  tool: z.string(),
+  decision: policyDecisionKindSchema,
+  severity: policySeveritySchema,
+  detail: z.string(),
+  beatId: z.string().nullable(),
+  resolvedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+
 export type Company = z.infer<typeof companySchema>;
 export type FundamentalIdea = z.infer<typeof fundamentalIdeaSchema>;
 export type StrategyBrief = z.infer<typeof strategyBriefSchema>;
@@ -702,3 +783,14 @@ export type BeatRecord = z.infer<typeof beatRecordSchema>;
 export type TaskProgress = z.infer<typeof taskProgressSchema>;
 export type TaskResult = z.infer<typeof taskResultSchema>;
 export type AgentBeatContext = z.infer<typeof agentBeatContextSchema>;
+
+// Governance types (Spec 13)
+export type PolicyDecisionKind = z.infer<typeof policyDecisionKindSchema>;
+export type PolicyRule = z.infer<typeof policyRuleSchema>;
+export type PolicyEvalContext = z.infer<typeof policyEvalContextSchema>;
+export type PolicyDecision = z.infer<typeof policyDecisionSchema>;
+export type TrustScore = z.infer<typeof trustScoreSchema>;
+export type TrustEventKind = z.infer<typeof trustEventKindSchema>;
+export type TrustEvent = z.infer<typeof trustEventSchema>;
+export type PolicySeverity = z.infer<typeof policySeveritySchema>;
+export type PolicyViolation = z.infer<typeof policyViolationSchema>;

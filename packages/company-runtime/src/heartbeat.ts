@@ -618,19 +618,6 @@ export class HeartbeatEngine {
         snapshotVersionRead ?? undefined
       );
 
-      // Optimistic concurrency conflict — another beat mutated state under us
-      if (heartbeatResult.errors.length > 0 && heartbeatResult.applied === 0) {
-        const conflictMsg = heartbeatResult.errors.join("; ");
-        deps.audit.auditAgent(
-          request.companyId, request.role,
-          "beat_conflict", `Beat ${beatId} OCC conflict: ${conflictMsg}`,
-          { beatId, detail: { snapshotVersionRead, currentVersion: heartbeatResult.version } }
-        );
-        return this.buildRecord(beatId, request, startedAt, phases, "completed", "CONFLICT",
-          totalTokens, conflictMsg, `OCC conflict — mutations discarded (read v${snapshotVersionRead}, current v${heartbeatResult.version})`,
-          snapshotVersionRead, null);
-      }
-
       mutationCount += heartbeatResult.applied;
       snapshotVersionWritten = heartbeatResult.version;
 
