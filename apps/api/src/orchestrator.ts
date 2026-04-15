@@ -3,7 +3,8 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, updateSuccessRate, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany } from "@arceus/company-runtime";
+import { initSkillEvolution } from "./skill-evolution";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
@@ -209,7 +210,10 @@ export const hippocampus = createHippocampusService({
 // Skill loader — reads SKILL.md files with YAML frontmatter
 // ---------------------------------------------------------------------------
 
-// ── Skill Registry integration (Spec 14) ──────────────────
+// ── Skill Registry + Evolution integration (Spec 14) ─────
+
+// Wire LLM deps for Phase 2 failure attribution + skill mutation
+initSkillEvolution();
 
 /**
  * Ensure skills are seeded from Markdown files on first use.
@@ -2390,18 +2394,27 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
         });
       }
 
-      // Spec 14: update skill success rates based on task outcome
-      // outcome: 1.0 for completed, 0.0 for failed, 0.3 for cancelled
-      const skillOutcome = status === "completed"
-        ? (task.iterationCount <= 1 ? 1.0 : Math.max(0.4, 1.0 - task.iterationCount * 0.15))
-        : status === "failed" ? 0.0 : 0.3;
-      const taskSkills = registryMatchSkills(
-        snapshot.company.id,
-        task.assignedRole,
-        `${task.title} ${task.description}`,
-      );
-      for (const skill of taskSkills) {
-        updateSuccessRate(skill.id, skillOutcome);
+      // Spec 14 Phase 2: update success rates + trigger failure attribution
+      // Replaces old inline matchSkills+updateSuccessRate (Path B).
+      // processTaskOutcome handles: success rate EMA, failure attribution, mutation proposal.
+      // Fire-and-forget — never blocks task progression.
+      if (status === "completed" || status === "failed") {
+        processTaskOutcome({
+          taskId: task.id,
+          taskTitle: task.title,
+          taskDescription: task.description,
+          assignedRole: task.assignedRole,
+          companyId: snapshot.company.id,
+          status,
+          iterationCount: task.iterationCount,
+          executionTrace: feedback ?? undefined,
+        }).then((mutation) => {
+          if (mutation) {
+            console.log(`[SkillMutator] Proposed ${mutation.originalSkillId ? "mutation" : "discovery"}: ${mutation.id} (${mutation.reason})`);
+          }
+        }).catch((err) => {
+          console.warn(`[SkillMutator] processTaskOutcome error for ${task.id}: ${err instanceof Error ? err.message : err}`);
+        });
       }
     }
   }

@@ -29,7 +29,7 @@ import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAu
 import { auditConfig } from "./config/audit";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { warmUpOpencode } from "./opencode";
 import { readFileSync } from "node:fs";
@@ -561,6 +561,65 @@ app.get("/api/skills/:name/history", async (request) => {
   }
   const history = registryGetSkillHistory(companyId, name);
   return { name, versions: history };
+});
+
+app.get("/api/skills/mutations", async () => {
+  const companyId = getSnapshot().company.id;
+  const mutations = getMutationsForCompany(companyId);
+  return {
+    mutations: mutations.map((m) => ({
+      id: m.id,
+      originalSkillId: m.originalSkillId,
+      proposedSkillName: m.proposedSkill.name,
+      proposedSkillVersion: m.proposedSkill.version,
+      reason: m.reason,
+      status: m.status,
+      revisionCycle: m.revisionCycle,
+      proposedBy: m.proposedBy,
+      proposedAt: m.proposedAt,
+      resolvedAt: m.resolvedAt,
+    })),
+    total: mutations.length,
+  };
+});
+
+app.get("/api/skills/attributions", async () => {
+  const companyId = getSnapshot().company.id;
+  return {
+    attributions: getAttributionsForCompany(companyId),
+  };
+});
+
+app.post("/api/skills/simulate-task-outcome", async (request) => {
+  const body = request.body as {
+    taskId: string;
+    taskTitle: string;
+    taskDescription: string;
+    assignedRole: string;
+    status: "completed" | "failed";
+    iterationCount: number;
+    executionTrace?: string;
+  };
+  const companyId = getSnapshot().company.id;
+  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+    seedExistingSkills(companyId);
+  }
+  const mutation = await processTaskOutcome({
+    ...body,
+    companyId,
+  });
+  return {
+    mutationProposed: mutation !== null,
+    mutation: mutation ? {
+      id: mutation.id,
+      status: mutation.status,
+      reason: mutation.reason,
+      originalSkillId: mutation.originalSkillId,
+      proposedSkillName: mutation.proposedSkill.name,
+      proposedSkillVersion: mutation.proposedSkill.version,
+      proposedSkillContentPreview: mutation.proposedSkill.content.slice(0, 200),
+    } : null,
+  };
 });
 
 // ── Preview control ─────────────────────────────────────────

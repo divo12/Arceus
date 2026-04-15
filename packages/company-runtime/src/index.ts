@@ -46,5 +46,22 @@ export {
   isSeeded as isSkillRegistrySeeded,
   resetRegistry as resetSkillRegistry,
   getRegistrySize,
+  // Phase 2: Mutation + attribution storage
+  storeMutation,
+  getMutationById,
+  updateMutationStatus,
+  getMutationsForCompany,
+  getPendingMutations,
+  storeAttribution,
+  getAttributionsForCompany,
+  applyMergedMutation,
 } from "./skill-registry";
+
+// Spec 14 Phase 2: Skill Mutator (pure logic)
+export {
+  processTaskOutcome,
+  setSkillMutatorDeps,
+  hasSkillMutatorDeps,
+} from "./skill-mutator";
+export type { SkillMutatorDeps, TaskOutcomeContext } from "./skill-mutator";
 

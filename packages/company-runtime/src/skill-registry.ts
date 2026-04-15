@@ -11,7 +11,7 @@
  * Singleton access via getSkillRegistry().
  */
 
-import type { SkillArtifact, SkillHealthReport } from "@arceus/contracts";
+import type { SkillArtifact, SkillHealthReport, SkillMutation, FailureAttribution } from "@arceus/contracts";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -221,11 +221,90 @@ export function markSeeded(): void {
 export function resetRegistry(): void {
   skillsById.clear();
   activeSkillIndex.clear();
+  mutationsById.clear();
+  attributionsStore.length = 0;
   seeded = false;
 }
 
 export function getRegistrySize(): number {
   return skillsById.size;
+}
+
+// ── Mutation + Attribution storage (Phase 2) ─────────────
+
+const mutationsById = new Map<string, SkillMutation>();
+const attributionsStore: FailureAttribution[] = [];
+
+export function storeMutation(mutation: SkillMutation): void {
+  mutationsById.set(mutation.id, { ...mutation });
+}
+
+export function getMutationById(id: string): SkillMutation | null {
+  return mutationsById.get(id) ?? null;
+}
+
+export function updateMutationStatus(
+  id: string,
+  status: SkillMutation["status"],
+  updates?: Partial<Pick<SkillMutation, "reviewFeedback" | "revisionCycle" | "testResults">>,
+): SkillMutation | null {
+  const existing = mutationsById.get(id);
+  if (!existing) return null;
+  const updated: SkillMutation = {
+    ...existing,
+    ...updates,
+    status,
+    resolvedAt: ["approved", "rejected", "merged"].includes(status)
+      ? new Date().toISOString()
+      : existing.resolvedAt,
+  };
+  mutationsById.set(id, updated);
+  return updated;
+}
+
+export function getMutationsForCompany(companyId: string): SkillMutation[] {
+  const results: SkillMutation[] = [];
+  for (const m of mutationsById.values()) {
+    if (m.companyId === companyId) results.push(m);
+  }
+  return results.sort((a, b) => b.proposedAt.localeCompare(a.proposedAt));
+}
+
+export function getPendingMutations(companyId: string): SkillMutation[] {
+  return getMutationsForCompany(companyId).filter(
+    (m) => m.status === "proposed" || m.status === "revision",
+  );
+}
+
+export function storeAttribution(attribution: FailureAttribution): void {
+  attributionsStore.push({ ...attribution });
+}
+
+export function getAttributionsForCompany(companyId: string): FailureAttribution[] {
+  // Attributions link to skills; for company filter, check if the skill belongs to this company.
+  // Attributions with null skillId (gaps) are always returned.
+  return attributionsStore.filter((a) => {
+    if (!a.attributedSkillId) return true;
+    const skill = skillsById.get(a.attributedSkillId);
+    return skill?.companyId === companyId;
+  });
+}
+
+/**
+ * Apply a merged mutation: deprecate old skill version, register new as active.
+ */
+export function applyMergedMutation(mutation: SkillMutation): SkillArtifact {
+  if (mutation.originalSkillId) {
+    deprecateSkill(mutation.originalSkillId, mutation.reason);
+  }
+  const newSkill: SkillArtifact = {
+    ...mutation.proposedSkill,
+    status: "active",
+    approvedAt: new Date().toISOString(),
+  };
+  registerSkill(newSkill);
+  updateMutationStatus(mutation.id, "merged");
+  return newSkill;
 }
 
 // ── Seed from Markdown files ──────────────────────────────
