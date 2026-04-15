@@ -73,3 +73,20 @@ export {
 } from "./skill-tester";
 export type { SkillTesterDeps } from "./skill-tester";
 
+// Spec 14 Phase 5: Pattern Learning → Skill Formation (pure logic)
+export {
+  extractPattern,
+  clusterPatterns,
+  checkSkillCandidates,
+  proposeSkillFromCluster,
+  cosineSimilarity,
+  applyEma,
+  setPatternLearnerDeps,
+  hasPatternLearnerDeps,
+  getPatternById,
+  getPatternsForCompany,
+  getPatternCount,
+  resetPatternStore,
+} from "./pattern-learner";
+export type { PatternLearnerDeps, PatternObservation } from "./pattern-learner";
+

@@ -3,7 +3,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster } from "@arceus/company-runtime";
 import { initSkillEvolution } from "./skill-evolution";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
@@ -1076,6 +1076,17 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
   }));
 
   await tagCurrentSprintSnapshot();
+
+  // Spec 14 Phase 5: Run pattern promotion sweep at sprint boundary.
+  // Clusters of ≥4 recurring successful tasks become emergent skill candidates.
+  // Fire-and-forget — never blocks next-sprint proposal.
+  runPatternPromotionSweep(snapshot.company.id).then((result) => {
+    if (result.candidatesFound > 0) {
+      console.log(`[PatternLearner] Sprint ${sprint.number} sweep: ${result.candidatesFound} candidates, ${result.mutationsProposed} mutations proposed`);
+    }
+  }).catch((err) => {
+    console.warn(`[PatternLearner] Sprint sweep error: ${err instanceof Error ? err.message : err}`);
+  });
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
   appendChatMessage({
@@ -2422,8 +2433,78 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           console.warn(`[SkillMutator] processTaskOutcome error for ${task.id}: ${err instanceof Error ? err.message : err}`);
         });
       }
+
+      // Spec 14 Phase 5: record task trajectory as a Pattern (cluster input).
+      // high_friction = completed but with iterationCount > 1 (rework).
+      // Fire-and-forget — never blocks.
+      if (status === "completed" || status === "failed") {
+        const patternOutcome = status === "failed"
+          ? "failure" as const
+          : task.iterationCount > 1
+            ? "high_friction" as const
+            : "success" as const;
+        const activeSkillIds = registryMatchSkills(
+          snapshot.company.id,
+          task.assignedRole,
+          `${task.title} ${task.description}`,
+        ).map((s) => s.id);
+        extractPattern({
+          taskId: task.id,
+          taskTitle: task.title,
+          taskDescription: task.description,
+          assignedRole: task.assignedRole,
+          companyId: snapshot.company.id,
+          outcome: patternOutcome,
+          trajectory: feedback ?? undefined,
+          activeSkillIds,
+        }).then((pattern) => {
+          if (pattern.usageCount === 1) {
+            console.log(`[PatternLearner] New pattern ${pattern.id} for "${task.title.slice(0, 40)}"`);
+          }
+        }).catch((err) => {
+          console.warn(`[PatternLearner] extractPattern error for ${task.id}: ${err instanceof Error ? err.message : err}`);
+        });
+      }
     }
   }
+}
+
+/**
+ * Spec 14 Phase 5: Sprint-boundary skill candidate sweep.
+ *
+ * Scans the pattern store for recurring clusters that meet promotion criteria
+ * (≥4 members, ≥60% success, no matching skill) and feeds each candidate
+ * into the ATA pipeline as a fresh mutation.
+ *
+ * Fire-and-forget from the caller; returns promotion counts for observability.
+ */
+export async function runPatternPromotionSweep(companyId: string): Promise<{
+  candidatesFound: number;
+  mutationsProposed: number;
+}> {
+  const candidates = checkSkillCandidates(companyId);
+  let mutationsProposed = 0;
+
+  for (const candidate of candidates) {
+    try {
+      const mutation = await proposeSkillFromCluster(candidate);
+      mutationsProposed++;
+      console.log(
+        `[PatternLearner] Promoted cluster ${candidate.clusterId} → mutation ${mutation.id} ` +
+        `(${candidate.memberCount} members, success=${candidate.combinedSuccessRate.toFixed(2)})`,
+      );
+      // Hand to ATA pipeline (fire-and-forget — same pattern as Phase 2/3 flow)
+      runATAPipeline(mutation.id).then((result) => {
+        console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
+      }).catch((err) => {
+        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } catch (err) {
+      console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  return { candidatesFound: candidates.length, mutationsProposed };
 }
 
 function taskSortWeight(task: Task) {

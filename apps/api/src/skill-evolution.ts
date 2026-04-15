@@ -10,9 +10,20 @@
 
 import { z } from "zod";
 import { structuredCompletion } from "./azure-openai";
-import { setSkillMutatorDeps, setSkillTesterDeps } from "@arceus/company-runtime";
+import { embed as embedWithSentenceTransformers } from "@arceus/hippocampus";
+import {
+  setSkillMutatorDeps,
+  setSkillTesterDeps,
+  setPatternLearnerDeps,
+} from "@arceus/company-runtime";
 import type { TaskOutcomeContext } from "@arceus/company-runtime";
-import type { SkillArtifact, FailureAttribution, SkillMutation, ATATestScenario } from "@arceus/contracts";
+import type {
+  SkillArtifact,
+  FailureAttribution,
+  SkillMutation,
+  ATATestScenario,
+  SkillCandidate,
+} from "@arceus/contracts";
 
 // ── Zod schemas for LLM structured output ────────────────
 
@@ -195,6 +206,15 @@ const skillRevisionSchema = z.object({
   description: z.string().describe("Updated one-line summary"),
 });
 
+// ── Phase 5: Pattern Learning Zod schemas ───────────────
+
+const skillSynthesisResponseSchema = z.object({
+  name: z.string().describe("Kebab-case skill name (e.g. 'handle-login-button')"),
+  trigger: z.string().describe("One-line activation description"),
+  content: z.string().describe("Full skill Markdown body (no YAML frontmatter)"),
+  description: z.string().describe("One-line summary of what the skill teaches"),
+});
+
 // ── Phase 3: ATA Pipeline Prompts ───────────────────────
 
 function buildTGAPrompt(mutation: SkillMutation): string {
@@ -292,6 +312,56 @@ ${scenarioResults}
 - "approve": All required criteria met, score >= 0.7
 - "revise": Promising but needs specific improvements (provide revisionGuidance)
 - "reject": Fundamentally flawed or doesn't fix the original failure`;
+}
+
+function buildSkillSynthesisPrompt(candidate: SkillCandidate): string {
+  const memberLines = candidate.memberSummaries
+    .slice(0, 10)
+    .map((s, i) => `${i + 1}. ${s}`)
+    .join("\n");
+
+  return `An AI agent for the role "${candidate.role}" has repeatedly completed a similar kind of task. Distill the shared intent into a reusable skill.
+
+## Recurring Behavior
+- Representative task: ${candidate.representativeTitle}
+- Summary: ${candidate.representativeSummary}
+- Cluster size: ${candidate.memberCount} related trajectories
+- Combined success rate: ${(candidate.combinedSuccessRate * 100).toFixed(0)}%
+
+## Trajectory Samples
+${memberLines}
+
+## Output Format
+Return the skill body as rich Markdown matching this structure:
+
+\`\`\`markdown
+# <Skill Title>
+
+## When to use
+<One paragraph: when should this skill activate>
+
+## <Numbered sections with domain-specific instructions>
+<Detailed, actionable steps. Use tables, code blocks, and bullet points where appropriate.>
+
+## Do's and Don'ts
+### Do
+- <specific actionable items>
+
+### Don't
+- <specific pitfalls to avoid>
+
+## Quick Reference
+<Concise cheat-sheet: key values, commands, or patterns for fast lookup>
+\`\`\`
+
+## Instructions
+- The "name" must be kebab-case and reflect the shared intent (e.g. "add-supabase-auth-button").
+- The "trigger" is a one-line activation description (what task shape fires this skill).
+- The "content" field must contain ONLY the Markdown body (no YAML frontmatter).
+- The "description" field is a one-line summary of what the skill teaches.
+- Write at least 3 substantive sections beyond "When to use".
+- Be specific and actionable — include exact values, code snippets, file paths, or commands where relevant.
+- Capture the *pattern* you've seen, not a single task. The skill must generalize to new instances of this task shape.`;
 }
 
 function buildRevisionPrompt(mutation: SkillMutation, feedback: string): string {
@@ -424,4 +494,30 @@ export function initSkillEvolution(): void {
   });
 
   console.log("[SkillEvolution] ATA pipeline deps wired (TGA + EAA + ROA)");
+
+  // ── Phase 5: Pattern Learning deps ─────────────────────
+
+  setPatternLearnerDeps({
+    async embedText(text: string) {
+      // Uses the same local sentence-transformers model (all-MiniLM-L6-v2, 384-dim)
+      // that powers Hippocampus — no Azure calls, no per-task LLM cost.
+      return embedWithSentenceTransformers(text);
+    },
+
+    async synthesizeSkill(candidate) {
+      return structuredCompletion(
+        "ceoDeployment",       // gpt-4o — strong (~$0.015)
+        [
+          { role: "system", content: "You are a skill author for an AI agent system. Distill recurring agent behaviors into reusable skills. Return structured JSON." },
+          { role: "user", content: buildSkillSynthesisPrompt(candidate) },
+        ],
+        skillSynthesisResponseSchema,
+        "pattern_synthesis",
+        { temperature: 0.4 },
+        { companyId: candidate.companyId, agentRole: candidate.role, label: "pattern_synthesis" },
+      );
+    },
+  });
+
+  console.log("[SkillEvolution] Pattern learner deps wired (embeddings + synthesis)");
 }

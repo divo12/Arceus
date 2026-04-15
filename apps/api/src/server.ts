@@ -12,8 +12,7 @@ import { z } from "zod";
 import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy, updateApproval } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter } from "./orchestrator";
-import { warmUpOpencode } from "./opencode";
+import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter, runPatternPromotionSweep } from "./orchestrator";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity, emitEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
@@ -29,7 +28,7 @@ import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAu
 import { auditConfig } from "./config/audit";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById, getPatternsForCompany, clusterPatterns, checkSkillCandidates, proposeSkillFromCluster, getPatternCount, extractPattern, matchSkills as registryMatchSkills } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { warmUpOpencode } from "./opencode";
 import { readFileSync } from "node:fs";
@@ -615,6 +614,29 @@ app.post("/api/skills/simulate-task-outcome", async (request) => {
     ...body,
     companyId,
   });
+
+  // Spec 14 Phase 5: mirror orchestrator.ts — fire extractPattern on every task outcome.
+  const patternOutcome = body.status === "failed"
+    ? "failure" as const
+    : body.iterationCount > 1
+      ? "high_friction" as const
+      : "success" as const;
+  const activeSkillIds = registryMatchSkills(
+    companyId,
+    body.assignedRole,
+    `${body.taskTitle} ${body.taskDescription}`,
+  ).map((s) => s.id);
+  const pattern = await extractPattern({
+    taskId: body.taskId,
+    taskTitle: body.taskTitle,
+    taskDescription: body.taskDescription,
+    assignedRole: body.assignedRole,
+    companyId,
+    outcome: patternOutcome,
+    trajectory: body.executionTrace,
+    activeSkillIds,
+  });
+
   return {
     mutationProposed: mutation !== null,
     mutation: mutation ? {
@@ -626,6 +648,13 @@ app.post("/api/skills/simulate-task-outcome", async (request) => {
       proposedSkillVersion: mutation.proposedSkill.version,
       proposedSkillContentPreview: mutation.proposedSkill.content.slice(0, 200),
     } : null,
+    pattern: {
+      id: pattern.id,
+      outcome: pattern.outcome,
+      usageCount: pattern.usageCount,
+      successRate: pattern.successRate,
+      embeddingDim: pattern.embedding.length,
+    },
   };
 });
 
@@ -647,6 +676,76 @@ app.post("/api/skills/mutations/:id/run-ata", async (request) => {
     testScenarios: result.testScenarios,
     dryRunResults: result.dryRunResults,
   };
+});
+
+// ── Spec 14 Phase 5: Pattern Learning ───────────────────────
+
+app.get("/api/patterns", async () => {
+  const companyId = getSnapshot().company.id;
+  const patterns = getPatternsForCompany(companyId);
+  return {
+    companyId,
+    totalPatterns: patterns.length,
+    globalCount: getPatternCount(),
+    patterns: patterns.map((p) => ({
+      id: p.id,
+      role: p.role,
+      taskTitle: p.taskTitle,
+      summary: p.summary,
+      outcome: p.outcome,
+      usageCount: p.usageCount,
+      successRate: p.successRate,
+      sourceTaskIds: p.sourceTaskIds,
+      matchedSkillIds: p.matchedSkillIds,
+      tags: p.tags,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+    })),
+  };
+});
+
+app.get("/api/patterns/clusters", async () => {
+  const companyId = getSnapshot().company.id;
+  return {
+    companyId,
+    clusters: clusterPatterns(companyId),
+  };
+});
+
+app.get("/api/patterns/candidates", async () => {
+  const companyId = getSnapshot().company.id;
+  return {
+    companyId,
+    candidates: checkSkillCandidates(companyId),
+  };
+});
+
+app.post("/api/patterns/promote/:clusterId", async (request) => {
+  const { clusterId } = request.params as { clusterId: string };
+  const companyId = getSnapshot().company.id;
+  const candidate = checkSkillCandidates(companyId).find((c) => c.clusterId === clusterId);
+  if (!candidate) {
+    return {
+      error: `No promotable candidate for cluster ${clusterId}. It may be below threshold or already covered by an active skill.`,
+    };
+  }
+  const mutation = await proposeSkillFromCluster(candidate);
+  // Fire-and-forget ATA — same pattern as other phases
+  runATAPipeline(mutation.id).catch((err) => {
+    console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+  });
+  return {
+    mutationId: mutation.id,
+    proposedSkillId: mutation.proposedSkill.id,
+    proposedSkillName: mutation.proposedSkill.name,
+    status: mutation.status,
+  };
+});
+
+app.post("/api/patterns/sweep", async () => {
+  const companyId = getSnapshot().company.id;
+  const result = await runPatternPromotionSweep(companyId);
+  return { companyId, ...result };
 });
 
 // ── Preview control ─────────────────────────────────────────
