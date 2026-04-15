@@ -31,6 +31,7 @@ import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLo
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
+import { warmUpOpencode } from "./opencode";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -741,6 +741,8 @@ export const policyRuleSchema = z.object({
   /** If true, rule is currently active */
   enabled: z.boolean().default(true),
   priority: z.number().int().default(0),
+  /** Optional regex pattern for file-path enforcement (e.g. "\\.(test|spec)\\.") */
+  filePattern: z.string().optional(),
 });
 
 export const policyEvalContextSchema = z.object({
@@ -750,6 +752,8 @@ export const policyEvalContextSchema = z.object({
   trustScore: z.number().min(0).max(1),
   beatId: z.string().optional(),
   companyId: z.string(),
+  /** File path being accessed — used for file-pattern rules (Spec 21) */
+  filePath: z.string().optional(),
 });
 
 export const policyDecisionSchema = z.object({

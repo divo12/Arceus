@@ -1470,6 +1470,152 @@ async function executeRetestAfterRework(
   };
 }
 
+// ── CTO Escalation Review (Spec 21) ─────────────────────────
+
+const ctoEscalationDecisionSchema = z.object({
+  decision: z.enum(["fix", "skip", "abort"]),
+  reasoning: z.string(),
+  criticalBugs: z.array(z.string()).optional(),
+});
+
+async function executeCtoBeatEscalationReview(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  startBeatTokenAccumulator(beatId);
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  const reviewState = sprint?.reviewState;
+  if (!sprint || !reviewState || !reviewState.escalatedToCto) {
+    return { summary: "No escalation pending", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  emitEmployeeActivity("cto", "working", `Beat ${beatId}: reviewing escalated Sprint ${sprint.number} (${reviewState.reworkCycleCount} rework cycles exhausted)`, { beatId });
+
+  // Gather context: bug tasks and their status
+  const bugTasks = reviewState.bugTaskIds
+    .map((id) => snapshot.tasks.find((t) => t.id === id))
+    .filter(Boolean);
+
+  const bugSummary = bugTasks.map((t) =>
+    `- [${t!.status}] ${t!.title}: ${t!.description?.slice(0, 150) ?? "no description"}`
+  ).join("\n");
+
+  const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+  const completedCount = sprintTasks.filter((t) => t.status === "completed").length;
+  const failedCount = sprintTasks.filter((t) => t.status === "failed").length;
+
+  const prompt = [
+    `Sprint ${sprint.number} "${sprint.title}" has been escalated to you after ${reviewState.reworkCycleCount} failed rework cycles (max ${reviewState.maxReworkCycles}).`,
+    ``,
+    `Sprint progress: ${completedCount}/${sprintTasks.length} tasks completed, ${failedCount} failed.`,
+    `Tester verdict: ${reviewState.testerVerdict ?? "unknown"}`,
+    ``,
+    `Remaining bug tasks:`,
+    bugSummary || "(none tracked)",
+    ``,
+    `You must decide:`,
+    `- "fix": Force one more targeted rework cycle on the critical bugs only`,
+    `- "skip": Ship the sprint as-is, accepting known defects as tech debt`,
+    `- "abort": Cancel the sprint entirely and re-plan`,
+    ``,
+    `Consider: severity of remaining bugs, business impact, and whether another rework cycle is likely to succeed.`,
+  ].join("\n");
+
+  try {
+    const result = await structuredCompletion(
+      "workerDeployment",
+      [
+        { role: "system", content: "You are the CTO making a ship-or-kill decision on an escalated sprint. Be decisive and justify your reasoning." },
+        { role: "user", content: prompt },
+      ],
+      ctoEscalationDecisionSchema,
+      "cto_escalation_review",
+      { temperature: 0.3 },
+    );
+
+    const decision = result.decision;
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+
+    emitEmployeeActivity("cto", "decision", `Beat ${beatId}: CTO escalation decision = ${decision} — ${result.reasoning.slice(0, 200)}`, {
+      beatId, detail: { decision, reasoning: result.reasoning },
+    });
+
+    // Apply the decision
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      reviewState: s.reviewState ? {
+        ...s.reviewState,
+        ctoDecision: decision,
+      } : s.reviewState,
+    }));
+
+    if (decision === "fix") {
+      // Allow one more rework cycle — reset phase to rework, bump max by 1
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: "rework" as const,
+          maxReworkCycles: s.reviewState.maxReworkCycles + 1,
+        } : s.reviewState,
+      }));
+      // Wake affected roles
+      for (const bugTask of bugTasks) {
+        if (bugTask?.assignedRole) {
+          emitReactive(bugTask.assignedRole, "bug_reported");
+        }
+      }
+      emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO granted extra rework cycle — Sprint ${sprint.number} back to rework`, { beatId });
+    } else if (decision === "skip") {
+      // Ship as-is — advance to final gate (tests may still fail, but CTO accepts)
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: "complete" as const,
+          completedAt: new Date().toISOString(),
+        } : s.reviewState,
+      }));
+      await finalizeSprintCompletion(sprintId, sprint.number, beatId);
+      emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO shipped Sprint ${sprint.number} with known defects`, { beatId });
+    } else if (decision === "abort") {
+      // Cancel sprint
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        status: "completed" as const,
+        completedAt: new Date().toISOString(),
+        summary: `Aborted by CTO after ${reviewState.reworkCycleCount} rework cycles: ${result.reasoning.slice(0, 300)}`,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: "complete" as const,
+          completedAt: new Date().toISOString(),
+        } : s.reviewState,
+      }));
+      emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO aborted Sprint ${sprint.number} — will need re-planning`, { beatId });
+      // Wake CEO to propose next sprint
+      emitReactive("ceo", "sprint_completed");
+    }
+
+    return {
+      summary: `CTO escalation review: ${decision} — ${result.reasoning.slice(0, 300)}`,
+      tokensUsed, actionsCount: 1, toolCalls: 1,
+    };
+  } catch (err) {
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+    emitEmployeeActivity("cto", "error", `Beat ${beatId}: CTO escalation review failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    return {
+      summary: `CTO escalation review failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed, actionsCount: 0, toolCalls: 0,
+    };
+  }
+}
+
 async function tagCurrentSprintSnapshot() {
   const snapshot = getSnapshot();
   if (snapshot.company.id === "company_pending") {
@@ -4714,27 +4860,9 @@ export async function executeChecklistAction(
     }
   }
 
-  // ── CTO: sprint review escalation (Spec 21) ──
-  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_decision") {
-    startBeatTokenAccumulator(beatId);
-    const snapshot = getSnapshot();
-    const sprintId = snapshot.company.currentSprintId;
-    if (!sprintId) {
-      return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-    const sprint = snapshot.sprints.find((s) => s.id === sprintId);
-    if (!sprint || sprint.status !== "reviewing") {
-      return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-
-    emitEmployeeActivity("cto", "transition", `Sprint ${sprint.number} escalated — CTO force-completing sprint after max rework cycles`, { beatId });
-
-    await finalizeSprintCompletion(sprintId);
-
-    return {
-      summary: `CTO escalation: force-completed Sprint ${sprint.number} after max rework cycles`,
-      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
-    };
+  // ── CTO: sprint escalation review (Spec 21) ──
+  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_review") {
+    return executeCtoBeatEscalationReview(ctx, beatId);
   }
 
   // ── PM: scope triage, board response ──

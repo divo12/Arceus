@@ -277,6 +277,30 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: `${remaining.length} bug fix(es) still pending` };
 }
 
+// ── Spec 21: CTO Escalation Check ─────────────────────────
+
+/**
+ * CTO check: has the sprint been escalated after max rework cycles?
+ * Fires when reviewState.escalatedToCto === true and ctoDecision is null.
+ */
+function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+
+  const reviewState = (sprint as any).reviewState;
+  if (!reviewState) return { status: "ok", detail: "No review state" };
+
+  if (reviewState.escalatedToCto === true && reviewState.ctoDecision === null) {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles — awaiting CTO decision (fix/skip/abort)`,
+      suggestedAction: "sprint_review:cto_escalation_review",
+    };
+  }
+
+  return { status: "ok", detail: "No pending escalation" };
+}
+
 function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
   const designTasks = ctx.tasks.filter(
     (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "ui_designer"
@@ -345,7 +369,7 @@ type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   ceo: [checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
-  cto: [checkEscalatedReview, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  cto: [checkEscalationPending, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
   tester: [checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],

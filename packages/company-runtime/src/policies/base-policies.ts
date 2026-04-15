@@ -196,6 +196,7 @@ const testerWriteTestsOnly: PolicyRule = rule({
   toolPatterns: ["write", "edit", "apply_patch"],
   decision: "allow",
   priority: 550,
+  filePattern: "\\.(test|spec)\\.",
 });
 
 /**
