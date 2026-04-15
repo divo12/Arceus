@@ -65,3 +65,11 @@ export {
 } from "./skill-mutator";
 export type { SkillMutatorDeps, TaskOutcomeContext } from "./skill-mutator";
 
+// Spec 14 Phase 3: ATA Pipeline (pure logic)
+export {
+  runATAPipeline,
+  setSkillTesterDeps,
+  hasSkillTesterDeps,
+} from "./skill-tester";
+export type { SkillTesterDeps } from "./skill-tester";
+

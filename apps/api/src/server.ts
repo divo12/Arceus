@@ -29,7 +29,7 @@ import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAu
 import { auditConfig } from "./config/audit";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { warmUpOpencode } from "./opencode";
 import { readFileSync } from "node:fs";
@@ -583,6 +583,13 @@ app.get("/api/skills/mutations", async () => {
   };
 });
 
+app.get("/api/skills/mutations/:id", async (request) => {
+  const { id } = request.params as { id: string };
+  const mutation = getMutationById(id);
+  if (!mutation) return { error: "not found" };
+  return { mutation };
+});
+
 app.get("/api/skills/attributions", async () => {
   const companyId = getSnapshot().company.id;
   return {
@@ -619,6 +626,26 @@ app.post("/api/skills/simulate-task-outcome", async (request) => {
       proposedSkillVersion: mutation.proposedSkill.version,
       proposedSkillContentPreview: mutation.proposedSkill.content.slice(0, 200),
     } : null,
+  };
+});
+
+app.post("/api/skills/mutations/:id/run-ata", async (request) => {
+  const { id } = request.params as { id: string };
+  const mutation = getMutationById(id);
+  if (!mutation) {
+    return { error: `Mutation ${id} not found` };
+  }
+  if (mutation.status !== "proposed" && mutation.status !== "revision") {
+    return { error: `Mutation ${id} has status "${mutation.status}", expected "proposed" or "revision"` };
+  }
+  const result = await runATAPipeline(id);
+  return {
+    verdict: result.verdict,
+    revisionCycles: result.revisionCycles,
+    completedAt: result.completedAt,
+    reviewVerdict: result.reviewVerdict,
+    testScenarios: result.testScenarios,
+    dryRunResults: result.dryRunResults,
   };
 });
 

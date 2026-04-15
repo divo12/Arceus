@@ -954,6 +954,44 @@ export const skillMutationSchema = z.object({
   resolvedAt: z.string().nullable().default(null),
 });
 
+// Spec 14 Phase 3: ATA Pipeline types
+
+export const ataTestScenarioSchema = z.object({
+  id: z.string(),
+  scenario: z.string(),
+  taskPrompt: z.string(),
+  expectedOutcomes: z.array(z.string()),
+  edgeCases: z.array(z.string()),
+});
+
+export const ataDryRunResultSchema = z.object({
+  testId: z.string(),
+  agentPlan: z.string(),
+  outcomeMatches: z.array(z.boolean()),
+  edgeCaseMatches: z.array(z.boolean()),
+  notes: z.string(),
+});
+
+export const ataReviewVerdictSchema = z.object({
+  verdict: z.enum(["approve", "reject", "revise"]),
+  overallScore: z.number().min(0).max(1),
+  fixesOriginalFailure: z.boolean(),
+  coreOutcomesPassing: z.string(),
+  edgeCasesPassing: z.string(),
+  securityConcerns: z.array(z.string()),
+  revisionGuidance: z.string().nullable(),
+});
+
+export const ataPipelineResultSchema = z.object({
+  mutationId: z.string(),
+  verdict: z.enum(["approve", "reject", "revise"]),
+  testScenarios: z.array(ataTestScenarioSchema),
+  dryRunResults: z.array(ataDryRunResultSchema),
+  reviewVerdict: ataReviewVerdictSchema,
+  revisionCycles: z.number().int().min(0),
+  completedAt: z.string(),
+});
+
 export type SkillStatus = z.infer<typeof skillStatusSchema>;
 export type SkillTestCase = z.infer<typeof skillTestCaseSchema>;
 export type SkillArtifact = z.infer<typeof skillArtifactSchema>;
@@ -962,6 +1000,10 @@ export type FailureAttribution = z.infer<typeof failureAttributionSchema>;
 export type SkillMutation = z.infer<typeof skillMutationSchema>;
 export type SkillMutationStatus = z.infer<typeof skillMutationStatusSchema>;
 export type SkillTestResult = z.infer<typeof skillTestResultSchema>;
+export type ATATestScenario = z.infer<typeof ataTestScenarioSchema>;
+export type ATADryRunResult = z.infer<typeof ataDryRunResultSchema>;
+export type ATAReviewVerdict = z.infer<typeof ataReviewVerdictSchema>;
+export type ATAPipelineResult = z.infer<typeof ataPipelineResultSchema>;
 
 // Sprint Verification types (Spec 21)
 export type VerificationGateResult = z.infer<typeof verificationGateResultSchema>;
