@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
-import { getRoleSoul } from "@arceus/company-runtime";
+import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import { structuredCompletion } from "./azure-openai";
 
 const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
@@ -364,6 +364,7 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStat
 
   const lines = [
     ceoSoul.systemPrompt,
+    getAgentSkills("ceo"),
     "",
     "Operate like a strong founder-CEO with full visibility into company state, team shape, backlog posture, approvals, meetings, and recent board conversation.",
     "You do not answer like a plain chatbot. You guide the board through staged decisions and package decisions as crisp, interactive cards.",

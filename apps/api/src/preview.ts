@@ -405,6 +405,30 @@ export function getLocalPreviewState() {
   return previewState;
 }
 
+/**
+ * Probe the preview URL with a real HTTP request.
+ * Returns { reachable, statusCode, error } — never throws.
+ */
+export async function probePreviewHealth(timeoutMs = 5000): Promise<{
+  reachable: boolean;
+  statusCode: number | null;
+  error: string | null;
+}> {
+  const url = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
+  if (!url || previewState.status !== "ready") {
+    return { reachable: false, statusCode: null, error: previewState.status === "idle" ? "Preview not started" : (previewState.lastError ?? `Preview status: ${previewState.status}`) };
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    clearTimeout(timer);
+    return { reachable: res.ok, statusCode: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+  } catch (err) {
+    return { reachable: false, statusCode: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function terminatePreviewProcessTree(childProcess: ChildProcess) {
   const processId = childProcess.pid;
   if (!processId) {

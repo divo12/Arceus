@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { readFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
@@ -12,14 +13,64 @@ type OpencodeInstance = {
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
-// OpenCode cwd must be where opencode.json lives (project root)
-const workspaceRoot = process.cwd();
+// Project root — where opencode.json lives (used to load agent definitions)
+const projectRoot = process.cwd();
+// Product workspace — where agents write code. OpenCode spawns with this as cwd
+// so that all file tools (write, edit, bash) resolve relative to it.
+const repoRoot = resolve(projectRoot, "..", "..");
+const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !projectRoot.startsWith("/app")
+  ? resolve(repoRoot, "workspace")
+  : resolve(projectRoot, "workspace");
+
+/**
+ * Load the opencode.json agent definitions from project root and merge
+ * with runtime overrides. This is passed via OPENCODE_CONFIG_CONTENT so
+ * OpenCode can run with cwd = productWorkspace while keeping agent defs.
+ */
+function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, unknown> {
+  const configPath = resolve(repoRoot, "opencode.json");
+  try {
+    const raw = readFileSync(configPath, "utf8");
+    const base = JSON.parse(raw);
+    return { ...base, ...overrides };
+  } catch {
+    // If opencode.json is missing, pass overrides only (OpenCode falls back to defaults)
+    return overrides;
+  }
+}
+
+/**
+ * Sync opencode.json and .opencode/prompts/ into the product workspace so
+ * the OpenCode server (which runs with cwd = productWorkspace) can discover
+ * the custom agent definitions. OPENCODE_CONFIG_CONTENT is not supported by
+ * the CLI, so the config must live at its cwd.
+ */
+function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
+  // Write resolved config
+  writeFileSync(
+    resolve(productWorkspace, "opencode.json"),
+    JSON.stringify(mergedConfig, null, 2),
+    "utf8"
+  );
+
+  // Copy .opencode/prompts/ so {file:...} references resolve
+  const srcPrompts = resolve(projectRoot, "..", "..", ".opencode", "prompts");
+  const dstPrompts = resolve(productWorkspace, ".opencode", "prompts");
+  if (existsSync(srcPrompts)) {
+    mkdirSync(dstPrompts, { recursive: true });
+    for (const file of readdirSync(srcPrompts)) {
+      copyFileSync(resolve(srcPrompts, file), resolve(dstPrompts, file));
+    }
+  }
+}
 
 function ensureAzureRuntimeEnvironment() {
   process.env.AZURE_RESOURCE_NAME = runtimeConfig.azureResourceName;
   process.env.AZURE_OPENAI_ENDPOINT = runtimeConfig.azureEndpoint;
   process.env.AZURE_OPENAI_API_KEY = runtimeConfig.azureApiKey;
   process.env.AZURE_OPENAI_API_VERSION = runtimeConfig.azureApiVersion;
+  // OpenCode's azure provider reads AZURE_API_KEY (not AZURE_OPENAI_API_KEY)
+  process.env.AZURE_API_KEY = runtimeConfig.azureApiKey;
 }
 
 async function detectExistingOpencodeServer(url: string) {
@@ -138,13 +189,16 @@ async function launchOpencodeServer(hostname: string, preferredPort: number, con
 
 function spawnOpencodeServer(hostname: string, port: number, config: Record<string, unknown>): Promise<{ url: string; proc: ChildProcess }> {
   const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
+  const mergedConfig = loadOpencodeConfig(config);
+
+  // Sync config + prompt files into workspace so OpenCode picks them up
+  syncOpencodeConfigToWorkspace(mergedConfig);
 
   const proc = spawn("opencode", args, {
     shell: true,
-    cwd: workspaceRoot,
+    cwd: productWorkspace,
     env: {
       ...process.env,
-      OPENCODE_CONFIG_CONTENT: JSON.stringify(config)
     }
   });
 
@@ -190,6 +244,9 @@ export async function getOpencode() {
   ensureAzureRuntimeEnvironment();
 
   if (!opencodePromise) {
+    // Always sync config so OpenCode's cwd has agent defs
+    syncOpencodeConfigToWorkspace(loadOpencodeConfig({ share: "disabled" }));
+
     const attempt = (async () => {
       const existingUrl = `http://${runtimeConfig.opencodeHost}:${runtimeConfig.opencodePort}`;
 

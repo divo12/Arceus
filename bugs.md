@@ -2,3 +2,5 @@
 - ceo chat does not have context of all agents work - never tested
 - ceo chat unaware of observability
 - ceo chat takes a lot of time - have sse
+- create a doc of all the endpoints that exist
+- create a doc of all the flows that exist

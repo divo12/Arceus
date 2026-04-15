@@ -15,7 +15,7 @@ export function LayoutShell({ children }: LayoutShellProps) {
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <Sidebar />
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
         {children}
       </main>
     </div>

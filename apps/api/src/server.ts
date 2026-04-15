@@ -9,10 +9,11 @@ process.on("uncaughtException", (err) => {
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
-import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy } from "./store";
+import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy, updateApproval } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
 import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter } from "./orchestrator";
+import { warmUpOpencode } from "./opencode";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity, emitEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
@@ -691,6 +692,29 @@ app.post("/api/board-review/approve", async (request, reply) => {
     return {
       error: error instanceof Error ? error.message : "Board review approval failed.",
     };
+  }
+});
+
+app.post("/api/approvals/:id/resolve", async (request, reply) => {
+  try {
+    const { id } = request.params as { id: string };
+    const body = (request.body as { action?: string; summary?: string }) ?? {};
+    const action = body.action ?? "approved";
+    const summary = body.summary ?? `Board ${action} at ${new Date().toISOString()}`;
+    const updated = updateApproval(id, (a) => ({
+      ...a,
+      status: action === "rejected" ? "rejected" : "approved",
+      resolutionSummary: summary,
+    }));
+    if (!updated) {
+      reply.code(404);
+      return { error: `Approval ${id} not found.` };
+    }
+    return updated;
+  } catch (error) {
+    request.log?.error?.(error);
+    reply.code(500);
+    return { error: error instanceof Error ? error.message : "Approval resolution failed." };
   }
 });
 
