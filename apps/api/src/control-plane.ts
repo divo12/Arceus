@@ -39,6 +39,11 @@ import {
 } from "@arceus/company-runtime";
 import type { TrustScore, TrustEvent, PolicyViolation } from "@arceus/contracts";
 import {
+  getSkillHealth,
+  getUnusedSkills,
+  analyzeSprintPatterns,
+} from "@arceus/company-runtime";
+import {
   getSnapshot,
   getEvents,
   getStoreLifecycleState,
@@ -531,6 +536,40 @@ export function cpLoadAgentContext(
     beatCostCeilingCents: config.beatCostCeilingCents,
     companyBudgetRemainingCents: snap.company.budgetCents - snap.company.spentCents,
     lastBuildCheck: lastBuildCheck.status !== "unknown" ? lastBuildCheck : undefined,
+
+    // Spec 14 Phase 6 — Skills Lead proactive heartbeat context
+    ...(agent.role === "skills_lead" ? buildSkillsLeadContext(snap.company.id, currentSprint?.id ?? null) : {}),
+  };
+}
+
+/**
+ * Build the Skills Lead-specific context extensions (Phase 6).
+ * Runs the skill-health scan, the unused-skill scan, and the sprint
+ * skill-gap count so the heartbeat checklist can branch without any
+ * additional I/O.
+ */
+function buildSkillsLeadContext(companyId: string, currentSprintId: string | null) {
+  const health = getSkillHealth(companyId);
+  const unusedRaw = getUnusedSkills(companyId, 30);
+  const gaps = currentSprintId ? analyzeSprintPatterns(companyId, currentSprintId, 3) : [];
+
+  return {
+    skillHealth: {
+      totalSkills: health.totalSkills,
+      activeSkills: health.activeSkills,
+      averageSuccessRate: health.averageSuccessRate,
+      worstPerformers: health.worstPerformers.map((w) => ({
+        skillId: w.skillId,
+        name: w.name,
+        successRate: w.successRate,
+      })),
+    },
+    unusedSkills: unusedRaw.map((s) => ({
+      skillId: s.id,
+      name: s.name,
+      lastUsedAt: s.lastUsedAt,
+    })),
+    sprintSkillGapCount: gaps.length,
   };
 }
 

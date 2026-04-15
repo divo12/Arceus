@@ -640,6 +640,24 @@ export const agentBeatContextSchema = z.object({
     detail: z.string(),
     checkedAt: z.string(),
   }).optional(),
+
+  // Spec 14 Phase 6 — Skills Lead proactive heartbeat context
+  skillHealth: z.object({
+    totalSkills: z.number().int().nonnegative(),
+    activeSkills: z.number().int().nonnegative(),
+    averageSuccessRate: z.number().min(0).max(1),
+    worstPerformers: z.array(z.object({
+      skillId: z.string(),
+      name: z.string(),
+      successRate: z.number().min(0).max(1),
+    })),
+  }).optional(),
+  unusedSkills: z.array(z.object({
+    skillId: z.string(),
+    name: z.string(),
+    lastUsedAt: z.string().nullable(),
+  })).optional(),
+  sprintSkillGapCount: z.number().int().nonnegative().optional(),
 });
 
 export const companySnapshotSchema = z.object({
@@ -893,6 +911,10 @@ export const skillArtifactSchema = z.object({
   mutationReason: z.string().nullable().default(null),
   createdAt: z.string(),
   approvedAt: z.string().nullable().default(null),
+  /** Embedding of the trigger text (all-MiniLM-L6-v2, 384-dim). Populated
+   *  asynchronously after skill creation/activation. Used for semantic matching
+   *  instead of bag-of-words token overlap. Optional so old records still parse. */
+  triggerEmbedding: z.array(z.number()).optional(),
 });
 
 export const skillHealthReportSchema = z.object({
@@ -1015,6 +1037,8 @@ export const patternSchema = z.object({
   sourceTaskIds: z.array(z.string()),
   matchedSkillIds: z.array(z.string()).describe("Skills that were active when this pattern was observed"),
   tags: z.array(z.string()),
+  firstSeenSprintId: z.string().nullable().describe("Sprint where this pattern was first observed (Phase 6 cross-sprint transfer)"),
+  sprintIds: z.array(z.string()).describe("All sprints where this pattern has been observed"),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

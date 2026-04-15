@@ -3,7 +3,8 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, matchSkillsAsync as registryMatchSkillsAsync, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster, analyzeSprintPatterns, getUnderperformingSkills, getUnusedSkills, deprecateSkill as registryDeprecateSkill, embedAllSkillTriggers } from "@arceus/company-runtime";
+import { applyGovernanceToMutation } from "./skill-governance";
 import { initSkillEvolution } from "./skill-evolution";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
@@ -227,41 +228,95 @@ function ensureSkillsSeeded(): void {
   const count = seedExistingSkills(companyId);
   if (count > 0) {
     console.log(`[SkillRegistry] Seeded ${count} skills for company ${companyId}`);
+    // Embed all seed skill triggers asynchronously so semantic matching works
+    // from the first heartbeat beat. Fire-and-forget — never blocks seeding.
+    embedAllSkillTriggers(companyId).then((embedded) => {
+      if (embedded > 0) {
+        console.log(`[SkillRegistry] Embedded triggers for ${embedded}/${count} seed skills`);
+      }
+    }).catch((err) => {
+      console.warn(`[SkillRegistry] Seed embedding failed: ${err instanceof Error ? err.message : err}`);
+    });
   }
 }
 
-function buildSkillMenu(role: string): string {
+/**
+ * Build the skill section injected into an agent's system prompt.
+ *
+ * When `matchedSkillIds` is provided (heartbeat path), only the semantically
+ * matched skills are included — capped at 3 per spec §14. This keeps the
+ * prompt tight and prevents irrelevant guidance from older skills polluting
+ * the context window.
+ *
+ * When `matchedSkillIds` is omitted (legacy direct-session paths), all active
+ * skills for the role are included so those paths are unaffected.
+ */
+function buildSkillSection(
+  role: string,
+  matchedSkillIds?: string[],
+  cap = 3,
+): string {
   ensureSkillsSeeded();
   const snapshot = getSnapshot();
-  const skills = registryGetSkillsForRole(snapshot.company.id, role);
+  let skills = registryGetSkillsForRole(snapshot.company.id, role);
   if (skills.length === 0) return "";
-  const lines = ["", "# Available skills for this role"];
+
+  if (matchedSkillIds && matchedSkillIds.length > 0) {
+    // Semantic match path: only the skills the matcher selected, capped at 3
+    const idSet = new Set(matchedSkillIds);
+    skills = skills.filter((s) => idSet.has(s.id)).slice(0, cap);
+  }
+  if (skills.length === 0) return "";
+
+  const lines = [
+    "",
+    "## Relevant Skills",
+    "The following procedural skills are available for this task:",
+  ];
   for (const skill of skills) {
-    lines.push(`- **${skill.name}** (v${skill.version}, success: ${Math.round(skill.successRate * 100)}%): ${skill.trigger}`);
+    lines.push(
+      "",
+      `### ${skill.name} (v${skill.version}, success: ${Math.round(skill.successRate * 100)}%)`,
+      `Trigger: ${skill.trigger}`,
+      skill.content,
+    );
   }
   return lines.join("\n");
 }
 
+/** @deprecated Use buildSkillSection(role, undefined) — kept for call sites that haven't migrated. */
+function buildSkillMenu(role: string): string {
+  return buildSkillSection(role);
+}
+
+/** @deprecated Use buildSkillSection(role, undefined) — kept for call sites that haven't migrated. */
 function getSkillBody(role: string, skillName?: string): string {
-  ensureSkillsSeeded();
-  const snapshot = getSnapshot();
-  const skills = registryGetSkillsForRole(snapshot.company.id, role);
-  if (skills.length === 0) return "";
   if (skillName) {
-    const match = skills.find(s => s.name === skillName);
+    ensureSkillsSeeded();
+    const snapshot = getSnapshot();
+    const skills = registryGetSkillsForRole(snapshot.company.id, role);
+    const match = skills.find((s) => s.name === skillName);
     return match ? `\n# Skill: ${match.name}\n\n${match.content}` : "";
   }
-  return skills.map(s => `\n# Skill: ${s.name} (v${s.version})\n\n${s.content}`).join("\n");
+  // Delegating to buildSkillSection avoids duplicating the section in prompts
+  // that call both buildSkillMenu() and getSkillBody() — they now return "" from
+  // getSkillBody since buildSkillMenu already has the full content.
+  return "";
 }
 
 /**
- * Match and record usage of skills relevant to a task.
- * Returns matched skill IDs for later success rate updates.
+ * Semantically match skills relevant to a task and record their usage.
+ *
+ * Uses cosine similarity over trigger embeddings when available (after
+ * initSkillEvolution() has wired the embedding dep). Falls back to token
+ * overlap for skills not yet embedded or when deps are missing.
+ *
+ * Returns matched skill IDs so the caller can filter prompt injection.
  */
-function matchAndRecordSkills(role: string, taskDescription: string): string[] {
+async function matchAndRecordSkills(role: string, taskDescription: string): Promise<string[]> {
   ensureSkillsSeeded();
   const snapshot = getSnapshot();
-  const matched = registryMatchSkills(snapshot.company.id, role, taskDescription);
+  const matched = await registryMatchSkillsAsync(snapshot.company.id, role, taskDescription);
   for (const skill of matched) {
     recordSkillUsage(skill.id);
   }
@@ -1077,15 +1132,16 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
 
   await tagCurrentSprintSnapshot();
 
-  // Spec 14 Phase 5: Run pattern promotion sweep at sprint boundary.
-  // Clusters of ≥4 recurring successful tasks become emergent skill candidates.
+  // Spec 14 Phase 6: Cross-sprint pattern transfer at sprint boundary.
+  // Filters patterns first-seen in THIS sprint with usageCount>=3, clusters,
+  // governs each candidate, and hands approved mutations to ATA.
   // Fire-and-forget — never blocks next-sprint proposal.
-  runPatternPromotionSweep(snapshot.company.id).then((result) => {
+  runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
     if (result.candidatesFound > 0) {
-      console.log(`[PatternLearner] Sprint ${sprint.number} sweep: ${result.candidatesFound} candidates, ${result.mutationsProposed} mutations proposed`);
+      console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
     }
   }).catch((err) => {
-    console.warn(`[PatternLearner] Sprint sweep error: ${err instanceof Error ? err.message : err}`);
+    console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
   });
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
@@ -2419,9 +2475,25 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           status,
           iterationCount: task.iterationCount,
           executionTrace: feedback ?? undefined,
-        }).then((mutation) => {
+        }).then(async (mutation) => {
           if (mutation) {
             console.log(`[SkillMutator] Proposed ${mutation.originalSkillId ? "mutation" : "discovery"}: ${mutation.id} (${mutation.reason})`);
+
+            // Phase 6: apply governance gate (trust, own-role, sprint cap,
+            // budget, shell lint). "system" proposer bypasses trust + own-role.
+            const gov = await applyGovernanceToMutation({
+              mutation,
+              companyId: snapshot.company.id,
+              sprintId: task.sprintId ?? snapshot.company.currentSprintId ?? null,
+              proposerAgentId: null,
+              proposerRole: "system",
+              estimatedCostCents: mutation.originalSkillId ? 1 : 2, // attribution ~$0.003 + discovery ~$0.015
+            });
+            if (!gov.allowed) {
+              console.warn(`[Governance] Mutation ${mutation.id} refused — ${gov.code}: ${gov.reason}`);
+              return;
+            }
+
             // Phase 3: Auto-trigger ATA pipeline (async, never blocks)
             runATAPipeline(mutation.id).then((result) => {
               console.log(`[ATA] ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore}, revisions=${result.revisionCycles})`);
@@ -2457,6 +2529,7 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           outcome: patternOutcome,
           trajectory: feedback ?? undefined,
           activeSkillIds,
+          sprintId: task.sprintId ?? snapshot.company.currentSprintId ?? null,
         }).then((pattern) => {
           if (pattern.usageCount === 1) {
             console.log(`[PatternLearner] New pattern ${pattern.id} for "${task.title.slice(0, 40)}"`);
@@ -2470,13 +2543,71 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
 }
 
 /**
- * Spec 14 Phase 5: Sprint-boundary skill candidate sweep.
+ * Spec 14 Phase 6: Cross-sprint pattern transfer.
  *
- * Scans the pattern store for recurring clusters that meet promotion criteria
- * (≥4 members, ≥60% success, no matching skill) and feeds each candidate
- * into the ATA pipeline as a fresh mutation.
+ * Runs at sprint boundary. Filters patterns to those first observed in the
+ * just-completed sprint that recurred ≥3 times AND are shared across multiple
+ * sprints, clusters them, applies promotion gate, governs each candidate, and
+ * hands approved mutations to the ATA pipeline.
  *
- * Fire-and-forget from the caller; returns promotion counts for observability.
+ * Unlike the older all-time sweep (runPatternPromotionSweep), this sprint-
+ * scoped version ensures only the *current* sprint's patterns propagate to the
+ * next one — satisfying spec §1095 ("propagate to next sprint").
+ *
+ * Fire-and-forget from the caller; returns observability counts.
+ */
+export async function runCrossSprintTransfer(
+  companyId: string,
+  sprintId: string,
+): Promise<{
+  candidatesFound: number;
+  mutationsProposed: number;
+  mutationsRefused: number;
+}> {
+  const candidates = analyzeSprintPatterns(companyId, sprintId, 3);
+  let mutationsProposed = 0;
+  let mutationsRefused = 0;
+
+  for (const candidate of candidates) {
+    try {
+      const mutation = await proposeSkillFromCluster(candidate);
+
+      // Phase 6: governance gate before ATA (pattern_learner bypasses trust/own-role).
+      const gov = await applyGovernanceToMutation({
+        mutation,
+        companyId,
+        sprintId,
+        proposerAgentId: null,
+        proposerRole: "pattern_learner",
+        estimatedCostCents: 2, // synthesizeSkill via gpt-4o ≈ $0.015
+      });
+      if (!gov.allowed) {
+        mutationsRefused++;
+        console.warn(`[Governance] Emergent mutation ${mutation.id} refused — ${gov.code}: ${gov.reason}`);
+        continue;
+      }
+
+      mutationsProposed++;
+      console.log(
+        `[CrossSprintTransfer] Promoted cluster ${candidate.clusterId} → mutation ${mutation.id} ` +
+        `(${candidate.memberCount} members, success=${candidate.combinedSuccessRate.toFixed(2)})`,
+      );
+      runATAPipeline(mutation.id).then((result) => {
+        console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
+      }).catch((err) => {
+        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } catch (err) {
+      console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  return { candidatesFound: candidates.length, mutationsProposed, mutationsRefused };
+}
+
+/**
+ * @deprecated Use runCrossSprintTransfer(companyId, sprintId) instead.
+ * Retained only for tests that exercise the all-time sweep path.
  */
 export async function runPatternPromotionSweep(companyId: string): Promise<{
   candidatesFound: number;
@@ -2484,26 +2615,17 @@ export async function runPatternPromotionSweep(companyId: string): Promise<{
 }> {
   const candidates = checkSkillCandidates(companyId);
   let mutationsProposed = 0;
-
   for (const candidate of candidates) {
     try {
       const mutation = await proposeSkillFromCluster(candidate);
       mutationsProposed++;
-      console.log(
-        `[PatternLearner] Promoted cluster ${candidate.clusterId} → mutation ${mutation.id} ` +
-        `(${candidate.memberCount} members, success=${candidate.combinedSuccessRate.toFixed(2)})`,
-      );
-      // Hand to ATA pipeline (fire-and-forget — same pattern as Phase 2/3 flow)
-      runATAPipeline(mutation.id).then((result) => {
-        console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
-      }).catch((err) => {
+      runATAPipeline(mutation.id).catch((err) => {
         console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
       });
     } catch (err) {
       console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
     }
   }
-
   return { candidatesFound: candidates.length, mutationsProposed };
 }
 
@@ -3704,12 +3826,20 @@ function getToolsForPrompt(role: AgentIdentity["role"]): Record<string, boolean>
   };
 }
 
-async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string, tools?: Record<string, boolean>) {
+async function runPromptText(
+  role: AgentIdentity["role"],
+  sessionId: string,
+  systemPrompt: string,
+  text: string,
+  tools?: Record<string, boolean>,
+  matchedSkillIds?: string[],
+) {
   const deployment = ensureDeployment("workerDeployment");
 
-  // Inject role-specific skills into the system prompt
-  const skillMenu = buildSkillMenu(role);
-  const skillBody = getSkillBody(role);
+  // Inject skills: when matchedSkillIds is provided (heartbeat path), only the
+  // semantically matched subset (≤3) is included. Otherwise all role skills are
+  // included (legacy direct-session paths). See buildSkillSection for details.
+  const skillSection = buildSkillSection(role, matchedSkillIds);
 
   // Inject Hippocampus memory context (never fatal — graceful degradation)
   let memoryBlock = "";
@@ -3730,13 +3860,13 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
     emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }
 
-  const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody, memoryBlock].filter(Boolean).join("\n");
+  const enrichedSystemPrompt = [systemPrompt, skillSection, memoryBlock].filter(Boolean).join("\n");
 
-  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skill=${skillMenu.length + skillBody.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
+  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skills=${skillSection.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
     detail: {
       systemPromptLen: systemPrompt.length,
-      skillMenuLen: skillMenu.length,
-      skillBodyLen: skillBody.length,
+      skillSectionLen: skillSection.length,
+      matchedSkillCount: matchedSkillIds?.length ?? 0,
       memoryBlockLen: memoryBlock.length,
       memoryCount,
       habitCount,
@@ -4584,8 +4714,9 @@ export async function executeBeatTask(
 
   const role = ctx.role;
 
-  // Spec 14: match skills relevant to this task and record usage
-  const matchedSkillIds = matchAndRecordSkills(role, `${task.title} ${task.description}`);
+  // Spec 14: semantically match skills relevant to this task and record usage.
+  // Uses cosine similarity when embeddings are available, token fallback otherwise.
+  const matchedSkillIds = await matchAndRecordSkills(role, `${task.title} ${task.description}`);
 
   emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority} matchedSkills=${matchedSkillIds.length}`, {
     beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, matchedSkillIds },
@@ -4763,7 +4894,9 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
-    const output = await runPromptText(role, beatSession.id, soul.systemPrompt + getAgentSkills(role), taskPrompt, tools);
+    // Pass matchedSkillIds so runPromptText injects only the semantically relevant
+    // skills (≤3) rather than every skill for the role (spec §14 Phase 1).
+    const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt, tools, matchedSkillIds);
 
     touchAgentSession(role, "idle");
 
@@ -5018,10 +5151,137 @@ export async function executeChecklistAction(
     };
   }
 
+  // ── Skills Lead: skill governance actions (Spec 14 Phase 6) ──
+  if (role === "skills_lead" && action.suggestedAction.startsWith("skills_lead:")) {
+    return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
+  }
+
   // ── Fallback: log the action without executing ──
   emitEmployeeActivity(role, "info", `Beat ${beatId}: no handler for checklist action — "${action.suggestedAction}"`, { beatId });
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
   };
+}
+
+// ── Skills Lead action handlers (Spec 14 Phase 6) ──────────
+
+/**
+ * Skills Lead dispatches to one of three actions emitted by the proactive
+ * heartbeat checks (checkSkillHealth, checkUnusedSkills, checkSkillGaps).
+ *
+ * All three route through `applyGovernanceToMutation` so they respect the
+ * trust/cap/budget/lint gate like any other mutation.
+ */
+async function executeSkillsLeadAction(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+  suggestedAction: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  startBeatTokenAccumulator(beatId);
+  const snapshot = getSnapshot();
+  const companyId = snapshot.company.id;
+  const sprintId = snapshot.company.currentSprintId ?? null;
+
+  try {
+    // ── mutate_underperformer: rewrite the worst active skill ──
+    if (suggestedAction === "skills_lead:mutate_underperformer") {
+      const underperformers = getUnderperformingSkills(companyId, 0.6);
+      if (underperformers.length === 0) {
+        emitEmployeeActivity("skills_lead", "context", `Beat ${beatId}: no underperformers to mutate`, { beatId });
+        return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      const worst = underperformers[0]!;
+      emitEmployeeActivity("skills_lead", "working", `Beat ${beatId}: proposing mutation for ${worst.name} (rate=${worst.successRate.toFixed(2)})`, { beatId });
+
+      // Trigger failure attribution pipeline using a synthetic TaskOutcome representing the
+      // skill's accumulated underperformance. We use role + skill name as anchor.
+      const mutation = await processTaskOutcome({
+        taskId: `skills_lead_mutation_${worst.id}_${Date.now()}`,
+        taskTitle: `Improve underperforming skill: ${worst.name}`,
+        taskDescription: `Skill ${worst.name} has a ${(worst.successRate * 100).toFixed(0)}% success rate over ${worst.usageCount} uses. Identify root cause and propose an improved version.`,
+        assignedRole: worst.role as AgentIdentity["role"],
+        companyId,
+        status: "failed",
+        iterationCount: 3,
+        executionTrace: `Historical rate ${worst.successRate.toFixed(2)} across ${worst.usageCount} invocations.`,
+      });
+
+      if (!mutation) {
+        return { summary: `No mutation produced for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+      }
+
+      const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
+      const gov = await applyGovernanceToMutation({
+        mutation, companyId, sprintId,
+        proposerAgentId: skillsLeadAgent?.id ?? null,
+        proposerRole: "skills_lead",
+        estimatedCostCents: 2,
+      });
+      if (!gov.allowed) {
+        return { summary: `Mutation for ${worst.name} refused: ${gov.reason}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+      }
+
+      runATAPipeline(mutation.id).catch((err) => {
+        console.warn(`[ATA] Skills Lead pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      });
+      return { summary: `Proposed mutation ${mutation.id} for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+    }
+
+    // ── deprecate_unused: flip unused skills to deprecated ──
+    if (suggestedAction === "skills_lead:deprecate_unused") {
+      const unused = getUnusedSkills(companyId, 30);
+      if (unused.length === 0) {
+        return { summary: "No unused skills to deprecate", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      const deprecated: string[] = [];
+      for (const s of unused.slice(0, 3)) { // cap at 3/beat
+        registryDeprecateSkill(s.id, `Unused for 30+ days (0 invocations since ${s.lastUsedAt ?? "creation"})`);
+        deprecated.push(s.name);
+        auditAgent(companyId, "skills_lead", "skill_deprecated", `Skills Lead deprecated unused skill ${s.name}`, {
+          severity: "info", detail: { skillId: s.id, lastUsedAt: s.lastUsedAt },
+        });
+      }
+      emitEmployeeActivity("skills_lead", "context", `Beat ${beatId}: deprecated ${deprecated.length} unused skills`, { beatId });
+      return { summary: `Deprecated ${deprecated.length} unused skills: ${deprecated.join(", ")}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: deprecated.length, toolCalls: 1 };
+    }
+
+    // ── fill_skill_gap: synthesize skill from sprint cluster ──
+    if (suggestedAction === "skills_lead:fill_skill_gap") {
+      if (!sprintId) {
+        return { summary: "No current sprint — skipping skill-gap fill", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      const candidates = analyzeSprintPatterns(companyId, sprintId, 3);
+      if (candidates.length === 0) {
+        return { summary: "No sprint skill gaps detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      let proposed = 0;
+      let refused = 0;
+      for (const candidate of candidates.slice(0, 2)) { // cap per-beat to preserve budget
+        try {
+          const mutation = await proposeSkillFromCluster(candidate);
+          const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
+          const gov = await applyGovernanceToMutation({
+            mutation, companyId, sprintId,
+            proposerAgentId: skillsLeadAgent?.id ?? null,
+            proposerRole: "skills_lead",
+            estimatedCostCents: 2,
+          });
+          if (!gov.allowed) { refused++; continue; }
+          proposed++;
+          runATAPipeline(mutation.id).catch((err) => {
+            console.warn(`[ATA] Skills Lead gap-fill error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+          });
+        } catch (err) {
+          console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+      return { summary: `Proposed ${proposed} emergent skills, ${refused} refused by governance`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: proposed, toolCalls: proposed + refused };
+    }
+
+    return { summary: `Unknown Skills Lead action: ${suggestedAction}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  } catch (err) {
+    emitEmployeeActivity("skills_lead", "error", `Beat ${beatId}: Skills Lead action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    return { summary: `Skills Lead action failed: ${err instanceof Error ? err.message : String(err)}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
 }

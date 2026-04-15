@@ -87,6 +87,8 @@ export interface PatternObservation {
   activeSkillIds?: string[];
   /** Optional tags for categorization. */
   tags?: string[];
+  /** Sprint the source task belongs to (Phase 6 cross-sprint transfer). */
+  sprintId?: string | null;
 }
 
 // ── Pure helpers ─────────────────────────────────────────
@@ -164,6 +166,9 @@ export async function extractPattern(obs: PatternObservation): Promise<Pattern> 
         : [...duplicate.sourceTaskIds, obs.taskId],
       matchedSkillIds: mergeUnique(duplicate.matchedSkillIds, obs.activeSkillIds ?? []),
       tags: mergeUnique(duplicate.tags, obs.tags ?? []),
+      sprintIds: obs.sprintId
+        ? mergeUnique(duplicate.sprintIds ?? [], [obs.sprintId])
+        : (duplicate.sprintIds ?? []),
       updatedAt: now,
     };
     patternsById.set(merged.id, merged);
@@ -186,6 +191,8 @@ export async function extractPattern(obs: PatternObservation): Promise<Pattern> 
     sourceTaskIds: [obs.taskId],
     matchedSkillIds: [...(obs.activeSkillIds ?? [])],
     tags: [...(obs.tags ?? [])],
+    firstSeenSprintId: obs.sprintId ?? null,
+    sprintIds: obs.sprintId ? [obs.sprintId] : [],
     createdAt: now,
     updatedAt: now,
   };
@@ -329,6 +336,99 @@ export function checkSkillCandidates(companyId: string): SkillCandidate[] {
 
   for (const cluster of clusters) {
     if (cluster.patternIds.length < MIN_CLUSTER_SIZE_FOR_PROMOTION) continue;
+    if (cluster.combinedSuccessRate < MIN_CLUSTER_SUCCESS_RATE) continue;
+    if (cluster.hasMatchingSkill) continue;
+
+    const memberSummaries = cluster.patternIds
+      .map((id) => patternsById.get(id)?.summary)
+      .filter((s): s is string => typeof s === "string");
+
+    candidates.push({
+      clusterId: cluster.id,
+      companyId,
+      role: cluster.dominantRole,
+      representativeTitle: cluster.representativeTitle,
+      representativeSummary: cluster.representativeSummary,
+      memberCount: cluster.patternIds.length,
+      combinedUsageCount: cluster.combinedUsageCount,
+      combinedSuccessRate: cluster.combinedSuccessRate,
+      memberSummaries,
+      proposedAt: now,
+    });
+  }
+
+  return candidates;
+}
+
+// ── analyzeSprintPatterns (Phase 6 — cross-sprint transfer) ──
+
+/**
+ * Spec 14 Phase 6 — narrow candidate search to patterns observed *within*
+ * `sprintId` with `usageCount >= minFrequency`. Used at sprint boundary to
+ * ship emergent skills to Sprint N+1, rather than the all-time sweep.
+ *
+ * Differs from checkSkillCandidates:
+ *   - Filters patterns by sprintIds containing the target sprint
+ *   - Requires `usageCount >= minFrequency` (default 3 per spec §1095)
+ *   - Still applies the promotion gate (≥4 members, ≥60% success, no matching skill)
+ */
+export function analyzeSprintPatterns(
+  companyId: string,
+  sprintId: string,
+  minFrequency: number = 3,
+): SkillCandidate[] {
+  // Sprint-scoped patterns with sufficient frequency
+  const sprintPatterns = getPatternsForCompany(companyId).filter(
+    (p) =>
+      (p.sprintIds ?? []).includes(sprintId) &&
+      p.usageCount >= minFrequency,
+  );
+  if (sprintPatterns.length === 0) return [];
+
+  // Cluster *only* those patterns
+  const sorted = [...sprintPatterns].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const clusters: { members: Pattern[]; centroid: number[] }[] = [];
+
+  for (const pattern of sorted) {
+    let joined = false;
+    for (const cluster of clusters) {
+      if (cluster.members[0].role !== pattern.role) continue;
+      const sim = cosineSimilarity(pattern.embedding, cluster.centroid);
+      if (sim >= CLUSTER_SIMILARITY_THRESHOLD) {
+        cluster.members.push(pattern);
+        cluster.centroid = updateCentroid(
+          cluster.centroid,
+          cluster.members.length - 1,
+          pattern.embedding,
+        );
+        joined = true;
+        break;
+      }
+    }
+    if (!joined) {
+      clusters.push({ members: [pattern], centroid: [...pattern.embedding] });
+    }
+  }
+
+  const activeSkills = getAllSkills(companyId).filter((s) => s.status === "active");
+  const now = new Date().toISOString();
+  const candidates: SkillCandidate[] = [];
+
+  for (const raw of clusters) {
+    // Path A: variety cluster — 4+ different-but-similar patterns in one sprint
+    const isVarietyCluster = raw.members.length >= MIN_CLUSTER_SIZE_FOR_PROMOTION;
+
+    // Path B: cross-sprint recurrence — same pattern seen in ≥2 sprints with
+    // usageCount ≥ minFrequency. Single pattern repeated across sprint boundaries
+    // is the strongest possible signal that a skill is needed.
+    const leadMember = raw.members[0]!;
+    const isCrossSprintRecurrence =
+      (leadMember.sprintIds ?? []).length >= 2 &&
+      leadMember.usageCount >= minFrequency;
+
+    if (!isVarietyCluster && !isCrossSprintRecurrence) continue;
+
+    const cluster = buildClusterArtifact(companyId, raw.members, activeSkills);
     if (cluster.combinedSuccessRate < MIN_CLUSTER_SUCCESS_RATE) continue;
     if (cluster.hasMatchingSkill) continue;
 

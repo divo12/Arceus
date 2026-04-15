@@ -343,23 +343,58 @@ function checkSkillQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No skill tasks" };
 }
 
-// ── Spec 21: CTO escalation check ──────────────────────────
+// ── Spec 14 Phase 6: Skills Lead proactive checks ─────────
 
 /**
- * CTO check: has the sprint review been escalated to the CTO?
- * Fires when reviewState.phase is "escalated" so the CTO can force-complete the sprint.
+ * Skills Lead — flag skills with successRate < 0.6 for mutation.
+ * The beat handler picks the worst-performing one and routes it to
+ * Phase 2 failure-attribution → mutation proposal.
+ *
+ * Data flows through ctx.skillHealth (injected by loadAgentContext).
  */
-function checkEscalatedReview(ctx: AgentBeatContext): CheckResult {
-  const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
-
-  const reviewState = (sprint as any).reviewState;
-  if (!reviewState || reviewState.phase !== "escalated") return { status: "ok", detail: "No escalation" };
-
+function checkSkillHealth(ctx: AgentBeatContext): CheckResult {
+  const health = ctx.skillHealth;
+  if (!health || health.worstPerformers.length === 0) {
+    return { status: "ok", detail: "All skills healthy" };
+  }
+  const worst = health.worstPerformers[0];
   return {
     status: "action_needed",
-    detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles`,
-    suggestedAction: "sprint_review:cto_escalation_decision",
+    detail: `${health.worstPerformers.length} underperforming skill(s), worst: ${worst.name} (${Math.round(worst.successRate * 100)}%)`,
+    suggestedAction: "skills_lead:mutate_underperformer",
+  };
+}
+
+/**
+ * Skills Lead — flag skills that have not been used for 30+ days.
+ * The beat handler proposes deprecation via an ATA-gated mutation
+ * (so the system can veto if the skill is actually valuable).
+ */
+function checkUnusedSkills(ctx: AgentBeatContext): CheckResult {
+  const unused = ctx.unusedSkills ?? [];
+  if (unused.length === 0) {
+    return { status: "ok", detail: "No stale skills" };
+  }
+  return {
+    status: "action_needed",
+    detail: `${unused.length} skill(s) unused for 30+ days`,
+    suggestedAction: "skills_lead:deprecate_unused",
+  };
+}
+
+/**
+ * Skills Lead — detect skill gaps from recurring patterns in the current sprint.
+ * The beat handler routes matching candidates through cross-sprint transfer.
+ */
+function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
+  const gapCount = ctx.sprintSkillGapCount ?? 0;
+  if (gapCount === 0) {
+    return { status: "ok", detail: "No skill gaps in current sprint" };
+  }
+  return {
+    status: "action_needed",
+    detail: `${gapCount} skill gap(s) in current sprint`,
+    suggestedAction: "skills_lead:fill_skill_gap",
   };
 }
 
@@ -375,7 +410,15 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   tester: [checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
   ui_designer: [checkDesignQueue, checkAssignedTasks],
   marketing: [checkContentQueue, checkAssignedTasks],
-  skills_lead: [checkSkillQueue, checkAssignedTasks],
+  skills_lead: [
+    // Phase 6 proactive checks first — fire even with no assigned task
+    checkSkillHealth,
+    checkSkillGaps,
+    checkUnusedSkills,
+    // Reactive task-based checks after
+    checkSkillQueue,
+    checkAssignedTasks,
+  ],
 };
 
 // ── Public API ─────────────────────────────────────────────

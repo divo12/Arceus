@@ -39,9 +39,17 @@ export {
   getAllSkills,
   getSkillHistory,
   matchSkills,
+  matchSkillsAsync,
   recordSkillUsage,
   updateSuccessRate,
   getSkillHealth,
+  storeSkillEmbedding,
+  embedAllSkillTriggers,
+  setSkillRegistryDeps,
+  hasSkillRegistryDeps,
+  // Phase 6 lifecycle helpers
+  getUnusedSkills,
+  getUnderperformingSkills,
   seedExistingSkills,
   isSeeded as isSkillRegistrySeeded,
   resetRegistry as resetSkillRegistry,
@@ -64,6 +72,7 @@ export {
   hasSkillMutatorDeps,
 } from "./skill-mutator";
 export type { SkillMutatorDeps, TaskOutcomeContext } from "./skill-mutator";
+export type { SkillRegistryDeps } from "./skill-registry";
 
 // Spec 14 Phase 3: ATA Pipeline (pure logic)
 export {
@@ -87,6 +96,8 @@ export {
   getPatternsForCompany,
   getPatternCount,
   resetPatternStore,
+  // Phase 6: Cross-sprint transfer
+  analyzeSprintPatterns,
 } from "./pattern-learner";
 export type { PatternLearnerDeps, PatternObservation } from "./pattern-learner";
 
