@@ -260,6 +260,32 @@ export const policyViolationsTable = arceusSchema ? arceusSchema.table("policy_v
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ── Spec 14: Skill Evolution tables ───────────────────────
+
+const skillArtifactColumns = {
+  id: text("id").primaryKey(),
+  companyId: text("company_id").notNull(),
+  name: text("name").notNull(),
+  role: text("role").notNull(),
+  version: integer("version").notNull().default(1),
+  status: text("status").notNull().default("draft"),
+  triggerCondition: text("trigger_condition").notNull(),
+  content: text("content").notNull(),
+  testCases: jsonb("test_cases").notNull().default([]),
+  successRate: real("success_rate").notNull().default(0.5),
+  usageCount: integer("usage_count").notNull().default(0),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  mutatedFromId: text("mutated_from_id"),
+  mutatedBy: text("mutated_by"),
+  mutationReason: text("mutation_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+};
+
+export const skillArtifactsTable = arceusSchema
+  ? arceusSchema.table("skill_artifacts", skillArtifactColumns)
+  : pgTable("skill_artifacts", skillArtifactColumns);
+
 export const workspaceStorageTables = {
   workspaces: workspacesTable,
   sprintSnapshots: sprintSnapshotsTable,
@@ -271,6 +297,7 @@ export const workspaceStorageTables = {
   beatRecords: beatRecordsTable,
   trustScores: trustScoresTable,
   policyViolations: policyViolationsTable,
+  skillArtifacts: skillArtifactsTable,
 };
 
 export const arceusDatabaseSchemaName = configuredSchemaName;

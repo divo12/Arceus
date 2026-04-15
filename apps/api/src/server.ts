@@ -29,7 +29,7 @@ import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAu
 import { auditConfig } from "./config/audit";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { warmUpOpencode } from "./opencode";
 import { readFileSync } from "node:fs";
@@ -518,6 +518,49 @@ app.get("/api/product/overview", async () => {
     preview: getLocalPreviewState(),
     files,
   };
+});
+
+// ── Skill Registry API (Spec 14 Phase 1) ──────────────────
+
+app.get("/api/skills", async () => {
+  const companyId = getSnapshot().company.id;
+  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+    seedExistingSkills(companyId);
+  }
+  const skills = getAllSkills(companyId);
+  return {
+    skills: skills.map((s) => ({
+      id: s.id,
+      name: s.name,
+      role: s.role,
+      version: s.version,
+      status: s.status,
+      trigger: s.trigger,
+      successRate: s.successRate,
+      usageCount: s.usageCount,
+      lastUsedAt: s.lastUsedAt,
+      createdAt: s.createdAt,
+    })),
+    total: skills.length,
+  };
+});
+
+app.get("/api/skills/health", async () => {
+  const companyId = getSnapshot().company.id;
+  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+    seedExistingSkills(companyId);
+  }
+  return getSkillHealth(companyId);
+});
+
+app.get("/api/skills/:name/history", async (request) => {
+  const { name } = request.params as { name: string };
+  const companyId = getSnapshot().company.id;
+  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+    seedExistingSkills(companyId);
+  }
+  const history = registryGetSkillHistory(companyId, name);
+  return { name, versions: history };
 });
 
 // ── Preview control ─────────────────────────────────────────

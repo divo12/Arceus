@@ -29,3 +29,22 @@ export {
 } from "./governance-gateway";
 export type { DeniedTool, FilterResult } from "./governance-gateway";
 
+// Spec 14: Skill Registry
+export {
+  registerSkill,
+  updateSkill,
+  deprecateSkill,
+  getSkillById,
+  getSkillsForRole,
+  getAllSkills,
+  getSkillHistory,
+  matchSkills,
+  recordSkillUsage,
+  updateSuccessRate,
+  getSkillHealth,
+  seedExistingSkills,
+  isSeeded as isSkillRegistrySeeded,
+  resetRegistry as resetSkillRegistry,
+  getRegistrySize,
+} from "./skill-registry";
+

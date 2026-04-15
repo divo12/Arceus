@@ -863,6 +863,61 @@ export type TrustEvent = z.infer<typeof trustEventSchema>;
 export type PolicySeverity = z.infer<typeof policySeveritySchema>;
 export type PolicyViolation = z.infer<typeof policyViolationSchema>;
 
+// Skill Evolution types (Spec 14)
+
+export const skillStatusSchema = z.enum(["draft", "testing", "active", "deprecated"]);
+
+export const skillTestCaseSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  input: z.string(),
+  expectedBehavior: z.string(),
+  validationCriteria: z.array(z.string()),
+});
+
+export const skillArtifactSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  name: z.string(),
+  role: z.string(),
+  version: z.number().int().min(1).default(1),
+  status: skillStatusSchema,
+  trigger: z.string(),
+  content: z.string(),
+  testCases: z.array(skillTestCaseSchema).default([]),
+  successRate: z.number().min(0).max(1).default(0.5),
+  usageCount: z.number().int().default(0),
+  lastUsedAt: z.string().nullable().default(null),
+  mutatedFromId: z.string().nullable().default(null),
+  mutatedBy: z.string().nullable().default(null),
+  mutationReason: z.string().nullable().default(null),
+  createdAt: z.string(),
+  approvedAt: z.string().nullable().default(null),
+});
+
+export const skillHealthReportSchema = z.object({
+  totalSkills: z.number(),
+  activeSkills: z.number(),
+  averageSuccessRate: z.number(),
+  worstPerformers: z.array(z.object({
+    skillId: z.string(),
+    name: z.string(),
+    successRate: z.number(),
+    issues: z.array(z.string()),
+  })),
+  gaps: z.array(z.object({
+    taskPattern: z.string(),
+    frequency: z.number(),
+    suggestedSkill: z.string(),
+  })),
+  recentMutationCount: z.number(),
+});
+
+export type SkillStatus = z.infer<typeof skillStatusSchema>;
+export type SkillTestCase = z.infer<typeof skillTestCaseSchema>;
+export type SkillArtifact = z.infer<typeof skillArtifactSchema>;
+export type SkillHealthReport = z.infer<typeof skillHealthReportSchema>;
+
 // Sprint Verification types (Spec 21)
 export type VerificationGateResult = z.infer<typeof verificationGateResultSchema>;
 export type SprintReviewPhase = z.infer<typeof sprintReviewPhaseSchema>;

@@ -3,7 +3,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, updateSuccessRate, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById } from "@arceus/company-runtime";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
@@ -209,76 +209,59 @@ export const hippocampus = createHippocampusService({
 // Skill loader — reads SKILL.md files with YAML frontmatter
 // ---------------------------------------------------------------------------
 
-const skillsDir = resolve(process.cwd(), "packages", "company-runtime", "skills");
+// ── Skill Registry integration (Spec 14) ──────────────────
 
-interface SkillEntry {
-  name: string;
-  description: string;
-  role: string;
-  body: string;
-  path: string;
-}
-
-function parseSkillFrontmatter(content: string): { frontmatter: Record<string, string>; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) return { frontmatter: {}, body: content };
-  const lines = match[1].split("\n");
-  const frontmatter: Record<string, string> = {};
-  for (const line of lines) {
-    const colonIndex = line.indexOf(":");
-    if (colonIndex > 0) {
-      frontmatter[line.slice(0, colonIndex).trim()] = line.slice(colonIndex + 1).trim();
-    }
+/**
+ * Ensure skills are seeded from Markdown files on first use.
+ * Idempotent — no-op if already seeded.
+ */
+function ensureSkillsSeeded(): void {
+  if (isSkillRegistrySeeded()) return;
+  const snapshot = getSnapshot();
+  const companyId = snapshot.company.id;
+  if (!companyId || companyId === "company_empty") return;
+  const count = seedExistingSkills(companyId);
+  if (count > 0) {
+    console.log(`[SkillRegistry] Seeded ${count} skills for company ${companyId}`);
   }
-  return { frontmatter, body: match[2].trim() };
-}
-
-function loadSkillsForRole(role: string): SkillEntry[] {
-  const entries: SkillEntry[] = [];
-  if (!existsSync(skillsDir)) return entries;
-
-  for (const dir of readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!dir.isDirectory()) continue;
-    const skillPath = join(skillsDir, dir.name, "SKILL.md");
-    if (!existsSync(skillPath)) continue;
-
-    const raw = readFileSync(skillPath, "utf8");
-    const { frontmatter, body } = parseSkillFrontmatter(raw);
-
-    // Include skills that match this role or have no role specified (universal)
-    if (frontmatter.role && frontmatter.role !== role) continue;
-
-    entries.push({
-      name: frontmatter.name || dir.name,
-      description: frontmatter.description || "",
-      role: frontmatter.role || "",
-      body,
-      path: skillPath,
-    });
-  }
-  return entries;
 }
 
 function buildSkillMenu(role: string): string {
-  const skills = loadSkillsForRole(role);
+  ensureSkillsSeeded();
+  const snapshot = getSnapshot();
+  const skills = registryGetSkillsForRole(snapshot.company.id, role);
   if (skills.length === 0) return "";
   const lines = ["", "# Available skills for this role"];
   for (const skill of skills) {
-    lines.push(`- **${skill.name}**: ${skill.description}`);
+    lines.push(`- **${skill.name}** (v${skill.version}, success: ${Math.round(skill.successRate * 100)}%): ${skill.trigger}`);
   }
   return lines.join("\n");
 }
 
 function getSkillBody(role: string, skillName?: string): string {
-  const skills = loadSkillsForRole(role);
+  ensureSkillsSeeded();
+  const snapshot = getSnapshot();
+  const skills = registryGetSkillsForRole(snapshot.company.id, role);
   if (skills.length === 0) return "";
-  // If a specific skill is requested, return its body
   if (skillName) {
     const match = skills.find(s => s.name === skillName);
-    return match ? `\n# Skill: ${match.name}\n\n${match.body}` : "";
+    return match ? `\n# Skill: ${match.name}\n\n${match.content}` : "";
   }
-  // Otherwise return all skills for this role (there's usually just one)
-  return skills.map(s => `\n# Skill: ${s.name}\n\n${s.body}`).join("\n");
+  return skills.map(s => `\n# Skill: ${s.name} (v${s.version})\n\n${s.content}`).join("\n");
+}
+
+/**
+ * Match and record usage of skills relevant to a task.
+ * Returns matched skill IDs for later success rate updates.
+ */
+function matchAndRecordSkills(role: string, taskDescription: string): string[] {
+  ensureSkillsSeeded();
+  const snapshot = getSnapshot();
+  const matched = registryMatchSkills(snapshot.company.id, role, taskDescription);
+  for (const skill of matched) {
+    recordSkillUsage(skill.id);
+  }
+  return matched.map(s => s.id);
 }
 
 type AgentSessionState = {
@@ -2406,6 +2389,20 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${describePgError(err)}`);
         });
       }
+
+      // Spec 14: update skill success rates based on task outcome
+      // outcome: 1.0 for completed, 0.0 for failed, 0.3 for cancelled
+      const skillOutcome = status === "completed"
+        ? (task.iterationCount <= 1 ? 1.0 : Math.max(0.4, 1.0 - task.iterationCount * 0.15))
+        : status === "failed" ? 0.0 : 0.3;
+      const taskSkills = registryMatchSkills(
+        snapshot.company.id,
+        task.assignedRole,
+        `${task.title} ${task.description}`,
+      );
+      for (const skill of taskSkills) {
+        updateSuccessRate(skill.id, skillOutcome);
+      }
     }
   }
 }
@@ -4486,8 +4483,12 @@ export async function executeBeatTask(
   }
 
   const role = ctx.role;
-  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority}`, {
-    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone },
+
+  // Spec 14: match skills relevant to this task and record usage
+  const matchedSkillIds = matchAndRecordSkills(role, `${task.title} ${task.description}`);
+
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority} matchedSkills=${matchedSkillIds.length}`, {
+    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, matchedSkillIds },
   });
 
   // ── CEO beat: sprint lifecycle detection ──────────────────

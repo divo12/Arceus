@@ -1,7 +1,7 @@
 ---
 name: apple-design-system
 description: Apple-inspired design system with cinematic layouts, SF Pro typography, binary light/dark sections, single accent color. Include design direction in your technical plan.
-role: cto
+role: ui_designer
 ---
 
 # Apple Design System Inspiration
