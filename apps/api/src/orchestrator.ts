@@ -39,6 +39,7 @@ import {
   type QAFinding,
 } from "./sprint-review";
 import { runVerificationGate } from "./verification-gate";
+import { scaffoldProductWorkspace, STYLE_GUIDE_MD } from "./workspace-scaffold";
 
 // ---------------------------------------------------------------------------
 // Reactive event emitter — wired to HeartbeatEngine.emitEvent() by server.ts
@@ -2491,17 +2492,20 @@ function buildDeveloperBeatPrompt(task: Task, existingFiles?: string[]) {
       lines.push(`... and ${existingFiles.length - 100} more`);
     }
   } else {
-    lines.push("", `# Existing files in workspace`, `No files found — this is a fresh workspace. Scaffold a new project.`);
+    lines.push("", `# Existing files in workspace`, `No files found — this is a fresh workspace. The project will be auto-scaffolded.`);
   }
 
   lines.push(
     "",
     `# Instructions`,
     `You are a software developer. IMPLEMENT this task by writing real code using your tools.`,
+    `The workspace is pre-configured with: Vite + React 18 + TypeScript + Tailwind CSS 3 + shadcn/ui utilities.`,
+    `Design tokens and a style guide are in design/style-guide.md — follow them.`,
+    `The cn() utility is at src/lib/utils.ts — use it for conditional class merging.`,
     `1. Read existing files in the workspace to understand the current codebase.`,
     `2. Write or edit files to implement the task requirements.`,
-    `3. If this is the first task and no project exists, scaffold one (e.g. npm create vite@latest . -- --template react-ts).`,
-    `4. Install dependencies with npm install if needed.`,
+    `3. Create components as separate files in src/components/ — NOT everything in App.tsx.`,
+    `4. Do NOT run npm create vite, do NOT reconfigure Tailwind — it's already set up.`,
     `5. Do NOT start a dev server — preview is handled separately.`,
     `6. After writing code, briefly summarize what you implemented.`,
   );
@@ -4023,10 +4027,13 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
 
     const decompositionPrompt = [
       "Break the following technical plan into 2-4 sequential IMPLEMENTATION steps for a frontend developer.",
-      "IMPORTANT: The base project is ALREADY scaffolded (Vite + React TypeScript + npm install done). Do NOT include any setup/scaffold step.",
+      "IMPORTANT: The base project is ALREADY scaffolded with Vite + React 18 + TypeScript + Tailwind CSS 3 + PostCSS + shadcn/ui utilities.",
+      "Tailwind config, PostCSS config, tsconfig, vite.config.ts, index.html, src/main.tsx, src/App.tsx, src/index.css (with design tokens), and src/lib/utils.ts (cn() helper) already exist.",
+      "A style guide is at design/style-guide.md. Do NOT include any setup/scaffold/install step.",
       "IMPORTANT: Do NOT include any step that runs the app (npm run dev, npm start, etc). Running the app is handled separately.",
       "IMPORTANT: All React component files MUST use .tsx extension, NEVER .jsx. This ensures TypeScript catches undeclared variables and missing imports.",
       "The developer ONLY writes code. Verification is compile-only (npm run build + tsc --noEmit).",
+      "Components should be created as separate files in src/components/ — NOT everything in App.tsx.",
       "Start from building the first UI component. Keep steps small and focused.",
       "Each step must be independently executable and verifiable.",
       "CRITICAL: The LAST step MUST be an integration/wiring step that imports ALL components into the app entry point (src/main.tsx or src/App.tsx) and renders them together in a cohesive layout. This step ensures nothing is left as an orphan file. Its expectedFiles MUST include the entry point file.",
@@ -4045,8 +4052,8 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
     const parsed = JSON.parse(jsonStr);
     if (Array.isArray(parsed) && parsed.length >= 1) {
       return parsed.slice(0, orchestratorConfig.developer.maxSteps).map((s: any, i: number) => ({
-        index: i + 2, // starts at 2 because step 1 is scaffold
-        title: String(s.title ?? `Step ${i + 2}`),
+        index: i + 1, // starts at 1 — scaffold is done programmatically
+        title: String(s.title ?? `Step ${i + 1}`),
         instruction: String(s.instruction ?? ""),
         verifyCommand: "npx tsc --noEmit && npm run build",  // type-check then compile
         expectedFiles: Array.isArray(s.expectedFiles) ? s.expectedFiles.map(String) : [],
@@ -4058,9 +4065,9 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
 
   // Fallback: single step with the whole plan + npm run build verify
   return [{
-    index: 2,
+    index: 1,
     title: "Implement full CTO spec",
-    instruction: `Implement the following plan. The Vite project is already scaffolded.\n\n${planText}`,
+    instruction: `Implement the following plan. The Vite + React + Tailwind project is already scaffolded with design tokens and cn() utility. Create components in src/components/. Read design/style-guide.md for the visual style.\n\n${planText}`,
     verifyCommand: "npx tsc --noEmit && npm run build",
     expectedFiles: ["src/App.tsx"],
   }];
@@ -4167,6 +4174,19 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
   updateRoleMemory("developer", ["Implement approved spec", `Company workspace: ${productDir}`]);
   setTaskStatus(activeExecution.buildTaskId, "in_progress");
 
+  // ── Programmatic scaffold — deterministic, no LLM involved ──
+  emitEmployeeActivity("developer", "working", "Scaffolding workspace (Vite + React + Tailwind + shadcn/ui)…", {
+    taskId: activeExecution.buildTaskId,
+  });
+  const scaffoldResult = await scaffoldProductWorkspace(productDir, "product-app");
+  if (scaffoldResult.scaffolded) {
+    emitEmployeeActivity("developer", "info", "Workspace scaffolded: Vite + React + TypeScript + Tailwind CSS + shadcn/ui utilities.");
+  } else if (scaffoldResult.error) {
+    emitEmployeeActivity("developer", "info", `Scaffold skipped/partial: ${scaffoldResult.error}`);
+  } else {
+    emitEmployeeActivity("developer", "info", "Workspace already scaffolded — skipping.");
+  }
+
   // ── Build system prompt ──
   const devSkillBody = getSkillBody("developer");
   const devSystemPrompt = [
@@ -4175,27 +4195,27 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
     buildSkillMenu("developer"),
     devSkillBody,
     "",
-    "# Skill Usage (MANDATORY)",
-    "You MUST follow the **frontend-web-app** skill for project setup, framework choice (Vite + React), and port configuration (3210).",
-    "CRITICAL: Always use .tsx file extensions for React components, NEVER .jsx. TypeScript catches errors that JSX silently misses.",
-    "For visual design: strictly follow the CTO's technical plan.",
+    "# Project Setup (ALREADY DONE — do NOT repeat)",
+    "The workspace is pre-configured with: Vite + React 18 + TypeScript + Tailwind CSS 3 + PostCSS + shadcn/ui utilities.",
+    `Port: ${previewConfig.port}. vite.config.ts, tailwind.config.js, postcss.config.js, tsconfig.json are all set up.`,
+    "The cn() utility is at src/lib/utils.ts — use it for conditional class merging.",
+    "Design tokens (CSS custom properties) are defined in src/index.css — use them via Tailwind or var().",
+    "Do NOT run \`npm create vite\`, do NOT reinstall Tailwind, do NOT recreate config files.",
+    "CRITICAL: Always use .tsx file extensions for React components, NEVER .jsx.",
+    "",
+    "# Style Guide (MANDATORY — follow exactly)",
+    STYLE_GUIDE_MD,
     "",
     "# UI Quality Standards (NON-NEGOTIABLE)",
     "Every component you write MUST be visually polished. No bare unstyled HTML.",
-    "Apply these rules to EVERY component:",
-    "- Use Tailwind CSS utility classes for all styling. Install and configure tailwindcss, postcss, autoprefixer.",
-    "- Use a modern color palette with CSS custom properties as fallback.",
-    "- All text must have proper font-family, font-size, line-height, and color.",
-    "- All containers must have proper padding (p-4/p-6), rounded corners (rounded-lg/rounded-xl), and background.",
-    "- Buttons must have hover states (hover:bg-*), focus rings (focus:ring-2), proper padding, cursor:pointer.",
-    "- Forms must have styled inputs with padding, border, rounded corners, focus:ring, placeholder text.",
+    "- Use Tailwind CSS utility classes. The design tokens are pre-loaded as CSS variables.",
+    "- Cards: bg-white rounded-xl shadow-sm p-6 border border-[--color-border-light]",
+    "- Inputs: w-full px-4 py-2.5 rounded-lg border border-[--color-border] focus:ring-2 focus:ring-[--color-accent]",
+    "- Buttons: px-5 py-2.5 rounded-lg transition-all active:scale-[0.98]",
     "- Use flexbox/grid for layout — never rely on browser defaults.",
-    "- Add smooth transitions (transition-all duration-200) to interactive elements.",
-    "- Include loading skeletons (animate-pulse) for async content.",
-    "- The index.css or global stylesheet MUST set body { margin:0; font-family; background-color; color }.",
-    "- Add micro-animations: button scale on hover (hover:scale-105), fade-in for page content.",
-    "- Empty states must have helpful illustrations or messages, not blank screens.",
-    "- Error states must be friendly and actionable, not raw error dumps.",
+    "- Add transitions (transition-all duration-200) to interactive elements.",
+    "- Empty states: friendly message with icon, not blank screens.",
+    "- Create separate component files in src/components/ — NOT everything in App.tsx.",
     "",
     "# Scope Discipline",
     "Only build what the CTO plan and acceptance criteria ask for.",
@@ -4209,27 +4229,9 @@ async function startDeveloperPhase(snapshot: CompanySnapshot) {
   });
   const implSteps = await decomposePlanIntoSteps(activeExecution.planText);
 
-  // ── Build full step list: hardcoded scaffold + decomposed impl steps ──
-  const scaffoldStep: DevStep = {
-    index: 1,
-    title: "Scaffold Vite + React project",
-    instruction: [
-      `cd ${productDir}`,
-      `Run: npm create vite@latest . -- --template react-ts (this uses .tsx — NEVER create .jsx files)`,
-      `Then edit vite.config.ts to set:`,
-      `  server: { port: ${previewConfig.port}, host: '127.0.0.1' }`,
-      `Then run: npm install`,
-      `Do NOT run npm run dev or npm start — the preview phase handles that.`,
-      ...(orchestratorConfig.demoMode ? [
-        "",
-        `CRITICAL: This is a FRONTEND-ONLY app. No Express, no backend, no server.js, no API routes.`,
-      ] : []),
-    ].join("\n"),
-    verifyCommand: "",
-    expectedFiles: ["package.json", "vite.config.ts", "index.html"],
-  };
-
-  const allSteps = [scaffoldStep, ...implSteps];
+  // ── Build full step list: scaffold is done programmatically, only impl steps ──
+  // Re-index impl steps to start from 1 (scaffold is no longer an LLM step)
+  const allSteps = implSteps.map((step, i) => ({ ...step, index: i + 1 }));
   const totalSteps = allSteps.length;
   const skippedSteps: Array<{ index: number; title: string; error: string }> = [];
 
