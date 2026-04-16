@@ -18,3 +18,23 @@
     - gate sprint_proposal checklist emission on previous sprint = closed so CEO doesn't burn beats on ineligible work
     - piggyback CTO review gate onto the last developer beat instead of a separate step
   - need a visible "sprint transition" timeline in UI so this stops feeling like a blackbox (phase, current actor, waiting-on, ETA)
+- "git tag sprint-N failed: fatal: Failed to resolve 'HEAD' as a valid ref" — fires every sprint
+  - observed on sprint-1, sprint-2, sprint-3 (inbox shows one error per completed sprint)
+  - confirmed via filesystem: /Users/divyansh/Arceus/workspace/.git says "fatal: your current branch 'main' does not have any commits yet"
+  - root cause: the workspace repo has NO commits because the developer beat never calls commitAndSync
+    - ensureLocal → ensureGitRepository (git-ops.ts:35-48) creates .git and .gitkeep but does not commit — HEAD absent
+    - syncWorkspaceCheckpoint (orchestrator.ts:779) is the only wrapper around commitAndSync
+    - syncWorkspaceCheckpoint is called in EXACTLY ONE place — orchestrator.ts:3007 for skills_lead only
+    - the developer beat (which actually writes files) never calls it
+    - sprint end → tagCurrentSprintSnapshot → workspaceManager.tagSprint → tagWorkspace → git tag on empty HEAD → throws
+  - secondary consequence (silent data loss): tagWorkspace throws before the rest of tagSprint runs, so each failed sprint also skips
+    - Supabase bundle upload (sprint-N.bundle)
+    - sprint_snapshots DB row insert
+    - in-memory fallback snapshot update
+    - rollback / sprint-diff / export features have no data
+  - contrast: createBundleFromWorkspace (git-ops.ts:80-90) already defends against empty HEAD with an auto-commit fallback; tagWorkspace is missing the same guard
+  - proposed fixes:
+    - Fix 1 (tactical, 3 LOC): add `if (!(await getHeadSha(workspacePath))) await commitAllChanges(...)` guard to tagWorkspace (git-ops.ts:99) — stops the error today
+    - Fix 2 (strategic): add `syncWorkspaceCheckpoint(task.id, "developer", message)` call to the developer beat completion path (same spot that fires tryAutoPreview). Restores the "commit per task, tag per sprint" design from Spec 08
+    - Fix 3 (cleanup): hoist the HEAD guard into ensureGitRepository so every downstream call (diffWorkspaceRefs, etc.) is safe
+  - recommended: Fix 1 + Fix 2 together — Fix 1 unblocks the error, Fix 2 closes the underlying "developer work is never versioned" root cause
