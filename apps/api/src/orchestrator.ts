@@ -17,6 +17,7 @@ import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCan
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
 import { persistRuntimeArtifact } from "./artifact-persistence";
+import { describePgError } from "./pg-errors";
 import { workspaceManager } from "./workspace-manager";
 import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "./azure-openai";
 import { cpCommitTaskResult, cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "./control-plane";
@@ -838,90 +839,134 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
  * After a sprint completes, triggers the CEO to auto-propose Sprint N+1 via LLM.
  * If auto-approve is enabled and this isn't a board-review sprint, the proposal is
  * approved immediately without waiting for the board.
+ *
+ * Concurrency: guarded by `ceoProposalInFlight`. `triggerCeoSprintProposal` can be
+ * invoked from three paths (finalizeSprintCompletion, the CEO heartbeat beat's
+ * all-terminal detector, and the CEO checklist action), and all three can fire
+ * within the same beat window once a sprint becomes `completed`. Without the
+ * in-flight lock, two racers both pass the wait-gate and the duplicate-guard
+ * (the chat message isn't appended until after the LLM returns), both pay for a
+ * CEO LLM call, and the second caller's `approveSprintProposal` throws with
+ * "execution is 'executing'" because the first caller has already started
+ * Sprint N+1 via `beginSprintExecution`. The lock drops the loser cheaply with
+ * an info log — a second proposal for the same sprint is always redundant.
  */
+let ceoProposalInFlight = false;
+
 async function triggerCeoSprintProposal(): Promise<void> {
-  // Ensure the current sprint is marked complete before proposing a new one
-  await checkSprintCompletion();
-
-  const snapshot = getSnapshot();
-
-  // Duplicate guard: if a sprint_proposal card already exists for the current sprint,
-  // try to auto-approve it instead of generating a new one.
-  const existingProposal = snapshot.chatMessages.find(
-    (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
-  );
-  if (existingProposal) {
-    const card = existingProposal.cardData as CeoCard | null;
-    if (card?.sprint_proposal && orchestratorConfig.sprint.autoApproveProposals) {
-      const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
-      const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
-      const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
-      if (!needsBoardReview) {
-        executionStatus = "done";
-        emitEmployeeActivity("ceo", "info", `Re-approving existing Sprint ${nextSprintNumber} proposal.`);
-        await approveSprintProposal(card);
-      }
-    }
+  if (ceoProposalInFlight) {
+    emitEmployeeActivity(
+      "ceo",
+      "info",
+      "CEO proposal already in flight — skipping duplicate trigger.",
+    );
     return;
   }
-
-  // Set execution status so CEO stage infers as "between_sprints"
-  executionStatus = "done";
-
+  ceoProposalInFlight = true;
   try {
-    const ceoPrompt = buildCeoOperatingPrompt(snapshot, executionStatus);
-    const ceoResponse = await structuredCompletion(
-      "ceoDeployment",
-      [
-        { role: "system", content: ceoPrompt },
-        { role: "user", content: "The previous sprint has completed. Analyze the results and propose the next sprint. Include sprint goal, key tasks with assigned roles and dependencies, carried-forward items, risks, and rationale." },
-      ],
-      z.object({ response: z.string() }),
-      "ceo_sprint_proposal",
-    );
+    // Ensure the current sprint is marked complete before proposing a new one
+    await checkSprintCompletion();
 
-    const ceoText = ceoResponse.response;
-    const card = await classifyCeoResponse(ceoText, snapshot, executionStatus);
+    const snapshot = getSnapshot();
 
-    // Append CEO message to chat
-    appendChatMessage({
-      id: `chat_${crypto.randomUUID()}`,
-      companyId: snapshot.company.id,
-      sprintId: snapshot.company.currentSprintId,
-      agentId: getAgentByRole(snapshot, "ceo")?.id ?? null,
-      role: "ceo",
-      content: ceoText,
-      cardType: card.card_type,
-      cardData: card,
-      createdAt: nowIso(),
-    });
-
-    // Determine if this sprint should auto-approve or wait for board review
-    const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
-    const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
-    const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
-
-    if (orchestratorConfig.sprint.autoApproveProposals && !needsBoardReview && card.sprint_proposal) {
+    // Wait gate: don't propose a new sprint while the current one is still in-flight
+    // (planned / executing / reviewing). Emits info (not error) so the inbox stays
+    // clean, and skips the LLM call that would otherwise be rejected at the
+    // approveSprintProposal gate. CEO beat will retry once the sprint closes.
+    const inFlightSprint = snapshot.company.currentSprintId
+      ? snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId)
+      : null;
+    if (inFlightSprint && inFlightSprint.status !== "completed") {
       emitEmployeeActivity(
         "ceo",
         "info",
-        `CEO proposed Sprint ${nextSprintNumber}. Auto-approving (board review scheduled for Sprint ${Math.ceil(nextSprintNumber / cadence) * cadence}).`,
+        `CEO waiting — Sprint ${inFlightSprint.number} is "${inFlightSprint.status}". Next proposal will fire once it closes.`,
       );
-      await approveSprintProposal(card);
-    } else {
-      const reason = needsBoardReview
-        ? `CEO proposed Sprint ${nextSprintNumber}. Board review required (every ${cadence} sprints). Awaiting board approval.`
-        : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
-      emitEmployeeActivity("ceo", "info", reason);
+      return;
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[Sprint] CEO sprint proposal generation failed:", message);
-    emitEmployeeActivity(
-      "system",
-      "error",
-      `Failed to auto-generate sprint proposal: ${message}. Board can message the CEO directly to request a proposal.`,
+
+    // Duplicate guard: if a sprint_proposal card already exists for the current sprint,
+    // try to auto-approve it instead of generating a new one.
+    const existingProposal = snapshot.chatMessages.find(
+      (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
     );
+    if (existingProposal) {
+      const card = existingProposal.cardData as CeoCard | null;
+      if (card?.sprint_proposal && orchestratorConfig.sprint.autoApproveProposals) {
+        const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
+        const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
+        const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
+        if (!needsBoardReview) {
+          executionStatus = "done";
+          emitEmployeeActivity("ceo", "info", `Re-approving existing Sprint ${nextSprintNumber} proposal.`);
+          await approveSprintProposal(card);
+        }
+      }
+      return;
+    }
+
+    // Set execution status so CEO stage infers as "between_sprints"
+    executionStatus = "done";
+
+    try {
+      const ceoPrompt = buildCeoOperatingPrompt(snapshot, executionStatus);
+      const ceoResponse = await structuredCompletion(
+        "ceoDeployment",
+        [
+          { role: "system", content: ceoPrompt },
+          { role: "user", content: "The previous sprint has completed. Analyze the results and propose the next sprint. Include sprint goal, key tasks with assigned roles and dependencies, carried-forward items, risks, and rationale." },
+        ],
+        z.object({ response: z.string() }),
+        "ceo_sprint_proposal",
+      );
+
+      const ceoText = ceoResponse.response;
+      const card = await classifyCeoResponse(ceoText, snapshot, executionStatus);
+
+      // Append CEO message to chat
+      appendChatMessage({
+        id: `chat_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId: snapshot.company.currentSprintId,
+        agentId: getAgentByRole(snapshot, "ceo")?.id ?? null,
+        role: "ceo",
+        content: ceoText,
+        cardType: card.card_type,
+        cardData: card,
+        createdAt: nowIso(),
+      });
+
+      // Determine if this sprint should auto-approve or wait for board review
+      const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
+      const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
+      const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
+
+      if (orchestratorConfig.sprint.autoApproveProposals && !needsBoardReview && card.sprint_proposal) {
+        emitEmployeeActivity(
+          "ceo",
+          "info",
+          `CEO proposed Sprint ${nextSprintNumber}. Auto-approving (board review scheduled for Sprint ${Math.ceil(nextSprintNumber / cadence) * cadence}).`,
+        );
+        await approveSprintProposal(card);
+      } else {
+        const reason = needsBoardReview
+          ? `CEO proposed Sprint ${nextSprintNumber}. Board review required (every ${cadence} sprints). Awaiting board approval.`
+          : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
+        emitEmployeeActivity("ceo", "info", reason);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      console.error("[Sprint] CEO sprint proposal generation failed:", message);
+      emitEmployeeActivity(
+        "system",
+        "error",
+        `Failed to auto-generate sprint proposal: ${message}. Board can message the CEO directly to request a proposal.`,
+      );
+    }
+  } finally {
+    // Always clear the in-flight flag — even on throw — so a crashed proposal
+    // can't deadlock the next sprint cycle.
+    ceoProposalInFlight = false;
   }
 }
 
@@ -1162,20 +1207,20 @@ async function executeSprintReviewVerification(
         reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
       }));
 
-      // Persist a QA report artifact
-      const artifact = {
+      // Persist a QA report artifact (Spec 08 — sprint/task/fileReferences flow
+      // through to the hippocampus.artifacts row via the expanded
+      // PersistedRuntimeArtifact shape).
+      await persistRuntimeArtifact(snapshot.company.id, {
         id: `artifact_${crypto.randomUUID()}`,
-        companyId: snapshot.company.id,
-        sprintId,
-        taskId: null,
-        agentRole: "tester",
-        kind: "qa_report" as const,
+        agent: "tester",
+        kind: "qa_report",
         title: `Sprint ${sprint.number} QA Report — PASS`,
         content: output ?? "Verification passed",
-        fileReferences: (qaReport?.testFilesWritten ?? []).map((f) => ({ path: f, action: "created" })),
         createdAt: nowIso(),
-      };
-      await persistRuntimeArtifact(snapshot.company.id, artifact as any);
+        sprintId,
+        taskId: null,
+        fileReferences: (qaReport?.testFilesWritten ?? []).map((f) => ({ path: f, action: "created" })),
+      });
 
       return { summary: `Tester verification PASS for Sprint ${sprint.number}`, tokensUsed, actionsCount: 1, toolCalls: 1 };
 
@@ -1274,20 +1319,18 @@ async function executeSprintReviewVerification(
         emitReactive(bugRole, "bug_reported");
       }
 
-      // Persist QA report artifact
-      const artifact = {
+      // Persist QA report artifact (FAIL branch — same expanded shape as PASS)
+      await persistRuntimeArtifact(snapshot.company.id, {
         id: `artifact_${crypto.randomUUID()}`,
-        companyId: snapshot.company.id,
-        sprintId,
-        taskId: null,
-        agentRole: "tester",
-        kind: "qa_report" as const,
+        agent: "tester",
+        kind: "qa_report",
         title: `Sprint ${sprint.number} QA Report — FAIL (cycle ${updatedReviewState.reworkCycleCount})`,
         content: output ?? "Verification failed",
-        fileReferences: [],
         createdAt: nowIso(),
-      };
-      await persistRuntimeArtifact(snapshot.company.id, artifact as any);
+        sprintId,
+        taskId: null,
+        fileReferences: [],
+      });
 
       return {
         summary: `Tester verification FAIL for Sprint ${sprint.number} — ${newBugTaskIds.length - reviewState.bugTaskIds.length} new bugs filed`,
@@ -2221,7 +2264,7 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           taskTitle: task.title,
           role: task.assignedRole,
         }).catch((err) => {
-          console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${err instanceof Error ? err.message : err}`);
+          console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${describePgError(err)}`);
         });
       }
     }
@@ -3598,7 +3641,7 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
       habitCount = ctx.habits.length;
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown error";
+    const msg = describePgError(err);
     console.warn(`[Hippocampus] Memory retrieval failed for ${role}, continuing without: ${msg}`);
     emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }

@@ -1,11 +1,23 @@
 import "./load-env";
-import { boolean, doublePrecision, integer, jsonb, pgTable, real, text, timestamp, uuid, vector } from "drizzle-orm/pg-core";
+import { boolean, doublePrecision, integer, jsonb, pgSchema, pgTable, real, text, timestamp, uuid, vector } from "drizzle-orm/pg-core";
+
+// Honor ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA (falls back to ARCEUS_DB_SCHEMA, then "public").
+// Migration 001b_fix_schema.sql moved these tables into the `hippocampus` schema,
+// so plain pgTable(...) without schema would emit queries against public and throw
+// 42P01 (relation does not exist). Mirror the pattern from tables.ts.
+const configuredSchemaName =
+  process.env.ARCEUS_DB_SCHEMA?.trim() ||
+  process.env.ARCEUS_HIPPOCAMPUS_POSTGRES_SCHEMA?.trim() ||
+  "public";
+
+const hippocampusSchema = configuredSchemaName === "public" ? null : pgSchema(configuredSchemaName);
+const defineTable: (name: string, columns: any) => any = hippocampusSchema ? hippocampusSchema.table.bind(hippocampusSchema) : pgTable;
 
 /**
  * memory_units — Core storage for agent memories with vector embeddings.
  * Uses Drizzle's native vector(384) column for all-MiniLM-L6-v2 embeddings.
  */
-export const memoryUnitsTable = pgTable("memory_units", {
+export const memoryUnitsTable = defineTable("memory_units", {
   id: uuid("id").primaryKey().defaultRandom(),
   companyId: uuid("company_id").notNull(),
   agentId: uuid("agent_id").notNull(),
@@ -31,7 +43,7 @@ export const memoryUnitsTable = pgTable("memory_units", {
 /**
  * habits — Procedural memory. Behavioral patterns agents develop over time.
  */
-export const habitsTable = pgTable("habits", {
+export const habitsTable = defineTable("habits", {
   id: text("id").primaryKey(),
   companyId: text("company_id").notNull(),
   agentId: text("agent_id").notNull(),
@@ -49,7 +61,7 @@ export const habitsTable = pgTable("habits", {
 /**
  * priming_state — Emotional/confidence state per agent. One row per agent.
  */
-export const primingStateTable = pgTable("priming_state", {
+export const primingStateTable = defineTable("priming_state", {
   agentId: text("agent_id").primaryKey(),
   companyId: text("company_id").notNull(),
   confidence: doublePrecision("confidence").notNull().default(0.5),

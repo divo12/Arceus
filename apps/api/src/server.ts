@@ -277,6 +277,7 @@ app.delete("/api/company", async (request, reply) => {
   try {
     const companyId = getSnapshot().company.id;
     await resetOrchestratorState();
+    heartbeatEngine.reset();
     const warnings = companyId === "company_pending"
       ? []
       : (await workspaceManager.archive(companyId)).warnings;

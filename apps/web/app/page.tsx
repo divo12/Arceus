@@ -1769,7 +1769,7 @@ export default function Page() {
       title: `Error from ${ev.employee}`,
       detail: ev.content.slice(0, 120),
       time: formatRelativeTime(ev.timestamp),
-      href: "/activity",
+      href: "/logs",
     });
   }
 
@@ -1802,8 +1802,14 @@ export default function Page() {
     });
   }
 
-  // Execution done notice
-  if (executionStatus === "done") {
+  // Execution done notice — suppress while a sprint is in flight.
+  // Backend reuses executionStatus="done" as a between-sprints signal
+  // (orchestrator.ts:869, 5027) so the CEO stage inference lands on
+  // "between_sprints". Don't surface that transient state as a terminal banner
+  // when a sprint is still being created, executed, or reviewed.
+  const hasInFlightSprint = snapshot.sprints.some((s) => s.status !== "completed");
+  const hasCompletedSprint = snapshot.sprints.some((s) => s.status === "completed");
+  if (executionStatus === "done" && !hasInFlightSprint && hasCompletedSprint) {
     inboxItems.push({
       id: "exec-done",
       kind: "info",

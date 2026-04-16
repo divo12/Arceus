@@ -465,13 +465,58 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
     "MANDATORY hierarchy: ceo manages cto and marketing ONLY. cto manages pm, developer, tester, ui_designer, and skills_lead. pm may manage developer, tester, or ui_designer. Never place pm, developer, tester, ui_designer, or skills_lead directly under ceo.",
   ].join("\n");
 
-  return structuredCompletion(
-    "ceoDeployment",
-    [
-      { role: "system", content: buildCeoOperatingPrompt(snapshot) },
-      { role: "user", content: userPrompt },
-    ],
-    strategyOutputSchema,
-    "strategy_output",
-  );
+  const messages = [
+    { role: "system" as const, content: buildCeoOperatingPrompt(snapshot) },
+    { role: "user" as const, content: userPrompt },
+  ];
+
+  try {
+    return await structuredCompletion(
+      "ceoDeployment",
+      messages,
+      strategyOutputSchema,
+      "strategy_output",
+    );
+  } catch (err: unknown) {
+    // Self-heal hierarchy violations: retry once with the specific violations
+    // echoed back to the model. This unblocks single-token LLM drifts without
+    // loosening the policy schema.
+    const zodIssues = extractZodIssues(err);
+    const hierarchyViolations = zodIssues.filter(
+      (issue) => Array.isArray(issue.path) && issue.path.includes("parent_role"),
+    );
+    if (hierarchyViolations.length === 0) throw err;
+
+    const violationLines = hierarchyViolations
+      .map((issue) => `- roles[${issue.path[1]}].parent_role: ${issue.message}`)
+      .join("\n");
+
+    const retryPrompt = [
+      "Your previous strategy violated hierarchy policy:",
+      violationLines,
+      "",
+      "Re-emit the strategy with corrected parent_role values. Each parent_role MUST",
+      "appear in that manager's allowed list. Do not change role names — only fix",
+      "parent_role fields as needed. Keep all other content identical.",
+    ].join("\n");
+
+    return structuredCompletion(
+      "ceoDeployment",
+      [...messages, { role: "user" as const, content: retryPrompt }],
+      strategyOutputSchema,
+      "strategy_output",
+    );
+  }
+}
+
+/** Extract Zod issues from a thrown error, whether direct ZodError or wrapped. */
+function extractZodIssues(err: unknown): Array<{ path: Array<string | number>; message: string }> {
+  if (err && typeof err === "object") {
+    const anyErr = err as { issues?: unknown; cause?: { issues?: unknown } };
+    const issues = (anyErr.issues ?? anyErr.cause?.issues) as unknown;
+    if (Array.isArray(issues)) {
+      return issues as Array<{ path: Array<string | number>; message: string }>;
+    }
+  }
+  return [];
 }

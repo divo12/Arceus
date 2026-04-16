@@ -1,14 +1,21 @@
 import { desc, eq } from "drizzle-orm";
 import { artifactsTable, getDb, isDatabaseConfigured } from "@arceus/db";
 import { uploadArtifactPayload } from "./supabase-storage";
+import { describePgError } from "./pg-errors";
 
 export type PersistedRuntimeArtifact = {
   id: string;
   agent: string;
-  kind: "plan" | "code" | "output" | "specification";
+  kind: "plan" | "code" | "output" | "specification" | "qa_report";
   title: string;
   content: string;
   createdAt: string;
+  /** Optional sprint linkage — carried into the artifacts row when present. */
+  sprintId?: string | null;
+  /** Optional task linkage — carried into the artifacts row when present. */
+  taskId?: string | null;
+  /** Optional file references (e.g. tester-written test files) — defaults to []. */
+  fileReferences?: unknown[];
 };
 
 export async function persistRuntimeArtifact(companyId: string, artifact: PersistedRuntimeArtifact) {
@@ -17,27 +24,35 @@ export async function persistRuntimeArtifact(companyId: string, artifact: Persis
   }
 
   if (isDatabaseConfigured()) {
-    await getDb()
-      .insert(artifactsTable)
-      .values({
-        id: artifact.id,
-        companyId,
-        sprintId: null,
-        taskId: null,
-        agentRole: artifact.agent,
-        kind: artifact.kind,
-        title: artifact.title,
-        content: artifact.content,
-        fileReferences: [],
-        createdAt: new Date(artifact.createdAt),
-      })
-      .onConflictDoUpdate({
-        target: artifactsTable.id,
-        set: {
+    try {
+      await getDb()
+        .insert(artifactsTable)
+        .values({
+          id: artifact.id,
+          companyId,
+          sprintId: artifact.sprintId ?? null,
+          taskId: artifact.taskId ?? null,
+          agentRole: artifact.agent,
+          kind: artifact.kind,
           title: artifact.title,
           content: artifact.content,
-        },
-      });
+          fileReferences: artifact.fileReferences ?? [],
+          createdAt: new Date(artifact.createdAt),
+        })
+        .onConflictDoUpdate({
+          target: artifactsTable.id,
+          set: {
+            title: artifact.title,
+            content: artifact.content,
+          },
+        });
+    } catch (err) {
+      // Best-effort persistence — log with SQLSTATE/detail so the root cause
+      // is visible instead of Drizzle's generic "Failed query:" wrapper.
+      console.warn(
+        `[artifact-persistence] insert failed for ${artifact.id}: ${describePgError(err)}`,
+      );
+    }
   }
 
   try {
@@ -61,6 +76,9 @@ export async function listPersistedArtifacts(companyId: string): Promise<Persist
       title: row.title,
       content: row.content,
       createdAt: row.createdAt.toISOString(),
+      sprintId: row.sprintId ?? null,
+      taskId: row.taskId ?? null,
+      fileReferences: Array.isArray(row.fileReferences) ? row.fileReferences : [],
     }));
   } catch {
     return [];

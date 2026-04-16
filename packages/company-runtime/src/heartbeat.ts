@@ -377,6 +377,19 @@ export class HeartbeatEngine {
     };
   }
 
+  /**
+   * Clear per-company state when the company is reset.
+   * Keeps the scheduler running and retains config/locks so the next company
+   * inherits a warm scheduler without a restart. Safe to call repeatedly.
+   */
+  reset() {
+    this.beatCounter = 0;
+    this.beatHistory.length = 0;
+    this.lastBeatAt.clear();
+    this.stagedMutations = [];
+    this.eventQueue.clear();
+  }
+
   // ── Scheduler tick ───────────────────────────────────────
 
   /** Role priority weights: lower = higher priority. */
