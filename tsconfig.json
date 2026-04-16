@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["apps/web/app", "apps/web/components", "apps/web/lib"]
 }

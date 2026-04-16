@@ -421,7 +421,7 @@ export async function probePreviewHealth(timeoutMs = 5000): Promise<{
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    const res = await fetch(url, { method: "GET", signal: controller.signal, headers: { "Accept": "text/html,*/*" } });
     clearTimeout(timer);
     return { reachable: res.ok, statusCode: res.status, error: res.ok ? null : `HTTP ${res.status}` };
   } catch (err) {

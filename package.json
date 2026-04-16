@@ -25,18 +25,25 @@
     "vite": "^8.0.4"
   },
   "dependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/express-fileupload": "^1.5.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/react-router-dom": "^5.3.3",
+    "@types/uuid": "^10.0.0",
+    "autoprefixer": "^10.5.0",
     "body-parser": "^2.2.2",
+    "cors": "^2.8.6",
     "csv-parse": "^6.2.1",
     "express": "^5.2.1",
     "express-fileupload": "^1.5.2",
+    "postcss": "^8.5.10",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-router-dom": "^7.14.0",
-    "ts-node": "^10.9.2"
+    "tailwindcss": "^4.2.2",
+    "ts-node": "^10.9.2",
+    "uuid": "^13.0.0"
   }
 }

@@ -1,0 +1,14 @@
+import { jsx as _jsx } from "react/jsx-runtime";
+import * as React from "react";
+import { cn } from "../../lib/utils";
+const Card = React.forwardRef(({ className, ...props }, ref) => (_jsx("div", { ref: ref, className: cn("border border-[var(--swiss-gray-100)] bg-[var(--swiss-white)]", className), ...props })));
+Card.displayName = "Card";
+const CardHeader = React.forwardRef(({ className, ...props }, ref) => (_jsx("div", { ref: ref, className: cn("flex flex-col gap-1 p-5", className), ...props })));
+CardHeader.displayName = "CardHeader";
+const CardTitle = React.forwardRef(({ className, ...props }, ref) => (_jsx("h3", { ref: ref, className: cn("text-[0.9375rem] font-semibold tracking-[-0.01em]", className), ...props })));
+CardTitle.displayName = "CardTitle";
+const CardDescription = React.forwardRef(({ className, ...props }, ref) => (_jsx("p", { ref: ref, className: cn("text-[0.8125rem] text-[var(--swiss-gray-400)]", className), ...props })));
+CardDescription.displayName = "CardDescription";
+const CardContent = React.forwardRef(({ className, ...props }, ref) => (_jsx("div", { ref: ref, className: cn("p-5 pt-0", className), ...props })));
+CardContent.displayName = "CardContent";
+export { Card, CardContent, CardDescription, CardHeader, CardTitle };
