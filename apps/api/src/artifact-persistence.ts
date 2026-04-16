@@ -5,7 +5,7 @@ import { uploadArtifactPayload } from "./supabase-storage";
 export type PersistedRuntimeArtifact = {
   id: string;
   agent: string;
-  kind: "plan" | "code" | "output";
+  kind: "plan" | "code" | "output" | "specification";
   title: string;
   content: string;
   createdAt: string;

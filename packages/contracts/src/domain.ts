@@ -39,6 +39,8 @@ export const artifactKindSchema = z.enum([
   "meeting_note",
   "chat_card",
   "memory_seed",
+  "plan",
+  "output",
   "other"
 ]);
 export const prioritySchema = z.enum(["critical", "high", "medium", "low"]);
@@ -676,6 +678,11 @@ export const verificationGateResultSchema = z.object({
     stderr: z.string(),
     summary: z.string(),
   }).nullable(),
+  previewResult: z.object({
+    reachable: z.boolean(),
+    statusCode: z.number().nullable(),
+    error: z.string().nullable(),
+  }).nullable().optional(),
   phase: z.enum(["pre_review", "final"]),
   timestamp: z.string(),
 });

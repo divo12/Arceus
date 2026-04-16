@@ -1148,9 +1148,22 @@ export default function Page() {
   const [expandedArtifact, setExpandedArtifact] = useState<Artifact | null>(null);
   const [productOverview, setProductOverview] = useState<ProductOverview>(emptyProductOverview);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const [teamOpen, setTeamOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [sprintOpen, setSprintOpen] = useState(false);
+  const [heartbeatStatus, setHeartbeatStatus] = useState<{
+    running: boolean;
+    totalBeats: number;
+    activeLocks: number;
+  } | null>(null);
+  const [heartbeatHistory, setHeartbeatHistory] = useState<Array<{
+    id: string;
+    status: string;
+    outcome: string | null;
+    agentId: string | null;
+    startedAt: string;
+    endedAt: string | null;
+    summary: string | null;
+  }>>([]);
 
   async function loadState(options?: { suppressRuntimeError?: boolean }) {
     const [companyResult, runtimeResult] = await Promise.allSettled([
@@ -1185,11 +1198,13 @@ export default function Page() {
 
   async function loadExecutionTelemetry() {
     try {
-      const [activityResponse, orchestratorResponse, companyResponse, productResponse] = await Promise.all([
+      const [activityResponse, orchestratorResponse, companyResponse, productResponse, heartbeatStatusResponse, heartbeatHistoryResponse] = await Promise.all([
         fetch(apiUrl("/employee-activity"), { cache: "no-store" }),
         fetch(apiUrl("/orchestrator/status"), { cache: "no-store" }),
         fetch(apiUrl("/company"), { cache: "no-store" }),
         fetch(apiUrl("/product/overview"), { cache: "no-store" }),
+        fetch(apiUrl("/heartbeat/status"), { cache: "no-store" }),
+        fetch(apiUrl("/heartbeat/history?limit=30"), { cache: "no-store" }),
       ]);
 
       if (activityResponse.ok) {
@@ -1208,6 +1223,14 @@ export default function Page() {
 
       if (productResponse.ok) {
         setProductOverview((await productResponse.json()) as ProductOverview);
+      }
+
+      if (heartbeatStatusResponse.ok) {
+        setHeartbeatStatus(await heartbeatStatusResponse.json());
+      }
+
+      if (heartbeatHistoryResponse.ok) {
+        setHeartbeatHistory(await heartbeatHistoryResponse.json());
       }
     } catch {
       /* polling fallback should stay silent */
@@ -1845,7 +1868,7 @@ export default function Page() {
   return (
     <div className="flex h-full flex-col">
       {/* ── Status bar (compact) ────────────────────────── */}
-      <header className="flex h-9 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-4">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-5">
         <div className="flex items-center gap-2">
           <span className="text-[0.75rem] font-semibold text-[var(--text-primary)]">
             {snapshot.company.id === "company_pending" ? "Arceus" : snapshot.company.name}
@@ -1935,7 +1958,7 @@ export default function Page() {
                       key={message.id}
                       className={
                         message.role === "board"
-                          ? "ml-auto max-w-[85%] rounded-lg border border-[var(--swiss-gray-200)] bg-[var(--swiss-gray-50)] px-4 py-3 text-[0.8125rem]"
+                          ? "ml-auto max-w-[85%] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/60 px-4 py-3 text-[0.8125rem] backdrop-blur-sm"
                           : message.role === "ceo"
                             ? "max-w-[90%] rounded-lg border border-[var(--swiss-gray-100)] px-4 py-3 text-[0.8125rem]"
                             : "max-w-[90%] rounded-lg border-l-2 border-[var(--swiss-gray-200)] py-2 pl-3 text-[0.8125rem] text-[var(--swiss-gray-400)]"
@@ -2186,44 +2209,70 @@ export default function Page() {
                 ) : null}
               </section>
 
-              {/* ── Team (collapsible) ───────────────────── */}
-              {snapshot.agents.length > 0 ? (
-                <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]">
-                  <button
-                    className="flex w-full items-center justify-between px-5 py-3 text-left"
-                    onClick={() => setTeamOpen((prev) => !prev)}
-                  >
+              {/* ── Heartbeat ────────────────────────────── */}
+              {heartbeatStatus ? (
+                <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-5 py-3">
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-[var(--swiss-gray-400)]" />
-                      <span className="text-[0.8125rem] font-semibold">Team</span>
-                      <span className="text-[0.6875rem] text-[var(--swiss-gray-400)]">{snapshot.agents.length} members</span>
+                      <Zap className="h-3.5 w-3.5 text-[var(--swiss-gray-400)]" />
+                      <span className="text-[0.8125rem] font-semibold">Heartbeat</span>
+                      {heartbeatStatus.running ? (
+                        <span className="flex items-center gap-1 text-[0.6875rem] text-[var(--status-success)]">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--status-success)]" />
+                          Running
+                        </span>
+                      ) : (
+                        <span className="text-[0.6875rem] text-[var(--swiss-gray-400)]">Idle</span>
+                      )}
                     </div>
-                    <ChevronDown
-                      className={`h-4 w-4 text-[var(--swiss-gray-400)] transition-transform ${teamOpen ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                  {teamOpen ? (
-                    <div className="border-t border-[var(--swiss-gray-100)] px-5 py-3">
-                      <div className="space-y-1">
-                        {snapshot.agents.map((agent) => {
-                          const session = orchestratorStatus?.agentSessions?.[agent.sessionBindingId];
-                          return (
-                            <Link key={agent.id} href="/employees" className="flex items-center gap-3 rounded-lg px-3 py-2 transition hover:bg-[var(--swiss-gray-100)] cursor-pointer">
-                              <span className={`h-2 w-2 shrink-0 rounded-full ${getAgentStatusColor(session?.status)}`} />
-                              <span className="text-[0.8125rem] font-medium">{agent.name}</span>
-                              <Badge variant="outline" className="text-[0.5625rem]">{agent.role}</Badge>
-                              <span className="ml-auto max-w-[200px] truncate text-[0.6875rem] text-[var(--swiss-gray-400)]">
-                                {session?.lastEventSummary || session?.status || "idle"}
+                    {heartbeatStatus.totalBeats > 0 ? (
+                      <span className="font-mono text-[0.6875rem] text-[var(--swiss-gray-400)]">{heartbeatStatus.totalBeats} beats</span>
+                    ) : null}
+                  </div>
+                  {heartbeatHistory.length > 0 ? (
+                    <div className="mt-2 flex items-center gap-[3px]">
+                      {heartbeatHistory.map((beat) => {
+                        const isIdle = beat.outcome === "HEARTBEAT_OK" || (beat.summary?.startsWith("Idle beat") ?? false);
+                        const isSkipped = beat.outcome === "SKIPPED" || (beat.summary?.startsWith("Skipped") ?? false)
+                          || (beat.outcome === "WORK_DONE" && (beat.summary?.includes("waiting on") ?? false));
+                        const color = beat.status === "failed" || beat.outcome === "ERROR" ? "bg-[var(--status-error)]"
+                          : beat.status === "running" ? "bg-[var(--swiss-blue)] animate-pulse"
+                          : isIdle ? "bg-[var(--swiss-gray-300)]"
+                          : isSkipped ? "bg-[var(--swiss-gray-300)]"
+                          : beat.outcome === "BUDGET_EXCEEDED" ? "bg-[var(--status-warning)]"
+                          : beat.outcome === "WORK_DONE" ? "bg-[var(--status-success)]"
+                          : "bg-[var(--swiss-gray-300)]";
+                        const statusLabel = beat.status === "failed" || beat.outcome === "ERROR" ? "✗ Failed"
+                          : beat.status === "running" ? "● Running"
+                          : isIdle ? "○ Idle"
+                          : isSkipped ? "○ Skipped"
+                          : beat.outcome === "WORK_DONE" ? "✓ Work done"
+                          : beat.outcome ?? beat.status;
+                        return (
+                          <span
+                            key={beat.id}
+                            className={`group relative h-2 flex-1 cursor-default rounded-full ${color}`}
+                          >
+                            <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-48 -translate-x-1/2 rounded-lg border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-3 py-2 shadow-lg group-hover:block">
+                              <span className="flex items-center gap-1.5 text-[0.75rem] font-semibold">
+                                <span className={`inline-block h-1.5 w-1.5 rounded-full ${color.replace(" animate-pulse", "")}`} />
+                                {statusLabel}
                               </span>
-                              <span className="text-[0.625rem] text-[var(--swiss-gray-300)]">
-                                {session?.lastEventAt ? formatRelativeTime(session.lastEventAt) : "—"}
-                              </span>
-                            </Link>
-                          );
-                        })}
-                      </div>
+                              {beat.agentId ? (
+                                <span className="mt-1 block text-[0.6875rem] text-[var(--swiss-gray-400)]">{beat.agentId}</span>
+                              ) : null}
+                              {beat.summary ? (
+                                <span className="mt-1 block text-[0.6875rem] leading-snug text-[var(--text-secondary)]">{beat.summary}</span>
+                              ) : null}
+                              <span className="mt-1.5 block text-[0.625rem] text-[var(--swiss-gray-300)]">{beat.startedAt ? formatRelativeTime(beat.startedAt) : "—"}</span>
+                            </span>
+                          </span>
+                        );
+                      })}
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="mt-1 text-[0.6875rem] text-[var(--swiss-gray-300)]">No beats recorded yet</div>
+                  )}
                 </section>
               ) : null}
 

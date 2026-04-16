@@ -2,38 +2,38 @@
 
 /* ── Arceus — Themeable Design System ───────────────── */
 
-/* Dark theme (default) */
+/* Dark theme (default) — rich charcoal slate */
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-primary:    #0a0a0b;
-  --bg-secondary:  #141416;
-  --bg-tertiary:   #1c1c1f;
-  --border:        #27272a;
-  --border-subtle: #1c1c1f;
-  --text-primary:  #fafafa;
-  --text-secondary:#a1a1aa;
-  --text-muted:    #71717a;
+  --bg-primary:    #1e2129;
+  --bg-secondary:  #252833;
+  --bg-tertiary:   #2c303d;
+  --border:        #363b4d;
+  --border-subtle: #2c303d;
+  --text-primary:  #e8e6e3;
+  --text-secondary:#a0a2b4;
+  --text-muted:    #747690;
 
   /* Legacy aliases (for existing components) */
-  --swiss-black:   #fafafa;
-  --swiss-white:   #0a0a0b;
-  --swiss-gray-50: #141416;
-  --swiss-gray-100:#1c1c1f;
-  --swiss-gray-200:#27272a;
-  --swiss-gray-300:#3f3f46;
-  --swiss-gray-400:#71717a;
-  --swiss-gray-500:#a1a1aa;
-  --swiss-red:     #ef4444;
-  --swiss-blue:    #3b82f6;
+  --swiss-black:   #e8e6e3;
+  --swiss-white:   #1e2129;
+  --swiss-gray-50: #252833;
+  --swiss-gray-100:#2c303d;
+  --swiss-gray-200:#363b4d;
+  --swiss-gray-300:#48506a;
+  --swiss-gray-400:#747690;
+  --swiss-gray-500:#a0a2b4;
+  --swiss-red:     #f87171;
+  --swiss-blue:    #60a5fa;
 
-  --arc-success:   #22c55e;
-  --arc-warning:   #eab308;
-  --arc-surface:   #141416;
-  --arc-elevated:  #1c1c1f;
-  --arc-glow:      rgba(59, 130, 246, 0.06);
-  --arc-preview-bg:#141416;
+  --arc-success:   #34d399;
+  --arc-warning:   #fbbf24;
+  --arc-surface:   #252833;
+  --arc-elevated:  #2c303d;
+  --arc-glow:      rgba(96, 165, 250, 0.07);
+  --arc-preview-bg:#252833;
 
   /* Status colors */
   --status-success: #22c55e;

@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { VerificationGateResult } from "@arceus/contracts";
+import { probePreviewHealth, getLocalPreviewState } from "./preview";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -116,6 +117,22 @@ export async function runVerificationGate(
       summary: extractTestSummary(testRes.stdout, testRes.stderr),
     };
     if (testRes.exitCode !== 0) {
+      result.passed = false;
+    }
+  }
+
+  // ── Preview health gate (both phases) ─────────────────────
+  const previewState = getLocalPreviewState();
+  if (previewState.status === "ready" || previewState.url) {
+    const probe = await probePreviewHealth(8000);
+    result.previewResult = probe;
+    if (!probe.reachable) {
+      result.passed = false;
+    }
+  } else {
+    // No preview configured — flag it but don't hard-fail pre_review
+    result.previewResult = { reachable: false, statusCode: null, error: "Preview not started or not configured" };
+    if (phase === "final") {
       result.passed = false;
     }
   }

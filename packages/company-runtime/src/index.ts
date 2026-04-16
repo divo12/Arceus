@@ -4,6 +4,7 @@ export type { HeartbeatConfig, BeatRequest, BeatExecutor, BeatDependencies } fro
 export { runChecklist } from "./heartbeat-checklist";
 export type { ChecklistResult } from "./heartbeat-checklist";
 export { ROLE_SOULS, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
+export { getAgentSkills, getFullAgentPrompt, listAvailableAgents } from "./agent-skills";
 export { emitBeatEvent, onBeatEvent, getBeatEventSubscriberCount } from "./beat-event-bus";
 export type { BeatEvent, BeatEventHandler } from "./beat-event-bus";
 

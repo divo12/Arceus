@@ -192,7 +192,42 @@ export default function TasksPage() {
                   {pendingApprovals.length} approval request{pendingApprovals.length === 1 ? " is" : "s are"} pending.
                 </div>
               </div>
-              <div className="swiss-caption">{pendingApprovals[0]?.title}</div>
+              <div className="flex items-center gap-3">
+                <div className="swiss-caption">{pendingApprovals[0]?.title}</div>
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    for (const a of pendingApprovals) {
+                      await fetch(apiUrl(`/approvals/${a.id}/resolve`), {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "approved" }),
+                      });
+                    }
+                    const res = await fetch(apiUrl("/company"), { cache: "no-store" });
+                    if (res.ok) setSnapshot((await res.json()) as CompanySnapshot);
+                  }}
+                >
+                  Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    for (const a of pendingApprovals) {
+                      await fetch(apiUrl(`/approvals/${a.id}/resolve`), {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "dismissed" }),
+                      });
+                    }
+                    const res = await fetch(apiUrl("/company"), { cache: "no-store" });
+                    if (res.ok) setSnapshot((await res.json()) as CompanySnapshot);
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
