@@ -2884,6 +2884,33 @@ async function executeSpecialistTask(taskId: string) {
     deliverSkillsLeadMemoryHandoff(task, artifact.id, skillPackage.relativePath);
     setTaskStatus(task.id, "completed", `Skills Lead authored reusable package ${skillPackage.relativePath}.`);
     await syncWorkspaceCheckpoint(task.id, role, `Skills Lead authored reusable package ${skillPackage.relativePath}`);
+  } else if (role === "cto" && task.kind === "board_handoff") {
+    // Hard preview gate: CTO review cannot complete unless preview is healthy
+    const reviewProbe = await probePreviewHealth(8000);
+    if (!reviewProbe.reachable) {
+      setTaskStatus(task.id, "blocked", `CTO review blocked — preview unreachable: ${reviewProbe.error ?? "no response"}. Developer must fix the preview before sprint review can proceed.`);
+      emitEmployeeActivity("cto", "error", `Board handoff blocked — preview not reachable (${reviewProbe.error}). Cannot approve sprint without a working product.`, { taskId: task.id });
+      recordMeeting({
+        type: "escalation",
+        facilitatorRole: "cto",
+        participantRoles: ["cto", "developer"],
+        summary: `CTO board handoff blocked: preview is unreachable (${reviewProbe.error}). Developer must fix the preview.`,
+        agenda: [{
+          topic: "Preview unreachable",
+          type: "blocker" as const,
+          content: `The product preview is not reachable. Error: ${reviewProbe.error ?? "unknown"}. The CTO cannot approve a sprint without a working, accessible product.`,
+          raisedByRole: "cto" as const,
+          relatedTaskId: task.id,
+        }],
+        decisions: [{
+          description: "Developer must restore preview before CTO review can complete.",
+          decidedByRoles: ["cto"],
+          impactIds: [task.id],
+        }],
+      });
+      return;
+    }
+    setTaskStatus(task.id, "completed", `CTO review completed — preview verified reachable (HTTP ${reviewProbe.statusCode}).`);
   } else {
     setTaskStatus(task.id, "completed", `${role} completed the specialist task.`);
   }
@@ -4606,6 +4633,17 @@ async function startReviewPhase(): Promise<PhaseResult> {
   executionStatus = "verifying";
 
   const snapshot = getSnapshot();
+
+  // Hard preview gate: CTO review cannot even start unless preview is healthy
+  const preReviewProbe = await probePreviewHealth(8000);
+  if (!preReviewProbe.reachable) {
+    emitEmployeeActivity("cto", "error", `CTO review blocked — preview not reachable (${preReviewProbe.error}). Developer must fix the preview first.`, { taskId: activeExecution.reviewTaskId });
+    setTaskStatus(activeExecution.reviewTaskId, "blocked", `Preview unreachable: ${preReviewProbe.error ?? "no response"}. Developer must fix preview before CTO review.`);
+    activeExecution.reviewStarted = false;
+    executionStatus = "executing";
+    return { ok: false, reworkFeedback: `Preview is not reachable (${preReviewProbe.error}). Fix the preview so the product is accessible, then the CTO review will proceed.` };
+  }
+
   const ctoSession = await ensureAgentSession(snapshot, "cto");
   const ctoSoul = getRoleSoul("cto");
   ctoSession.status = "working";
@@ -4687,8 +4725,22 @@ async function startReviewPhase(): Promise<PhaseResult> {
       { temperature: 0 },
     );
   } catch {
-    // If verdict extraction fails, assume approved to avoid blocking
-    emitEmployeeActivity("system", "info", "Could not extract structured CTO verdict — assuming approved.", { taskId: activeExecution.reviewTaskId });
+    // If verdict extraction fails, do NOT assume approved — treat as rework needed
+    verdict = { approved: false, reworkItems: ["CTO review verdict could not be parsed — developer must ensure the implementation clearly meets acceptance criteria and re-request review."], summary: "Verdict extraction failed — treating as rework needed." };
+    emitEmployeeActivity("system", "error", "Could not extract structured CTO verdict — treating as rework needed.", { taskId: activeExecution.reviewTaskId });
+  }
+
+  // Hard override: even if LLM says approved, preview must be reachable
+  if (verdict.approved) {
+    const postReviewProbe = await probePreviewHealth(8000);
+    if (!postReviewProbe.reachable) {
+      verdict = {
+        approved: false,
+        reworkItems: [`Preview is unreachable (${postReviewProbe.error ?? "no response"}). The product must be accessible before the sprint can be approved.`],
+        summary: `Preview unreachable — overriding CTO approval to rework.`,
+      };
+      emitEmployeeActivity("cto", "error", `CTO verdict overridden — preview not reachable (${postReviewProbe.error}). Cannot approve without working product.`, { taskId: activeExecution.reviewTaskId });
+    }
   }
 
   if (!verdict.approved && verdict.reworkItems.length > 0) {
