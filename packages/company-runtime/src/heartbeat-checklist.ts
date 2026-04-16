@@ -319,13 +319,33 @@ function checkSkillQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No skill tasks" };
 }
 
+// ── Spec 21: CTO escalation check ──────────────────────────
+
+/**
+ * CTO check: has the sprint review been escalated to the CTO?
+ * Fires when reviewState.phase is "escalated" so the CTO can force-complete the sprint.
+ */
+function checkEscalatedReview(ctx: AgentBeatContext): CheckResult {
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+
+  const reviewState = (sprint as any).reviewState;
+  if (!reviewState || reviewState.phase !== "escalated") return { status: "ok", detail: "No escalation" };
+
+  return {
+    status: "action_needed",
+    detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles`,
+    suggestedAction: "sprint_review:cto_escalation_decision",
+  };
+}
+
 // ── Role checklist definitions ─────────────────────────────
 
 type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   ceo: [checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
-  cto: [checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  cto: [checkEscalatedReview, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
   tester: [checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],

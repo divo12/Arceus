@@ -659,7 +659,8 @@ export class HeartbeatEngine {
 
     const actionable = ctx.tasks.filter(
       (t): t is typeof t & { status: ActionableStatus } =>
-        t.status === "in_progress" || t.status === "planned" || t.status === "created"
+        (t.status === "in_progress" || t.status === "planned" || t.status === "created") &&
+        (t.assignedRole === ctx.role || !t.assignedRole)
     );
     if (actionable.length === 0) return null;
 

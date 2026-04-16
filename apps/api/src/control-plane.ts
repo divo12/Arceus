@@ -394,6 +394,20 @@ export function cpLoadAgentContext(
           (t.assignedRole === agent.role && !t.assignedAgentId)
       );
 
+  // During sprint review, tester needs visibility into bug_fix tasks tracked in
+  // reviewState.bugTaskIds (typically assigned to developer) so checkBugFixesReady
+  // can see their actual status instead of treating missing tasks as resolved.
+  if (agent.role === "tester" && currentSprint?.status === "reviewing") {
+    const reviewState = (currentSprint as any).reviewState;
+    if (reviewState?.bugTaskIds?.length > 0) {
+      const existingIds = new Set(agentTasks.map((t) => t.id));
+      const bugTasks = snap.tasks.filter(
+        (t) => (reviewState.bugTaskIds as string[]).includes(t.id) && !existingIds.has(t.id)
+      );
+      agentTasks.push(...bugTasks);
+    }
+  }
+
   // Collect artifact ids referenced by this agent's tasks
   const artifactIds = new Set(agentTasks.flatMap((t) => [...t.artifactIds, ...t.incomingArtifactIds]));
   const artifacts = snap.artifacts.filter((a) => artifactIds.has(a.id));

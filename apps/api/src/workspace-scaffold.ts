@@ -378,6 +378,8 @@ export async function scaffoldProductWorkspace(
 
     for (const [relativePath, content] of Object.entries(files)) {
       const fullPath = resolve(workspaceDir, relativePath);
+      // Don't overwrite source files the developer already created
+      if (existsSync(fullPath) && relativePath.startsWith("src/")) continue;
       await writeFile(fullPath, content, "utf-8");
     }
 

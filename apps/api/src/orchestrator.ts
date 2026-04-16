@@ -6086,10 +6086,16 @@ export async function executeBeatTask(
   // For CTO/PM/developer — run a single prompt cycle via runPromptText
   const soul = getRoleSoul(role);
 
-  // For developer beats, snapshot the workspace BEFORE execution and include
-  // the file manifest in the prompt so the LLM knows the current codebase.
+  // For developer beats, ensure workspace is scaffolded before first prompt.
+  // The scaffold is idempotent — skips if already set up.
   let preSnapshot: Map<string, number> | null = null;
   if (role === "developer") {
+    const scaffoldResult = await scaffoldProductWorkspace(productDir, "product-app");
+    if (scaffoldResult.scaffolded) {
+      emitEmployeeActivity("developer", "info", `Beat ${beatId}: workspace scaffolded (Vite + React + Tailwind + shadcn/ui)`, { beatId, taskId });
+    } else if (scaffoldResult.error) {
+      emitEmployeeActivity("developer", "info", `Beat ${beatId}: scaffold skipped/partial: ${scaffoldResult.error}`, { beatId, taskId });
+    }
     preSnapshot = await collectWorkspaceSnapshot();
   }
   const existingFileList = preSnapshot ? Array.from(preSnapshot.keys()).sort() : undefined;
@@ -6369,6 +6375,29 @@ export async function executeChecklistAction(
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
       };
     }
+  }
+
+  // ── CTO: sprint review escalation (Spec 21) ──
+  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_decision") {
+    startBeatTokenAccumulator(beatId);
+    const snapshot = getSnapshot();
+    const sprintId = snapshot.company.currentSprintId;
+    if (!sprintId) {
+      return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+    if (!sprint || sprint.status !== "reviewing") {
+      return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+
+    emitEmployeeActivity("cto", "transition", `Sprint ${sprint.number} escalated — CTO force-completing sprint after max rework cycles`, { beatId });
+
+    await finalizeSprintCompletion(sprintId);
+
+    return {
+      summary: `CTO escalation: force-completed Sprint ${sprint.number} after max rework cycles`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+    };
   }
 
   // ── PM: scope triage, board response ──
