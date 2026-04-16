@@ -87,6 +87,15 @@ setReactiveEventEmitter((companyId, agentId, role, event) =>
     } catch (err) {
       console.warn("[STARTUP] Registry re-seed failed:", err instanceof Error ? err.message : err);
     }
+
+    // Auto-resume heartbeat if there's an active sprint (executing or reviewing)
+    const activeSprint = snap.sprints.find(
+      (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),
+    );
+    if (activeSprint) {
+      heartbeatEngine.start();
+      console.log(`[STARTUP] Auto-resumed heartbeat — Sprint ${activeSprint.number} is ${activeSprint.status}`);
+    }
   } else {
     console.log("[STARTUP] No company hydrated — skipping registry seed");
   }
