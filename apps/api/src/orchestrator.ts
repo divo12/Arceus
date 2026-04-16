@@ -2336,17 +2336,100 @@ function buildSpecialistTaskPrompt(task: Task) {
     }
   }
 
-  profileHints.push(
-    "",
-    "# Output requirements",
-    "Produce text only.",
-    "Return a concise execution artifact with these sections:",
-    "1. Objective alignment",
-    "2. What you did",
-    "3. Evidence or reasoning",
-    "4. Open issues or follow-ups",
-    "5. Recommendation to the company",
-  );
+  // ── Role-specific output requirements ──
+  if (task.assignedRole === "pm") {
+    profileHints.push(
+      "",
+      "# Output requirements — Product Manager",
+      "You MUST produce a structured specification document, NOT a generic status update.",
+      "Do NOT write vague prose like 'clarified scope'. Write the ACTUAL spec.",
+      "Your output is the primary input for the Developer — if it's vague, the product will be wrong.",
+      "",
+      "Required sections (include ALL of these with CONCRETE content):",
+      "",
+      "## 1. User Stories",
+      "Write 3–8 user stories in the format: 'As a [user], I want [action] so that [benefit]'.",
+      "Each story MUST have numbered acceptance criteria (Given/When/Then or checkbox format).",
+      "",
+      "## 2. Functional Requirements",
+      "List every feature the developer must implement. Be specific:",
+      "- BAD: 'Users can manage notes'",
+      "- GOOD: 'Users can create a new note with a title (max 200 chars) and body (Markdown supported). Notes persist across page reloads via localStorage. Each note has a created_at timestamp.'",
+      "",
+      "## 3. UI/UX Requirements",
+      "Describe the screens/views, layout structure, key interactions, and navigation flow.",
+      "Name specific components (sidebar, note list, editor pane, tag picker, etc.).",
+      "",
+      "## 4. Non-functional Requirements",
+      "Performance targets, browser support, accessibility level, data persistence strategy.",
+      "",
+      "## 5. Out of Scope (Non-goals)",
+      "Explicitly list what is NOT part of this sprint.",
+      "",
+      "## 6. Definition of Done",
+      "Measurable checklist of what 'done' means for the developer.",
+    );
+  } else if (task.assignedRole === "ui_designer") {
+    profileHints.push(
+      "",
+      "# Output requirements — UI Designer",
+      "You MUST produce actionable design specifications that a developer can directly implement.",
+      "Do NOT write vague prose like 'designed intuitive layouts'. Provide EXACT specs.",
+      "",
+      "Required sections (include ALL with CONCRETE values):",
+      "",
+      "## 1. Layout Structure",
+      "Describe the page layout using CSS terms: grid template, flex direction, sidebar width, main content area.",
+      "Example: 'Two-column layout: fixed 260px sidebar on left, flexible main area. Sidebar has logo area (64px height), search input, folder list, tag cloud.'",
+      "",
+      "## 2. Component Hierarchy",
+      "List every React component the developer should create, with props and children:",
+      "- AppShell → Sidebar + MainContent",
+      "- Sidebar → SearchInput + FolderList + TagCloud",
+      "- MainContent → NoteListHeader + NoteList | NoteEditor",
+      "- NoteEditor → TitleInput + MarkdownEditor + TagPicker",
+      "",
+      "## 3. Design Tokens",
+      "Provide EXACT values the developer must use:",
+      "- Colors: background, surface, text-primary, text-secondary, accent, border (hex codes)",
+      "- Typography: font-family, size scale (h1–body–caption), line heights, weights",
+      "- Spacing: base unit (e.g. 8px), padding/margin for key elements",
+      "- Border radius, shadow values",
+      "- Breakpoints for responsive behavior",
+      "",
+      "## 4. Component States",
+      "For each interactive component, specify: default, hover, active, focus, disabled, loading, empty, error states.",
+      "",
+      "## 5. Interactions & Animations",
+      "Describe transitions, hover effects, and micro-interactions with duration and easing.",
+      "Example: 'Note list item: hover scales to 1.01 with 150ms ease-out, background shifts to surface-hover color.'",
+      "",
+      "## 6. Responsive Behavior",
+      "How does the layout adapt at mobile (<640px), tablet (640–1024px), and desktop (>1024px)?",
+    );
+  } else if (task.assignedRole === "marketing") {
+    profileHints.push(
+      "",
+      "# Output requirements — Marketing",
+      "Return a concise execution artifact with these sections:",
+      "1. Target audience and messaging strategy",
+      "2. Concrete deliverables produced (copy, assets, channel plans)",
+      "3. Key messages and value propositions",
+      "4. Distribution channels and timeline",
+      "5. Success metrics and next steps",
+    );
+  } else {
+    profileHints.push(
+      "",
+      "# Output requirements",
+      "Return a concise execution artifact with these sections:",
+      "1. Objective alignment",
+      "2. What you did (be specific — name files, tools, concrete actions)",
+      "3. Evidence or concrete results",
+      "4. Open issues or blockers",
+      "5. Recommendation for next steps",
+    );
+  }
 
   return profileHints.join("\n");
 }
@@ -2560,13 +2643,26 @@ async function materializeSkillPackage(task: Task, output: string) {
 }
 
 function deliverUiDesignerMemoryHandoff(task: Task, artifactId: string) {
-  const guidance = `Use UI direction artifact /api/artifacts/${artifactId} while implementing ${task.title}.`;
-  const qaGuidance = `Use UI direction artifact /api/artifacts/${artifactId} to verify UX quality and interaction consistency for ${task.title}.`;
+  // Find the actual artifact content so we can embed it — not just an API URL
+  const artifact = artifacts.find((a) => a.id === artifactId);
+  const designContent = artifact?.content
+    ? artifact.content.slice(0, 4000) // Cap to avoid token bloat
+    : `(Design artifact ${artifactId} content not available — request review from UI Designer.)`;
+
+  const guidance = [
+    `UI Designer delivered design direction for "${task.title}".`,
+    `IMPORTANT: Follow these design specs exactly when implementing UI components.`,
+    `--- BEGIN DESIGN SPECS ---`,
+    designContent,
+    `--- END DESIGN SPECS ---`,
+  ].join("\n");
+
+  const qaGuidance = `Verify UI implementation matches the design direction in artifact ${artifactId} for ${task.title}. Check: layout structure, color tokens, component states, responsive behavior.`;
 
   enrichRoleMemory("developer", {
     currentFocus: [guidance],
     recentLearnings: [guidance],
-    activePatterns: ["Respect UI Designer direction before final implementation polish."],
+    activePatterns: ["Follow UI Designer design specs exactly — use specified colors, spacing, typography, and component hierarchy."],
   });
   enrichRoleMemory("tester", {
     currentFocus: [qaGuidance],
@@ -6101,12 +6197,32 @@ export async function executeBeatTask(
       filesModified = changed;
 
       if (changed.length > 0) {
+        // Filter to meaningful source files — config-only or lock-file-only changes don't count
+        const meaningfulExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".css", ".scss", ".html"]);
+        const meaningfulChanges = changed.filter((f) => {
+          const ext = f.slice(f.lastIndexOf("."));
+          return meaningfulExtensions.has(ext);
+        });
+
         for (const f of changed) {
           appendTaskResult(task.id, `edited:${f}`);
         }
-        emitEmployeeActivity(role, "context", `Beat ${beatId}: ${changed.length} file(s) modified: ${changed.slice(0, 10).join(", ")}`, {
-          beatId, taskId, detail: { filesModified: changed },
+        emitEmployeeActivity(role, "context", `Beat ${beatId}: ${changed.length} file(s) modified (${meaningfulChanges.length} source): ${changed.slice(0, 10).join(", ")}`, {
+          beatId, taskId, detail: { filesModified: changed, meaningfulCount: meaningfulChanges.length },
         });
+
+        // If ONLY non-source files changed (e.g. just package-lock.json or opencode.json), don't complete
+        if (meaningfulChanges.length === 0) {
+          emitEmployeeActivity(role, "info", `Beat ${beatId}: developer changed ${changed.length} file(s) but none are source code — task stays in_progress`, { beatId, taskId });
+          appendTaskResult(task.id, `[${beatId}] only config/lock files changed — no source code written`);
+          return {
+            summary: `Developer beat changed ${changed.length} config files but no source code — task stays in_progress for retry`,
+            tokensUsed,
+            actionsCount: 1,
+            toolCalls: 1,
+            completed: false,
+          };
+        }
       } else {
         // Developer produced no file changes — do NOT mark as completed.
         // Leave as in_progress so the next beat can retry with fresh context.
