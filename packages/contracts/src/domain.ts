@@ -512,6 +512,7 @@ export const beatEventTriggerSchema = z.enum([
   "approval_granted",
   "feedback_received",
   "sprint_started",
+  "sprint_completed",
   "escalation_received",
   "bug_reported",
 ]);

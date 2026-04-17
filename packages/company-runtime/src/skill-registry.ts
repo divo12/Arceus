@@ -377,14 +377,17 @@ export function seedExistingSkills(
   companyId: string,
   skillsDir?: string,
 ): number {
-  if (seeded) return 0;
+  // Only treat the registry as seeded once at least one skill exists for this
+  // company — otherwise an earlier transient failure (missing dir, parse error,
+  // race with snapshot load) permanently blocks lazy re-seed. See
+  // `markSeeded()` call at the end of this fn, which is now count-gated.
+  if (seeded && getAllSkills(companyId).length > 0) return 0;
 
   // Resolve relative to this file so it works regardless of process.cwd()
   const thisDir = new URL(".", import.meta.url).pathname;
   const dir = skillsDir ?? resolve(thisDir, "..", "skills");
   if (!existsSync(dir)) {
     console.warn(`[SkillRegistry] Skills directory not found: ${dir}`);
-    markSeeded();
     return 0;
   }
 
@@ -428,7 +431,10 @@ export function seedExistingSkills(
     count++;
   }
 
-  markSeeded();
+  // Only mark seeded if we actually registered skills. If count=0 (all files
+  // failed to parse, or all were filtered out), leave the flag false so the
+  // next lazy-seed call gets another chance.
+  if (count > 0) markSeeded();
   return count;
 }
 

@@ -3,7 +3,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, isSkillRegistrySeeded, matchSkills as registryMatchSkills, matchSkillsAsync as registryMatchSkillsAsync, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster, analyzeSprintPatterns, getUnderperformingSkills, getUnusedSkills, deprecateSkill as registryDeprecateSkill, embedAllSkillTriggers } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, matchSkills as registryMatchSkills, matchSkillsAsync as registryMatchSkillsAsync, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster, analyzeSprintPatterns, getUnderperformingSkills, getUnusedSkills, deprecateSkill as registryDeprecateSkill, embedAllSkillTriggers } from "@arceus/company-runtime";
 import { applyGovernanceToMutation } from "./skill-governance";
 import { initSkillEvolution } from "./skill-evolution";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
@@ -221,7 +221,6 @@ initSkillEvolution();
  * Idempotent — no-op if already seeded.
  */
 function ensureSkillsSeeded(): void {
-  if (isSkillRegistrySeeded()) return;
   const snapshot = getSnapshot();
   const companyId = snapshot.company.id;
   if (!companyId || companyId === "company_empty") return;
@@ -1111,6 +1110,12 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
 
+  // Reset preview state when a sprint closes so any stale "error" from the
+  // final developer beat (e.g. no runnable workspace yet) doesn't leak into
+  // the next CEO refinement phase. The UI polls /api/product/overview and
+  // would otherwise show a red "Error" badge until the next sprint starts.
+  await stopLocalPreview();
+
   const sprintTasks = snapshot.tasks.filter(
     (t) => t.sprintId === sprintId && t.kind !== "follow_up",
   );
@@ -1636,7 +1641,7 @@ async function executeCtoBeatEscalationReview(
           completedAt: new Date().toISOString(),
         } : s.reviewState,
       }));
-      await finalizeSprintCompletion(sprintId, sprint.number, beatId);
+      await finalizeSprintCompletion(sprintId);
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO shipped Sprint ${sprint.number} with known defects`, { beatId });
     } else if (decision === "abort") {
       // Cancel sprint

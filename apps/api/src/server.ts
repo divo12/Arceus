@@ -28,7 +28,7 @@ import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAu
 import { auditConfig } from "./config/audit";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, isSkillRegistrySeeded, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById, getPatternsForCompany, clusterPatterns, checkSkillCandidates, proposeSkillFromCluster, getPatternCount, extractPattern, matchSkills as registryMatchSkills, recordSkillUsage, getUnusedSkills, getUnderperformingSkills, analyzeSprintPatterns } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById, getPatternsForCompany, clusterPatterns, checkSkillCandidates, proposeSkillFromCluster, getPatternCount, extractPattern, matchSkills as registryMatchSkills, recordSkillUsage, getUnusedSkills, getUnderperformingSkills, analyzeSprintPatterns } from "@arceus/company-runtime";
 import { getSprintBudget, getAllSprintBudgets, SPRINT_EVOLUTION_BUDGET_CENTS, MAX_MUTATIONS_PER_SPRINT, MIN_TRUST_FOR_MUTATION, canProposeMutation, lintSkillContent, recordMutationProposal } from "./skill-governance";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { warmUpOpencode } from "./opencode";
@@ -524,7 +524,7 @@ app.get("/api/product/overview", async () => {
 
 app.get("/api/skills", async () => {
   const companyId = getSnapshot().company.id;
-  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+  if (companyId && companyId !== "company_empty") {
     seedExistingSkills(companyId);
   }
   const skills = getAllSkills(companyId);
@@ -547,7 +547,7 @@ app.get("/api/skills", async () => {
 
 app.get("/api/skills/health", async () => {
   const companyId = getSnapshot().company.id;
-  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+  if (companyId && companyId !== "company_empty") {
     seedExistingSkills(companyId);
   }
   return getSkillHealth(companyId);
@@ -556,7 +556,7 @@ app.get("/api/skills/health", async () => {
 app.get("/api/skills/:name/history", async (request) => {
   const { name } = request.params as { name: string };
   const companyId = getSnapshot().company.id;
-  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+  if (companyId && companyId !== "company_empty") {
     seedExistingSkills(companyId);
   }
   const history = registryGetSkillHistory(companyId, name);
@@ -609,7 +609,7 @@ app.post("/api/skills/simulate-task-outcome", async (request) => {
     sprintId?: string;
   };
   const companyId = getSnapshot().company.id;
-  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+  if (companyId && companyId !== "company_empty") {
     seedExistingSkills(companyId);
   }
 
@@ -1366,7 +1366,7 @@ app.get("/api/governance/stats", async () => {
 /** GET /api/skills/unused — unused skills (Phase 6) */
 app.get("/api/skills/unused", async () => {
   const companyId = getSnapshot().company.id;
-  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+  if (companyId && companyId !== "company_empty") {
     seedExistingSkills(companyId);
   }
   const staleDays = 30;
@@ -1379,7 +1379,7 @@ app.get("/api/skills/unused", async () => {
 /** GET /api/skills/underperforming — skills under threshold success rate (Phase 6) */
 app.get("/api/skills/underperforming", async (request) => {
   const companyId = getSnapshot().company.id;
-  if (!isSkillRegistrySeeded() && companyId && companyId !== "company_empty") {
+  if (companyId && companyId !== "company_empty") {
     seedExistingSkills(companyId);
   }
   const query = request.query as { threshold?: string };
@@ -1420,6 +1420,12 @@ app.get("/api/governance/sprint-budget/:sprintId", async (request) => {
 
 /** GET /api/governance/budgets — all sprint budgets (Phase 6) */
 app.get("/api/governance/budgets", async () => {
+  // Materialize a budget row for every live sprint so the dashboard reflects
+  // cap/remaining even before any mutation has been proposed. getSprintBudget
+  // is self-initializing.
+  for (const sprint of getSnapshot().sprints) {
+    getSprintBudget(sprint.id);
+  }
   return {
     mutationCap: MAX_MUTATIONS_PER_SPRINT,
     budgetCeilingCents: SPRINT_EVOLUTION_BUDGET_CENTS,
@@ -1459,7 +1465,7 @@ app.post("/api/governance/check", async (request) => {
       costCents: body.estimatedCostCents ?? 1,
     });
   }
-  return { allowed: decision.allowed, code: (decision as { code?: string }).code ?? null, reason: (decision as { reason?: string }).reason ?? null, lintIssues: lint.issues };
+  return { allowed: decision.allowed, code: (decision as { code?: string }).code ?? null, reason: (decision as { reason?: string }).reason ?? null, lintIssues: lint.findings };
 });
 
 // ── Start audit ledger ──
