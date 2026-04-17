@@ -3,7 +3,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, matchSkills as registryMatchSkills, matchSkillsAsync as registryMatchSkillsAsync, getSkillsForRole as registryGetSkillsForRole, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster, analyzeSprintPatterns, getUnderperformingSkills, getUnusedSkills, deprecateSkill as registryDeprecateSkill, embedAllSkillTriggers } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, getSkillsForRole as registryGetSkillsForRole, matchSkills as registryMatchSkills, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster, analyzeSprintPatterns, getUnderperformingSkills, getUnusedSkills, deprecateSkill as registryDeprecateSkill } from "@arceus/company-runtime";
 import { applyGovernanceToMutation } from "./skill-governance";
 import { initSkillEvolution } from "./skill-evolution";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
@@ -227,28 +227,37 @@ function ensureSkillsSeeded(): void {
   const count = seedExistingSkills(companyId);
   if (count > 0) {
     console.log(`[SkillRegistry] Seeded ${count} skills for company ${companyId}`);
-    // Embed all seed skill triggers asynchronously so semantic matching works
-    // from the first heartbeat beat. Fire-and-forget — never blocks seeding.
-    embedAllSkillTriggers(companyId).then((embedded) => {
-      if (embedded > 0) {
-        console.log(`[SkillRegistry] Embedded triggers for ${embedded}/${count} seed skills`);
-      }
-    }).catch((err) => {
-      console.warn(`[SkillRegistry] Seed embedding failed: ${err instanceof Error ? err.message : err}`);
-    });
   }
 }
 
 /**
- * Build the skill section injected into an agent's system prompt.
+ * Tier-1 skill catalog (progressive disclosure): a compact one-line-per-skill
+ * summary for ALL active skills this role has. Fed to the classifier so the
+ * LLM can choose which skills apply — no embeddings, no thresholds.
  *
- * When `matchedSkillIds` is provided (heartbeat path), only the semantically
- * matched skills are included — capped at 3 per spec §14. This keeps the
- * prompt tight and prevents irrelevant guidance from older skills polluting
- * the context window.
- *
- * When `matchedSkillIds` is omitted (legacy direct-session paths), all active
- * skills for the role are included so those paths are unaffected.
+ * Matches the nanobot/OpenClaw pattern where the agent sees a catalog of
+ * names + descriptions and picks by understanding, not cosine similarity.
+ */
+function buildSkillCatalog(
+  role: string,
+): Array<{ id: string; name: string; trigger: string; successRate: number; version: number }> {
+  ensureSkillsSeeded();
+  const snapshot = getSnapshot();
+  const skills = registryGetSkillsForRole(snapshot.company.id, role);
+  return skills.map((s) => ({
+    id: s.id,
+    name: s.name,
+    trigger: s.trigger,
+    successRate: s.successRate,
+    version: s.version,
+  }));
+}
+
+/**
+ * Build the skill section injected into an agent's system prompt (tier-2:
+ * full skill bodies). When `matchedSkillIds` is provided, only those skills'
+ * bodies are rendered. When omitted, all active role skills are rendered
+ * (legacy direct-session paths).
  */
 function buildSkillSection(
   role: string,
@@ -261,7 +270,6 @@ function buildSkillSection(
   if (skills.length === 0) return "";
 
   if (matchedSkillIds && matchedSkillIds.length > 0) {
-    // Semantic match path: only the skills the matcher selected, capped at 3
     const idSet = new Set(matchedSkillIds);
     skills = skills.filter((s) => idSet.has(s.id)).slice(0, cap);
   }
@@ -304,22 +312,104 @@ function getSkillBody(role: string, skillName?: string): string {
 }
 
 /**
- * Semantically match skills relevant to a task and record their usage.
+ * Zod schema for the classifier's structured output.
+ * Kept tiny — 0-3 skill IDs plus a short justification for audit.
+ */
+const skillClassifierSchema = z.object({
+  appliedSkillIds: z
+    .array(z.string())
+    .max(3)
+    .describe("IDs of 0-3 skills from the catalog that most apply to this task."),
+  reasoning: z
+    .string()
+    .max(240)
+    .describe("One short sentence explaining why these skills (or none) apply."),
+});
+
+/**
+ * Classify which skills apply to a task using a cheap LLM call.
  *
- * Uses cosine similarity over trigger embeddings when available (after
- * initSkillEvolution() has wired the embedding dep). Falls back to token
- * overlap for skills not yet embedded or when deps are missing.
+ * Progressive disclosure, tier-1: the LLM is given a compact catalog of
+ * all role skills and picks 0-3 IDs. This replaces the former
+ * embedding-cosine matcher — the LLM's language understanding does the
+ * matching, no precomputed embeddings needed.
  *
- * Returns matched skill IDs so the caller can filter prompt injection.
+ * Falls back to an empty list on failure (skills still available but not
+ * pre-applied — the agent can still read the catalog via buildSkillSection
+ * when `matchedSkillIds` is undefined at the call site).
+ */
+async function classifyTaskSkills(
+  role: string,
+  taskDescription: string,
+  catalog: ReturnType<typeof buildSkillCatalog>,
+): Promise<string[]> {
+  if (catalog.length === 0) return [];
+
+  const catalogText = catalog
+    .map(
+      (s) =>
+        `- ${s.id} [${s.name} v${s.version}] — ${s.trigger} (success ${Math.round(s.successRate * 100)}%)`,
+    )
+    .join("\n");
+
+  const messages = [
+    {
+      role: "system" as const,
+      content:
+        `You select procedural skills for an agent with role "${role}". ` +
+        `From the catalog, pick 0-3 skill IDs most relevant to the task. ` +
+        `If none apply, return an empty array. Prefer higher success rates ` +
+        `when relevance is tied. Return only IDs that appear in the catalog.`,
+    },
+    {
+      role: "user" as const,
+      content:
+        `## Available skills for role "${role}"\n${catalogText}\n\n` +
+        `## Task\n${taskDescription}\n\n` +
+        `Return 0-3 skill IDs from the catalog.`,
+    },
+  ];
+
+  try {
+    const result = await structuredCompletion(
+      "workerDeployment",
+      messages,
+      skillClassifierSchema,
+      "skill_classifier",
+      { temperature: 0.1 },
+      {
+        companyId: getSnapshot().company.id,
+        agentRole: role,
+        label: "skill_classifier",
+      },
+    );
+    // Drop hallucinated IDs — keep only those that exist in the catalog.
+    const validIds = new Set(catalog.map((s) => s.id));
+    return result.appliedSkillIds.filter((id) => validIds.has(id));
+  } catch (err) {
+    console.warn(
+      `[SkillClassifier] ${role} classifier failed, no skills applied: ${err instanceof Error ? err.message : err}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Classify skills applicable to a task and record usage.
+ *
+ * Tier-1 pre-call: build compact catalog → ask LLM to pick ≤3 IDs → record
+ * usage for each picked ID → return IDs. The caller threads these IDs into
+ * runPromptText() so buildSkillSection() can render the full bodies (tier-2)
+ * in the agent's system prompt.
  */
 async function matchAndRecordSkills(role: string, taskDescription: string): Promise<string[]> {
-  ensureSkillsSeeded();
-  const snapshot = getSnapshot();
-  const matched = await registryMatchSkillsAsync(snapshot.company.id, role, taskDescription);
-  for (const skill of matched) {
-    recordSkillUsage(skill.id);
+  const catalog = buildSkillCatalog(role);
+  if (catalog.length === 0) return [];
+  const picked = await classifyTaskSkills(role, taskDescription, catalog);
+  for (const id of picked) {
+    recordSkillUsage(id);
   }
-  return matched.map(s => s.id);
+  return picked;
 }
 
 type AgentSessionState = {
@@ -3841,9 +3931,11 @@ async function runPromptText(
 ) {
   const deployment = ensureDeployment("workerDeployment");
 
-  // Inject skills: when matchedSkillIds is provided (heartbeat path), only the
-  // semantically matched subset (≤3) is included. Otherwise all role skills are
-  // included (legacy direct-session paths). See buildSkillSection for details.
+  // Inject skills (tier-2 bodies): when matchedSkillIds is provided
+  // (heartbeat path), only the classifier-picked subset (≤3) is included.
+  // Otherwise all role skills are included (legacy direct-session paths).
+  // See buildSkillCatalog + buildSkillSection for the progressive-disclosure
+  // design.
   const skillSection = buildSkillSection(role, matchedSkillIds);
 
   // Inject Hippocampus memory context (never fatal — graceful degradation)
@@ -4719,12 +4811,14 @@ export async function executeBeatTask(
 
   const role = ctx.role;
 
-  // Spec 14: semantically match skills relevant to this task and record usage.
-  // Uses cosine similarity when embeddings are available, token fallback otherwise.
+  // Spec 14 (progressive disclosure): pick relevant skills via an LLM
+  // classifier over a compact catalog. Replaces the former embedding-cosine
+  // matcher — the LLM's language understanding handles matching natively.
+  const availableSkillCount = buildSkillCatalog(role).length;
   const matchedSkillIds = await matchAndRecordSkills(role, `${task.title} ${task.description}`);
 
-  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority} matchedSkills=${matchedSkillIds.length}`, {
-    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, matchedSkillIds },
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority} availableSkills=${availableSkillCount} appliedSkills=${matchedSkillIds.length}`, {
+    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, availableSkillCount, appliedSkillIds: matchedSkillIds },
   });
 
   // ── CEO beat: sprint lifecycle detection ──────────────────
@@ -4899,7 +4993,7 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
-    // Pass matchedSkillIds so runPromptText injects only the semantically relevant
+    // Pass matchedSkillIds so runPromptText injects only the classifier-picked
     // skills (≤3) rather than every skill for the role (spec §14 Phase 1).
     const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt, tools, matchedSkillIds);
 

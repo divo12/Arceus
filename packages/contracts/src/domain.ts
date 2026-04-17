@@ -912,9 +912,10 @@ export const skillArtifactSchema = z.object({
   mutationReason: z.string().nullable().default(null),
   createdAt: z.string(),
   approvedAt: z.string().nullable().default(null),
-  /** Embedding of the trigger text (all-MiniLM-L6-v2, 384-dim). Populated
-   *  asynchronously after skill creation/activation. Used for semantic matching
-   *  instead of bag-of-words token overlap. Optional so old records still parse. */
+  /** @deprecated No longer populated. Kept optional so legacy records still
+   *  parse. Skill matching is now handled by an LLM classifier in the
+   *  orchestrator (see buildSkillCatalog / classifyTaskSkills); trigger
+   *  embeddings are no longer needed. */
   triggerEmbedding: z.array(z.number()).optional(),
 });
 

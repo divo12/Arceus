@@ -16,7 +16,6 @@ import {
   setSkillTesterDeps,
   setPatternLearnerDeps,
   setSkillRegistryDeps,
-  storeSkillEmbedding,
 } from "@arceus/company-runtime";
 import type { TaskOutcomeContext } from "@arceus/company-runtime";
 import type {
@@ -523,25 +522,23 @@ export function initSkillEvolution(): void {
 
   console.log("[SkillEvolution] Pattern learner deps wired (embeddings + synthesis)");
 
-  // ── Skill Registry: semantic matching deps ─────────────
-  // Reuses the same local sentence-transformers model.
-  // After this is wired, matchSkillsAsync() scores by cosine similarity
-  // against stored triggerEmbeddings instead of token overlap.
-
+  // ── Skill Registry: activation hook ────────────────────
+  //
+  // Under the progressive-disclosure design, skill matching happens in the
+  // orchestrator via an LLM classifier over a compact catalog
+  // (see apps/api/src/orchestrator.ts:classifyTaskSkills). The registry
+  // no longer needs embeddings for matching — all matching is handled
+  // natively by the LLM's language understanding.
+  //
+  // `onSkillActivated` is kept as a fire-and-forget hook for downstream
+  // audit/telemetry when new skills are activated at runtime.
   setSkillRegistryDeps({
-    async embedText(text: string) {
-      return embedWithSentenceTransformers(text);
-    },
     onSkillActivated(skill) {
-      // Fire-and-forget: embed the trigger so future matchSkillsAsync calls
-      // can use cosine similarity for this skill immediately.
-      embedWithSentenceTransformers(skill.trigger)
-        .then((embedding) => storeSkillEmbedding(skill.id, embedding))
-        .catch((err) => {
-          console.warn(`[SkillRegistry] Failed to embed trigger for ${skill.id}: ${err instanceof Error ? err.message : err}`);
-        });
+      console.log(
+        `[SkillRegistry] Skill activated: ${skill.id} (${skill.name} v${skill.version}) for ${skill.companyId}/${skill.role}`,
+      );
     },
   });
 
-  console.log("[SkillEvolution] Skill registry semantic matching wired (cosine via all-MiniLM-L6-v2)");
+  console.log("[SkillEvolution] Skill registry activation hook wired (no embedding matcher — LLM classifier in orchestrator)");
 }
