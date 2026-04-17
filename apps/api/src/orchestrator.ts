@@ -11,10 +11,12 @@ import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/in
 import { emitEmployeeActivity } from "./activity";
 import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
 import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
+import type { Approval, CompanySnapshot, AgentIdentity, DefectArea, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
 import { isCeoStreaming } from "./chat";
+import { emitGraphSprintStarted, emitGraphSprintCompleted, emitGraphNodeAdded, emitGraphStatusChanged, emitGraphArtifactProduced, emitGraphArtifactConsumed, emitGraphBeatStarted, emitGraphBeatCompleted, emitGraphDecision, emitGraphFileChanges, emitGraphMeeting, emitGraphMemoryWrite, resolveActiveSprintId } from "./graph-emitter";
+import { graphStore } from "./graph-store";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, probePreviewHealth, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { persistRuntimeArtifact } from "./artifact-persistence";
@@ -32,7 +34,6 @@ import {
   createReviewState,
   buildGateFailureBugFields,
   buildBugFixTaskFields,
-  parseQAReport,
   routeDefect,
   allBugFixesResolved,
   shouldRetestAfterRework,
@@ -52,6 +53,37 @@ let reactiveEventEmitter: ((companyId: string, agentId: string, role: AgentIdent
 /** Called by server.ts after HeartbeatEngine is created. */
 export function setReactiveEventEmitter(fn: typeof reactiveEventEmitter) {
   reactiveEventEmitter = fn;
+}
+
+// ---------------------------------------------------------------------------
+// Escalation meeting trigger — wired to MeetingScheduler by server.ts
+// ---------------------------------------------------------------------------
+
+import type { MeetingScheduler } from "@arceus/company-runtime";
+
+let meetingSchedulerRef: MeetingScheduler | null = null;
+
+/** Called by server.ts to wire the meeting scheduler for escalation triggers. */
+export function setMeetingScheduler(scheduler: MeetingScheduler) {
+  meetingSchedulerRef = scheduler;
+}
+
+/**
+ * Trigger an escalation meeting for a blocked task.
+ * Called from setTaskStatus() when a task transitions to "blocked".
+ * Skips if no scheduler, if task has no assignee, or if an escalation
+ * meeting already exists for this task.
+ */
+function triggerEscalationMeeting(taskId: string, blockerDetail: string) {
+  if (!meetingSchedulerRef) return;
+  const snap = getSnapshot();
+  const task = snap.tasks.find((t) => t.id === taskId);
+  if (!task || !task.assignedRole) return;
+
+  const agent = snap.agents.find((a) => a.role === task.assignedRole);
+  if (!agent) return;
+
+  meetingSchedulerRef.createEscalationMeeting(snap, agent.id, blockerDetail, taskId);
 }
 
 /** Emit a reactive event for a specific role (resolves agentId from snapshot). */
@@ -772,6 +804,12 @@ async function pollDeveloperWorkspaceChanges() {
     appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
   }
 
+  // ── Graph instrumentation (Spec 22) — workspace file changes ──
+  const fileChangeSprintId = resolveActiveSprintId();
+  if (fileChangeSprintId && activeExecution.buildTaskId) {
+    emitGraphFileChanges(fileChangeSprintId, activeExecution.buildTaskId, changedFiles.map((f) => ({ path: f, action: "modified" as const })));
+  }
+
   try {
     await maybeStartDeveloperLivePreview(changedFiles);
   } catch (err) {
@@ -905,6 +943,28 @@ function addArtifact(agent: string, kind: Artifact["kind"], title: string, conte
   artifacts.push(artifact);
   void persistRuntimeArtifact(getSnapshot().company.id, artifact);
   return artifact;
+}
+
+/**
+ * Persist an artifact as a markdown file inside the workspace `docs/` folder
+ * and record the file change on the graph so it appears in the Files tab.
+ */
+async function writeArtifactToWorkspace(
+  taskId: string,
+  role: string,
+  slug: string,
+  content: string,
+): Promise<void> {
+  const docsDir = join(productDir, "docs");
+  await mkdir(docsDir, { recursive: true });
+  const filePath = join(docsDir, `${slug}.md`);
+  await writeFile(filePath, `${content}\n`, "utf8");
+
+  const relativePath = `docs/${slug}.md`;
+  const sid = resolveActiveSprintId();
+  if (sid) {
+    emitGraphFileChanges(sid, taskId, [{ path: relativePath, action: "created", linesChanged: content.split("\n").length }]);
+  }
 }
 
 async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, message: string) {
@@ -1139,6 +1199,12 @@ async function checkSprintCompletion(): Promise<boolean> {
     detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId },
   });
 
+  // ── Graph instrumentation (Spec 22) — sprint review decision ──
+  emitGraphDecision(currentSprintId, null, "task_completion",
+    `Sprint ${currentSprint.number} → REVIEWING`,
+    `All ${sprintTasks.length} implementation tasks reached terminal status`,
+    "system", 1.0);
+
   const reviewState = createReviewState(3);
 
   updateSprint(currentSprintId, (sprint) => ({
@@ -1150,6 +1216,12 @@ async function checkSprintCompletion(): Promise<boolean> {
   // Run pre-review build gate
   const productDir = workspaceManager.getLegacyProductDir();
   const gateResult = await runVerificationGate(productDir, "pre_review");
+
+  // ── Graph instrumentation (Spec 22) — gate verdict ──
+  emitGraphDecision(currentSprintId, null, "gate_verdict",
+    `Pre-review gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
+    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+    "system", gateResult.passed ? 1.0 : 0);
 
   reviewState.gateResults.push(gateResult);
 
@@ -1170,6 +1242,10 @@ async function checkSprintCompletion(): Promise<boolean> {
       upsertTask(bugTask);
       reviewState.bugTaskIds.push(bugTask.id);
       reviewState.phase = "rework";
+
+      // ── Graph instrumentation (Spec 22) — bug_fix node added ──
+      emitGraphNodeAdded(currentSprintId, bugTask);
+
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
   } else {
@@ -1225,6 +1301,9 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
     reviewState: s.reviewState ? { ...s.reviewState, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
   }));
 
+  // ── Graph instrumentation (Spec 22) ──
+  emitGraphSprintCompleted(sprintId, "completed");
+
   await tagCurrentSprintSnapshot();
 
   // Spec 14 Phase 6: Cross-sprint pattern transfer at sprint boundary.
@@ -1279,6 +1358,12 @@ async function executeSprintReviewVerification(
   const role = ctx.role;
   const soul = getRoleSoul(role);
 
+  // ── Graph instrumentation (Spec 22) — beat wrapping verification ──
+  const reviewBeatId = `review_${beatId}`;
+  const reviewBeatSprintId = sprintId;
+  const reviewBeatStart = Date.now();
+  emitGraphBeatStarted(reviewBeatSprintId, sprintId, reviewBeatId, role, "sprint_verification", `Sprint ${sprint.number} review`);
+
   // Build the tester verification prompt
   const completedTasks = snapshot.tasks.filter(
     (t) => t.sprintId === sprintId && t.status === "completed" && t.kind !== "bug_fix" && t.kind !== "follow_up",
@@ -1296,6 +1381,9 @@ async function executeSprintReviewVerification(
     emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error}) — auto-failing sprint verification`, { beatId });
   }
 
+  // Entry-point import check
+  const sprintEntryCheck = checkEntryPointImports();
+
   const prompt = [
     `You are verifying Sprint ${sprint.number}: "${sprint.goal}".`,
     "",
@@ -1308,18 +1396,35 @@ async function executeSprintReviewVerification(
     previewProbe.reachable
       ? `HTTP status: ${previewProbe.statusCode}`
       : `Error: ${previewProbe.error ?? "unknown"}`,
+    previewProbe.reachable ? `Content length: ${previewProbe.contentLength} bytes` : "",
+    previewProbe.reachable ? `Has product content: ${previewProbe.hasProductContent}` : "",
+    previewProbe.bodySnippet ? `Page text snippet: ${previewProbe.bodySnippet}` : "",
+    "",
+    "## Entry-Point Integration Check (automated)",
+    `Entry file: ${sprintEntryCheck.entryFile ?? "not found"}`,
+    `Import check passed: ${sprintEntryCheck.pass}`,
+    `Details: ${sprintEntryCheck.reason}`,
+    sprintEntryCheck.orphanedModules.length > 0 ? `Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}` : "",
+    !sprintEntryCheck.pass ? "CRITICAL: Entry file does NOT import product modules. Components exist as files but are never used. The sprint MUST fail." : "",
     "",
     "IMPORTANT: If the preview is UNREACHABLE, the sprint MUST fail. A product that cannot be accessed is not shippable.",
+    "IMPORTANT: If the entry-point integration check FAILED, the sprint MUST fail. Files on disk that aren't imported are not a product.",
     "",
     "## Your Verification Steps",
-    "1. Check the automated preview health result above — if unreachable, verdict MUST be fail",
-    "2. Analyze each completed task against its Definition of Done",
-    "3. Identify any defects or gaps",
-    "4. Produce a structured QA report",
+    "1. Check the automated preview health and entry-point results above — if either failed, verdict MUST be fail",
+    "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal",
+    `   - Read the entry file (start with ${productDir}/src/App.tsx or equivalent) and verify it imports product modules`,
+    "   - Do NOT produce a theoretical report — cite actual files and import statements you verified",
+    "3. Analyze each completed task against its Definition of Done",
+    "4. Identify any defects or gaps",
+    "5. Produce a structured QA report",
     "",
-    "## QA Report Format (required)",
-    "Output a JSON block with this structure:",
-    '{"verdict":"pass"|"fail","tasks":[{"taskId":"...","verdict":"pass"|"fail","findings":[{"defect_area":"build_failure"|"test_failure"|"ui_rendering"|"ui_interaction"|"api_behavior"|"accessibility"|"content"|"design_mismatch"|"logic_error"|"performance","severity":"critical"|"high"|"medium"|"low","description":"...","expected":"...","actual":"...","file":"...","fix_suggestion":"..."}],"dod_checklist":[{"item":"...","status":"pass"|"fail","evidence":"..."}]}],"test_files_written":[],"build_status":"pass"|"fail"|"skipped","test_suite_status":"pass"|"fail"|"skipped"|"no_tests"}',
+    "## QA Report Requirements",
+    "For each completed task, assess whether it passes or fails its Definition of Done.",
+    "For failures, describe the defect area, severity, what was expected vs actual, the file involved, and a fix suggestion.",
+    "For each DoD item, state whether it passes or fails with evidence.",
+    "State overall build and test suite status.",
+    "Conclude with an overall verdict: PASS or FAIL.",
   ].join("\n");
 
   try {
@@ -1332,17 +1437,41 @@ async function executeSprintReviewVerification(
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
 
-    // Try to parse QA report from output
-    const qaReport = output ? parseQAReport(output) : null;
+    // Extract structured QA report from the agent's freeform output
+    let qaReport: QAReport | null = null;
+    if (output) {
+      try {
+        const extracted = await structuredCompletion(
+          "workerDeployment",
+          [
+            {
+              role: "system",
+              content: "Extract a structured QA report from the tester's analysis below. Map each task assessment, finding, and DoD checklist item. Preserve the tester's verdicts exactly.",
+            },
+            { role: "user", content: output },
+          ],
+          QAReportSchema,
+          "qa_report_extract",
+          { temperature: 0 },
+        );
+        qaReport = qaSchemaResultToQAReport(extracted);
+      } catch (extractErr) {
+        emitEmployeeActivity("tester", "error", `QA report extraction failed: ${extractErr instanceof Error ? extractErr.message : "unknown"} — treating as unparseable`, { beatId });
+      }
+    }
 
-    // Hard override: if preview is unreachable, force fail regardless of LLM verdict
+    // Hard override: if preview is unreachable OR entry-point is disconnected, force fail
     const effectiveVerdict = !previewProbe.reachable ? "fail"
+      : !sprintEntryCheck.pass ? "fail"
       : qaReport ? qaReport.verdict
       : null;
 
     if (effectiveVerdict === "pass") {
       // Tester approves → advance to final gate
       emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: PASS — advancing to final gate`, { beatId });
+
+      // ── Graph instrumentation (Spec 22) — QA verdict decision ──
+      emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: PASS`, "Tester verified all tasks pass their Definition of Done", "tester", 1.0);
 
       updateSprint(sprintId, (s) => ({
         ...s,
@@ -1364,14 +1493,20 @@ async function executeSprintReviewVerification(
         fileReferences: (qaReport?.testFilesWritten ?? []).map((f) => ({ path: f, action: "created" })),
       });
 
+      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "completed", `PASS — Sprint ${sprint.number}`, 1, Date.now() - reviewBeatStart);
       return { summary: `Tester verification PASS for Sprint ${sprint.number}`, tokensUsed, actionsCount: 1, toolCalls: 1 };
 
     } else if (effectiveVerdict === "fail") {
       // Tester found bugs (or preview unreachable) → create bug_fix tasks
       const failReason = !previewProbe.reachable
         ? `Preview unreachable: ${previewProbe.error}`
-        : "Tester QA report verdict: FAIL";
+        : !sprintEntryCheck.pass
+          ? `Entry-point disconnected: ${sprintEntryCheck.reason}`
+          : "Tester QA report verdict: FAIL";
       emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: FAIL — ${failReason}`, { beatId });
+
+      // ── Graph instrumentation (Spec 22) — QA verdict decision ──
+      emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: FAIL`, failReason, "tester", 0);
 
       const updatedReviewState: SprintReviewState = {
         ...(reviewState as SprintReviewState),
@@ -1397,6 +1532,9 @@ async function executeSprintReviewVerification(
         upsertTask(bugTask);
         newBugTaskIds.push(bugTask.id);
         rolesWithBugs.add("developer");
+
+        // ── Graph instrumentation (Spec 22) — bug_fix node for preview ──
+        emitGraphNodeAdded(sprintId, bugTask);
       }
 
       for (const taskReport of (qaReport?.tasks ?? [])) {
@@ -1420,6 +1558,9 @@ async function executeSprintReviewVerification(
           upsertTask(bugTask);
           newBugTaskIds.push(bugTask.id);
           rolesWithBugs.add(bugFields.assignedRole);
+
+          // ── Graph instrumentation (Spec 22) — QA bug_fix node added ──
+          emitGraphNodeAdded(sprintId, bugTask);
 
           // Create feedback round for audit trail
           const feedbackRound = {
@@ -1449,6 +1590,12 @@ async function executeSprintReviewVerification(
         updatedReviewState.escalatedToCto = true;
         emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
         emitReactive("cto", "escalation_received");
+
+        // ── Graph instrumentation (Spec 22) — escalation decision ──
+        emitGraphDecision(sprintId, null, "escalation",
+          `Sprint ${sprint.number} rework limit reached — escalating to CTO`,
+          `Rework cycle ${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles} exhausted`,
+          "tester", 0);
       }
 
       updateSprint(sprintId, (s) => ({
@@ -1474,6 +1621,7 @@ async function executeSprintReviewVerification(
         fileReferences: [],
       });
 
+      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "completed", `FAIL — Sprint ${sprint.number}`, 1, Date.now() - reviewBeatStart);
       return {
         summary: `Tester verification FAIL for Sprint ${sprint.number} — ${newBugTaskIds.length - reviewState.bugTaskIds.length} new bugs filed`,
         tokensUsed, actionsCount: 1, toolCalls: 1,
@@ -1486,11 +1634,13 @@ async function executeSprintReviewVerification(
         ...s,
         reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "fail" as const, phase: "rework" as const, reworkCycleCount: (s.reviewState.reworkCycleCount ?? 0) + 1 } : s.reviewState,
       }));
+      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", "Output unparseable — treated as fail", 0, Date.now() - reviewBeatStart);
       return { summary: `Tester output unparseable — treating as fail, returning to rework`, tokensUsed, actionsCount: 1, toolCalls: 1 };
     }
   } catch (err) {
     touchAgentSession(role, "idle");
     emitEmployeeActivity(role, "error", `Beat ${beatId}: sprint verification failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", err instanceof Error ? err.message : String(err), 0, Date.now() - reviewBeatStart);
     return {
       summary: `Sprint verification failed: ${err instanceof Error ? err.message : String(err)}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -1524,6 +1674,14 @@ async function executeSprintFinalGate(
 
   const productDir = workspaceManager.getLegacyProductDir();
   const gateResult = await runVerificationGate(productDir, "final");
+
+  // ── Graph instrumentation (Spec 22) — final gate verdict ──
+  if (sprintId) {
+    emitGraphDecision(sprintId, null, "gate_verdict",
+      `Final gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
+      gateResult.passed ? "Final build check passed" : `Final build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+      "system", gateResult.passed ? 1.0 : 0);
+  }
 
   const updatedGateResults = [...reviewState.gateResults, gateResult];
 
@@ -2204,7 +2362,8 @@ export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoTex
     }
   }
 
-  const meetingType = card.meeting.type ?? (card.card_type === "status_update" ? "escalation" : "ad_hoc");
+  const ceoMeetingType = card.meeting.type ?? (card.card_type === "status_update" ? "escalation" : "ad_hoc");
+  const meetingType: Meeting["type"] = ceoMeetingType === "escalation" ? "escalation" : "eval_triggered";
   const agendaType = meetingType === "escalation" ? "blocker" : card.card_type === "clarifying_question" ? "question" : "proposal";
 
   return recordMeeting({
@@ -2266,7 +2425,8 @@ function recordMeeting(params: {
   memoryModifications?: MemoryModificationInput[];
 }) {
   const snapshot = getSnapshot();
-  const participants = uniqueStrings(
+  const facilitatorAgent = getAgentByRole(snapshot, params.facilitatorRole);
+  const participantAgentIds = uniqueStrings(
     params.participantRoles
       .map((role) => getAgentByRole(snapshot, role)?.id)
       .filter(Boolean),
@@ -2275,50 +2435,65 @@ function recordMeeting(params: {
   const now = new Date().toISOString();
   const meetingMemoryModifications = deriveMeetingMemoryModifications(params);
 
+  // Build a single facilitator contribution from the legacy agenda items
+  const facilitatorContribution: Meeting["contributions"][number] = {
+    agentId: facilitatorAgent?.id ?? "unknown_agent",
+    agentName: facilitatorAgent?.name ?? params.facilitatorRole,
+    agentRole: params.facilitatorRole,
+    contribution: {
+      whatIDid: params.agenda.filter(a => a.type === "update").map(a => a.content).join("; ") || params.summary,
+      whatImDoing: "",
+      blockers: params.agenda.filter(a => a.type === "blocker").map(a => a.content).join("; "),
+      learnings: (params.learnings ?? []).map(l => l.content).join("; "),
+      questionsForTeam: params.agenda.filter(a => a.type === "question").map(a => a.content).join("; "),
+    },
+    submittedAt: now,
+  };
+
+  // Build resolutions from legacy decisions + task modifications
+  const resolutions: Meeting["resolutions"] = (params.decisions ?? []).length > 0 || (params.taskModifications ?? []).length > 0
+    ? {
+        decisions: [
+          ...(params.decisions ?? []).map(d => ({
+            conflictId: null,
+            blockerId: null,
+            decision: d.description,
+            action: "note" as const,
+          })),
+          ...(params.taskModifications ?? []).map(tm => ({
+            conflictId: null,
+            blockerId: null,
+            decision: tm.details,
+            action: (tm.modificationType === "cancel" ? "modify_task"
+                   : tm.modificationType === "assign" ? "create_task"
+                   : "modify_task") as "create_task" | "modify_task",
+            taskAction: {
+              type: (tm.modificationType === "assign" ? "create" : "update") as "create" | "update",
+              issueId: tm.taskId,
+              assigneeRole: tm.assignedRole ?? undefined,
+              newStatus: tm.resultingStatus ?? undefined,
+              newPriority: tm.priority ?? undefined,
+            },
+          })),
+        ],
+      }
+    : null;
+
   const meeting: Meeting = {
     id: `meeting_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
+    scheduleId: null,
     type: params.type,
-    participants,
-    agenda: params.agenda.map((item) => ({
-      id: `agenda_${crypto.randomUUID()}`,
-      topic: item.topic,
-      type: item.type,
-      content: item.content,
-      raisedByAgentId: getAgentByRole(snapshot, item.raisedByRole)?.id ?? "unknown_agent",
-      relatedTaskId: item.relatedTaskId ?? null,
-      needsBoardApproval: item.needsBoardApproval ?? false,
-    })),
-    decisions: (params.decisions ?? []).map((decision) => ({
-      id: `decision_${crypto.randomUUID()}`,
-      description: decision.description,
-      decidedByAgentIds: uniqueStrings(decision.decidedByRoles.map((role) => getAgentByRole(snapshot, role)?.id), 8),
-      impactIds: decision.impactIds,
-    })),
-    learnings: (params.learnings ?? []).map((learning) => ({
-      id: `learning_${crypto.randomUUID()}`,
-      agentId: getAgentByRole(snapshot, learning.role)?.id ?? "unknown_agent",
-      content: learning.content,
-      promotedToSummary: learning.promotedToSummary ?? true,
-    })),
-    taskModifications: (params.taskModifications ?? []).map((modification) => ({
-      id: `task_mod_${crypto.randomUUID()}`,
-      taskId: modification.taskId,
-      modificationType: modification.modificationType,
-      details: modification.details,
-      assignedRole: modification.assignedRole ?? null,
-      priority: modification.priority ?? null,
-      resultingStatus: modification.resultingStatus ?? null,
-    })),
-    memoryModifications: meetingMemoryModifications.map((modification) => ({
-      id: `memory_mod_${crypto.randomUUID()}`,
-      agentId: getAgentByRole(snapshot, modification.role)?.id ?? "unknown_agent",
-      modificationType: modification.modificationType,
-      content: modification.content,
-    })),
+    title: params.summary,
     status: "completed",
-    summary: params.summary,
-    scheduledAt: now,
+    facilitatorAgentId: facilitatorAgent?.id ?? "unknown_agent",
+    participantAgentIds,
+    contributions: [facilitatorContribution],
+    synthesis: null,
+    resolutions,
+    brief: null,
+    healthSnapshot: null,
+    createdAt: now,
     completedAt: now,
   };
 
@@ -2340,6 +2515,35 @@ function recordMeeting(params: {
     `${params.type.replace(/_/g, " ")} meeting complete: ${params.summary}`,
     { meetingId: meeting.id },
   );
+
+  // ── Graph instrumentation: meetings ──
+  const activeSprintId = resolveActiveSprintId();
+  if (activeSprintId) {
+    // Determine which task node this meeting relates to (if any)
+    const meetingNodeId = (params as { _graphNodeId?: string })._graphNodeId ?? null;
+
+    // Derive trigger from agenda blockers/topics
+    const triggerItems = params.agenda
+      .filter(a => a.type === "blocker" || a.type === "update")
+      .map(a => a.content.slice(0, 100));
+    const trigger = triggerItems.length > 0
+      ? triggerItems.join("; ")
+      : `${params.type.replace(/_/g, " ")} by ${params.facilitatorRole}`;
+
+    emitGraphMeeting(
+      activeSprintId,
+      meetingNodeId,
+      meeting.id,
+      params.type,
+      params.facilitatorRole,
+      params.participantRoles,
+      params.summary,
+      trigger,
+      (params.decisions ?? []).map(d => d.description),
+      (meetingMemoryModifications ?? []).map(m => `${m.agentRole}: ${m.content.slice(0, 80)}`),
+      false,
+    );
+  }
 
   return meeting;
 }
@@ -2405,6 +2609,14 @@ function attachArtifactToTask(taskId: string, artifactId: string) {
     ...task,
     artifactIds: task.artifactIds.includes(artifactId) ? task.artifactIds : [...task.artifactIds, artifactId],
   }));
+
+  // ── Graph instrumentation (Spec 22) ──
+  const task = getSnapshot().tasks.find((t) => t.id === taskId);
+  const sprintId = task?.sprintId ?? resolveActiveSprintId();
+  if (sprintId) {
+    const artifact = artifacts.find((a) => a.id === artifactId);
+    emitGraphArtifactProduced(sprintId, taskId, artifactId, artifact?.kind ?? "output", artifact?.title ?? artifactId);
+  }
 }
 
 function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null) {
@@ -2464,18 +2676,21 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
   updateTask(taskId, (task) => ({
     ...task,
     status,
-    verifierState:
-      status === "completed"
-        ? {
-            ...task.verifierState,
-            isVerified: true,
-            feedback: feedback ?? task.verifierState.feedback,
-          }
-        : {
-            ...task.verifierState,
-            feedback: feedback ?? task.verifierState.feedback,
-          },
+    verifierState: {
+      ...task.verifierState,
+      // isVerified is NOT auto-stamped on completion — it must be set
+      // explicitly by an independent verification step (preview validation,
+      // tester, or CTO review). This prevents self-reported "done" from
+      // being treated as "verified".
+      feedback: feedback ?? task.verifierState.feedback,
+    },
   }));
+
+  // ── Graph instrumentation (Spec 22) ──
+  const sprintId = prev?.sprintId ?? resolveActiveSprintId();
+  if (sprintId) {
+    emitGraphStatusChanged(sprintId, taskId, prevStatus, status, prev?.assignedRole ?? "system", feedback ?? `${prevStatus} → ${status}`);
+  }
 
   // Audit task transitions
   audit({
@@ -2488,6 +2703,11 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
     detail: { taskId, previousStatus: prevStatus, feedback: feedback ?? null },
     correlationId: taskId,
   });
+
+  // Phase 7: Trigger escalation meeting when a task becomes blocked
+  if (status === "blocked" && prevStatus !== "blocked") {
+    triggerEscalationMeeting(taskId, feedback ?? `Task "${prev?.title ?? taskId}" is blocked`);
+  }
 
   // Auto-promote downstream tasks when a task completes
   if (status === "completed") {
@@ -2502,6 +2722,11 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           ...t,
           incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...completedTask.artifactIds], 20),
         }));
+        // Graph: artifact_flow edge from producer → consumer
+        const sid = completedTask.sprintId ?? resolveActiveSprintId();
+        if (sid) {
+          emitGraphArtifactConsumed(sid, childId, taskId, completedTask.artifactIds, null);
+        }
       }
     }
 
@@ -2518,7 +2743,16 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
         const upstreamArtifactIds: string[] = [];
         for (const depId of task.dependsOnTaskIds) {
           const dep = snapshot.tasks.find((t) => t.id === depId);
-          if (dep) upstreamArtifactIds.push(...dep.artifactIds);
+          if (dep) {
+            upstreamArtifactIds.push(...dep.artifactIds);
+            // Graph: artifact_flow edge from each dependency → consumer
+            if (dep.artifactIds.length > 0) {
+              const sid = dep.sprintId ?? resolveActiveSprintId();
+              if (sid) {
+                emitGraphArtifactConsumed(sid, task.id, depId, dep.artifactIds, null);
+              }
+            }
+          }
         }
         updateTask(task.id, (t) => ({
           ...t,
@@ -2543,6 +2777,25 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
       if (agent) {
         const outcome = status === "completed" ? "success" : status === "failed" ? "failure" : "partial";
         const memoryOutput = buildTaskMemoryOutput(task, feedback);
+
+        // ── Graph instrumentation: memory write (fires regardless of hippocampus) ──
+        const sid = resolveActiveSprintId();
+        if (sid) {
+          emitGraphMemoryWrite(
+            sid,
+            task.id,
+            task.assignedRole,
+            task.id,
+            null,
+            "dynamic",
+            "task_completion",
+            `Memory stored for "${task.title}" (${outcome})`,
+            memoryOutput.slice(0, 500),
+            outcome,
+            true,
+          );
+        }
+
         hippocampus.processTaskCompletion({
           agentId: agent.id,
           taskId: task.id,
@@ -2724,6 +2977,35 @@ export async function runPatternPromotionSweep(companyId: string): Promise<{
   return { candidatesFound: candidates.length, mutationsProposed };
 }
 
+/**
+ * Mark a task as independently verified. This MUST be called by a verification
+ * step (preview validation, tester, CTO review) — not by the agent that did
+ * the work. Separating verification from completion prevents self-reported
+ * "done" from being treated as "verified".
+ */
+function setTaskVerified(taskId: string, verifiedBy: string) {
+  updateTask(taskId, (task) => ({
+    ...task,
+    verifierState: {
+      ...task.verifierState,
+      isVerified: true,
+      feedback: task.verifierState.feedback
+        ? `${task.verifierState.feedback} | Verified by ${verifiedBy}`
+        : `Verified by ${verifiedBy}`,
+    },
+  }));
+  audit({
+    companyId: getSnapshot().company.id,
+    category: "task_lifecycle",
+    severity: "info",
+    eventType: "task_verified",
+    agentRole: null,
+    summary: `Task "${taskId}" independently verified by ${verifiedBy}`,
+    detail: { taskId, verifiedBy },
+    correlationId: taskId,
+  });
+}
+
 function taskSortWeight(task: Task) {
   if (task.priority === "critical") return 0;
   if (task.priority === "high") return 1;
@@ -2802,10 +3084,26 @@ function buildSpecialistTaskPrompt(task: Task) {
   if (task.assignedRole === "tester") {
     profileHints.push(
       "",
-      "# Verification rules",
+      "# Verification rules — YOU HAVE TOOLS, USE THEM",
       "Treat this as a verification assignment, not a build assignment.",
-      "Use the available preview metadata to reason about what should be validated.",
-      "Explicitly state: verdict, what was verified, what remains unverified, concrete risks, and what downstream role should act next.",
+      "You are an agent with full tool access. You MUST:",
+      "",
+      "1. READ the actual source files in the product workspace using your file-read tools",
+      `   - Start with the entry file (e.g. ${productDir}/src/App.tsx or equivalent)`,
+      "   - Verify it IMPORTS and RENDERS the product-specific components",
+      "   - If the entry file is scaffold boilerplate that doesn't import product modules, the task FAILS",
+      "",
+      "2. CHECK the import chain: entry file → components → data/lib modules",
+      "   - Files existing on disk is NOT sufficient — they must be connected via imports",
+      "",
+      "3. If a preview URL is available, verify it serves actual product content",
+      `   - Preview URL: ${preview.validationUrl ?? preview.entryUrl ?? preview.url ?? "not available"}`,
+      "",
+      "4. Produce a verdict with evidence from the files you actually read",
+      "   - Cite specific file paths and import statements you verified",
+      "   - Do NOT write a theoretical report — verify by reading actual code",
+      "",
+      "FAIL the task if: entry file doesn't import product modules, components are orphaned (exist but unused), or the product is scaffold-only.",
     );
   }
 
@@ -2857,6 +3155,10 @@ function buildSpecialistTaskPrompt(task: Task) {
       "",
       "## 6. Definition of Done",
       "Measurable checklist of what 'done' means for the developer.",
+      "",
+      "# IMPORTANT: Write your spec to disk",
+      `After producing the spec, write it as a Markdown file to ${productDir}/docs/pm-acceptance-spec.md using your file tools.`,
+      "This ensures the developer and other agents can read it directly from the workspace.",
     );
   } else if (task.assignedRole === "ui_designer") {
     profileHints.push(
@@ -3444,6 +3746,17 @@ async function executeSpecialistTask(taskId: string) {
     appendTaskResult(task.id, `verification:${getPreviewEvidenceUrl() ?? "no-preview-url"}`);
   }
   attachArtifactToTask(task.id, artifact.id);
+  // Write specialist reports to workspace as markdown files
+  const artifactSlug = role === "tester"
+    ? "tester-report"
+    : role === "ui_designer"
+      ? "ui-design-direction"
+      : role === "marketing"
+        ? "marketing-report"
+        : null;
+  if (artifactSlug) {
+    await writeArtifactToWorkspace(task.id, role, artifactSlug, artifactContent);
+  }
   if (role === "tester") {
     const evidenceUrl = getPreviewEvidenceUrl();
     setTaskPreviewUrl(task.id, evidenceUrl);
@@ -3491,14 +3804,22 @@ async function executeSpecialistTask(taskId: string) {
       });
       return;
     }
-    setTaskStatus(task.id, "completed", `CTO review completed — preview verified reachable (HTTP ${reviewProbe.statusCode}).`);
+    // Also verify entry-point imports — HTTP 200 alone is not enough
+    const ctoEntryCheck = checkEntryPointImports();
+    if (!ctoEntryCheck.pass) {
+      setTaskStatus(task.id, "blocked", `CTO review blocked — ${ctoEntryCheck.reason}`);
+      emitEmployeeActivity("cto", "error", `Board handoff blocked — entry-point disconnected: ${ctoEntryCheck.reason}`, { taskId: task.id });
+      return;
+    }
+    setTaskStatus(task.id, "completed", `CTO review completed — preview verified reachable (HTTP ${reviewProbe.statusCode}), entry-point imports verified${reviewProbe.hasProductContent ? ", product content detected" : ""}.`);
+    setTaskVerified(task.id, "cto_board_handoff");
   } else {
     setTaskStatus(task.id, "completed", `${role} completed the specialist task.`);
   }
 
   const specialistMeetingContext = getSpecialistMeetingContext(role, task, artifact.id);
   const completionMeeting = recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: role,
     participantRoles: specialistMeetingContext.participantRoles,
     summary: `${role.replace(/_/g, " ")} completed specialist task ${task.title}.`,
@@ -3527,25 +3848,25 @@ async function executeSpecialistTask(taskId: string) {
     if (approval) {
       const createdApproval = approval;
       appendTaskResult(task.id, `approval:${approval.id}`);
+      // Add board escalation to resolutions
       updateMeeting(completionMeeting.id, (meeting) => ({
         ...meeting,
-        agenda: meeting.agenda.map((item, index) => (
-          index === 0
-            ? {
-                ...item,
-                needsBoardApproval: true,
-                content: `${item.content} Board approval is required before any external distribution action can occur.`,
-              }
-            : item
-        )),
-        decisions: meeting.decisions.map((decision, index) => (
-          index === 0
-            ? {
-                ...decision,
-                impactIds: decision.impactIds.includes(createdApproval.id) ? decision.impactIds : [...decision.impactIds, createdApproval.id],
-              }
-            : decision
-        )),
+        resolutions: {
+          decisions: [
+            ...(meeting.resolutions?.decisions ?? []),
+            {
+              conflictId: null,
+              blockerId: null,
+              decision: `Board approval required for marketing external distribution. Approval ID: ${createdApproval.id}`,
+              action: "escalate_to_board" as const,
+              escalation: {
+                question: "Approve external marketing distribution?",
+                context: `Task: ${task.title}`,
+                severity: "medium" as const,
+              },
+            },
+          ],
+        },
       }));
     }
   }
@@ -3577,58 +3898,50 @@ async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnapshot): 
   );
   if (pendingSpecialist.length === 0) return 0;
 
-  // Collect workspace source listing for the LLM to evaluate.
-  const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".html", ".css"]);
-  const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".vite"]);
-  const fileList: string[] = [];
-
-  function walk(dir: string, depth = 0) {
-    if (depth > 3) return;
-    let entries: import("node:fs").Dirent[];
-    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
-    for (const entry of entries) {
-      if (ignoreDirs.has(entry.name)) continue;
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) { walk(fullPath, depth + 1); continue; }
-      const ext = entry.name.slice(entry.name.lastIndexOf("."));
-      if (sourceExtensions.has(ext)) {
-        fileList.push(relative(productDir, fullPath).replace(/\\/g, "/"));
-      }
-    }
-  }
-  walk(productDir);
-  if (fileList.length === 0) return 0;
-
   const taskSummary = pendingSpecialist.map((t) =>
     `- id="${t.id}" kind=${t.kind} role=${t.assignedRole} title="${t.title}" dod=[${t.definitionOfDone.join("; ")}]`
   ).join("\n");
 
+  const prompt = [
+    "You decide which queued specialist tasks have ALREADY been satisfied by the developer implementation.",
+    "USE YOUR TOOLS to read the source files in the product workspace:",
+    `- Product directory: ${productDir}`,
+    `- Start with the entry file (e.g. ${productDir}/src/App.tsx or ${productDir}/src/main.tsx)`,
+    "- Read imports and follow them to verify each task's definition-of-done",
+    "",
+    "A task is resolved ONLY if:",
+    "- The source code clearly implements the definition-of-done",
+    "- The implemented code is actually IMPORTED and USED (not just existing as an orphaned file)",
+    "- For UI tasks: components are rendered in the app entry point, not just defined",
+    "- For integration tasks: modules are connected, not just co-located",
+    "Do not resolve tasks that require runtime verification (e.g. running tests, checking HTTP).",
+    "When in doubt, do NOT resolve — let the specialist agent verify.",
+    "",
+    "After reading the files, list which task IDs are already resolved, with a short reason for each.",
+    "",
+    "Pending specialist tasks:",
+    taskSummary,
+  ].join("\n");
+
   try {
+    const session = await ensureAgentSession(snapshot, "tester");
+    const soul = getRoleSoul("tester");
+    const output = await runPromptText("tester", session.sessionId, soul.systemPrompt + getAgentSkills("tester"), prompt);
+
+    if (!output) return 0;
+
+    // Extract structured verdict from the agent's freeform output
     const verdict = await structuredCompletion(
       "workerDeployment",
       [
         {
           role: "system",
-          content: [
-            "You decide which queued specialist tasks have ALREADY been satisfied by the developer implementation.",
-            "A task is resolved ONLY if the workspace files clearly demonstrate its definition-of-done is met.",
-            "Do not resolve tasks that require runtime verification (e.g. running tests, checking HTTP).",
-            "Return the list of resolved task IDs with a short reason.",
-          ].join("\n"),
+          content: "Extract the list of resolved task IDs and reasons from the tester's analysis below. Only include tasks the tester explicitly confirmed as already implemented.",
         },
-        {
-          role: "user",
-          content: [
-            "Workspace files:",
-            fileList.join("\n"),
-            "",
-            "Pending specialist tasks:",
-            taskSummary,
-          ].join("\n"),
-        },
+        { role: "user", content: output },
       ],
       SpecialistPruneVerdict,
-      "specialist_prune_verdict",
+      "specialist_prune_verdict_extract",
       { temperature: 0 },
     );
 
@@ -3638,10 +3951,17 @@ async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnapshot): 
       if (!validIds.has(item.taskId)) continue;
       setTaskStatus(item.taskId, "completed", `Auto-resolved by workspace audit: ${item.reason}`);
       resolved += 1;
+
+      // ── Graph instrumentation (Spec 22) — prune decision ──
+      const pruneSprintId = snapshot.company.currentSprintId;
+      if (pruneSprintId) {
+        emitGraphDecision(pruneSprintId, item.taskId, "prune_decision",
+          `Pruned: ${item.taskId}`, item.reason, "tester");
+      }
     }
     return resolved;
   } catch {
-    // Non-fatal — if the LLM call fails, just proceed with regular specialist execution.
+    // Non-fatal — if the agent call fails, just proceed with regular specialist execution.
     return 0;
   }
 }
@@ -3741,7 +4061,7 @@ async function completeExecutionCycle(reason: string) {
   }
 
   recordMeeting({
-    type: "ad_hoc",
+    type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],
     summary: queuedNonCoreTaskCount > 0
@@ -3777,7 +4097,7 @@ async function completeExecutionCycle(reason: string) {
 function pauseForBoardReview(reason: string) {
   executionStatus = "awaiting_board_review";
   recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: "cto",
     participantRoles: ["cto", "ceo"],
     summary: "Autonomous execution paused for a board-level decision.",
@@ -3822,6 +4142,18 @@ async function reconcilePostReviewExecution() {
 
   const snapshot = getSnapshot();
   const boardDecision = shouldPauseForBoardReview(snapshot);
+
+  // ── Graph instrumentation (Spec 22) — auto_approve decision ──
+  {
+    const pauseSprintId = snapshot.company.currentSprintId;
+    if (pauseSprintId) {
+      emitGraphDecision(pauseSprintId, null, boardDecision.shouldPause ? "escalation" : "auto_approve",
+        boardDecision.shouldPause ? "Board review required" : "Auto-approved — continuing execution",
+        boardDecision.reason ?? "No blocking items",
+        "system");
+    }
+  }
+
   if (boardDecision.shouldPause) {
     pauseForBoardReview(boardDecision.reason ?? "Board review required.");
     return;
@@ -4065,7 +4397,6 @@ async function runPromptText(
 }
 
 
-
 export function getArtifacts() {
   return artifacts;
 }
@@ -4087,6 +4418,7 @@ export async function resetOrchestratorState() {
   executionStatus = "idle";
   eventBridgeStarted = false;
   activeExecution = null;
+  graphStore.reset();
   await stopLocalPreview();
 }
 
@@ -4202,7 +4534,7 @@ export async function approveBoardReview() {
   }));
 
   recordMeeting({
-    type: "ad_hoc",
+    type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],
     summary: "Board approved the CTO handoff and closed the current execution cycle.",
@@ -4380,6 +4712,9 @@ export async function approveSprintProposal(card: CeoCard) {
   for (const task of createdTasks) {
     upsertTask(task);
   }
+
+  // ── Graph instrumentation (Spec 22) — Sprint N+1 graph ──
+  emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");
 
   // Auto-promote tasks with no dependencies to "planned"
   for (const task of createdTasks) {
@@ -4993,6 +5328,13 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
+    // ── Graph instrumentation (Spec 22) — beat start ──
+    const beatStartTime = Date.now();
+    const beatSprintId = task.sprintId ?? resolveActiveSprintId();
+    if (beatSprintId) {
+      emitGraphBeatStarted(beatSprintId, taskId, beatId, role, task.kind === "implementation" ? "execute_task" : task.kind, taskPrompt);
+    }
+
     // Pass matchedSkillIds so runPromptText injects only the classifier-picked
     // skills (≤3) rather than every skill for the role (spec §14 Phase 1).
     const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt, tools, matchedSkillIds);
@@ -5078,6 +5420,11 @@ export async function executeBeatTask(
       emitEmployeeActivity(role, "context", `Beat ${beatId}: created artifact ${artifact.id} (${artifactTitle})`, {
         beatId, taskId, detail: { artifactId: artifact.id, artifactKind },
       });
+
+      // Write PM acceptance specs to workspace so downstream agents can read them
+      if (role === "pm" && task.kind === "acceptance_spec") {
+        await writeArtifactToWorkspace(task.id, "pm", "pm-acceptance-spec", output);
+      }
     }
 
     // Commit task result — only if not already completed by a sub-handler
@@ -5109,6 +5456,11 @@ export async function executeBeatTask(
       beatId, taskId, detail: { beatViolationCount },
     });
 
+    // ── Graph instrumentation (Spec 22) — beat complete (success) ──
+    if (beatSprintId) {
+      emitGraphBeatCompleted(beatSprintId, taskId, beatId, "completed", output?.slice(0, 300), 1, Date.now() - beatStartTime);
+    }
+
     return {
       summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
       tokensUsed,
@@ -5121,6 +5473,11 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "error", `Beat ${beatId}: execution failed — ${err instanceof Error ? err.message : String(err)}`, {
       beatId, taskId, detail: { error: err instanceof Error ? err.message : String(err) },
     });
+
+    // ── Graph instrumentation (Spec 22) — beat complete (failure) ──
+    if (beatSprintId) {
+      emitGraphBeatCompleted(beatSprintId, taskId, beatId, "failed", err instanceof Error ? err.message : String(err), 0, Date.now() - beatStartTime);
+    }
 
     // ── Governance: trust lifecycle — failure (Spec 13 Step 10) ──
     const failEvent = buildTrustEvent(ctx.agentId, "task_failed", `Beat ${beatId}: ${err instanceof Error ? err.message : "unknown error"}`, new Date().toISOString());
@@ -5159,6 +5516,17 @@ export async function executeChecklistAction(
 ): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
   const role = ctx.role;
 
+  // ── Graph instrumentation (Spec 22) — beat wrapping checklist action ──
+  const clBeatId = `cl_${beatId}`;
+  const clSprintId = ctx.currentSprint?.id ?? resolveActiveSprintId() ?? "";
+  const clBeatStart = Date.now();
+  if (clSprintId) {
+    emitGraphBeatStarted(clSprintId, clSprintId, clBeatId, role, `checklist:${action.suggestedAction}`, action.detail?.slice(0, 200));
+  }
+  const finishClBeat = (status: "completed" | "failed", summary: string, toolCalls: number) => {
+    if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, status, summary, toolCalls, Date.now() - clBeatStart);
+  };
+
   // Ensure the SSE event bridge is running so runPromptText() completion
   // promises resolve (session.idle / session.error events).
   if (!eventBridgeStarted) {
@@ -5174,18 +5542,21 @@ export async function executeChecklistAction(
   if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
     if (isCeoStreaming()) {
       emitEmployeeActivity("ceo", "info", `Beat ${beatId}: CEO skipped — live chat streaming`, { beatId });
+      finishClBeat("completed", "CEO skipped — streaming", 0);
       return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
     try {
       emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
       await triggerCeoSprintProposal();
       emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: CEO sprint proposal completed`, { beatId });
+      finishClBeat("completed", "CEO sprint proposal completed", 1);
       return {
         summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
       emitEmployeeActivity("ceo", "error", `Beat ${beatId}: CEO sprint proposal failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      finishClBeat("failed", "CEO sprint proposal failed", 0);
       return {
         summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -5215,6 +5586,7 @@ export async function executeChecklistAction(
       emitEmployeeActivity(role, "context", `Beat ${beatId}: checklist action completed — output=${(output?.length ?? 0)} chars`, {
         beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
       });
+      finishClBeat("completed", `${role} checklist action completed`, 1);
       return {
         summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
@@ -5222,6 +5594,7 @@ export async function executeChecklistAction(
     } catch (err) {
       touchAgentSession(role, "idle");
       emitEmployeeActivity(role, "error", `Beat ${beatId}: ${role} checklist action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      finishClBeat("failed", `${role} checklist action failed`, 0);
       return {
         summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -5235,15 +5608,22 @@ export async function executeChecklistAction(
     const reviewAction = action.suggestedAction;
 
     if (reviewAction === "sprint_review:run_tester_verification") {
-      return executeSprintReviewVerification(ctx, beatId);
+      const res = await executeSprintReviewVerification(ctx, beatId);
+      finishClBeat("completed", "tester verification", res.toolCalls);
+      return res;
     }
     if (reviewAction === "sprint_review:run_final_gate") {
-      return executeSprintFinalGate(ctx, beatId);
+      const res = await executeSprintFinalGate(ctx, beatId);
+      finishClBeat("completed", "final gate", res.toolCalls);
+      return res;
     }
     if (reviewAction === "sprint_review:retest_after_rework") {
-      return executeRetestAfterRework(ctx, beatId);
+      const res = await executeRetestAfterRework(ctx, beatId);
+      finishClBeat("completed", "retest after rework", res.toolCalls);
+      return res;
     }
 
+    finishClBeat("completed", `Unknown review action: ${reviewAction}`, 0);
     return {
       summary: `Unknown sprint review action: ${reviewAction}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -5255,8 +5635,69 @@ export async function executeChecklistAction(
     return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
   }
 
+  // ── Meeting contribution (Spec 18 Phase 4) ──
+  if (action.suggestedAction.startsWith("meeting_contribution:")) {
+    startBeatTokenAccumulator(beatId);
+    const meetingId = action.suggestedAction.split(":")[1];
+    const snapshot = getSnapshot();
+    const meeting = snapshot.meetings.find((m) => m.id === meetingId);
+    if (!meeting || meeting.status !== "collecting") {
+      finishClBeat("completed", `Meeting ${meetingId} not collecting`, 0);
+      return { summary: `Meeting ${meetingId} not in collecting status`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+
+    const agent = snapshot.agents.find((a) => a.id === ctx.agentId);
+    if (!agent) {
+      finishClBeat("completed", `Agent not found`, 0);
+      return { summary: `Agent ${ctx.agentId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+
+    const agentTasks = ctx.tasks.filter((t) => t.assignedRole === ctx.role);
+    try {
+      emitEmployeeActivity(ctx.role, "working", `Beat ${beatId}: producing meeting contribution for "${meeting.title}"`, { beatId });
+
+      const { generateContribution } = await import("./meeting-synthesis");
+      const contribution = await generateContribution(
+        meeting,
+        { id: agent.id, name: agent.name, role: agent.role, title: agent.title },
+        agentTasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),
+      );
+
+      // Add contribution to the meeting
+      updateMeeting(meetingId, (m) => ({
+        ...m,
+        contributions: [
+          ...m.contributions,
+          {
+            agentId: agent.id,
+            agentName: agent.name,
+            agentRole: agent.role,
+            contribution,
+            submittedAt: new Date().toISOString(),
+          },
+        ],
+      }));
+      await flush();
+
+      emitEmployeeActivity(ctx.role, "transition", `Beat ${beatId}: meeting contribution submitted`, { beatId });
+      finishClBeat("completed", "meeting contribution submitted", 1);
+      return {
+        summary: `Contributed to meeting "${meeting.title}"`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+      };
+    } catch (err) {
+      emitEmployeeActivity(ctx.role, "error", `Beat ${beatId}: meeting contribution failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      finishClBeat("failed", "meeting contribution failed", 0);
+      return {
+        summary: `Meeting contribution failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+      };
+    }
+  }
+
   // ── Fallback: log the action without executing ──
   emitEmployeeActivity(role, "info", `Beat ${beatId}: no handler for checklist action — "${action.suggestedAction}"`, { beatId });
+  if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, "completed", `No handler: ${action.suggestedAction}`, 0, Date.now() - clBeatStart);
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,

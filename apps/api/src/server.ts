@@ -9,10 +9,11 @@ process.on("uncaughtException", (err) => {
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
-import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy, updateApproval } from "./store";
+import { clearPersistedStoreState, hydrate, flush, teardown, getEvents, getSnapshot, resetCompany, applyStrategy, updateApproval, upsertMeeting, upsertMeetingSchedule, updateMeeting, updateMeetingSchedule } from "./store";
 import { getRuntimeStatus } from "./runtime";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "./chat";
-import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter, runPatternPromotionSweep } from "./orchestrator";
+import { approveBoardReview, approveSprintProposal, rejectSprintProposal, getAgentSessions, getArtifacts, getExecutionStatus, getTransitions, getFeedbackRounds, resetOrchestratorState, hippocampus, executeBeatTask, executeChecklistAction, triggerCeoSprintProposalFromBeat, setReactiveEventEmitter, runPatternPromotionSweep, setMeetingScheduler } from "./orchestrator";
+import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./azure-openai";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity, emitEmployeeActivity } from "./activity";
 import { strategyOutputSchema, generateStrategy } from "./ceo";
 import { serverConfig, orchestratorConfig } from "./config/index";
@@ -26,9 +27,10 @@ import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
+import { graphStore } from "./graph-store";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
-import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById, getPatternsForCompany, clusterPatterns, checkSkillCandidates, proposeSkillFromCluster, getPatternCount, extractPattern, matchSkills as registryMatchSkills, recordSkillUsage, getUnusedSkills, getUnderperformingSkills, analyzeSprintPatterns } from "@arceus/company-runtime";
+import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, seedExistingSkills, getMutationsForCompany, getAttributionsForCompany, processTaskOutcome, runATAPipeline, getMutationById, getPatternsForCompany, clusterPatterns, checkSkillCandidates, proposeSkillFromCluster, getPatternCount, extractPattern, matchSkills as registryMatchSkills, recordSkillUsage, getUnusedSkills, getUnderperformingSkills, analyzeSprintPatterns, MeetingScheduler, MeetingPipeline } from "@arceus/company-runtime";
 import { getSprintBudget, getAllSprintBudgets, SPRINT_EVOLUTION_BUDGET_CENTS, MAX_MUTATIONS_PER_SPRINT, MIN_TRUST_FOR_MUTATION, canProposeMutation, lintSkillContent, recordMutationProposal } from "./skill-governance";
 import type { BeatDependencies } from "@arceus/company-runtime";
 import { warmUpOpencode } from "./opencode";
@@ -40,6 +42,8 @@ const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
 cpSetBuildCheckDir(productDir);
 
+const persistenceMode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
+console.log(`[STARTUP] Company state persistence mode: ${persistenceMode}`);
 await hydrate();
 
 // ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
@@ -77,6 +81,184 @@ setReactiveEventEmitter((companyId, agentId, role, event) =>
   heartbeatEngine.emitEvent(companyId, agentId, role, event)
 );
 
+// ── Meeting Pipeline & Scheduler (Spec 18) ─────────────────
+
+const meetingPipeline = new MeetingPipeline({
+  getSnapshot,
+  updateMeeting,
+  flush,
+
+  // Phase 8: Token tracking for meeting pipeline
+  startTokenTracking: (meetingId) => startMeetingTokenAccumulator(meetingId),
+  drainTokens: (meetingId) => drainMeetingTokenAccumulator(meetingId),
+
+  // Phase 4: Collect contributions by emitting meeting_contribution events to all participants
+  async collectContributions(meeting) {
+    const snap = getSnapshot();
+    const collectionTimeoutMs = 300_000; // 5 minutes
+    const pollIntervalMs = 5_000;
+    const deadline = Date.now() + collectionTimeoutMs;
+
+    // Emit meeting_contribution events to trigger beats for each participant
+    for (const agentId of meeting.participantAgentIds) {
+      const agent = snap.agents.find((a) => a.id === agentId);
+      if (agent) {
+        heartbeatEngine.emitEvent(snap.company.id, agentId, agent.role, "meeting_contribution");
+      }
+    }
+
+    // Wait for contributions to arrive (agents add them via executeChecklistAction)
+    while (Date.now() < deadline) {
+      const current = getSnapshot().meetings.find((m) => m.id === meeting.id);
+      if (!current || current.status !== "collecting") break;
+
+      const contributed = current.contributions.length;
+      if (contributed >= meeting.participantAgentIds.length) break;
+
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
+
+    return getSnapshot().meetings.find((m) => m.id === meeting.id) ?? meeting;
+  },
+
+  // Phase 4: Synthesize contributions via LLM
+  async synthesizeMeeting(meeting) {
+    const { synthesizeMeeting: synthesize } = await import("./meeting-synthesis");
+    const snap = getSnapshot();
+    const synthesis = await synthesize(meeting, snap);
+
+    const updated = updateMeeting(meeting.id, (m) => ({ ...m, synthesis }));
+    await flush();
+    return updated ?? meeting;
+  },
+
+  // Phase 5: Resolve conflicts/blockers via CEO LLM call
+  async resolveMeeting(meeting) {
+    const { resolveMeeting: resolve } = await import("./meeting-resolution");
+    const snap = getSnapshot();
+    const resolutions = await resolve(meeting, snap);
+
+    const updated = updateMeeting(meeting.id, (m) => ({ ...m, resolutions }));
+    await flush();
+    return updated ?? meeting;
+  },
+
+  // Phase 5: Execute resolution decisions
+  async executeMeetingDecisions(meeting) {
+    const { executeMeetingDecisions: execute } = await import("./meeting-resolution");
+    const { appendChatMessage, upsertTask, updateTask, upsertApproval } = await import("./store");
+    const snap = getSnapshot();
+    const result = execute(meeting, snap, { upsertTask, updateTask, upsertApproval, appendChatMessage, flush });
+    await flush();
+    return result;
+  },
+
+  // Phase 5: Produce daily sync brief + post summary card
+  async produceBrief(meeting) {
+    const { buildDailySyncBrief, postDailySyncSummary } = await import("./meeting-resolution");
+    const { appendChatMessage } = await import("./store");
+    const snap = getSnapshot();
+    const brief = await buildDailySyncBrief(meeting, snap);
+
+    const updated = updateMeeting(meeting.id, (m) => ({ ...m, brief }));
+    postDailySyncSummary(meeting, brief, snap, appendChatMessage);
+    await flush();
+    return updated ?? meeting;
+  },
+
+  // Phase 6: Extract meeting memories for each participant
+  async extractMemories(meeting) {
+    const { extractMeetingMemories } = await import("@arceus/company-runtime");
+    const { MEETING_EXTRACTION_PROMPT, buildMeetingExtractionPrompt } = await import("@arceus/hippocampus");
+    const { structuredCompletion } = await import("./azure-openai");
+    const { z } = await import("zod");
+    const { hippocampus } = await import("./orchestrator");
+
+    const snap = getSnapshot();
+
+    const extractedFactSchema = z.object({
+      facts: z.array(z.object({
+        content: z.string(),
+        type: z.enum(["static", "dynamic", "procedural"]),
+        confidence: z.number(),
+        is_temporal: z.boolean(),
+        expiry_days: z.number().nullable(),
+        trigger: z.string().nullable(),
+        action: z.string().nullable(),
+      })),
+    });
+
+    const meetingFactExtractor = async (transcript: string, role: string, name: string) => {
+      const userPrompt = buildMeetingExtractionPrompt(role, name, transcript);
+      const result = await structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: MEETING_EXTRACTION_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        extractedFactSchema,
+        "meeting_fact_extraction",
+        { temperature: 0.3 },
+      );
+      return result.facts.map((f) => ({
+        ...f,
+        trigger: f.trigger ?? undefined,
+        action: f.action ?? undefined,
+      }));
+    };
+
+    const results = await extractMeetingMemories(meeting, snap, meetingFactExtractor);
+    let totalStored = 0;
+
+    for (const { memories } of results) {
+      try {
+        totalStored += await hippocampus.storeMemories(memories);
+      } catch (err) {
+        console.warn(`[MEETING-MEMORY] Failed to store memories: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    return totalStored;
+  },
+
+  // Phase 7: Re-escalate if blocker is still unresolved after escalation meeting
+  onEscalationComplete(meeting) {
+    // Extract related task ID from title format: "Escalation: ... [taskId]"
+    const taskIdMatch = meeting.title.match(/\[([^\]]+)\]$/);
+    const relatedTaskId = taskIdMatch?.[1] ?? null;
+
+    if (relatedTaskId && relatedTaskId !== "general") {
+      const snap = getSnapshot();
+      const task = snap.tasks.find((t) => t.id === relatedTaskId);
+      if (task && task.status === "blocked") {
+        // Task still blocked — escalate up the chain
+        console.log(`[ESCALATION] Task ${relatedTaskId} still blocked after escalation meeting ${meeting.id} — escalating up`);
+        meetingScheduler.escalateUp(
+          snap,
+          meeting,
+          `Task "${task.title}" still blocked after escalation to ${snap.agents.find((a) => a.id === meeting.facilitatorAgentId)?.role ?? "manager"}`,
+          relatedTaskId,
+        );
+      }
+    }
+  },
+});
+
+const meetingScheduler = new MeetingScheduler(
+  { tickIntervalMs: 30_000, defaultDailySyncIntervalMs: 300_000 },
+  {
+    getSnapshot,
+    upsertMeeting,
+    upsertMeetingSchedule,
+    updateMeetingSchedule,
+    flush,
+    runPipeline: (meetingId) => meetingPipeline.run(meetingId),
+  },
+);
+
+// Wire meeting scheduler to orchestrator for escalation triggers (Phase 7)
+setMeetingScheduler(meetingScheduler);
+
 // Re-seed service registry on startup if a company already exists (survives server restarts)
 {
   const snap = getSnapshot();
@@ -95,7 +277,8 @@ setReactiveEventEmitter((companyId, agentId, role, event) =>
     );
     if (activeSprint) {
       heartbeatEngine.start();
-      console.log(`[STARTUP] Auto-resumed heartbeat — Sprint ${activeSprint.number} is ${activeSprint.status}`);
+      meetingScheduler.start();
+      console.log(`[STARTUP] Auto-resumed heartbeat + meeting scheduler — Sprint ${activeSprint.number} is ${activeSprint.status}`);
     }
   } else {
     console.log("[STARTUP] No company hydrated — skipping registry seed");
@@ -338,6 +521,7 @@ app.post("/api/strategy/execute", async (request, reply) => {
     const snapshot = applyStrategy(body);
 
     heartbeatEngine.start();
+    meetingScheduler.start();
 
     return { snapshot, status: "heartbeat_started", mode: "heartbeat" };
   } catch (error) {
@@ -891,6 +1075,69 @@ app.get("/api/execution-flow", async () => {
   };
 });
 
+// ── Debug Graph API (Spec 22) ──────────────────────────────
+
+app.get("/api/debug/graph", async () => {
+  return { sprints: graphStore.listSprints() };
+});
+
+app.get("/api/debug/graph/:sprintId", async (request, reply) => {
+  const { sprintId } = request.params as { sprintId: string };
+  const graph = graphStore.getGraph(sprintId);
+  if (!graph) {
+    reply.code(404);
+    return { error: "Sprint graph not found" };
+  }
+  return graph;
+});
+
+app.get("/api/debug/graph/:sprintId/node/:nodeId", async (request, reply) => {
+  const { sprintId, nodeId } = request.params as { sprintId: string; nodeId: string };
+  const node = graphStore.getNode(sprintId, nodeId);
+  if (!node) {
+    reply.code(404);
+    return { error: "Node not found" };
+  }
+  return node;
+});
+
+app.get("/api/debug/graph/stream", async (request, reply) => {
+  const sprintIdFilter = (request.query as Record<string, string>).sprintId ?? null;
+
+  reply.raw.setHeader("Content-Type", "text/event-stream");
+  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("X-Accel-Buffering", "no");
+  reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin || "*");
+  reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+  reply.raw.flushHeaders?.();
+
+  const heartbeat = setInterval(() => {
+    try {
+      reply.raw.write(`event: ping\ndata: {}\n\n`);
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 10000);
+
+  const unsubscribe = graphStore.subscribe((event) => {
+    // Filter by sprint if requested
+    if (sprintIdFilter && "sprintId" in event && event.sprintId !== sprintIdFilter) {
+      return;
+    }
+    try {
+      reply.raw.write(`event: graph\ndata: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      /* stream broken */
+    }
+  });
+
+  reply.raw.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+});
+
 app.get("/api/artifacts/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
   const companyId = getSnapshot().company.id;
@@ -918,12 +1165,14 @@ app.post("/api/orchestrator/execute", async (request, reply) => {
   }
 
   heartbeatEngine.start();
+  meetingScheduler.start();
   return { status: "heartbeat_started", mode: "heartbeat" };
 });
 
 app.post("/api/orchestrator/stop", async (request, reply) => {
   try {
     heartbeatEngine.stop();
+    meetingScheduler.stop();
     return { status: "stopped", ...heartbeatEngine.getStatus() };
   } catch (error) {
     request.log?.error?.(error);
@@ -1050,6 +1299,7 @@ app.post("/api/quick-execute", async (request, reply) => {
 
     // 4. Fire heartbeat execution
     heartbeatEngine.start();
+    meetingScheduler.start();
 
     return { snapshot, strategy, status: "heartbeat_started", mode: "heartbeat" };
   } catch (error) {
@@ -1159,11 +1409,13 @@ app.post("/api/control-plane/mutations", async (request, reply) => {
 
 app.post("/api/heartbeat/start", async () => {
   heartbeatEngine.start();
+  meetingScheduler.start();
   return { status: "started", ...heartbeatEngine.getStatus() };
 });
 
 app.post("/api/heartbeat/stop", async () => {
   heartbeatEngine.stop();
+  meetingScheduler.stop();
   return { status: "stopped", ...heartbeatEngine.getStatus() };
 });
 
@@ -1486,6 +1738,7 @@ async function shutdown(signal: string) {
   console.log(`[ARCEUS] ${signal} received — shutting down gracefully…`);
   try {
     heartbeatEngine.stop();
+    meetingScheduler.stop();
     await drainAuditLedger();
     await teardown();
     await app.close();

@@ -413,19 +413,53 @@ export async function probePreviewHealth(timeoutMs = 5000): Promise<{
   reachable: boolean;
   statusCode: number | null;
   error: string | null;
+  contentLength: number | null;
+  hasProductContent: boolean;
+  bodySnippet: string | null;
 }> {
   const url = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
   if (!url || previewState.status !== "ready") {
-    return { reachable: false, statusCode: null, error: previewState.status === "idle" ? "Preview not started" : (previewState.lastError ?? `Preview status: ${previewState.status}`) };
+    return { reachable: false, statusCode: null, error: previewState.status === "idle" ? "Preview not started" : (previewState.lastError ?? `Preview status: ${previewState.status}`), contentLength: null, hasProductContent: false, bodySnippet: null };
   }
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(url, { method: "GET", signal: controller.signal, headers: { "Accept": "text/html,*/*" } });
     clearTimeout(timer);
-    return { reachable: res.ok, statusCode: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+
+    if (!res.ok) {
+      return { reachable: false, statusCode: res.status, error: `HTTP ${res.status}`, contentLength: null, hasProductContent: false, bodySnippet: null };
+    }
+
+    // Read the response body and check for actual content
+    const body = await res.text();
+    const contentLength = body.length;
+
+    // Check if the page has any meaningful product-specific content
+    // beyond bare scaffold markers. A Vite scaffold has a generic <div id="root"></div>
+    // and default content like "Vite + React" or just "App".
+    const scaffoldPatterns = [
+      /^\s*<div id="(root|app)"><\/div>\s*$/m,       // empty root div
+      /Vite \+ React/i,                                // default Vite scaffold
+      /Hello Vite/i,                                   // another scaffold default
+    ];
+    const bodyText = body.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const isBareBones = bodyText.length < 50 || scaffoldPatterns.some((p) => p.test(body));
+    // SPAs render via JS, so check if the HTML at least loads JS bundles that reference product modules
+    const hasJsBundles = /src=["'][^"']*\.(js|ts|jsx|tsx)/i.test(body);
+    // For SPAs, having JS bundles is acceptable even if the HTML body is empty
+    const hasProductContent = !isBareBones || hasJsBundles;
+
+    return {
+      reachable: true,
+      statusCode: res.status,
+      error: null,
+      contentLength,
+      hasProductContent,
+      bodySnippet: bodyText.slice(0, 500) || null,
+    };
   } catch (err) {
-    return { reachable: false, statusCode: null, error: err instanceof Error ? err.message : String(err) };
+    return { reachable: false, statusCode: null, error: err instanceof Error ? err.message : String(err), contentLength: null, hasProductContent: false, bodySnippet: null };
   }
 }
 

@@ -349,6 +349,48 @@ export class HippocampusService implements HippocampusGateway {
     }
   }
 
+  async storeMemories(units: MemoryUnit[]): Promise<number> {
+    let stored = 0;
+    for (const unit of units) {
+      const store = unit.type === "static" ? this.staticStore : this.dynamicStore;
+
+      // Run action decider to avoid duplicates if available
+      if (this.decideAction) {
+        try {
+          let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+          try {
+            const factEmbedding = await embed(unit.content);
+            if (store.searchByEmbedding) {
+              const results = await store.searchByEmbedding(unit.agentId, factEmbedding, 5);
+              similar = results.map((r) => ({ id: r.id, content: r.content, type: r.type, confidence: r.confidence }));
+            }
+          } catch {
+            const all = await store.list(unit.agentId);
+            similar = all.slice(0, 5).map((m) => ({ id: m.id, content: m.content, type: m.type, confidence: m.confidence }));
+          }
+
+          const decision = await this.decideAction(unit.content, similar);
+          if (decision.action === "NONE") continue;
+          if (decision.action === "UPDATE" && decision.target_id) {
+            await store.update(decision.target_id, unit.content, unit.confidence);
+            stored++;
+            continue;
+          }
+          if (decision.action === "DELETE" && decision.target_id) {
+            await store.softDelete(decision.target_id, `Contradicted by: ${unit.content.slice(0, 100)}`);
+            continue;
+          }
+        } catch (err) {
+          console.warn(`[Hippocampus] Action decision failed for storeMemories, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+
+      await store.add(unit);
+      stored++;
+    }
+    return stored;
+  }
+
   async runGC(companyId: string): Promise<GCResult> {
     const [deletedDynamicUnits, deactivatedHabits] = await Promise.all([
       this.dynamicStore.gc(companyId),

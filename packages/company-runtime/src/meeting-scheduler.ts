@@ -1,0 +1,407 @@
+/**
+ * MeetingScheduler — Spec 18 Phase 2 + Phase 7 (Escalation)
+ *
+ * Manages meeting schedule ticks. Each tick evaluates whether a
+ * scheduled meeting (daily sync, etc.) is due and whether it should
+ * be created or skipped based on snapshot conditions.
+ *
+ * Phase 7 adds escalation meetings: immediate 2-person meetings
+ * triggered when an agent hits an unresolvable blocker. The
+ * escalation chain follows the management hierarchy.
+ *
+ * The scheduler itself is a pure logic layer — it receives dependencies
+ * from the API layer (store access, pipeline trigger) at construction.
+ */
+
+import type {
+  AgentIdentity,
+  CompanySnapshot,
+  Meeting,
+  MeetingSchedule,
+  MeetingScheduleConfig,
+} from "@arceus/contracts";
+
+// ── Dependencies ───────────────────────────────────────────
+
+export interface MeetingSchedulerDeps {
+  getSnapshot: () => CompanySnapshot;
+  upsertMeeting: (meeting: Meeting) => Meeting;
+  upsertMeetingSchedule: (schedule: MeetingSchedule) => MeetingSchedule;
+  updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => MeetingSchedule | null;
+  flush: () => Promise<void>;
+  runPipeline: (meetingId: string) => Promise<void>;
+}
+
+export interface MeetingSchedulerConfig {
+  tickIntervalMs: number;
+  defaultDailySyncIntervalMs: number;
+}
+
+// ── Scheduler ──────────────────────────────────────────────
+
+export class MeetingScheduler {
+  private readonly config: MeetingSchedulerConfig;
+  private readonly deps: MeetingSchedulerDeps;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private running = false;
+  private ticking = false;
+
+  constructor(config: MeetingSchedulerConfig, deps: MeetingSchedulerDeps) {
+    this.config = config;
+    this.deps = deps;
+  }
+
+  // ── Lifecycle ──────────────────────────────────────────
+
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.timer = setInterval(() => void this.tick(), this.config.tickIntervalMs);
+    console.log(`[MEETING-SCHEDULER] Started (tick every ${this.config.tickIntervalMs}ms)`);
+  }
+
+  stop(): void {
+    if (!this.running) return;
+    this.running = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    console.log("[MEETING-SCHEDULER] Stopped");
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  // ── Tick ───────────────────────────────────────────────
+
+  async tick(): Promise<void> {
+    if (this.ticking) return; // guard re-entrant ticks
+    this.ticking = true;
+    try {
+      const snap = this.deps.getSnapshot();
+      if (snap.company.id === "company_pending") return;
+
+      // Auto-create daily sync schedule when 2+ agents exist
+      this.ensureDailySyncExists(snap);
+
+      const now = Date.now();
+      const schedules = snap.meetingSchedules ?? [];
+
+      for (const schedule of schedules) {
+        if (!schedule.enabled) continue;
+
+        // Check if it's time
+        const nextCheck = schedule.nextCheckAt ? new Date(schedule.nextCheckAt).getTime() : 0;
+        if (now < nextCheck) continue;
+
+        const needsMeeting = this.assessMeetingNeed(snap, schedule);
+
+        // Update schedule metadata
+        const nowIso = new Date().toISOString();
+        const nextCheckIso = new Date(now + schedule.intervalMs).toISOString();
+
+        if (!needsMeeting) {
+          // Skip — increment skip counter, advance nextCheckAt
+          this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+            ...s,
+            lastCheckedAt: nowIso,
+            nextCheckAt: nextCheckIso,
+            skipCount: s.skipCount + 1,
+          }));
+          console.log(`[MEETING-SCHEDULER] Skipped ${schedule.type} (skipCount=${schedule.skipCount + 1})`);
+          continue;
+        }
+
+        // Create scheduled meeting
+        const meeting = this.createScheduledMeeting(snap, schedule);
+        this.deps.upsertMeeting(meeting);
+
+        // Update schedule — link meeting, reset skip count, advance
+        this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+          ...s,
+          lastCheckedAt: nowIso,
+          lastMeetingId: meeting.id,
+          nextCheckAt: nextCheckIso,
+          skipCount: 0,
+          totalRuns: s.totalRuns + 1,
+        }));
+
+        console.log(`[MEETING-SCHEDULER] Created ${schedule.type} meeting ${meeting.id}`);
+
+        // Trigger the pipeline asynchronously (fire-and-forget from scheduler perspective)
+        this.deps.runPipeline(meeting.id).catch((err) => {
+          console.error(`[MEETING-SCHEDULER] Pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
+        });
+      }
+    } catch (err) {
+      console.error("[MEETING-SCHEDULER] Tick error:", err instanceof Error ? err.message : err);
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  // ── Need Assessment ────────────────────────────────────
+
+  /**
+   * Determines whether a scheduled meeting should fire or be skipped.
+   * Pure snapshot queries — no side effects.
+   */
+  assessMeetingNeed(snap: CompanySnapshot, schedule: MeetingSchedule): boolean {
+    const cfg = schedule.config;
+
+    // Never skip past max consecutive skips
+    if (schedule.skipCount >= cfg.maxConsecutiveSkips) return true;
+
+    // Only apply skip logic if conditional checking is enabled
+    if (!schedule.conditionalCheckEnabled) return true;
+
+    const hasBlockedTasks = snap.tasks.some(
+      (t) => t.status === "blocked" && schedule.participantAgentIds.includes(t.assignedAgentId ?? ""),
+    );
+
+    // If there are blocked tasks, always meet
+    if (hasBlockedTasks) return true;
+
+    // Check for recent task changes since last check
+    const lastChecked = schedule.lastCheckedAt ? new Date(schedule.lastCheckedAt).getTime() : 0;
+    const hasTaskChanges = snap.tasks.some((t) => {
+      const updated = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+      return updated > lastChecked && schedule.participantAgentIds.includes(t.assignedAgentId ?? "");
+    });
+
+    if (cfg.skipIfNoBlockers && !hasBlockedTasks && cfg.skipIfNoTaskChanges && !hasTaskChanges) {
+      return false;
+    }
+
+    return true;
+  }
+
+  // ── Daily Sync Auto-create ─────────────────────────────
+
+  /**
+   * Ensures a daily_sync schedule exists when 2+ agents are active.
+   * Idempotent — safe to call every tick.
+   */
+  ensureDailySyncExists(snap: CompanySnapshot): void {
+    const schedules = snap.meetingSchedules ?? [];
+    const hasDailySync = schedules.some((s) => s.type === "daily_sync");
+    if (hasDailySync) return;
+
+    const activeAgents = snap.agents.filter((a) => a.status === "active" || a.status === "idle" || a.status === "running");
+    if (activeAgents.length < 2) return;
+
+    const ceo = activeAgents.find((a) => a.role === "ceo");
+    const facilitatorId = ceo?.id ?? activeAgents[0]!.id;
+
+    const schedule: MeetingSchedule = {
+      id: `msched_daily_sync_${snap.company.id}`,
+      companyId: snap.company.id,
+      type: "daily_sync",
+      title: "Daily sync",
+      intervalMs: this.config.defaultDailySyncIntervalMs,
+      participantAgentIds: activeAgents.map((a) => a.id),
+      facilitatorAgentId: facilitatorId,
+      conditionalCheckEnabled: true,
+      enabled: true,
+      lastCheckedAt: null,
+      lastMeetingId: null,
+      nextCheckAt: null, // triggers immediately on first tick
+      skipCount: 0,
+      totalRuns: 0,
+      config: {
+        maxConsecutiveSkips: 3,
+        skipIfNoBlockers: true,
+        skipIfNoTaskChanges: true,
+        collectionTimeoutMs: 300_000,
+      },
+    };
+
+    this.deps.upsertMeetingSchedule(schedule);
+    console.log(`[MEETING-SCHEDULER] Auto-created daily_sync schedule for ${activeAgents.length} agents`);
+  }
+
+  // ── Meeting Creation ───────────────────────────────────
+
+  private createScheduledMeeting(snap: CompanySnapshot, schedule: MeetingSchedule): Meeting {
+    return {
+      id: `meeting_${crypto.randomUUID()}`,
+      companyId: snap.company.id,
+      scheduleId: schedule.id,
+      type: schedule.type,
+      title: schedule.title,
+      status: "scheduled",
+      facilitatorAgentId: schedule.facilitatorAgentId,
+      participantAgentIds: schedule.participantAgentIds,
+      contributions: [],
+      synthesis: null,
+      resolutions: null,
+      brief: null,
+      healthSnapshot: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    };
+  }
+
+  // ── Escalation Meetings (Phase 7) ─────────────────────
+
+  /**
+   * Create an immediate 2-person escalation meeting between a blocked
+   * agent and their direct manager. Returns the meeting (already
+   * upserted) and fires the pipeline.
+   *
+   * Returns null if no manager exists for the role or if an active
+   * escalation meeting already exists for this task.
+   */
+  createEscalationMeeting(
+    snap: CompanySnapshot,
+    blockedAgentId: string,
+    blockerDetail: string,
+    relatedTaskId: string | null,
+  ): Meeting | null {
+    const blockedAgent = snap.agents.find((a) => a.id === blockedAgentId);
+    if (!blockedAgent) return null;
+
+    const managerRole = getManagerRole(blockedAgent.role);
+    if (!managerRole) return null; // CEO has no manager — would need board approval
+
+    const managerAgent = snap.agents.find((a) => a.role === managerRole);
+    if (!managerAgent) return null;
+
+    // Guard: don't create duplicate escalation for the same task
+    if (relatedTaskId) {
+      const existing = snap.meetings.find(
+        (m) =>
+          m.type === "escalation" &&
+          m.status !== "completed" &&
+          m.title.includes(relatedTaskId),
+      );
+      if (existing) return null;
+    }
+
+    const now = new Date().toISOString();
+    const meeting: Meeting = {
+      id: `meeting_${crypto.randomUUID()}`,
+      companyId: snap.company.id,
+      scheduleId: null,
+      type: "escalation",
+      title: `Escalation: ${blockedAgent.name} → ${managerAgent.name} [${relatedTaskId ?? "general"}]`,
+      status: "scheduled",
+      facilitatorAgentId: managerAgent.id,
+      participantAgentIds: [blockedAgentId, managerAgent.id],
+      contributions: [],
+      synthesis: null,
+      resolutions: null,
+      brief: null,
+      healthSnapshot: null,
+      createdAt: now,
+      completedAt: null,
+    };
+
+    this.deps.upsertMeeting(meeting);
+    console.log(
+      `[MEETING-SCHEDULER] Escalation meeting ${meeting.id}: ${blockedAgent.role} → ${managerRole} (${blockerDetail.slice(0, 80)})`,
+    );
+
+    // Fire pipeline immediately (async)
+    this.deps.runPipeline(meeting.id).catch((err) => {
+      console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
+    });
+
+    return meeting;
+  }
+
+  /**
+   * Escalate an existing escalation meeting up the management chain.
+   * Creates a new meeting with the next-level manager.
+   *
+   * Returns null if the chain is exhausted (already at CEO level).
+   */
+  escalateUp(
+    snap: CompanySnapshot,
+    previousMeeting: Meeting,
+    blockerDetail: string,
+    relatedTaskId: string | null,
+  ): Meeting | null {
+    // The facilitator of the previous meeting is the manager who couldn't resolve.
+    // Escalate to THEIR manager.
+    const prevManager = snap.agents.find((a) => a.id === previousMeeting.facilitatorAgentId);
+    if (!prevManager) return null;
+
+    const nextManagerRole = getManagerRole(prevManager.role);
+    if (!nextManagerRole) return null; // Already at the top
+
+    const nextManager = snap.agents.find((a) => a.role === nextManagerRole);
+    if (!nextManager) return null;
+
+    // The blocked agent is the non-facilitator participant
+    const blockedAgentId = previousMeeting.participantAgentIds.find(
+      (id) => id !== previousMeeting.facilitatorAgentId,
+    );
+    if (!blockedAgentId) return null;
+
+    const now = new Date().toISOString();
+    const meeting: Meeting = {
+      id: `meeting_${crypto.randomUUID()}`,
+      companyId: snap.company.id,
+      scheduleId: null,
+      type: "escalation",
+      title: `Escalation: ${prevManager.name} → ${nextManager.name} [${relatedTaskId ?? "general"}]`,
+      status: "scheduled",
+      facilitatorAgentId: nextManager.id,
+      participantAgentIds: [blockedAgentId, nextManager.id],
+      contributions: [],
+      synthesis: null,
+      resolutions: null,
+      brief: null,
+      healthSnapshot: null,
+      createdAt: now,
+      completedAt: null,
+    };
+
+    this.deps.upsertMeeting(meeting);
+    console.log(
+      `[MEETING-SCHEDULER] Escalation UP ${meeting.id}: ${prevManager.role} → ${nextManagerRole}`,
+    );
+
+    this.deps.runPipeline(meeting.id).catch((err) => {
+      console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
+    });
+
+    return meeting;
+  }
+}
+
+// ── Role Hierarchy (Escalation Chain) ──────────────────────
+
+/**
+ * Maps each role to its direct manager. Derived from ROLE_SOULS.allowedDirectReports.
+ * CEO has no manager (returns null → triggers board approval instead).
+ */
+const MANAGER_ROLE_MAP: Record<AgentIdentity["role"], AgentIdentity["role"] | null> = {
+  ceo: null,
+  cto: "ceo",
+  marketing: "ceo",
+  pm: "cto",
+  developer: "cto",
+  tester: "cto",
+  ui_designer: "cto",
+  skills_lead: "cto",
+};
+
+/** Get the direct manager role for a given role. Returns null for CEO. */
+export function getManagerRole(role: AgentIdentity["role"]): AgentIdentity["role"] | null {
+  return MANAGER_ROLE_MAP[role] ?? null;
+}
+
+/** Build the full escalation chain for a role (excluding the role itself). */
+export function getEscalationChain(role: AgentIdentity["role"]): AgentIdentity["role"][] {
+  const chain: AgentIdentity["role"][] = [];
+  let current = getManagerRole(role);
+  while (current) {
+    chain.push(current);
+    current = getManagerRole(current);
+  }
+  return chain;
+}

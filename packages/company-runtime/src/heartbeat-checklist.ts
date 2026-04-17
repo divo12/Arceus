@@ -343,6 +343,29 @@ function checkSkillQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No skill tasks" };
 }
 
+// ── Spec 18: Meeting contribution check ────────────────────
+
+/**
+ * Check if this agent needs to contribute to a meeting currently in "collecting" status.
+ * Returns action_needed with the meeting ID so the beat executor can produce a contribution.
+ */
+function checkMeetingContribution(ctx: AgentBeatContext): CheckResult {
+  const collectingMeeting = ctx.recentMeetings.find(
+    (m) => m.status === "collecting" && m.participantAgentIds.includes(ctx.agentId),
+  );
+  if (!collectingMeeting) return { status: "ok", detail: "No meeting awaiting contribution" };
+
+  // Check if we already contributed
+  const alreadyContributed = collectingMeeting.contributions.some((c) => c.agentId === ctx.agentId);
+  if (alreadyContributed) return { status: "ok", detail: "Already contributed to meeting" };
+
+  return {
+    status: "action_needed",
+    detail: `Meeting "${collectingMeeting.title}" awaiting your contribution`,
+    suggestedAction: `meeting_contribution:${collectingMeeting.id}`,
+  };
+}
+
 // ── Spec 14 Phase 6: Skills Lead proactive checks ─────────
 
 /**
@@ -403,14 +426,15 @@ function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
 type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
-  ceo: [checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
-  cto: [checkEscalationPending, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
-  pm: [checkScopeControl, checkSprintHealth, checkAssignedTasks],
-  developer: [checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
-  tester: [checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
-  ui_designer: [checkDesignQueue, checkAssignedTasks],
-  marketing: [checkContentQueue, checkAssignedTasks],
+  ceo: [checkMeetingContribution, checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
+  cto: [checkMeetingContribution, checkEscalationPending, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
+  developer: [checkMeetingContribution, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
+  tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
+  ui_designer: [checkMeetingContribution, checkDesignQueue, checkAssignedTasks],
+  marketing: [checkMeetingContribution, checkContentQueue, checkAssignedTasks],
   skills_lead: [
+    checkMeetingContribution,
     // Phase 6 proactive checks first — fire even with no assigned task
     checkSkillHealth,
     checkSkillGaps,

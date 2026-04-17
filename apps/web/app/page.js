@@ -233,7 +233,7 @@ function buildReturnSummary({ executionStatus, activeTasks, pendingApprovals, pr
         bullets.push(`Latest workspace change: ${latestProductFile.path}`);
     }
     if (recentMeeting) {
-        bullets.push(`Last meeting: ${recentMeeting.summary}`);
+        bullets.push(`Last meeting: ${recentMeeting.title}`);
     }
     if (bullets.length === 0) {
         bullets.push("The company is waiting for its first board directive.");
