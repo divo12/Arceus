@@ -814,6 +814,9 @@ export const sprintReviewStateSchema = z.object({
   testerVerdict: z.enum(["pending", "pass", "fail"]).nullable(),
   escalatedToCto: z.boolean(),
   ctoDecision: z.enum(["fix", "skip", "abort"]).nullable(),
+  /** ISO timestamp set when escalatedToCto first flips to true. Used by the
+   * force-complete safety valve to bound how long CTO review can stall. */
+  escalatedAt: z.string().nullable().default(null),
   startedAt: z.string(),
   completedAt: z.string().nullable(),
 });

@@ -54,3 +54,8 @@
     - Fix 2 (strategic): add `syncWorkspaceCheckpoint(task.id, "developer", message)` call to the developer beat completion path (same spot that fires tryAutoPreview). Restores the "commit per task, tag per sprint" design from Spec 08
     - Fix 3 (cleanup): hoist the HEAD guard into ensureGitRepository so every downstream call (diffWorkspaceRefs, etc.) is safe
   - recommended: Fix 1 + Fix 2 together — Fix 1 unblocks the error, Fix 2 closes the underlying "developer work is never versioned" root cause
+- trust-scores table leaks across company bootstraps
+  - observed: rows grew 92 → 95 → 104 across three consecutive `DELETE /api/company` + re-bootstrap cycles during spec-14 playbook verification
+  - root cause: `DELETE /api/company` does not purge trust rows whose agentId belongs to the destroyed company — agents are deleted but their governance telemetry (trust scores, attribution, mutation history) is orphaned
+  - effect: fresh-company T0 baseline is polluted — `curl /api/governance/trust-scores` returns stale 0.73/0.79 rows mixed with the expected 0.5 baseline for newly-hired agents, making Phase 4 verification noisy
+  - proposed fix: extend the company-delete handler to cascade-delete trust scores, attribution events, and mutation proposals scoped to the destroyed agents so T0 snapshots read cleanly

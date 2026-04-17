@@ -1405,23 +1405,24 @@ async function executeSprintReviewVerification(
     `Import check passed: ${sprintEntryCheck.pass}`,
     `Details: ${sprintEntryCheck.reason}`,
     sprintEntryCheck.orphanedModules.length > 0 ? `Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}` : "",
-    !sprintEntryCheck.pass ? "CRITICAL: Entry file does NOT import product modules. Components exist as files but are never used. The sprint MUST fail." : "",
+    !sprintEntryCheck.pass ? "Note: The entry file currently does not import the product modules — this is a structural issue that will be tracked as a single bug task. Consider it when forming your verdict but do not duplicate it in your findings." : "",
     "",
-    "IMPORTANT: If the preview is UNREACHABLE, the sprint MUST fail. A product that cannot be accessed is not shippable.",
-    "IMPORTANT: If the entry-point integration check FAILED, the sprint MUST fail. Files on disk that aren't imported are not a product.",
+    "If the preview is UNREACHABLE, the sprint cannot pass — a product that cannot be accessed is not shippable.",
     "",
     "## Your Verification Steps",
-    "1. Check the automated preview health and entry-point results above — if either failed, verdict MUST be fail",
-    "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal",
+    "1. Review the automated preview health and entry-point results above as context for your verdict.",
+    "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal.",
     `   - Read the entry file (start with ${productDir}/src/App.tsx or equivalent) and verify it imports product modules`,
     "   - Do NOT produce a theoretical report — cite actual files and import statements you verified",
-    "3. Analyze each completed task against its Definition of Done",
-    "4. Identify any defects or gaps",
-    "5. Produce a structured QA report",
+    "3. Analyze each completed task against its Definition of Done.",
+    "4. List concrete, reproducible defects with file evidence. It is valid to return an empty findings list if nothing is broken — do not invent findings to fill the schema.",
+    "5. Produce a QA report.",
     "",
     "## QA Report Requirements",
     "For each completed task, assess whether it passes or fails its Definition of Done.",
-    "For failures, describe the defect area, severity, what was expected vs actual, the file involved, and a fix suggestion.",
+    "For each real defect, describe the defect area, severity (critical/high/medium/low), what was expected vs actual, the file involved, and a fix suggestion.",
+    "Only file a finding when you have concrete evidence (a file path, a reproducible behavior). Vague observations should be omitted.",
+    "Do not duplicate the entry-point structural issue in your findings — it is tracked separately.",
     "For each DoD item, state whether it passes or fails with evidence.",
     "State overall build and test suite status.",
     "Conclude with an overall verdict: PASS or FAIL.",
@@ -1446,7 +1447,7 @@ async function executeSprintReviewVerification(
           [
             {
               role: "system",
-              content: "Extract a structured QA report from the tester's analysis below. Map each task assessment, finding, and DoD checklist item. Preserve the tester's verdicts exactly.",
+              content: "Extract a structured QA report from the tester's analysis below. Only record findings the tester stated as concrete, reproducible defects with a specific file or behavior — do NOT fabricate findings from vague prose, general observations, or speculative remarks. If the tester did not list explicit defects for a task, its findings array must be empty. Preserve the tester's verdicts exactly.",
             },
             { role: "user", content: output },
           ],
@@ -1460,11 +1461,16 @@ async function executeSprintReviewVerification(
       }
     }
 
-    // Hard override: if preview is unreachable OR entry-point is disconnected, force fail
+    // Hard override: if preview is unreachable OR entry-point is disconnected, force fail.
+    // Entry-point is still a fail gate (a product whose entry file doesn't import its
+    // components isn't shippable), but downstream we emit it as ONE targeted bug task
+    // instead of letting the tester's findings cascade multiply it into N bugs.
     const effectiveVerdict = !previewProbe.reachable ? "fail"
       : !sprintEntryCheck.pass ? "fail"
       : qaReport ? qaReport.verdict
       : null;
+    const entryPointIsSoleFailCause =
+      !sprintEntryCheck.pass && previewProbe.reachable && qaReport?.verdict !== "fail";
 
     if (effectiveVerdict === "pass") {
       // Tester approves → advance to final gate
@@ -1537,9 +1543,50 @@ async function executeSprintReviewVerification(
         emitGraphNodeAdded(sprintId, bugTask);
       }
 
-      for (const taskReport of (qaReport?.tasks ?? [])) {
+      // Entry-point structural defect → ONE targeted bug task (not cascaded via findings).
+      // Fire whenever the entry-point check failed, regardless of tester verdict. Findings
+      // iteration below is instructed not to duplicate this via the softened prompt.
+      if (!sprintEntryCheck.pass) {
+        const orphanList = sprintEntryCheck.orphanedModules.length > 0
+          ? ` Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}.`
+          : "";
+        const entryBug = createWorkflowTask(
+          getSnapshot(), "bug_fix", "developer",
+          "Wire entry file to product modules",
+          `Entry file ${sprintEntryCheck.entryFile ?? "(not found)"} does not import this sprint's components. ${sprintEntryCheck.reason}${orphanList} Components exist on disk but are never rendered.`,
+          "Entry file is disconnected from the product modules this sprint produced.",
+          "Entry file imports and renders the sprint's components so they appear in the running app.",
+          [
+            "Entry file imports the sprint's product modules",
+            "No orphaned modules remain in sprint scope",
+            "Preview renders the sprint's components",
+          ],
+          "critical", "planned", sprintId,
+        );
+        upsertTask(entryBug);
+        newBugTaskIds.push(entryBug.id);
+        rolesWithBugs.add("developer");
+        emitGraphNodeAdded(sprintId, entryBug);
+      }
+
+      // When entry-point is the ONLY reason we failed (tester said pass), skip the
+      // findings cascade entirely — we've already filed the single structural bug above.
+      const taskReports = entryPointIsSoleFailCause ? [] : (qaReport?.tasks ?? []);
+
+      // Severity + per-task cap to prevent runaway bug explosion. Only critical/high
+      // findings become bug_fix tasks; medium/low are retained in the persisted QA
+      // report artifact as context but do not spawn their own work items.
+      const MAX_FINDINGS_PER_TASK = 3;
+
+      for (const taskReport of taskReports) {
         if (taskReport.verdict !== "fail") continue;
-        for (const finding of taskReport.findings) {
+        const hiredRoles = new Set(
+          getSnapshot().agents.map((a) => a.role as AgentIdentity["role"]),
+        );
+        const actionableFindings = taskReport.findings
+          .filter((f) => f.severity === "critical" || f.severity === "high")
+          .slice(0, MAX_FINDINGS_PER_TASK);
+        for (const finding of actionableFindings) {
           const bugFields = buildBugFixTaskFields({
             finding: {
               ...finding,
@@ -1547,6 +1594,7 @@ async function executeSprintReviewVerification(
             },
             sprintId,
             parentTaskId: taskReport.taskId,
+            hiredRoles,
           });
           const bugTask = createWorkflowTask(
             getSnapshot(), bugFields.kind, bugFields.assignedRole,
@@ -1588,6 +1636,7 @@ async function executeSprintReviewVerification(
       if (shouldEscalate(updatedReviewState)) {
         updatedReviewState.phase = "escalated";
         updatedReviewState.escalatedToCto = true;
+        if (!updatedReviewState.escalatedAt) updatedReviewState.escalatedAt = nowIso();
         emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
         emitReactive("cto", "escalation_received");
 
@@ -1628,14 +1677,65 @@ async function executeSprintReviewVerification(
       };
 
     } else {
-      // Couldn't parse QA report — treat as FAIL (don't let ambiguity pass)
-      emitEmployeeActivity("tester", "error", `Sprint ${sprint.number} tester output could not be parsed as QA report — treating as FAIL`, { beatId });
+      // Couldn't parse QA report — this is a TOOL failure, not a QA failure.
+      // Keep phase in "tester_verification" so the next tester beat re-runs
+      // verification (checkReviewPhaseActive will re-emit run_tester_verification).
+      // Bump reworkCycleCount so we eventually escalate to CTO if the tester
+      // is deterministically broken — but do NOT flip phase to "rework"
+      // without bug tasks (that combination wedges the sprint; see
+      // heartbeat-checklist checkBugFixesReady).
+      const nextCycleCount = (reviewState.reworkCycleCount ?? 0) + 1;
+      const willEscalate = nextCycleCount >= reviewState.maxReworkCycles;
+
+      emitEmployeeActivity("tester", "error", `Sprint ${sprint.number} tester output could not be parsed as QA report — treating as tool failure (cycle ${nextCycleCount}/${reviewState.maxReworkCycles})`, { beatId });
+
+      if (willEscalate) {
+        emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} parse-failure limit reached — escalating to CTO`, { beatId });
+        emitReactive("cto", "escalation_received");
+      }
+
       updateSprint(sprintId, (s) => ({
         ...s,
-        reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "fail" as const, phase: "rework" as const, reworkCycleCount: (s.reviewState.reworkCycleCount ?? 0) + 1 } : s.reviewState,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          reworkCycleCount: nextCycleCount,
+          // Stay in tester_verification so next beat retries. On escalation,
+          // flip to rework + mark escalated so checkEscalationPending fires.
+          phase: willEscalate ? "rework" as const : "tester_verification" as const,
+          escalatedToCto: willEscalate ? true : s.reviewState.escalatedToCto,
+          escalatedAt: willEscalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
+        } : s.reviewState,
       }));
-      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", "Output unparseable — treated as fail", 0, Date.now() - reviewBeatStart);
-      return { summary: `Tester output unparseable — treating as fail, returning to rework`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+      emitGraphBeatCompleted(
+        reviewBeatSprintId,
+        sprintId,
+        reviewBeatId,
+        "failed",
+        willEscalate ? "Output unparseable — escalating" : "Output unparseable — retrying",
+        0,
+        Date.now() - reviewBeatStart,
+      );
+
+      // Persist the raw output as a forensic artifact so operators can see
+      // what the tester actually said on the parse-failure path.
+      await persistRuntimeArtifact(snapshot.company.id, {
+        id: `artifact_${crypto.randomUUID()}`,
+        agent: "tester",
+        kind: "qa_report",
+        title: `Sprint ${sprint.number} QA Report — UNPARSEABLE (cycle ${nextCycleCount})`,
+        content: output ?? "(no output)",
+        createdAt: nowIso(),
+        sprintId,
+        taskId: null,
+        fileReferences: [],
+      });
+
+      return {
+        summary: willEscalate
+          ? `Tester output unparseable — parse-failure limit reached, escalating to CTO`
+          : `Tester output unparseable — retrying next beat (cycle ${nextCycleCount}/${reviewState.maxReworkCycles})`,
+        tokensUsed, actionsCount: 1, toolCalls: 1,
+      };
     }
   } catch (err) {
     touchAgentSession(role, "idle");
@@ -1729,6 +1829,7 @@ async function executeSprintFinalGate(
         reworkCycleCount: newReworkCount,
         phase: (escalate ? "escalated" : "rework") as any,
         escalatedToCto: escalate || s.reviewState.escalatedToCto,
+        escalatedAt: escalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
       } : s.reviewState,
     }));
 
@@ -5568,6 +5669,37 @@ export async function executeChecklistAction(
   // ── CTO: sprint escalation review (Spec 21) ──
   if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_review") {
     return executeCtoBeatEscalationReview(ctx, beatId);
+  }
+
+  // ── CTO: escalation timeout safety valve ──
+  // Fires when checkEscalationPending detects an escalation that has been
+  // pending longer than ESCALATION_TIMEOUT_MS without a CTO decision.
+  // Force-completes the sprint rather than retrying the 3-way review again.
+  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_force_complete") {
+    startBeatTokenAccumulator(beatId);
+    const snapshot = getSnapshot();
+    const sprintId = snapshot.company.currentSprintId;
+    if (!sprintId) {
+      finishClBeat("completed", "No active sprint", 0);
+      return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+    if (!sprint || sprint.status !== "reviewing") {
+      finishClBeat("completed", "Sprint not in reviewing state", 0);
+      return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+
+    emitEmployeeActivity("cto", "transition", `Beat ${beatId}: escalation timeout — force-completing Sprint ${sprint.number}`, {
+      beatId, detail: { reason: action.detail },
+    });
+
+    await finalizeSprintCompletion(sprintId);
+
+    finishClBeat("completed", `CTO force-completed Sprint ${sprint.number} (escalation timeout)`, 1);
+    return {
+      summary: `CTO escalation timeout: force-completed Sprint ${sprint.number}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+    };
   }
 
   // ── PM: scope triage, board response ──

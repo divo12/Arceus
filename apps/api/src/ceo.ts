@@ -4,7 +4,12 @@ import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import { structuredCompletion } from "./azure-openai";
 
 const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
-const coreStrategyRoles = ["ceo", "cto", "pm", "developer"] as const;
+// Mandatory hierarchy floor. Enforced deterministically after the LLM returns
+// (see `enforceMandatoryRoles` below), NOT via Zod — so a drifting LLM never
+// causes a retry/latency spike. Kept in lockstep with MANDATORY_ROLES in
+// packages/company-runtime/src/roles.ts.
+const coreStrategyRoles = ["ceo", "cto", "pm", "developer", "tester", "skills_lead"] as const;
+type CoreStrategyRole = (typeof coreStrategyRoles)[number];
 const ceoMeetingTypeSchema = z.enum(["ad_hoc", "sync", "escalation"]);
 export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
 
@@ -88,14 +93,10 @@ function validateStrategyRoles(
     }
   });
 
-  coreStrategyRoles.forEach((role) => {
-    if (!seen.has(role)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Strategy output must include the core role: ${role}`,
-      });
-    }
-  });
+  // Mandatory-role presence is enforced DETERMINISTICALLY by enforceMandatoryRoles()
+  // after the LLM returns, not at schema-validation time. Keeping it out of Zod means
+  // a drifting LLM never triggers a retry/latency spike — we just inject missing
+  // roles server-side.
 }
 
 export const strategyOutputSchema = z.object({
@@ -116,6 +117,39 @@ export const strategyOutputSchema = z.object({
 
 export type StrategyOutput = z.infer<typeof strategyOutputSchema>;
 export type CeoStage = z.infer<typeof ceoStageSchema>;
+
+type StrategyRoleEntry = StrategyOutput["roles"][number];
+
+/**
+ * Default role specs injected by `enforceMandatoryRoles` when the LLM omits
+ * a mandatory role. Titles/capabilities mirror ROLE_SOULS defaults so behavior
+ * is consistent regardless of whether the LLM produced the role or the server did.
+ */
+const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRoleEntry, "role">> = {
+  ceo: { title: "Founder CEO", parent_role: null, capabilities: ["Board communication", "Strategic narrowing", "Hiring requests", "Meeting orchestration"] },
+  cto: { title: "Chief Technology Officer", parent_role: "ceo", capabilities: ["Architecture planning", "Task decomposition", "Verification", "Technical escalation"] },
+  pm: { title: "Product Manager", parent_role: "cto", capabilities: ["Sprint planning", "Backlog prioritization", "Cross-role coordination"] },
+  developer: { title: "Full-Stack Developer", parent_role: "cto", capabilities: ["Feature implementation", "Frontend + backend code", "Bug fixing"] },
+  tester: { title: "Quality Assurance Tester", parent_role: "cto", capabilities: ["End-to-end verification", "QA report authoring", "Regression coverage"] },
+  skills_lead: { title: "Skills Lead", parent_role: "cto", capabilities: ["Skill authoring", "Playbook curation", "Workflow optimization"] },
+};
+
+/**
+ * Deterministic mandatory-role enforcer. Guarantees tester + skills_lead
+ * (and the other core roles) are present regardless of what the LLM produced.
+ * Called after every strategy generation / classification path.
+ */
+export function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
+  const present = new Set(roles.map((r) => r.role));
+  const result = [...roles];
+  for (const core of coreStrategyRoles) {
+    if (!present.has(core)) {
+      const defaults = MANDATORY_ROLE_DEFAULTS[core];
+      result.push({ role: core, ...defaults });
+    }
+  }
+  return result;
+}
 
 const roleSchema = z.object({
   role: strategyRoleSchema,
@@ -440,7 +474,7 @@ export async function classifyCeoResponse(
     ceoText,
   ].join("\n");
 
-  return structuredCompletion(
+  const card = await structuredCompletion(
     "ceoDeployment",
     [
       { role: "system", content: systemPrompt },
@@ -450,6 +484,14 @@ export async function classifyCeoResponse(
     "ceo_card",
     { temperature: 0.3 },
   );
+
+  // Deterministic mandatory-role injection for strategy_proposal cards — never
+  // trust the LLM to include tester + skills_lead. This guarantees the floor
+  // without round-tripping through a Zod-violation retry.
+  if (card.card_type === "strategy_proposal" && card.strategy) {
+    return { ...card, strategy: { ...card.strategy, roles: enforceMandatoryRoles(card.strategy.roles) } };
+  }
+  return card;
 }
 
 export async function generateStrategy(snapshot: CompanySnapshot): Promise<StrategyOutput> {
@@ -471,12 +513,13 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
   ];
 
   try {
-    return await structuredCompletion(
+    const raw = await structuredCompletion(
       "ceoDeployment",
       messages,
       strategyOutputSchema,
       "strategy_output",
     );
+    return { ...raw, roles: enforceMandatoryRoles(raw.roles) };
   } catch (err: unknown) {
     // Self-heal hierarchy violations: retry once with the specific violations
     // echoed back to the model. This unblocks single-token LLM drifts without
@@ -500,12 +543,13 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
       "parent_role fields as needed. Keep all other content identical.",
     ].join("\n");
 
-    return structuredCompletion(
+    const retried = await structuredCompletion(
       "ceoDeployment",
       [...messages, { role: "user" as const, content: retryPrompt }],
       strategyOutputSchema,
       "strategy_output",
     );
+    return { ...retried, roles: enforceMandatoryRoles(retried.roles) };
   }
 }
 

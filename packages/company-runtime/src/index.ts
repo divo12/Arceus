@@ -3,7 +3,7 @@ export { HeartbeatEngine } from "./heartbeat";
 export type { HeartbeatConfig, BeatRequest, BeatExecutor, BeatDependencies } from "./heartbeat";
 export { runChecklist } from "./heartbeat-checklist";
 export type { ChecklistResult } from "./heartbeat-checklist";
-export { ROLE_SOULS, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
+export { ROLE_SOULS, MANDATORY_ROLES, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
 export { getAgentSkills, getFullAgentPrompt, listAvailableAgents } from "./agent-skills";
 export { emitBeatEvent, onBeatEvent, getBeatEventSubscriberCount } from "./beat-event-bus";
 export type { BeatEvent, BeatEventHandler } from "./beat-event-bus";

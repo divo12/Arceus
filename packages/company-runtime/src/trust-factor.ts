@@ -19,8 +19,10 @@ import type { TrustScore, TrustEvent, TrustEventKind } from "@arceus/contracts";
 // ── Configuration ───────────────────────────────────────────
 
 export const TRUST_CONFIG = {
-  /** Score assigned to newly hired agents. */
-  initialScore: 0.7,
+  /** Score assigned to newly hired agents. Starts at the "standard" tier floor
+   *  (0.5) so new agents must earn trust before skipping shell/patch escalation.
+   *  See TRUST_TIER_THRESHOLDS below and Spec-14 Phase 4 T0 checklist. */
+  initialScore: 0.5,
   /** Maximum history entries kept per agent. */
   maxHistoryLength: 100,
   /** Deltas per event kind. */

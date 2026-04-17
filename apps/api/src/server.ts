@@ -22,7 +22,8 @@ import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "./pre
 import { workspaceManager } from "./workspace-manager";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "./bootstrap";
 import { deletePersistedArtifacts, getPersistedArtifactById, listPersistedArtifacts } from "./artifact-persistence";
-import { getDatabaseHealth } from "@arceus/db";
+import { getDatabaseHealth, getDb, isDatabaseConfigured, trustScoresTable, policyViolationsTable } from "@arceus/db";
+import { inArray, eq } from "drizzle-orm";
 import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
@@ -459,7 +460,11 @@ app.get("/api/chat/ceo/stream", async (request, reply) => {
 
 app.delete("/api/company", async (request, reply) => {
   try {
-    const companyId = getSnapshot().company.id;
+    const snap = getSnapshot();
+    const companyId = snap.company.id;
+    // Capture agent IDs BEFORE state reset so we can cascade-delete governance rows.
+    const priorAgentIds = snap.agents.map((a) => a.id);
+
     await resetOrchestratorState();
     heartbeatEngine.reset();
     const warnings = companyId === "company_pending"
@@ -471,6 +476,21 @@ app.delete("/api/company", async (request, reply) => {
     }
     if (warnings.length > 0) {
       request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
+    }
+
+    // Cascade-delete governance rows tied to this company. Without this, trust
+    // scores and policy violations leak across bootstraps (observed: 110 orphan
+    // trust rows accumulated before this fix).
+    if (companyId !== "company_pending" && isDatabaseConfigured()) {
+      try {
+        const db = getDb();
+        await db.delete(policyViolationsTable).where(eq(policyViolationsTable.companyId, companyId));
+        if (priorAgentIds.length > 0) {
+          await db.delete(trustScoresTable).where(inArray(trustScoresTable.agentId, priorAgentIds));
+        }
+      } catch (err) {
+        request.log?.warn?.({ err }, "Cascade cleanup of governance rows failed");
+      }
     }
 
     resetEmployeeActivityLog();
@@ -708,7 +728,8 @@ app.get("/api/product/overview", async () => {
 
 app.get("/api/skills", async () => {
   const companyId = getSnapshot().company.id;
-  if (companyId && companyId !== "company_empty") {
+  // Lazy-init: seed only if registry is empty (idempotent — skips existing skills).
+  if (companyId && companyId !== "company_pending" && getAllSkills(companyId).length === 0) {
     seedExistingSkills(companyId);
   }
   const skills = getAllSkills(companyId);
@@ -1535,10 +1556,23 @@ app.post("/api/service-registry/seed", async () => {
 /** GET /api/governance/trust-scores — all agent trust scores */
 app.get("/api/governance/trust-scores", async () => {
   const scores = cpGetAllTrustScores();
-  return scores.map((s) => ({
-    ...s,
-    tier: getTrustTier(s.score),
-  }));
+  const agents = getSnapshot().agents;
+  const agentById = new Map(agents.map((a) => [a.id, a]));
+  // agentId format: "agent_<role>_<uuid>" — extract role as fallback when
+  // the agentId belongs to a previous company not in the current snapshot.
+  const roleFromId = (id: string): string | null => {
+    const m = id.match(/^agent_(.+?)_[0-9a-f-]{36}$/);
+    return m ? m[1] : null;
+  };
+  return scores.map((s) => {
+    const agent = agentById.get(s.agentId);
+    return {
+      ...s,
+      agentRole: agent?.role ?? roleFromId(s.agentId),
+      agentName: agent?.name ?? null,
+      tier: getTrustTier(s.score),
+    };
+  });
 });
 
 /** GET /api/governance/trust-scores/:agentId — single agent trust score */
@@ -1562,6 +1596,26 @@ app.post("/api/governance/trust-scores/:agentId/adjust", async (request) => {
   );
   const updated = await cpUpdateTrustScore(event);
   return { ...updated, tier: getTrustTier(updated.score) };
+});
+
+/**
+ * POST /api/governance/trust-scores/cleanup — delete orphan trust rows.
+ *
+ * "Orphan" = a trust row whose agentId is not in the current company's agents.
+ * This is the one-time purge path for the accumulated leak from older DELETE
+ * /api/company flows that did not cascade. Safe to call repeatedly.
+ */
+app.post("/api/governance/trust-scores/cleanup", async () => {
+  if (!isDatabaseConfigured()) {
+    return { deletedCount: 0, reason: "database not configured" };
+  }
+  const liveAgentIds = new Set(getSnapshot().agents.map((a) => a.id));
+  const db = getDb();
+  const rows = await db.select({ agentId: trustScoresTable.agentId }).from(trustScoresTable);
+  const orphanIds = rows.map((r) => r.agentId).filter((id) => !liveAgentIds.has(id));
+  if (orphanIds.length === 0) return { deletedCount: 0 };
+  await db.delete(trustScoresTable).where(inArray(trustScoresTable.agentId, orphanIds));
+  return { deletedCount: orphanIds.length };
 });
 
 /** GET /api/governance/violations — recent policy violations */

@@ -18,7 +18,7 @@ import type {
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
 import type { StrategyOutput } from "./ceo";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state";
-import { cpNotifyStateChange } from "./control-plane";
+import { cpNotifyStateChange, cpUpdateTrustScore } from "./control-plane";
 
 type BootstrapInput = {
   companyName: string;
@@ -591,6 +591,28 @@ export function applyStrategy(output: StrategyOutput) {
       }
     }
   ]);
+
+  // Eager trust initialization — guarantees `/api/governance/trust-scores` returns
+  // one row per hired agent immediately after `applyStrategy`, instead of waiting
+  // for the first beat outcome to lazily create rows. Fire-and-forget; DB writes
+  // must not block the HTTP response.
+  const nowIso = new Date().toISOString();
+  void Promise.allSettled(
+    agents.map((a) =>
+      cpUpdateTrustScore({
+        agentId: a.id,
+        kind: "manual_adjustment",
+        delta: 0,
+        reason: "Agent hired — initial trust",
+        timestamp: nowIso,
+      }),
+    ),
+  ).then((results) => {
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      console.warn(`[Trust] init failed for ${failed}/${agents.length} agents`);
+    }
+  });
 
   return snapshot;
 }

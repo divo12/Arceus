@@ -224,12 +224,12 @@ export const beatRecordsTable = arceusSchema ? arceusSchema.table("beat_records"
 
 export const trustScoresTable = arceusSchema ? arceusSchema.table("trust_scores", {
   agentId: text("agent_id").primaryKey(),
-  score: real("score").notNull().default(0.7),
+  score: real("score").notNull().default(0.5),
   history: jsonb("history").notNull().default([]),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }) : pgTable("trust_scores", {
   agentId: text("agent_id").primaryKey(),
-  score: real("score").notNull().default(0.7),
+  score: real("score").notNull().default(0.5),
   history: jsonb("history").notNull().default([]),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -253,7 +253,19 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
   if (!reviewState || reviewState.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
 
   const bugTaskIds: string[] = reviewState.bugTaskIds ?? [];
-  if (bugTaskIds.length === 0) return { status: "ok", detail: "No bug tasks tracked" };
+  if (bugTaskIds.length === 0) {
+    // Defensive: if we're in rework with no bug tasks tracked (e.g. a tester
+    // parse-failure path advanced phase to rework without creating bugs),
+    // don't wedge the sprint — re-verify on the next beat. The only other
+    // check that looks at rework is checkEscalationPending, which only fires
+    // when escalatedToCto === true, so without this branch the sprint is
+    // permanently stuck.
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} in rework with no bug tasks — re-verifying`,
+      suggestedAction: "sprint_review:retest_after_rework",
+    };
+  }
 
   // Check if ALL bug_fix tasks are terminal
   const allResolved = bugTaskIds.every((id: string) => {
@@ -280,8 +292,18 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
 // ── Spec 21: CTO Escalation Check ─────────────────────────
 
 /**
+ * Safety-valve: if an escalation sits without a CTO decision longer than
+ * this timeout, force-complete the sprint instead of repeatedly retrying
+ * the 3-way review. Keeps stuck sprints from consuming the CTO's beats
+ * indefinitely when the LLM can't produce a parseable decision.
+ */
+const ESCALATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
  * CTO check: has the sprint been escalated after max rework cycles?
- * Fires when reviewState.escalatedToCto === true and ctoDecision is null.
+ * Fires `sprint_review:cto_escalation_review` for a fresh escalation,
+ * or `sprint_review:cto_escalation_force_complete` if the escalation
+ * has been pending longer than {@link ESCALATION_TIMEOUT_MS}.
  */
 function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
@@ -291,6 +313,16 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   if (!reviewState) return { status: "ok", detail: "No review state" };
 
   if (reviewState.escalatedToCto === true && reviewState.ctoDecision === null) {
+    // Safety valve — if escalation has been pending for too long, force-complete.
+    const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > ESCALATION_TIMEOUT_MS) {
+      const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
+      return {
+        status: "action_needed",
+        detail: `Sprint ${sprint.number} escalation pending ${ageMinutes}m without decision — force-completing as safety valve`,
+        suggestedAction: "sprint_review:cto_escalation_force_complete",
+      };
+    }
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles — awaiting CTO decision (fix/skip/abort)`,
@@ -427,7 +459,7 @@ type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   ceo: [checkMeetingContribution, checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
-  cto: [checkMeetingContribution, checkEscalationPending, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
   tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
