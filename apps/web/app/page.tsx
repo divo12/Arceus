@@ -1797,7 +1797,7 @@ export default function Page() {
       id: `mtg-${mtg.id}`,
       kind: "meeting",
       title: `${mtg.type.replace(/_/g, " ")} meeting`,
-      detail: mtg.title.slice(0, 100),
+      detail: (mtg.title ?? "").slice(0, 100),
       time: formatRelativeTime(mtg.createdAt),
       href: "/meetings",
     });
