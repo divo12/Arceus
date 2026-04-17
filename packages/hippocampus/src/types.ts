@@ -61,6 +61,8 @@ export type GCResult = {
 export interface HippocampusGateway {
   prepareAgentContext(agentId: string, taskDescription: string): Promise<PreparedAgentContext>;
   processTaskCompletion(input: ProcessTaskCompletionInput): Promise<void>;
+  /** Store pre-built memory units directly, bypassing LLM extraction. Runs action decider to avoid duplicates. */
+  storeMemories(units: MemoryUnit[]): Promise<number>;
   runGC(companyId: string): Promise<GCResult>;
 }
 

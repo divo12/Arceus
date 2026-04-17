@@ -48,6 +48,7 @@ export function createEmptyCompanySnapshot(): CompanySnapshot {
     artifacts: [],
     chatMessages: [],
     meetings: [],
+    meetingSchedules: [],
     approvals: [],
     memories: [],
     memoryUnits: [],

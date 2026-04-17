@@ -7,6 +7,7 @@ import type {
   FeedbackRound,
   HierarchyNode,
   Meeting,
+  MeetingSchedule,
   MemorySummary,
   SessionBinding,
   Sprint,
@@ -331,6 +332,28 @@ export function updateMeeting(meetingId: string, updater: (meeting: Meeting) => 
 
   const next = updater(current);
   upsertMeeting(next);
+  return next;
+}
+
+export function upsertMeetingSchedule(schedule: MeetingSchedule) {
+  const schedules = snapshot.meetingSchedules ?? [];
+  const existing = schedules.findIndex((s) => s.id === schedule.id);
+  const next = [...schedules];
+  if (existing >= 0) {
+    next[existing] = schedule;
+  } else {
+    next.push(schedule);
+  }
+  replaceState({ ...snapshot, meetingSchedules: next });
+  return schedule;
+}
+
+export function updateMeetingSchedule(scheduleId: string, updater: (s: MeetingSchedule) => MeetingSchedule) {
+  const schedules = snapshot.meetingSchedules ?? [];
+  const current = schedules.find((s) => s.id === scheduleId);
+  if (!current) return null;
+  const next = updater(current);
+  upsertMeetingSchedule(next);
   return next;
 }
 

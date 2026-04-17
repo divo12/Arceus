@@ -367,6 +367,16 @@ export function cpGetSnapshotSummary() {
   };
 }
 
+// ── Meeting context helpers ────────────────────────────────
+
+function getLatestDailySyncBrief(snap: CompanySnapshot) {
+  const completed = snap.meetings.filter(
+    (m) => m.type === "daily_sync" && m.status === "completed" && m.brief,
+  );
+  const latest = completed[completed.length - 1];
+  return latest?.brief ?? null;
+}
+
 // ── Heartbeat / Beat lifecycle (Spec 12 Phase 2) ──────────
 
 /**
@@ -451,10 +461,11 @@ export function cpLoadAgentContext(
     .filter((m) => m.role === "board" || m.role === "ceo")
     .slice(-10);
 
-  // Recent meetings (last 5)
-  const recentMeetings = snap.meetings
-    .filter((m) => m.status === "completed")
-    .slice(-5);
+  // Recent meetings (last 5 completed + any currently collecting)
+  const recentMeetings = [
+    ...snap.meetings.filter((m) => m.status === "collecting"),
+    ...snap.meetings.filter((m) => m.status === "completed").slice(-5),
+  ];
 
   // Pending approvals
   const pendingApprovals = snap.approvals.filter((a) => a.status === "pending");
@@ -526,6 +537,7 @@ export function cpLoadAgentContext(
     approvals: pendingApprovals,
     recentBoardMessages,
     recentMeetings,
+    latestDailySyncBrief: getLatestDailySyncBrief(snap),
 
     beatTokenBudget: config.beatTokenBudget,
     beatCostCeilingCents: config.beatCostCeilingCents,

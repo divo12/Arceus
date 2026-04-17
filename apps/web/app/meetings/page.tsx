@@ -33,7 +33,6 @@ export default function MeetingsPage() {
   const meetings = snapshot?.meetings ?? [];
   const approvals = snapshot?.approvals ?? [];
   const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
-  const resolvedApprovals = approvals.filter((approval) => ["approved", "applied", "rejected"].includes(approval.status));
   const selectedMeeting = meetings.find((meeting) => meeting.id === selectedMeetingId) ?? meetings[0] ?? null;
   const selectedMeetingApprovals = selectedMeeting ? approvals.filter((approval) => approval.meetingId === selectedMeeting.id) : [];
 
@@ -49,7 +48,7 @@ export default function MeetingsPage() {
   }, [meetings, selectedMeetingId]);
 
   return (
-    <PageShell title="Meetings" description="Scrum, handoff, escalation, and ad-hoc meeting flow.">
+    <PageShell title="Meetings" description="Daily syncs, eval-triggered meetings, and escalations.">
       <div className="space-y-6">
 
         <div className="grid grid-cols-4 gap-px border border-[var(--swiss-gray-100)]">
@@ -62,8 +61,8 @@ export default function MeetingsPage() {
             <div className="mt-1 text-2xl font-semibold">{meetings.filter((meeting) => meeting.type === "escalation").length}</div>
           </div>
           <div className="bg-[var(--swiss-white)] p-4">
-            <div className="swiss-caption text-[var(--swiss-gray-300)]">Handoffs</div>
-            <div className="mt-1 text-2xl font-semibold">{meetings.filter((meeting) => meeting.type === "handoff").length}</div>
+            <div className="swiss-caption text-[var(--swiss-gray-300)]">Daily syncs</div>
+            <div className="mt-1 text-2xl font-semibold">{meetings.filter((meeting) => meeting.type === "daily_sync").length}</div>
           </div>
           <div className="bg-[var(--swiss-white)] p-4">
             <div className="swiss-caption text-[var(--swiss-gray-300)]">Pending approvals</div>
@@ -95,10 +94,10 @@ export default function MeetingsPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <div className={`text-sm font-semibold capitalize ${selected ? "text-[var(--swiss-white)]" : ""}`}>{meeting.type.replace(/_/g, " ")}</div>
-                            <Badge variant={selected ? "secondary" : "outline"} className="text-[10px]">{meeting.participants.length} people</Badge>
+                            <Badge variant={selected ? "secondary" : "outline"} className="text-[10px]">{meeting.participantAgentIds.length} people</Badge>
                           </div>
-                          <div className={`mt-1 swiss-caption ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-300)]"}`}>{new Date(meeting.completedAt ?? meeting.scheduledAt).toLocaleString()}</div>
-                          <div className={`mt-2 line-clamp-2 text-xs leading-5 ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-400)]"}`}>{meeting.summary}</div>
+                          <div className={`mt-1 swiss-caption ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-300)]"}`}>{new Date(meeting.completedAt ?? meeting.createdAt).toLocaleString()}</div>
+                          <div className={`mt-2 line-clamp-2 text-xs leading-5 ${selected ? "text-[var(--swiss-gray-200)]" : "text-[var(--swiss-gray-400)]"}`}>{meeting.title}</div>
                         </div>
                       </button>
                     );
@@ -115,15 +114,15 @@ export default function MeetingsPage() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <CardTitle className="text-xl capitalize">{selectedMeeting.type.replace(/_/g, " ")}</CardTitle>
-                      <CardDescription className="mt-1 max-w-3xl text-sm leading-6">{selectedMeeting.summary}</CardDescription>
+                      <CardDescription className="mt-1 max-w-3xl text-sm leading-6">{selectedMeeting.title}</CardDescription>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="outline">{selectedMeeting.status}</Badge>
-                      <Badge variant="outline">{new Date(selectedMeeting.completedAt ?? selectedMeeting.scheduledAt).toLocaleString()}</Badge>
+                      <Badge variant="outline">{new Date(selectedMeeting.completedAt ?? selectedMeeting.createdAt).toLocaleString()}</Badge>
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {selectedMeeting.participants.map((participantId) => {
+                    {selectedMeeting.participantAgentIds.map((participantId) => {
                       const participant = agentsById.get(participantId);
                       return (
                         <Badge key={participantId} variant="secondary">
@@ -146,131 +145,98 @@ export default function MeetingsPage() {
                   <div className="grid gap-px border border-[var(--swiss-gray-100)] lg:grid-cols-2 xl:grid-cols-4">
                     <div className="bg-[var(--swiss-white)] p-4">
                       <div className="swiss-caption text-[var(--swiss-gray-300)]">Participants</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.participants.length}</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.participantAgentIds.length}</div>
                     </div>
                     <div className="bg-[var(--swiss-white)] p-4">
-                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Agenda</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.agenda.length}</div>
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Contributions</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.contributions.length}</div>
+                    </div>
+                    <div className="bg-[var(--swiss-white)] p-4">
+                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Conflicts</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.synthesis?.conflicts.length ?? 0}</div>
                     </div>
                     <div className="bg-[var(--swiss-white)] p-4">
                       <div className="swiss-caption text-[var(--swiss-gray-300)]">Decisions</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.decisions.length}</div>
-                    </div>
-                    <div className="bg-[var(--swiss-white)] p-4">
-                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Learnings</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.learnings.length}</div>
-                    </div>
-                    <div className="bg-[var(--swiss-white)] p-4">
-                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Mutations</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.taskModifications.length + selectedMeeting.memoryModifications.length}</div>
-                    </div>
-                    <div className="bg-[var(--swiss-white)] p-4">
-                      <div className="swiss-caption text-[var(--swiss-gray-300)]">Linked approvals</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedMeetingApprovals.length}</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedMeeting.resolutions?.decisions.length ?? 0}</div>
                     </div>
                   </div>
 
                   <div className="relative space-y-5 before:absolute before:bottom-0 before:left-4 before:top-0 before:w-px before:bg-[var(--swiss-gray-100)]">
+                    {/* Contributions */}
                     <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Clock3 className="h-4 w-4" /></div>
+                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><MessageSquareQuote className="h-4 w-4" /></div>
                       <div className="border border-[var(--swiss-gray-100)] p-4">
-                        <div className="text-sm font-semibold">Agenda flow</div>
+                        <div className="text-sm font-semibold">Contributions</div>
                         <div className="mt-3 space-y-3">
-                          {selectedMeeting.agenda.map((item) => (
-                            <div key={item.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <div className="font-medium">{item.topic}</div>
-                                <Badge variant="outline">{item.type}</Badge>
-                                {item.needsBoardApproval ? <Badge variant="warning">board approval</Badge> : null}
+                          {selectedMeeting.contributions.length === 0 ? (
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No contributions recorded.</div>
+                          ) : (
+                            selectedMeeting.contributions.map((c) => (
+                              <div key={c.agentId} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="font-medium">{c.agentName}</div>
+                                  <Badge variant="outline">{c.agentRole}</Badge>
+                                </div>
+                                {c.contribution.whatIDid ? <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]"><strong>Done:</strong> {c.contribution.whatIDid}</div> : null}
+                                {c.contribution.whatImDoing ? <div className="mt-1 text-sm leading-6 text-[var(--swiss-gray-400)]"><strong>Doing:</strong> {c.contribution.whatImDoing}</div> : null}
+                                {c.contribution.blockers ? <div className="mt-1 text-sm leading-6 text-[var(--swiss-red)]"><strong>Blockers:</strong> {c.contribution.blockers}</div> : null}
+                                {c.contribution.learnings ? <div className="mt-1 text-sm leading-6 text-[var(--swiss-gray-400)]"><strong>Learnings:</strong> {c.contribution.learnings}</div> : null}
+                                {c.contribution.questionsForTeam ? <div className="mt-1 text-sm leading-6 text-[var(--swiss-gray-400)]"><strong>Questions:</strong> {c.contribution.questionsForTeam}</div> : null}
                               </div>
-                              <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{item.content}</div>
-                            </div>
-                          ))}
+                            ))
+                          )}
                         </div>
                       </div>
                     </div>
 
+                    {/* Synthesis */}
+                    {selectedMeeting.synthesis ? (
+                      <div className="relative pl-12">
+                        <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Lightbulb className="h-4 w-4" /></div>
+                        <div className="border border-[var(--swiss-gray-100)] p-4">
+                          <div className="text-sm font-semibold">Synthesis</div>
+                          <div className="mt-3 space-y-3">
+                            {selectedMeeting.synthesis.conflicts.map((c) => (
+                              <div key={c.id} className="border border-[var(--swiss-red)]/30 bg-red-50 p-3 text-sm leading-6">
+                                <Badge variant="outline" className="mb-1">{c.severity} conflict</Badge>
+                                <div>{c.description}</div>
+                              </div>
+                            ))}
+                            {selectedMeeting.synthesis.blockers.map((b) => (
+                              <div key={b.id} className="border border-yellow-300 bg-yellow-50 p-3 text-sm leading-6">
+                                <Badge variant="outline" className="mb-1">blocker</Badge>
+                                <div>{b.description}</div>
+                              </div>
+                            ))}
+                            {selectedMeeting.synthesis.highlights.map((h, i) => (
+                              <div key={i} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3 text-sm leading-6">
+                                <Badge variant="outline" className="mb-1">{h.type}</Badge>
+                                <div>{h.description}</div>
+                              </div>
+                            ))}
+                            {selectedMeeting.synthesis.conflicts.length === 0 && selectedMeeting.synthesis.blockers.length === 0 && selectedMeeting.synthesis.highlights.length === 0 ? (
+                              <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No issues detected.</div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Resolutions */}
                     <div className="relative pl-12">
                       <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><CheckCircle2 className="h-4 w-4" /></div>
                       <div className="border border-[var(--swiss-gray-100)] p-4">
-                        <div className="text-sm font-semibold">Decisions made</div>
+                        <div className="text-sm font-semibold">Decisions</div>
                         <div className="mt-3 space-y-3">
-                          {selectedMeeting.decisions.length === 0 ? (
-                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No explicit decisions were recorded in this meeting.</div>
+                          {!selectedMeeting.resolutions || selectedMeeting.resolutions.decisions.length === 0 ? (
+                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No decisions were recorded.</div>
                           ) : (
-                            selectedMeeting.decisions.map((decision) => (
-                              <div key={decision.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3 text-sm leading-6">{decision.description}</div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Lightbulb className="h-4 w-4" /></div>
-                      <div className="border border-[var(--swiss-gray-100)] p-4">
-                        <div className="text-sm font-semibold">Learnings and memory updates</div>
-                        <div className="mt-3 space-y-3">
-                          {selectedMeeting.learnings.length === 0 ? (
-                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">No learnings were promoted into employee memory here.</div>
-                          ) : (
-                            selectedMeeting.learnings.map((learning) => {
-                              const agent = agentsById.get(learning.agentId);
-                              return (
-                                <div key={learning.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
-                                  <div className="text-sm font-medium">{agent?.name ?? learning.agentId}</div>
-                                  <div className="mt-1 text-sm leading-6 text-[var(--swiss-gray-400)]">{learning.content}</div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Users className="h-4 w-4" /></div>
-                      <div className="border border-[var(--swiss-gray-100)] p-4">
-                        <div className="text-sm font-semibold">Memory mutations applied</div>
-                        <div className="mt-3 space-y-3">
-                          {selectedMeeting.memoryModifications.length === 0 ? (
-                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">This meeting did not apply any explicit memory changes.</div>
-                          ) : (
-                            selectedMeeting.memoryModifications.map((modification) => {
-                              const agent = agentsById.get(modification.agentId);
-                              return (
-                                <div key={modification.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <Badge variant="outline">{modification.modificationType.replace(/_/g, " ")}</Badge>
-                                    <span className="swiss-caption text-[var(--swiss-gray-300)]">{agent?.name ?? modification.agentId}</span>
-                                  </div>
-                                  <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{modification.content}</div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="relative pl-12">
-                      <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><GitBranch className="h-4 w-4" /></div>
-                      <div className="border border-[var(--swiss-gray-100)] p-4">
-                        <div className="text-sm font-semibold">Task changes</div>
-                        <div className="mt-3 space-y-3">
-                          {selectedMeeting.taskModifications.length === 0 ? (
-                            <div className="border border-dashed border-[var(--swiss-gray-100)] p-3 text-sm text-[var(--swiss-gray-300)]">This meeting did not directly modify tasks.</div>
-                          ) : (
-                            selectedMeeting.taskModifications.map((modification) => (
-                              <div key={modification.id} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
+                            selectedMeeting.resolutions.decisions.map((d, i) => (
+                              <div key={i} className="border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-3">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <Badge variant="outline">{modification.modificationType.replace(/_/g, " ")}</Badge>
-                                  <span className="swiss-caption text-[var(--swiss-gray-300)]">task {modification.taskId.slice(-6)}</span>
-                                  {modification.assignedRole ? <Badge variant="outline">{modification.assignedRole}</Badge> : null}
-                                  {modification.priority ? <Badge variant="outline">{modification.priority}</Badge> : null}
-                                  {modification.resultingStatus ? <Badge variant="outline">{modification.resultingStatus.replace(/_/g, " ")}</Badge> : null}
+                                  <Badge variant="outline">{d.action.replace(/_/g, " ")}</Badge>
                                 </div>
-                                <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{modification.details}</div>
+                                <div className="mt-2 text-sm leading-6 text-[var(--swiss-gray-400)]">{d.decision}</div>
                               </div>
                             ))
                           )}
@@ -278,6 +244,26 @@ export default function MeetingsPage() {
                       </div>
                     </div>
 
+                    {/* Brief */}
+                    {selectedMeeting.brief ? (
+                      <div className="relative pl-12">
+                        <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><Users className="h-4 w-4" /></div>
+                        <div className="border border-[var(--swiss-gray-100)] p-4">
+                          <div className="text-sm font-semibold">Daily sync brief</div>
+                          <div className="mt-3 text-sm leading-6 text-[var(--swiss-gray-400)]">{selectedMeeting.brief.companyStatus}</div>
+                          {selectedMeeting.brief.activeBlockers.length > 0 ? (
+                            <div className="mt-2">
+                              <div className="swiss-caption text-[var(--swiss-gray-300)]">Active blockers</div>
+                              {selectedMeeting.brief.activeBlockers.map((b, i) => (
+                                <div key={i} className="mt-1 text-sm text-[var(--swiss-red)]">{b}</div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Approval requests */}
                     <div className="relative pl-12">
                       <div className="absolute left-0 top-1 flex h-8 w-8 items-center justify-center bg-[var(--swiss-black)] text-[var(--swiss-white)]"><CheckCircle2 className="h-4 w-4" /></div>
                       <div className="border border-[var(--swiss-gray-100)] p-4">

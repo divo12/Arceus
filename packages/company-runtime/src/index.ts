@@ -29,3 +29,11 @@ export {
 } from "./governance-gateway";
 export type { DeniedTool, FilterResult } from "./governance-gateway";
 
+// Spec 18: Meeting Pipeline
+export { MeetingScheduler, getManagerRole, getEscalationChain } from "./meeting-scheduler";
+export type { MeetingSchedulerConfig, MeetingSchedulerDeps } from "./meeting-scheduler";
+export { MeetingPipeline } from "./meeting-pipeline";
+export type { MeetingPipelineDeps } from "./meeting-pipeline";
+export { assembleMeetingTranscript, extractMeetingMemories } from "./meeting-memory";
+export type { MeetingFactExtractor, MeetingExtractedFact, MeetingMemoryResult } from "./meeting-memory";
+

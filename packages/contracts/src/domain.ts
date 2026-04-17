@@ -44,10 +44,10 @@ export const artifactKindSchema = z.enum([
   "other"
 ]);
 export const prioritySchema = z.enum(["critical", "high", "medium", "low"]);
-export const meetingTypeSchema = z.enum(["standup", "scrum", "escalation", "sync", "handoff", "ad_hoc"]);
+export const meetingTypeSchema = z.enum(["daily_sync", "eval_triggered", "escalation"]);
+export const meetingStatusSchema = z.enum(["scheduled", "collecting", "synthesizing", "resolving", "executing", "learning", "completed", "skipped"]);
 export const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "applied"]);
 export const roleTypeSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
-export const agendaItemTypeSchema = z.enum(["update", "blocker", "question", "proposal"]);
 export const chatMessageRoleSchema = z.enum(["board", "ceo", "agent", "system"]);
 export const chatMessageCardTypeSchema = z.enum([
   "welcome_brief",
@@ -58,6 +58,7 @@ export const chatMessageCardTypeSchema = z.enum([
   "sprint_proposal",
   "review_summary",
   "approval_request",
+  "daily_sync_summary",
   "info"
 ]);
 export const memoryUnitTypeSchema = z.enum(["static", "dynamic", "episodic", "semantic", "delegation"]);
@@ -234,61 +235,147 @@ export const taskSchema = z.object({
   completedAt: z.string().nullable().optional()
 });
 
-export const agendaItemSchema = z.object({
-  id: z.string(),
-  topic: z.string(),
-  type: agendaItemTypeSchema,
-  content: z.string(),
-  raisedByAgentId: z.string(),
-  relatedTaskId: z.string().nullable(),
-  needsBoardApproval: z.boolean()
+// ── Meeting Pipeline (Spec 18) ─────────────────────────────────
+
+export const meetingContributionSchema = z.object({
+  agentId: z.string(),
+  agentName: z.string(),
+  agentRole: z.string(),
+  contribution: z.object({
+    whatIDid: z.string(),
+    whatImDoing: z.string(),
+    blockers: z.string(),
+    learnings: z.string(),
+    questionsForTeam: z.string(),
+  }),
+  submittedAt: z.string(),
 });
 
-export const meetingDecisionSchema = z.object({
+export const meetingSynthesisConflictSchema = z.object({
   id: z.string(),
   description: z.string(),
-  decidedByAgentIds: z.array(z.string()),
-  impactIds: z.array(z.string())
+  involvedAgentIds: z.array(z.string()),
+  severity: z.enum(["low", "medium", "high"]),
+  suggestedResolution: z.string(),
 });
 
-export const meetingLearningSchema = z.object({
+export const meetingSynthesisBlockerSchema = z.object({
   id: z.string(),
-  agentId: z.string(),
-  content: z.string(),
-  promotedToSummary: z.boolean()
+  description: z.string(),
+  reportedByAgentId: z.string(),
+  suggestedAction: z.string(),
 });
 
-export const taskModificationSchema = z.object({
-  id: z.string(),
-  taskId: z.string(),
-  modificationType: z.enum(["assign", "reprioritize", "reassign", "cancel", "decompose_further", "unblock"]),
-  details: z.string(),
-  assignedRole: roleTypeSchema.nullable().optional(),
-  priority: prioritySchema.nullable().optional(),
-  resultingStatus: taskStatusSchema.nullable().optional(),
+export const synthesisOutputSchema = z.object({
+  conflicts: z.array(meetingSynthesisConflictSchema),
+  blockers: z.array(meetingSynthesisBlockerSchema),
+  alignmentIssues: z.array(z.object({
+    id: z.string(),
+    description: z.string(),
+    involvedAgentIds: z.array(z.string()),
+  })),
+  highlights: z.array(z.object({
+    type: z.enum(["completion", "milestone", "risk"]),
+    description: z.string(),
+    agentId: z.string(),
+  })),
+  requiresBoardAttention: z.boolean(),
+  boardSummary: z.string().nullable(),
 });
 
-export const memoryModificationSchema = z.object({
+export const resolutionDecisionSchema = z.object({
+  conflictId: z.string().nullable(),
+  blockerId: z.string().nullable(),
+  decision: z.string(),
+  action: z.enum(["create_task", "modify_task", "escalate_to_board", "note", "no_action"]),
+  taskAction: z.object({
+    type: z.enum(["create", "update", "reassign"]),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    assigneeRole: z.string().optional(),
+    issueId: z.string().optional(),
+    newStatus: z.string().optional(),
+    newPriority: z.string().optional(),
+  }).optional(),
+  escalation: z.object({
+    question: z.string(),
+    context: z.string(),
+    severity: z.enum(["low", "medium", "high"]),
+  }).optional(),
+});
+
+export const resolutionOutputSchema = z.object({
+  decisions: z.array(resolutionDecisionSchema),
+});
+
+export const dailySyncBriefSchema = z.object({
+  date: z.string(),
+  companyStatus: z.string(),
+  teamUpdates: z.array(z.object({
+    agentRole: z.string(),
+    summary: z.string(),
+  })),
+  activeBlockers: z.array(z.string()),
+  upcomingDependencies: z.array(z.string()),
+  decisionsFromMeeting: z.array(z.string()),
+});
+
+export const meetingHealthSnapshotSchema = z.object({
+  meetingId: z.string(),
+  scheduleId: z.string().nullable(),
+  pipelineDurationMs: z.number().int().nonnegative(),
+  contributionCount: z.number().int().nonnegative(),
+  conflictCount: z.number().int().nonnegative().default(0),
+  blockerCount: z.number().int().nonnegative().default(0),
+  decisionsCount: z.number().int().nonnegative().default(0),
+  tasksCreated: z.number().int().nonnegative().default(0),
+  tasksModified: z.number().int().nonnegative().default(0),
+  escalationsCreated: z.number().int().nonnegative().default(0),
+  totalTokensUsed: z.number().int().nonnegative().default(0),
+  skippedBefore: z.number().int().nonnegative().default(0),
+});
+
+export const meetingScheduleConfigSchema = z.object({
+  maxConsecutiveSkips: z.number().int().positive().default(3),
+  skipIfNoBlockers: z.boolean().default(true),
+  skipIfNoTaskChanges: z.boolean().default(true),
+  collectionTimeoutMs: z.number().int().positive().default(300000),
+});
+
+export const meetingScheduleSchema = z.object({
   id: z.string(),
-  agentId: z.string(),
-  modificationType: z.enum(["current_focus", "recent_learning", "active_pattern", "open_blocker", "important_decision", "clear_blocker"]),
-  content: z.string(),
+  companyId: z.string(),
+  type: meetingTypeSchema,
+  title: z.string(),
+  intervalMs: z.number().int().positive(),
+  participantAgentIds: z.array(z.string()),
+  facilitatorAgentId: z.string(),
+  conditionalCheckEnabled: z.boolean(),
+  enabled: z.boolean(),
+  lastCheckedAt: z.string().nullable(),
+  lastMeetingId: z.string().nullable(),
+  nextCheckAt: z.string().nullable(),
+  skipCount: z.number().int().nonnegative().default(0),
+  totalRuns: z.number().int().nonnegative().default(0),
+  config: meetingScheduleConfigSchema,
 });
 
 export const meetingSchema = z.object({
   id: z.string(),
   companyId: z.string(),
+  scheduleId: z.string().nullable(),
   type: meetingTypeSchema,
-  participants: z.array(z.string()),
-  agenda: z.array(agendaItemSchema),
-  decisions: z.array(meetingDecisionSchema),
-  learnings: z.array(meetingLearningSchema),
-  taskModifications: z.array(taskModificationSchema),
-  memoryModifications: z.array(memoryModificationSchema),
-  status: z.enum(["scheduled", "in_progress", "completed"]),
-  summary: z.string(),
-  scheduledAt: z.string(),
-  completedAt: z.string().nullable()
+  title: z.string(),
+  status: meetingStatusSchema,
+  facilitatorAgentId: z.string(),
+  participantAgentIds: z.array(z.string()),
+  contributions: z.array(meetingContributionSchema),
+  synthesis: synthesisOutputSchema.nullable(),
+  resolutions: resolutionOutputSchema.nullable(),
+  brief: dailySyncBriefSchema.nullable(),
+  healthSnapshot: meetingHealthSnapshotSchema.nullable(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
 });
 
 export const approvalSchema = z.object({
@@ -514,6 +601,7 @@ export const beatEventTriggerSchema = z.enum([
   "sprint_started",
   "escalation_received",
   "bug_reported",
+  "meeting_contribution",
 ]);
 
 export const beatTriggerSchema = z.discriminatedUnion("type", [
@@ -628,6 +716,7 @@ export const agentBeatContextSchema = z.object({
   approvals: z.array(approvalSchema),
   recentBoardMessages: z.array(chatMessageSchema),
   recentMeetings: z.array(meetingSchema),
+  latestDailySyncBrief: dailySyncBriefSchema.nullable().default(null),
 
   // Budget constraints
   beatTokenBudget: z.number().int().positive(),
@@ -654,6 +743,7 @@ export const companySnapshotSchema = z.object({
   artifacts: z.array(artifactSchema),
   chatMessages: z.array(chatMessageSchema),
   meetings: z.array(meetingSchema),
+  meetingSchedules: z.array(meetingScheduleSchema).default([]),
   approvals: z.array(approvalSchema),
   memories: z.array(memorySummarySchema),
   memoryUnits: z.array(memoryUnitSchema),
@@ -812,7 +902,14 @@ export type RoleSoul = z.infer<typeof roleSoulSchema>;
 export type AgentIdentity = z.infer<typeof agentIdentitySchema>;
 export type SessionBinding = z.infer<typeof sessionBindingSchema>;
 export type Task = z.infer<typeof taskSchema>;
-export type AgendaItem = z.infer<typeof agendaItemSchema>;
+export type MeetingContribution = z.infer<typeof meetingContributionSchema>;
+export type SynthesisOutput = z.infer<typeof synthesisOutputSchema>;
+export type ResolutionOutput = z.infer<typeof resolutionOutputSchema>;
+export type ResolutionDecision = z.infer<typeof resolutionDecisionSchema>;
+export type DailySyncBrief = z.infer<typeof dailySyncBriefSchema>;
+export type MeetingHealthSnapshot = z.infer<typeof meetingHealthSnapshotSchema>;
+export type MeetingScheduleConfig = z.infer<typeof meetingScheduleConfigSchema>;
+export type MeetingSchedule = z.infer<typeof meetingScheduleSchema>;
 export type Meeting = z.infer<typeof meetingSchema>;
 export type Approval = z.infer<typeof approvalSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
