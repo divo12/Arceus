@@ -28,6 +28,7 @@ import { getSupabaseEndpointHealth } from "./supabase-storage";
 import { getBreakersHealth } from "./resilience";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats, audit } from "./audit-ledger";
 import { auditConfig } from "./config/audit";
+import { graphStore } from "./graph-store";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations, cpLoadAgentContext, cpCommitBeatRecord, cpGetSnapshotVersion, cpGetBeatHistory, cpSetBuildCheckDir, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpGetAllTrustScores, cpHydrateTrustScores } from "./control-plane";
 import { seedRegistry, clearRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "./service-registry";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, MeetingScheduler, MeetingPipeline } from "@arceus/company-runtime";
@@ -40,6 +41,8 @@ const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
 cpSetBuildCheckDir(productDir);
 
+const persistenceMode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
+console.log(`[STARTUP] Company state persistence mode: ${persistenceMode}`);
 await hydrate();
 
 // ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
@@ -829,6 +832,69 @@ app.get("/api/execution-flow", async () => {
     feedbackRounds: getFeedbackRounds(),
     executionStatus: getExecutionStatus(),
   };
+});
+
+// ── Debug Graph API (Spec 22) ──────────────────────────────
+
+app.get("/api/debug/graph", async () => {
+  return { sprints: graphStore.listSprints() };
+});
+
+app.get("/api/debug/graph/:sprintId", async (request, reply) => {
+  const { sprintId } = request.params as { sprintId: string };
+  const graph = graphStore.getGraph(sprintId);
+  if (!graph) {
+    reply.code(404);
+    return { error: "Sprint graph not found" };
+  }
+  return graph;
+});
+
+app.get("/api/debug/graph/:sprintId/node/:nodeId", async (request, reply) => {
+  const { sprintId, nodeId } = request.params as { sprintId: string; nodeId: string };
+  const node = graphStore.getNode(sprintId, nodeId);
+  if (!node) {
+    reply.code(404);
+    return { error: "Node not found" };
+  }
+  return node;
+});
+
+app.get("/api/debug/graph/stream", async (request, reply) => {
+  const sprintIdFilter = (request.query as Record<string, string>).sprintId ?? null;
+
+  reply.raw.setHeader("Content-Type", "text/event-stream");
+  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("X-Accel-Buffering", "no");
+  reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin || "*");
+  reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+  reply.raw.flushHeaders?.();
+
+  const heartbeat = setInterval(() => {
+    try {
+      reply.raw.write(`event: ping\ndata: {}\n\n`);
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 10000);
+
+  const unsubscribe = graphStore.subscribe((event) => {
+    // Filter by sprint if requested
+    if (sprintIdFilter && "sprintId" in event && event.sprintId !== sprintIdFilter) {
+      return;
+    }
+    try {
+      reply.raw.write(`event: graph\ndata: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      /* stream broken */
+    }
+  });
+
+  reply.raw.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 });
 
 app.get("/api/artifacts/:id", async (request, reply) => {

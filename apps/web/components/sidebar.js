@@ -2,7 +2,7 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MessageSquare, LayoutDashboard, CheckSquare, Users, Inbox, Eye, Shield, Settings, Sun, Moon, } from "lucide-react";
+import { MessageSquare, LayoutDashboard, CheckSquare, Users, Inbox, Eye, Shield, Settings, Sun, Moon, CalendarDays, } from "lucide-react";
 import { useTheme } from "./theme-provider";
 import { cn } from "../lib/utils";
 const NAV_ITEMS = [
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
     { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
     { href: "/tasks", icon: CheckSquare, label: "Tasks" },
     { href: "/agents", icon: Users, label: "Agents" },
+    { href: "/meetings", icon: CalendarDays, label: "Meetings" },
     { href: "/inbox", icon: Inbox, label: "Inbox" },
     { href: "/preview", icon: Eye, label: "Preview" },
     { href: "/governance", icon: Shield, label: "Governance" },

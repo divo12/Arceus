@@ -11,6 +11,7 @@ import { structuredCompletion } from "./azure-openai";
 import { auditSystem } from "./audit-ledger";
 import { routerDecisionSchema, type CompanySnapshot, type RouterDecision, type Task, type Transition, type TransitionProposal, type FeedbackRound } from "@arceus/contracts";
 import { appendTransition, updateTransition, appendFeedbackRound, updateTask, getSnapshot } from "./store";
+import { emitGraphDecision, resolveActiveSprintId } from "./graph-emitter";
 
 /* ---------- valid task status transitions ---------- */
 
@@ -299,6 +300,21 @@ export async function runRouterLoop(
       },
       severity: "debug",
     });
+
+    // ── Graph instrumentation (Spec 22) — router_transition decision ──
+    {
+      const rtSprintId = snapshot.company.currentSprintId ?? resolveActiveSprintId();
+      if (rtSprintId) {
+        emitGraphDecision(rtSprintId, null, "router_transition",
+          decision.shouldPause
+            ? `Router paused: ${decision.pauseReason ?? "unknown"}`
+            : `Router proposed ${decision.transitions.length} transition(s)`,
+          decision.transitions.map((t) => `${t.toTaskId?.substring(0, 12)} → ${t.toStatus} (conf=${t.confidence})`).join("; ") || "No proposals",
+          "system",
+          decision.transitions.length > 0 ? decision.transitions[0].confidence : null,
+          decision.shouldPause ? [decision.pauseReason ?? ""] : null);
+      }
+    }
 
     console.log(`[Router] Cycle ${cycle}: shouldPause=${decision.shouldPause}, transitions=${decision.transitions.length}, pauseReason=${decision.pauseReason ?? "none"}`);
     for (const t of decision.transitions) {

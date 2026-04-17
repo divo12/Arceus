@@ -9,10 +9,12 @@ import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/in
 import { emitEmployeeActivity } from "./activity";
 import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
 import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
-import type { Approval, CompanySnapshot, AgentIdentity, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
+import type { Approval, CompanySnapshot, AgentIdentity, DefectArea, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
 import { isCeoStreaming } from "./chat";
+import { emitGraphSprintStarted, emitGraphSprintCompleted, emitGraphNodeAdded, emitGraphStatusChanged, emitGraphArtifactProduced, emitGraphArtifactConsumed, emitGraphBeatStarted, emitGraphBeatCompleted, emitGraphDecision, emitGraphFileChanges, emitGraphReworkStarted, emitGraphReworkIteration, emitGraphMeeting, emitGraphMemoryWrite, resolveActiveSprintId } from "./graph-emitter";
+import { graphStore } from "./graph-store";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, probePreviewHealth, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
 import { runRouterLoop, type RouterLoopResult } from "./router";
@@ -31,7 +33,6 @@ import {
   createReviewState,
   buildGateFailureBugFields,
   buildBugFixTaskFields,
-  parseQAReport,
   routeDefect,
   allBugFixesResolved,
   shouldRetestAfterRework,
@@ -679,6 +680,12 @@ async function pollDeveloperWorkspaceChanges() {
     appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
   }
 
+  // ── Graph instrumentation (Spec 22) — workspace file changes ──
+  const fileChangeSprintId = resolveActiveSprintId();
+  if (fileChangeSprintId && activeExecution.buildTaskId) {
+    emitGraphFileChanges(fileChangeSprintId, activeExecution.buildTaskId, changedFiles.map((f) => ({ path: f, action: "modified" as const })));
+  }
+
   try {
     await maybeStartDeveloperLivePreview(changedFiles);
   } catch (err) {
@@ -812,6 +819,28 @@ function addArtifact(agent: string, kind: Artifact["kind"], title: string, conte
   artifacts.push(artifact);
   void persistRuntimeArtifact(getSnapshot().company.id, artifact);
   return artifact;
+}
+
+/**
+ * Persist an artifact as a markdown file inside the workspace `docs/` folder
+ * and record the file change on the graph so it appears in the Files tab.
+ */
+async function writeArtifactToWorkspace(
+  taskId: string,
+  role: string,
+  slug: string,
+  content: string,
+): Promise<void> {
+  const docsDir = join(productDir, "docs");
+  await mkdir(docsDir, { recursive: true });
+  const filePath = join(docsDir, `${slug}.md`);
+  await writeFile(filePath, `${content}\n`, "utf8");
+
+  const relativePath = `docs/${slug}.md`;
+  const sid = resolveActiveSprintId();
+  if (sid) {
+    emitGraphFileChanges(sid, taskId, [{ path: relativePath, action: "created", linesChanged: content.split("\n").length }]);
+  }
 }
 
 async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, message: string) {
@@ -1046,6 +1075,12 @@ async function checkSprintCompletion(): Promise<boolean> {
     detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId },
   });
 
+  // ── Graph instrumentation (Spec 22) — sprint review decision ──
+  emitGraphDecision(currentSprintId, null, "task_completion",
+    `Sprint ${currentSprint.number} → REVIEWING`,
+    `All ${sprintTasks.length} implementation tasks reached terminal status`,
+    "system", 1.0);
+
   const reviewState = createReviewState(3);
 
   updateSprint(currentSprintId, (sprint) => ({
@@ -1057,6 +1092,12 @@ async function checkSprintCompletion(): Promise<boolean> {
   // Run pre-review build gate
   const productDir = workspaceManager.getLegacyProductDir();
   const gateResult = await runVerificationGate(productDir, "pre_review");
+
+  // ── Graph instrumentation (Spec 22) — gate verdict ──
+  emitGraphDecision(currentSprintId, null, "gate_verdict",
+    `Pre-review gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
+    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+    "system", gateResult.passed ? 1.0 : 0);
 
   reviewState.gateResults.push(gateResult);
 
@@ -1077,6 +1118,10 @@ async function checkSprintCompletion(): Promise<boolean> {
       upsertTask(bugTask);
       reviewState.bugTaskIds.push(bugTask.id);
       reviewState.phase = "rework";
+
+      // ── Graph instrumentation (Spec 22) — bug_fix node added ──
+      emitGraphNodeAdded(currentSprintId, bugTask);
+
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
   } else {
@@ -1126,6 +1171,9 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
     reviewState: s.reviewState ? { ...s.reviewState, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
   }));
 
+  // ── Graph instrumentation (Spec 22) ──
+  emitGraphSprintCompleted(sprintId, "completed");
+
   await tagCurrentSprintSnapshot();
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
@@ -1168,6 +1216,12 @@ async function executeSprintReviewVerification(
   const role = ctx.role;
   const soul = getRoleSoul(role);
 
+  // ── Graph instrumentation (Spec 22) — beat wrapping verification ──
+  const reviewBeatId = `review_${beatId}`;
+  const reviewBeatSprintId = sprintId;
+  const reviewBeatStart = Date.now();
+  emitGraphBeatStarted(reviewBeatSprintId, sprintId, reviewBeatId, role, "sprint_verification", `Sprint ${sprint.number} review`);
+
   // Build the tester verification prompt
   const completedTasks = snapshot.tasks.filter(
     (t) => t.sprintId === sprintId && t.status === "completed" && t.kind !== "bug_fix" && t.kind !== "follow_up",
@@ -1185,6 +1239,9 @@ async function executeSprintReviewVerification(
     emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error}) — auto-failing sprint verification`, { beatId });
   }
 
+  // Entry-point import check
+  const sprintEntryCheck = checkEntryPointImports();
+
   const prompt = [
     `You are verifying Sprint ${sprint.number}: "${sprint.goal}".`,
     "",
@@ -1197,18 +1254,35 @@ async function executeSprintReviewVerification(
     previewProbe.reachable
       ? `HTTP status: ${previewProbe.statusCode}`
       : `Error: ${previewProbe.error ?? "unknown"}`,
+    previewProbe.reachable ? `Content length: ${previewProbe.contentLength} bytes` : "",
+    previewProbe.reachable ? `Has product content: ${previewProbe.hasProductContent}` : "",
+    previewProbe.bodySnippet ? `Page text snippet: ${previewProbe.bodySnippet}` : "",
+    "",
+    "## Entry-Point Integration Check (automated)",
+    `Entry file: ${sprintEntryCheck.entryFile ?? "not found"}`,
+    `Import check passed: ${sprintEntryCheck.pass}`,
+    `Details: ${sprintEntryCheck.reason}`,
+    sprintEntryCheck.orphanedModules.length > 0 ? `Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}` : "",
+    !sprintEntryCheck.pass ? "CRITICAL: Entry file does NOT import product modules. Components exist as files but are never used. The sprint MUST fail." : "",
     "",
     "IMPORTANT: If the preview is UNREACHABLE, the sprint MUST fail. A product that cannot be accessed is not shippable.",
+    "IMPORTANT: If the entry-point integration check FAILED, the sprint MUST fail. Files on disk that aren't imported are not a product.",
     "",
     "## Your Verification Steps",
-    "1. Check the automated preview health result above — if unreachable, verdict MUST be fail",
-    "2. Analyze each completed task against its Definition of Done",
-    "3. Identify any defects or gaps",
-    "4. Produce a structured QA report",
+    "1. Check the automated preview health and entry-point results above — if either failed, verdict MUST be fail",
+    "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal",
+    `   - Read the entry file (start with ${productDir}/src/App.tsx or equivalent) and verify it imports product modules`,
+    "   - Do NOT produce a theoretical report — cite actual files and import statements you verified",
+    "3. Analyze each completed task against its Definition of Done",
+    "4. Identify any defects or gaps",
+    "5. Produce a structured QA report",
     "",
-    "## QA Report Format (required)",
-    "Output a JSON block with this structure:",
-    '{"verdict":"pass"|"fail","tasks":[{"taskId":"...","verdict":"pass"|"fail","findings":[{"defect_area":"build_failure"|"test_failure"|"ui_rendering"|"ui_interaction"|"api_behavior"|"accessibility"|"content"|"design_mismatch"|"logic_error"|"performance","severity":"critical"|"high"|"medium"|"low","description":"...","expected":"...","actual":"...","file":"...","fix_suggestion":"..."}],"dod_checklist":[{"item":"...","status":"pass"|"fail","evidence":"..."}]}],"test_files_written":[],"build_status":"pass"|"fail"|"skipped","test_suite_status":"pass"|"fail"|"skipped"|"no_tests"}',
+    "## QA Report Requirements",
+    "For each completed task, assess whether it passes or fails its Definition of Done.",
+    "For failures, describe the defect area, severity, what was expected vs actual, the file involved, and a fix suggestion.",
+    "For each DoD item, state whether it passes or fails with evidence.",
+    "State overall build and test suite status.",
+    "Conclude with an overall verdict: PASS or FAIL.",
   ].join("\n");
 
   try {
@@ -1221,17 +1295,41 @@ async function executeSprintReviewVerification(
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
 
-    // Try to parse QA report from output
-    const qaReport = output ? parseQAReport(output) : null;
+    // Extract structured QA report from the agent's freeform output
+    let qaReport: QAReport | null = null;
+    if (output) {
+      try {
+        const extracted = await structuredCompletion(
+          "workerDeployment",
+          [
+            {
+              role: "system",
+              content: "Extract a structured QA report from the tester's analysis below. Map each task assessment, finding, and DoD checklist item. Preserve the tester's verdicts exactly.",
+            },
+            { role: "user", content: output },
+          ],
+          QAReportSchema,
+          "qa_report_extract",
+          { temperature: 0 },
+        );
+        qaReport = qaSchemaResultToQAReport(extracted);
+      } catch (extractErr) {
+        emitEmployeeActivity("tester", "error", `QA report extraction failed: ${extractErr instanceof Error ? extractErr.message : "unknown"} — treating as unparseable`, { beatId });
+      }
+    }
 
-    // Hard override: if preview is unreachable, force fail regardless of LLM verdict
+    // Hard override: if preview is unreachable OR entry-point is disconnected, force fail
     const effectiveVerdict = !previewProbe.reachable ? "fail"
+      : !sprintEntryCheck.pass ? "fail"
       : qaReport ? qaReport.verdict
       : null;
 
     if (effectiveVerdict === "pass") {
       // Tester approves → advance to final gate
       emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: PASS — advancing to final gate`, { beatId });
+
+      // ── Graph instrumentation (Spec 22) — QA verdict decision ──
+      emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: PASS`, "Tester verified all tasks pass their Definition of Done", "tester", 1.0);
 
       updateSprint(sprintId, (s) => ({
         ...s,
@@ -1253,14 +1351,20 @@ async function executeSprintReviewVerification(
         fileReferences: (qaReport?.testFilesWritten ?? []).map((f) => ({ path: f, action: "created" })),
       });
 
+      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "completed", `PASS — Sprint ${sprint.number}`, 1, Date.now() - reviewBeatStart);
       return { summary: `Tester verification PASS for Sprint ${sprint.number}`, tokensUsed, actionsCount: 1, toolCalls: 1 };
 
     } else if (effectiveVerdict === "fail") {
       // Tester found bugs (or preview unreachable) → create bug_fix tasks
       const failReason = !previewProbe.reachable
         ? `Preview unreachable: ${previewProbe.error}`
-        : "Tester QA report verdict: FAIL";
+        : !sprintEntryCheck.pass
+          ? `Entry-point disconnected: ${sprintEntryCheck.reason}`
+          : "Tester QA report verdict: FAIL";
       emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: FAIL — ${failReason}`, { beatId });
+
+      // ── Graph instrumentation (Spec 22) — QA verdict decision ──
+      emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: FAIL`, failReason, "tester", 0);
 
       const updatedReviewState: SprintReviewState = {
         ...(reviewState as SprintReviewState),
@@ -1286,6 +1390,9 @@ async function executeSprintReviewVerification(
         upsertTask(bugTask);
         newBugTaskIds.push(bugTask.id);
         rolesWithBugs.add("developer");
+
+        // ── Graph instrumentation (Spec 22) — bug_fix node for preview ──
+        emitGraphNodeAdded(sprintId, bugTask);
       }
 
       for (const taskReport of (qaReport?.tasks ?? [])) {
@@ -1309,6 +1416,9 @@ async function executeSprintReviewVerification(
           upsertTask(bugTask);
           newBugTaskIds.push(bugTask.id);
           rolesWithBugs.add(bugFields.assignedRole);
+
+          // ── Graph instrumentation (Spec 22) — QA bug_fix node added ──
+          emitGraphNodeAdded(sprintId, bugTask);
 
           // Create feedback round for audit trail
           const feedbackRound = {
@@ -1338,6 +1448,12 @@ async function executeSprintReviewVerification(
         updatedReviewState.escalatedToCto = true;
         emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
         emitReactive("cto", "escalation_received");
+
+        // ── Graph instrumentation (Spec 22) — escalation decision ──
+        emitGraphDecision(sprintId, null, "escalation",
+          `Sprint ${sprint.number} rework limit reached — escalating to CTO`,
+          `Rework cycle ${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles} exhausted`,
+          "tester", 0);
       }
 
       updateSprint(sprintId, (s) => ({
@@ -1363,6 +1479,7 @@ async function executeSprintReviewVerification(
         fileReferences: [],
       });
 
+      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "completed", `FAIL — Sprint ${sprint.number}`, 1, Date.now() - reviewBeatStart);
       return {
         summary: `Tester verification FAIL for Sprint ${sprint.number} — ${newBugTaskIds.length - reviewState.bugTaskIds.length} new bugs filed`,
         tokensUsed, actionsCount: 1, toolCalls: 1,
@@ -1375,11 +1492,13 @@ async function executeSprintReviewVerification(
         ...s,
         reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "fail" as const, phase: "rework" as const, reworkCycleCount: (s.reviewState.reworkCycleCount ?? 0) + 1 } : s.reviewState,
       }));
+      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", "Output unparseable — treated as fail", 0, Date.now() - reviewBeatStart);
       return { summary: `Tester output unparseable — treating as fail, returning to rework`, tokensUsed, actionsCount: 1, toolCalls: 1 };
     }
   } catch (err) {
     touchAgentSession(role, "idle");
     emitEmployeeActivity(role, "error", `Beat ${beatId}: sprint verification failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", err instanceof Error ? err.message : String(err), 0, Date.now() - reviewBeatStart);
     return {
       summary: `Sprint verification failed: ${err instanceof Error ? err.message : String(err)}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -1413,6 +1532,14 @@ async function executeSprintFinalGate(
 
   const productDir = workspaceManager.getLegacyProductDir();
   const gateResult = await runVerificationGate(productDir, "final");
+
+  // ── Graph instrumentation (Spec 22) — final gate verdict ──
+  if (sprintId) {
+    emitGraphDecision(sprintId, null, "gate_verdict",
+      `Final gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
+      gateResult.passed ? "Final build check passed" : `Final build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+      "system", gateResult.passed ? 1.0 : 0);
+  }
 
   const updatedGateResults = [...reviewState.gateResults, gateResult];
 
@@ -2101,6 +2228,35 @@ function recordMeeting(params: {
     { meetingId: meeting.id },
   );
 
+  // ── Graph instrumentation: meetings ──
+  const activeSprintId = resolveActiveSprintId();
+  if (activeSprintId) {
+    // Determine which task node this meeting relates to (if any)
+    const meetingNodeId = (params as { _graphNodeId?: string })._graphNodeId ?? null;
+
+    // Derive trigger from agenda blockers/topics
+    const triggerItems = params.agenda
+      .filter(a => a.type === "blocker" || a.type === "update")
+      .map(a => a.content.slice(0, 100));
+    const trigger = triggerItems.length > 0
+      ? triggerItems.join("; ")
+      : `${params.type.replace(/_/g, " ")} by ${params.facilitatorRole}`;
+
+    emitGraphMeeting(
+      activeSprintId,
+      meetingNodeId,
+      meeting.id,
+      params.type,
+      params.facilitatorRole,
+      params.participantRoles,
+      params.summary,
+      trigger,
+      (params.decisions ?? []).map(d => d.description),
+      (meetingMemoryModifications ?? []).map(m => `${m.agentRole}: ${m.content.slice(0, 80)}`),
+      false,
+    );
+  }
+
   return meeting;
 }
 
@@ -2165,6 +2321,14 @@ function attachArtifactToTask(taskId: string, artifactId: string) {
     ...task,
     artifactIds: task.artifactIds.includes(artifactId) ? task.artifactIds : [...task.artifactIds, artifactId],
   }));
+
+  // ── Graph instrumentation (Spec 22) ──
+  const task = getSnapshot().tasks.find((t) => t.id === taskId);
+  const sprintId = task?.sprintId ?? resolveActiveSprintId();
+  if (sprintId) {
+    const artifact = artifacts.find((a) => a.id === artifactId);
+    emitGraphArtifactProduced(sprintId, taskId, artifactId, artifact?.kind ?? "output", artifact?.title ?? artifactId);
+  }
 }
 
 function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null) {
@@ -2224,18 +2388,21 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
   updateTask(taskId, (task) => ({
     ...task,
     status,
-    verifierState:
-      status === "completed"
-        ? {
-            ...task.verifierState,
-            isVerified: true,
-            feedback: feedback ?? task.verifierState.feedback,
-          }
-        : {
-            ...task.verifierState,
-            feedback: feedback ?? task.verifierState.feedback,
-          },
+    verifierState: {
+      ...task.verifierState,
+      // isVerified is NOT auto-stamped on completion — it must be set
+      // explicitly by an independent verification step (preview validation,
+      // tester, or CTO review). This prevents self-reported "done" from
+      // being treated as "verified".
+      feedback: feedback ?? task.verifierState.feedback,
+    },
   }));
+
+  // ── Graph instrumentation (Spec 22) ──
+  const sprintId = prev?.sprintId ?? resolveActiveSprintId();
+  if (sprintId) {
+    emitGraphStatusChanged(sprintId, taskId, prevStatus, status, prev?.assignedRole ?? "system", feedback ?? `${prevStatus} → ${status}`);
+  }
 
   // Audit task transitions
   audit({
@@ -2267,6 +2434,11 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           ...t,
           incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...completedTask.artifactIds], 20),
         }));
+        // Graph: artifact_flow edge from producer → consumer
+        const sid = completedTask.sprintId ?? resolveActiveSprintId();
+        if (sid) {
+          emitGraphArtifactConsumed(sid, childId, taskId, completedTask.artifactIds, null);
+        }
       }
     }
 
@@ -2283,7 +2455,16 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
         const upstreamArtifactIds: string[] = [];
         for (const depId of task.dependsOnTaskIds) {
           const dep = snapshot.tasks.find((t) => t.id === depId);
-          if (dep) upstreamArtifactIds.push(...dep.artifactIds);
+          if (dep) {
+            upstreamArtifactIds.push(...dep.artifactIds);
+            // Graph: artifact_flow edge from each dependency → consumer
+            if (dep.artifactIds.length > 0) {
+              const sid = dep.sprintId ?? resolveActiveSprintId();
+              if (sid) {
+                emitGraphArtifactConsumed(sid, task.id, depId, dep.artifactIds, null);
+              }
+            }
+          }
         }
         updateTask(task.id, (t) => ({
           ...t,
@@ -2308,6 +2489,25 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
       if (agent) {
         const outcome = status === "completed" ? "success" : status === "failed" ? "failure" : "partial";
         const memoryOutput = buildTaskMemoryOutput(task, feedback);
+
+        // ── Graph instrumentation: memory write (fires regardless of hippocampus) ──
+        const sid = resolveActiveSprintId();
+        if (sid) {
+          emitGraphMemoryWrite(
+            sid,
+            task.id,
+            task.assignedRole,
+            task.id,
+            null,
+            "dynamic",
+            "task_completion",
+            `Memory stored for "${task.title}" (${outcome})`,
+            memoryOutput.slice(0, 500),
+            outcome,
+            true,
+          );
+        }
+
         hippocampus.processTaskCompletion({
           agentId: agent.id,
           taskId: task.id,
@@ -2322,6 +2522,35 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
       }
     }
   }
+}
+
+/**
+ * Mark a task as independently verified. This MUST be called by a verification
+ * step (preview validation, tester, CTO review) — not by the agent that did
+ * the work. Separating verification from completion prevents self-reported
+ * "done" from being treated as "verified".
+ */
+function setTaskVerified(taskId: string, verifiedBy: string) {
+  updateTask(taskId, (task) => ({
+    ...task,
+    verifierState: {
+      ...task.verifierState,
+      isVerified: true,
+      feedback: task.verifierState.feedback
+        ? `${task.verifierState.feedback} | Verified by ${verifiedBy}`
+        : `Verified by ${verifiedBy}`,
+    },
+  }));
+  audit({
+    companyId: getSnapshot().company.id,
+    category: "task_lifecycle",
+    severity: "info",
+    eventType: "task_verified",
+    agentRole: null,
+    summary: `Task "${taskId}" independently verified by ${verifiedBy}`,
+    detail: { taskId, verifiedBy },
+    correlationId: taskId,
+  });
 }
 
 function taskSortWeight(task: Task) {
@@ -2402,10 +2631,26 @@ function buildSpecialistTaskPrompt(task: Task) {
   if (task.assignedRole === "tester") {
     profileHints.push(
       "",
-      "# Verification rules",
+      "# Verification rules — YOU HAVE TOOLS, USE THEM",
       "Treat this as a verification assignment, not a build assignment.",
-      "Use the available preview metadata to reason about what should be validated.",
-      "Explicitly state: verdict, what was verified, what remains unverified, concrete risks, and what downstream role should act next.",
+      "You are an agent with full tool access. You MUST:",
+      "",
+      "1. READ the actual source files in the product workspace using your file-read tools",
+      `   - Start with the entry file (e.g. ${productDir}/src/App.tsx or equivalent)`,
+      "   - Verify it IMPORTS and RENDERS the product-specific components",
+      "   - If the entry file is scaffold boilerplate that doesn't import product modules, the task FAILS",
+      "",
+      "2. CHECK the import chain: entry file → components → data/lib modules",
+      "   - Files existing on disk is NOT sufficient — they must be connected via imports",
+      "",
+      "3. If a preview URL is available, verify it serves actual product content",
+      `   - Preview URL: ${preview.validationUrl ?? preview.entryUrl ?? preview.url ?? "not available"}`,
+      "",
+      "4. Produce a verdict with evidence from the files you actually read",
+      "   - Cite specific file paths and import statements you verified",
+      "   - Do NOT write a theoretical report — verify by reading actual code",
+      "",
+      "FAIL the task if: entry file doesn't import product modules, components are orphaned (exist but unused), or the product is scaffold-only.",
     );
   }
 
@@ -3059,6 +3304,17 @@ async function executeSpecialistTask(taskId: string) {
     appendTaskResult(task.id, `verification:${getPreviewEvidenceUrl() ?? "no-preview-url"}`);
   }
   attachArtifactToTask(task.id, artifact.id);
+  // Write specialist reports to workspace as markdown files
+  const artifactSlug = role === "tester"
+    ? "tester-report"
+    : role === "ui_designer"
+      ? "ui-design-direction"
+      : role === "marketing"
+        ? "marketing-report"
+        : null;
+  if (artifactSlug) {
+    await writeArtifactToWorkspace(task.id, role, artifactSlug, artifactContent);
+  }
   if (role === "tester") {
     const evidenceUrl = getPreviewEvidenceUrl();
     setTaskPreviewUrl(task.id, evidenceUrl);
@@ -3106,7 +3362,15 @@ async function executeSpecialistTask(taskId: string) {
       });
       return;
     }
-    setTaskStatus(task.id, "completed", `CTO review completed — preview verified reachable (HTTP ${reviewProbe.statusCode}).`);
+    // Also verify entry-point imports — HTTP 200 alone is not enough
+    const ctoEntryCheck = checkEntryPointImports();
+    if (!ctoEntryCheck.pass) {
+      setTaskStatus(task.id, "blocked", `CTO review blocked — ${ctoEntryCheck.reason}`);
+      emitEmployeeActivity("cto", "error", `Board handoff blocked — entry-point disconnected: ${ctoEntryCheck.reason}`, { taskId: task.id });
+      return;
+    }
+    setTaskStatus(task.id, "completed", `CTO review completed — preview verified reachable (HTTP ${reviewProbe.statusCode}), entry-point imports verified${reviewProbe.hasProductContent ? ", product content detected" : ""}.`);
+    setTaskVerified(task.id, "cto_board_handoff");
   } else {
     setTaskStatus(task.id, "completed", `${role} completed the specialist task.`);
   }
@@ -3192,58 +3456,50 @@ async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnapshot): 
   );
   if (pendingSpecialist.length === 0) return 0;
 
-  // Collect workspace source listing for the LLM to evaluate.
-  const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".html", ".css"]);
-  const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".vite"]);
-  const fileList: string[] = [];
-
-  function walk(dir: string, depth = 0) {
-    if (depth > 3) return;
-    let entries: import("node:fs").Dirent[];
-    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
-    for (const entry of entries) {
-      if (ignoreDirs.has(entry.name)) continue;
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) { walk(fullPath, depth + 1); continue; }
-      const ext = entry.name.slice(entry.name.lastIndexOf("."));
-      if (sourceExtensions.has(ext)) {
-        fileList.push(relative(productDir, fullPath).replace(/\\/g, "/"));
-      }
-    }
-  }
-  walk(productDir);
-  if (fileList.length === 0) return 0;
-
   const taskSummary = pendingSpecialist.map((t) =>
     `- id="${t.id}" kind=${t.kind} role=${t.assignedRole} title="${t.title}" dod=[${t.definitionOfDone.join("; ")}]`
   ).join("\n");
 
+  const prompt = [
+    "You decide which queued specialist tasks have ALREADY been satisfied by the developer implementation.",
+    "USE YOUR TOOLS to read the source files in the product workspace:",
+    `- Product directory: ${productDir}`,
+    `- Start with the entry file (e.g. ${productDir}/src/App.tsx or ${productDir}/src/main.tsx)`,
+    "- Read imports and follow them to verify each task's definition-of-done",
+    "",
+    "A task is resolved ONLY if:",
+    "- The source code clearly implements the definition-of-done",
+    "- The implemented code is actually IMPORTED and USED (not just existing as an orphaned file)",
+    "- For UI tasks: components are rendered in the app entry point, not just defined",
+    "- For integration tasks: modules are connected, not just co-located",
+    "Do not resolve tasks that require runtime verification (e.g. running tests, checking HTTP).",
+    "When in doubt, do NOT resolve — let the specialist agent verify.",
+    "",
+    "After reading the files, list which task IDs are already resolved, with a short reason for each.",
+    "",
+    "Pending specialist tasks:",
+    taskSummary,
+  ].join("\n");
+
   try {
+    const session = await ensureAgentSession(snapshot, "tester");
+    const soul = getRoleSoul("tester");
+    const output = await runPromptText("tester", session.sessionId, soul.systemPrompt + getAgentSkills("tester"), prompt);
+
+    if (!output) return 0;
+
+    // Extract structured verdict from the agent's freeform output
     const verdict = await structuredCompletion(
       "workerDeployment",
       [
         {
           role: "system",
-          content: [
-            "You decide which queued specialist tasks have ALREADY been satisfied by the developer implementation.",
-            "A task is resolved ONLY if the workspace files clearly demonstrate its definition-of-done is met.",
-            "Do not resolve tasks that require runtime verification (e.g. running tests, checking HTTP).",
-            "Return the list of resolved task IDs with a short reason.",
-          ].join("\n"),
+          content: "Extract the list of resolved task IDs and reasons from the tester's analysis below. Only include tasks the tester explicitly confirmed as already implemented.",
         },
-        {
-          role: "user",
-          content: [
-            "Workspace files:",
-            fileList.join("\n"),
-            "",
-            "Pending specialist tasks:",
-            taskSummary,
-          ].join("\n"),
-        },
+        { role: "user", content: output },
       ],
       SpecialistPruneVerdict,
-      "specialist_prune_verdict",
+      "specialist_prune_verdict_extract",
       { temperature: 0 },
     );
 
@@ -3253,10 +3509,17 @@ async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnapshot): 
       if (!validIds.has(item.taskId)) continue;
       setTaskStatus(item.taskId, "completed", `Auto-resolved by workspace audit: ${item.reason}`);
       resolved += 1;
+
+      // ── Graph instrumentation (Spec 22) — prune decision ──
+      const pruneSprintId = snapshot.company.currentSprintId;
+      if (pruneSprintId) {
+        emitGraphDecision(pruneSprintId, item.taskId, "prune_decision",
+          `Pruned: ${item.taskId}`, item.reason, "tester");
+      }
     }
     return resolved;
   } catch {
-    // Non-fatal — if the LLM call fails, just proceed with regular specialist execution.
+    // Non-fatal — if the agent call fails, just proceed with regular specialist execution.
     return 0;
   }
 }
@@ -3437,6 +3700,18 @@ async function reconcilePostReviewExecution() {
 
   const snapshot = getSnapshot();
   const boardDecision = shouldPauseForBoardReview(snapshot);
+
+  // ── Graph instrumentation (Spec 22) — auto_approve decision ──
+  {
+    const pauseSprintId = snapshot.company.currentSprintId;
+    if (pauseSprintId) {
+      emitGraphDecision(pauseSprintId, null, boardDecision.shouldPause ? "escalation" : "auto_approve",
+        boardDecision.shouldPause ? "Board review required" : "Auto-approved — continuing execution",
+        boardDecision.reason ?? "No blocking items",
+        "system");
+    }
+  }
+
   if (boardDecision.shouldPause) {
     pauseForBoardReview(boardDecision.reason ?? "Board review required.");
     return;
@@ -3980,6 +4255,7 @@ async function runAcceptancePhase(snapshot: CompanySnapshot) {
   const acceptanceArtifact = addArtifact("pm", "plan", "Delivery Specification & Acceptance Criteria", acceptanceText);
   appendTaskResult(activeExecution.acceptanceTaskId, `artifact:${acceptanceArtifact.id}`);
   attachArtifactToTask(activeExecution.acceptanceTaskId, acceptanceArtifact.id);
+  await writeArtifactToWorkspace(activeExecution.acceptanceTaskId, "pm", "pm-acceptance-spec", acceptanceText);
   setTaskStatus(activeExecution.acceptanceTaskId, "completed", "Acceptance criteria delivered.");
   const implementationHandoff = recordMeeting({
     type: "eval_triggered",
@@ -4135,24 +4411,44 @@ async function decomposePlanIntoSteps(planText: string): Promise<DevStep[]> {
       "CRITICAL: The LAST step MUST be an integration/wiring step that imports ALL components into the app entry point (src/main.tsx or src/App.tsx) and renders them together in a cohesive layout. This step ensures nothing is left as an orphan file. Its expectedFiles MUST include the entry point file.",
       `Maximum ${orchestratorConfig.developer.maxSteps} steps total.`,
       "",
-      "Return ONLY a JSON array (no markdown fencing, no explanation) where each element has:",
-      '  { "title": "short title", "instruction": "what to build — be specific about files and components", "expectedFiles": ["relative/path"] }',
-      "Do NOT include verifyCommand — it will be set automatically to tsc --noEmit + npm run build.",
+      "For each step, provide a title, a detailed instruction, and the expected output files.",
       "",
       "Plan to decompose:",
       planText,
     ].join("\n");
 
     const output = await runPromptText("cto", ctoEntry[1].sessionId, getRoleSoul("cto").systemPrompt + getAgentSkills("cto"), decompositionPrompt);
-    const jsonStr = output.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(jsonStr);
-    if (Array.isArray(parsed) && parsed.length >= 1) {
-      return parsed.slice(0, orchestratorConfig.developer.maxSteps).map((s: any, i: number) => ({
-        index: i + 1, // starts at 1 — scaffold is done programmatically
-        title: String(s.title ?? `Step ${i + 1}`),
-        instruction: String(s.instruction ?? ""),
-        verifyCommand: "npx tsc --noEmit && npm run build",  // type-check then compile
-        expectedFiles: Array.isArray(s.expectedFiles) ? s.expectedFiles.map(String) : [],
+
+    // Extract structured steps from the CTO's freeform output
+    const DecomposedStepsSchema = z.object({
+      steps: z.array(z.object({
+        title: z.string(),
+        instruction: z.string(),
+        expectedFiles: z.array(z.string()),
+      })),
+    });
+
+    const extracted = await structuredCompletion(
+      "workerDeployment",
+      [
+        {
+          role: "system",
+          content: "Extract the implementation steps from the CTO's plan decomposition below. Each step should have a title, instruction, and expectedFiles array.",
+        },
+        { role: "user", content: output },
+      ],
+      DecomposedStepsSchema,
+      "plan_decomposition_extract",
+      { temperature: 0 },
+    );
+
+    if (extracted.steps.length >= 1) {
+      return extracted.steps.slice(0, orchestratorConfig.developer.maxSteps).map((s, i) => ({
+        index: i + 1,
+        title: s.title || `Step ${i + 1}`,
+        instruction: s.instruction || "",
+        verifyCommand: "npx tsc --noEmit && npm run build",
+        expectedFiles: s.expectedFiles ?? [],
       }));
     }
   } catch (err) {
@@ -4515,6 +4811,12 @@ async function runBuildPreviewReviewLoop(snapshot: CompanySnapshot) {
 
   const maxCycles = orchestratorConfig.developer.maxReworkCycles;
 
+  // ── Graph instrumentation (Spec 22) — rework group ──
+  const reworkSprintId = getSnapshot().company.currentSprintId;
+  if (reworkSprintId && activeExecution) {
+    emitGraphReworkStarted(reworkSprintId, activeExecution.buildTaskId, maxCycles);
+  }
+
   // Keep the flag true for the ENTIRE loop so the event bridge never
   // triggers post-developer routing while the loop is still in control.
   developerStepLoopActive = true;
@@ -4535,6 +4837,10 @@ async function runBuildPreviewReviewLoop(snapshot: CompanySnapshot) {
           return;
         }
         emitEmployeeActivity("system", "info", `Preview failed — sending developer to rework (cycle ${cycle + 1}/${maxCycles}).`, { taskId: activeExecution.buildTaskId });
+        // ── Graph instrumentation (Spec 22) — rework iteration ──
+        if (reworkSprintId && activeExecution) {
+          emitGraphReworkIteration(reworkSprintId, activeExecution.buildTaskId, cycle + 1, "fail", previewResult.reworkFeedback.slice(0, 300));
+        }
         await runDeveloperRework(getSnapshot(), previewResult.reworkFeedback);
         continue;
       }
@@ -4548,6 +4854,10 @@ async function runBuildPreviewReviewLoop(snapshot: CompanySnapshot) {
           return;
         }
         emitEmployeeActivity("system", "info", `CTO review requested rework — sending developer back (cycle ${cycle + 1}/${maxCycles}).`, { taskId: activeExecution.buildTaskId });
+        // ── Graph instrumentation (Spec 22) — rework iteration ──
+        if (reworkSprintId && activeExecution) {
+          emitGraphReworkIteration(reworkSprintId, activeExecution.buildTaskId, cycle + 1, "fail", reviewResult.reworkFeedback.slice(0, 300));
+        }
         await runDeveloperRework(getSnapshot(), reviewResult.reworkFeedback);
         continue;
       }
@@ -4565,6 +4875,147 @@ async function runBuildPreviewReviewLoop(snapshot: CompanySnapshot) {
 // Preview Content Validation — LLM evaluates rendered page against spec
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Entry-point integration check — verify the app entry file actually imports
+// product modules, not just that files exist on disk.
+// ---------------------------------------------------------------------------
+
+interface EntryPointCheckResult {
+  pass: boolean;
+  entryFile: string | null;
+  reason: string;
+  orphanedModules: string[];
+}
+
+function checkEntryPointImports(): EntryPointCheckResult {
+  // Identify the entry file (stack-agnostic — try common patterns)
+  const entryFileCandidates = [
+    "src/App.tsx", "src/App.jsx", "src/App.vue", "src/App.svelte",
+    "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
+    "src/index.tsx", "src/index.ts", "src/index.jsx", "src/index.js",
+    "app.py", "main.py", "index.html",
+    "pages/index.tsx", "pages/index.jsx", "app/page.tsx", "app/page.jsx",
+  ];
+
+  let entryFile: string | null = null;
+  let entryContent = "";
+  for (const candidate of entryFileCandidates) {
+    const fullPath = join(productDir, candidate);
+    try {
+      entryContent = readFileSync(fullPath, "utf-8");
+      entryFile = candidate;
+      break;
+    } catch { /* try next */ }
+  }
+
+  if (!entryFile) {
+    return { pass: true, entryFile: null, reason: "No recognizable entry file found — skipping import check.", orphanedModules: [] };
+  }
+
+  // Collect all product source files (exclude the entry file itself, config files, css)
+  const productModules: string[] = [];
+  const codeExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"]);
+  const ignoreNames = new Set(["node_modules", ".git", "dist", "build", ".next", ".vite", "coverage"]);
+  const ignoreFiles = new Set(["vite.config.ts", "vite.config.js", "tsconfig.json", "package.json", "postcss.config.mjs", "tailwind.config.js", "tailwind.config.ts", "next.config.ts", "next.config.js", "main.tsx", "main.ts", "main.js", "index.ts", "index.js", "index.css"]);
+
+  function walkProduct(dir: string, depth = 0) {
+    if (depth > 4) return;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
+    for (const entry of entries) {
+      if (ignoreNames.has(entry.name)) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) { walkProduct(fullPath, depth + 1); continue; }
+      if (ignoreFiles.has(entry.name)) continue;
+      const ext = entry.name.slice(entry.name.lastIndexOf("."));
+      if (codeExtensions.has(ext)) {
+        const rel = relative(productDir, fullPath).replace(/\\/g, "/");
+        if (rel !== entryFile) {
+          productModules.push(rel);
+        }
+      }
+    }
+  }
+  walkProduct(productDir);
+
+  if (productModules.length === 0) {
+    return { pass: true, entryFile, reason: "No product modules found beyond entry file.", orphanedModules: [] };
+  }
+
+  // Check which modules are referenced in the entry file (or transitively via
+  // files the entry file imports). We do a simple 2-level transitive check.
+  const referencedFiles = new Set<string>();
+
+  function extractImportedPaths(content: string, fileDir: string): string[] {
+    const importPaths: string[] = [];
+    // Match import/require statements
+    const importRegex = /(?:import|require)\s*\(?['"]([^'"]+)['"]\)?/g;
+    let match: RegExpExecArray | null;
+    while ((match = importRegex.exec(content)) !== null) {
+      const importPath = match[1];
+      if (importPath.startsWith(".")) {
+        // Resolve relative import to a workspace-relative path
+        const resolved = join(fileDir, importPath).replace(/\\/g, "/");
+        importPaths.push(resolved);
+      }
+    }
+    return importPaths;
+  }
+
+  // Level 1: direct imports from entry file
+  const entryDir = entryFile.includes("/") ? entryFile.substring(0, entryFile.lastIndexOf("/")) : ".";
+  const directImports = extractImportedPaths(entryContent, entryDir);
+  for (const imp of directImports) {
+    // Match against product modules (with and without extensions)
+    for (const mod of productModules) {
+      const modNoExt = mod.replace(/\.[^.]+$/, "");
+      if (imp === mod || imp === modNoExt || imp + "/index" === modNoExt) {
+        referencedFiles.add(mod);
+      }
+    }
+  }
+
+  // Level 2: imports from files that the entry file imports
+  for (const ref of referencedFiles) {
+    try {
+      const refContent = readFileSync(join(productDir, ref), "utf-8");
+      const refDir = ref.includes("/") ? ref.substring(0, ref.lastIndexOf("/")) : ".";
+      const transImports = extractImportedPaths(refContent, refDir);
+      for (const imp of transImports) {
+        for (const mod of productModules) {
+          const modNoExt = mod.replace(/\.[^.]+$/, "");
+          if (imp === mod || imp === modNoExt || imp + "/index" === modNoExt) {
+            referencedFiles.add(mod);
+          }
+        }
+      }
+    } catch { /* skip unreadable */ }
+  }
+
+  // Find orphaned modules — files that exist but are never imported
+  const orphaned = productModules.filter((mod) => !referencedFiles.has(mod));
+
+  if (orphaned.length > 0 && referencedFiles.size === 0) {
+    return {
+      pass: false,
+      entryFile,
+      reason: `Entry file ${entryFile} does not import ANY product modules. ${orphaned.length} module(s) exist on disk but are completely disconnected: ${orphaned.join(", ")}`,
+      orphanedModules: orphaned,
+    };
+  }
+
+  if (orphaned.length > 0 && orphaned.length >= productModules.length * 0.5) {
+    return {
+      pass: false,
+      entryFile,
+      reason: `Entry file ${entryFile} only imports ${referencedFiles.size}/${productModules.length} modules. ${orphaned.length} orphaned module(s): ${orphaned.join(", ")}`,
+      orphanedModules: orphaned,
+    };
+  }
+
+  return { pass: true, entryFile, reason: `Entry file ${entryFile} imports ${referencedFiles.size}/${productModules.length} product modules.`, orphanedModules: orphaned };
+}
+
 const PreviewContentVerdict = z.object({
   pass: z.boolean(),
   reason: z.string(),
@@ -4573,93 +5024,125 @@ const PreviewContentVerdict = z.object({
 });
 type PreviewContentVerdict = z.infer<typeof PreviewContentVerdict>;
 
+const QAReportSchema = z.object({
+  verdict: z.enum(["pass", "fail"]),
+  tasks: z.array(z.object({
+    taskId: z.string(),
+    verdict: z.enum(["pass", "fail"]),
+    findings: z.array(z.object({
+      defect_area: z.enum(["build_failure", "test_failure", "ui_rendering", "ui_interaction", "api_behavior", "accessibility", "content", "design_mismatch", "logic_error", "performance"]),
+      severity: z.enum(["critical", "high", "medium", "low"]),
+      description: z.string(),
+      expected: z.string(),
+      actual: z.string(),
+      file: z.string(),
+      fix_suggestion: z.string(),
+    })),
+    dod_checklist: z.array(z.object({
+      item: z.string(),
+      status: z.enum(["pass", "fail"]),
+      evidence: z.string(),
+    })),
+  })),
+  test_files_written: z.array(z.string()),
+  build_status: z.enum(["pass", "fail", "skipped"]),
+  test_suite_status: z.enum(["pass", "fail", "skipped", "no_tests"]),
+});
+
+function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QAReport {
+  return {
+    verdict: result.verdict,
+    tasks: result.tasks.map((t) => ({
+      taskId: t.taskId,
+      verdict: t.verdict,
+      findings: t.findings.map((f) => ({
+        taskId: t.taskId,
+        defectArea: f.defect_area as DefectArea,
+        severity: f.severity as Task["priority"],
+        description: f.description,
+        expected: f.expected,
+        actual: f.actual,
+        file: f.file,
+        fixSuggestion: f.fix_suggestion,
+      })),
+      dodChecklist: t.dod_checklist.map((c) => ({
+        item: c.item,
+        status: c.status,
+        evidence: c.evidence,
+      })),
+    })),
+    testFilesWritten: result.test_files_written,
+    buildStatus: result.build_status,
+    testSuiteStatus: result.test_suite_status,
+  };
+}
+
 async function validatePreviewContent(previewUrl: string, acceptanceSpec: string): Promise<PreviewContentVerdict> {
-  // Collect ALL source files from the workspace (stack-agnostic).
-  // We evaluate source code — not rendered HTML — because SPAs serve an empty
-  // shell and JS must execute in a browser to produce actual content.
-  const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".html", ".css", ".json"]);
-  const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".vite"]);
-
-  const sourceSnippets: string[] = [];
-  function collectSources(dir: string, depth = 0) {
-    if (depth > 4) return;
-    let entries: import("node:fs").Dirent[];
-    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
-    for (const entry of entries) {
-      if (ignoreDirs.has(entry.name)) continue;
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        collectSources(fullPath, depth + 1);
-      } else {
-        const ext = entry.name.slice(entry.name.lastIndexOf("."));
-        if (sourceExtensions.has(ext) && entry.name !== "package-lock.json") {
-          try {
-            const content = readFileSync(fullPath, "utf-8");
-            const relPath = relative(productDir, fullPath).replace(/\\/g, "/");
-            sourceSnippets.push(`--- ${relPath} ---\n${content.slice(0, 3000)}`);
-          } catch { /* skip unreadable */ }
-        }
-      }
-    }
-  }
-  collectSources(productDir);
-
-  // Cap total context to stay within token budget
-  let totalLen = 0;
-  const cappedSnippets: string[] = [];
-  for (const s of sourceSnippets) {
-    if (totalLen + s.length > 30000) break;
-    cappedSnippets.push(s);
-    totalLen += s.length;
-  }
+  // Use the tester agent (with tool access) to read and verify source files,
+  // then pipe the freeform output through structuredCompletion for typed results.
+  const prompt = [
+    "You are a QA engineer verifying that a product's SOURCE CODE delivers the features described in the acceptance specification below.",
+    "",
+    "USE YOUR TOOLS to read the source files in the product workspace:",
+    `- Product directory: ${productDir}`,
+    `- Start with the entry file (e.g. ${productDir}/src/App.tsx, ${productDir}/src/main.tsx, or equivalent)`,
+    "- Read key component files, stylesheets, and any imports you find",
+    "- Be stack-agnostic: this could be React, Vue, Svelte, Python, plain HTML, Express, or anything else",
+    "",
+    "FAIL if ANY of these are true:",
+    "- The app entry point does not import or use the product-specific modules/components",
+    "- The source code only contains scaffold/boilerplate with no product-specific logic",
+    "- Key features from the acceptance spec have no corresponding implementation in any source file",
+    "- Modules were created as files but are never imported or used by the application entry point",
+    "- The UI has NO meaningful styling — bare browser-default HTML with no CSS, no design tokens, no layout system",
+    "- The app includes features NOT in the acceptance spec (e.g. login/auth pages, admin panels) unless the spec explicitly requires them",
+    "",
+    "PASS if:",
+    "- The app entry point imports and uses the product-specific modules",
+    "- The core features from the acceptance spec have corresponding implementations",
+    "- The application would render/serve meaningful product content when run",
+    "- The UI code includes actual styling — not bare unstyled HTML",
+    "- The app ONLY implements what the spec asks for",
+    "",
+    "After reading the source files, provide your verdict with:",
+    "- pass: true or false",
+    "- reason: explain WHY, citing specific files and imports you read",
+    "- missingElements: list features from the spec that have no implementation",
+    "- visibleElements: list features from the spec that ARE implemented",
+    "",
+    "# Acceptance Specification",
+    acceptanceSpec,
+  ].join("\n");
 
   try {
+    const snapshot = getSnapshot();
+    const session = await ensureAgentSession(snapshot, "tester");
+    const soul = getRoleSoul("tester");
+    const output = await runPromptText("tester", session.sessionId, soul.systemPrompt + getAgentSkills("tester"), prompt);
+
+    if (!output) {
+      return { pass: false, reason: "Tester agent returned no output — treating as failed.", missingElements: ["Agent returned no output — all acceptance criteria unverified"], visibleElements: [] };
+    }
+
+    // Extract structured verdict from the agent's freeform output
     return await structuredCompletion(
       "workerDeployment",
       [
         {
           role: "system",
-          content: [
-            "You are a QA engineer verifying that a product's SOURCE CODE delivers the features described in the acceptance specification.",
-            "You will receive the acceptance spec and the source files from the workspace.",
-            "",
-            "FAIL if ANY of these are true:",
-            "- The app entry point (main file, index file, or equivalent for any framework) does not import or use the product-specific modules/components",
-            "- The source code only contains scaffold/boilerplate with no product-specific logic",
-            "- Key features from the acceptance spec have no corresponding implementation in any source file",
-            "- Modules were created as files but are never imported or used by the application entry point",
-            "- The UI has NO meaningful styling — bare browser-default HTML with no CSS, no design tokens, no layout system",
-            "- The app includes features NOT in the acceptance spec (e.g. login/auth pages, admin panels, settings screens) unless the spec explicitly requires them",
-            "",
-            "PASS if:",
-            "- The app entry point imports and uses the product-specific modules",
-            "- The core features from the acceptance spec have corresponding implementations",
-            "- The application would render/serve meaningful product content when run (even with mock/demo data)",
-            "- The UI code includes actual styling (CSS variables, classes, inline styles, or a CSS framework) — not bare unstyled HTML",
-            "- The app ONLY implements what the spec asks for — no hallucinated features like login pages or auth flows unless specified",
-            "",
-            "Be stack-agnostic. This could be React, Vue, Svelte, Python, plain HTML, Express, or anything else.",
-          ].join("\n"),
+          content: "Extract a structured QA verdict from the tester's analysis below. Return pass/reason/missingElements/visibleElements based on what the tester found.",
         },
-        {
-          role: "user",
-          content: [
-            "# Acceptance Specification",
-            acceptanceSpec,
-            "",
-            `# Source Files (${cappedSnippets.length} files from workspace)`,
-            ...cappedSnippets,
-          ].join("\n"),
-        },
+        { role: "user", content: output },
       ],
       PreviewContentVerdict,
-      "preview_content_verdict",
-      { temperature: 0.2 },
+      "preview_content_verdict_extract",
+      { temperature: 0 },
     );
   } catch (err) {
-    // If LLM call fails, don't block — let the CTO review phase catch issues
-    emitEmployeeActivity("system", "info", `LLM preview validation unavailable, deferring to CTO review: ${err instanceof Error ? err.message : "unknown"}`);
-    return { pass: true, reason: "LLM validation unavailable — deferred to CTO review", missingElements: [], visibleElements: [] };
+    // Fail-closed: if agent or extraction fails, treat as failure so the
+    // build-preview-review loop triggers rework instead of silently passing.
+    emitEmployeeActivity("system", "error", `Preview content validation failed — treating as content mismatch: ${err instanceof Error ? err.message : "unknown"}`);
+    return { pass: false, reason: `Preview content validation unavailable (${err instanceof Error ? err.message : "unknown"}). Cannot verify content matches spec — treating as failed.`, missingElements: ["Validation could not run — all acceptance criteria unverified"], visibleElements: [] };
   }
 }
 
@@ -4717,8 +5200,53 @@ async function startPreviewPhase(): Promise<PhaseResult> {
   setTaskPreviewUrl(activeExecution.previewTaskId, previewUrl);
   appendTaskResult(activeExecution.previewTaskId, `preview:${previewUrl}`);
 
+  // ── Static entry-point import check (fast, no LLM) ──
+  const entryCheck = checkEntryPointImports();
+  if (!entryCheck.pass) {
+    await stopLocalPreview();
+    const failMsg = `Entry-point integration check failed: ${entryCheck.reason}`;
+    setTaskStatus(activeExecution.previewTaskId, "failed", failMsg);
+    setTaskStatus(activeExecution.buildTaskId, "in_progress", failMsg);
+    emitEmployeeActivity("developer", "error", failMsg, { taskId: activeExecution.previewTaskId });
+    recordMeeting({
+      type: "escalation",
+      facilitatorRole: "developer",
+      participantRoles: ["developer", "cto"],
+      summary: `Entry-point ${entryCheck.entryFile} does not import product modules. Code exists on disk but is disconnected.`,
+      agenda: [{
+        topic: "Orphaned modules",
+        type: "blocker" as const,
+        content: `The following modules are not imported by the entry file: ${entryCheck.orphanedModules.join(", ")}`,
+        raisedByRole: "developer" as const,
+        relatedTaskId: activeExecution.buildTaskId,
+      }],
+      decisions: [{
+        description: "Developer must update the entry file to import and render all product modules.",
+        decidedByRoles: ["developer", "cto"],
+        impactIds: [activeExecution.buildTaskId, activeExecution.previewTaskId],
+      }],
+    });
+    return { ok: false, reworkFeedback: `${entryCheck.reason} You MUST update ${entryCheck.entryFile} to import and use these modules: ${entryCheck.orphanedModules.join(", ")}. Files on disk are useless if the app doesn't import them.` };
+  }
+  if (entryCheck.entryFile) {
+    emitEmployeeActivity("developer", "info", `Entry-point check passed: ${entryCheck.reason}`, { taskId: activeExecution.previewTaskId });
+  }
+
   // ── LLM Content Validation ──
   const contentVerdict = await validatePreviewContent(previewUrl, activeExecution.acceptanceText ?? "");
+
+  // ── Graph instrumentation (Spec 22) — preview validation decision ──
+  {
+    const pvSprintId = getSnapshot().company.currentSprintId;
+    if (pvSprintId) {
+      emitGraphDecision(pvSprintId, activeExecution.previewTaskId, "preview_validation",
+        contentVerdict.pass ? "Preview content PASS" : "Preview content FAIL",
+        contentVerdict.reason,
+        "tester", contentVerdict.pass ? 1.0 : 0,
+        contentVerdict.missingElements.length > 0 ? contentVerdict.missingElements : null);
+    }
+  }
+
   if (!contentVerdict.pass) {
     await stopLocalPreview();
     const failMsg = `Preview content validation failed: ${contentVerdict.reason}`;
@@ -4764,6 +5292,8 @@ async function startPreviewPhase(): Promise<PhaseResult> {
     `Developer implementation reached a runnable preview at ${previewUrl}`
   );
   setTaskStatus(activeExecution.previewTaskId, "completed", `Local preview reachable at ${previewUrl} — content validated against acceptance spec.`);
+  setTaskVerified(activeExecution.previewTaskId, "preview_content_validation");
+  setTaskVerified(activeExecution.buildTaskId, "preview_content_validation");
   clearRoleBlockers("developer", [preview.lastError ?? "Local preview launch failed."]);
   const previewReviewMeeting = recordMeeting({
     type: "eval_triggered",
@@ -4850,6 +5380,9 @@ async function startReviewPhase(): Promise<PhaseResult> {
   const ctoPreviewProbe = await probePreviewHealth(8000);
   const ctoPreviewUrl = getLocalPreviewState().validationUrl ?? getLocalPreviewState().entryUrl ?? getLocalPreviewState().url;
 
+  // Run static entry-point import check
+  const ctoEntryCheck = checkEntryPointImports();
+
   const reviewText = await runPromptText(
     "cto",
     ctoSession.sessionId,
@@ -4863,7 +5396,19 @@ async function startReviewPhase(): Promise<PhaseResult> {
       `Preview URL: ${ctoPreviewUrl ?? "none"}`,
       `Reachable: ${ctoPreviewProbe.reachable}`,
       ctoPreviewProbe.reachable ? `HTTP Status: ${ctoPreviewProbe.statusCode}` : `Error: ${ctoPreviewProbe.error ?? "unknown"}`,
+      ctoPreviewProbe.reachable ? `Content length: ${ctoPreviewProbe.contentLength} bytes` : "",
+      ctoPreviewProbe.reachable ? `Has product content: ${ctoPreviewProbe.hasProductContent}` : "",
+      ctoPreviewProbe.bodySnippet ? `Page text snippet: ${ctoPreviewProbe.bodySnippet}` : "",
       "",
+      `# Entry-Point Integration Check`,
+      `Entry file: ${ctoEntryCheck.entryFile ?? "not found"}`,
+      `Import check passed: ${ctoEntryCheck.pass}`,
+      `Details: ${ctoEntryCheck.reason}`,
+      ctoEntryCheck.orphanedModules.length > 0 ? `Orphaned modules (NOT imported): ${ctoEntryCheck.orphanedModules.join(", ")}` : "",
+      "",
+      !ctoEntryCheck.pass
+        ? `CRITICAL: The entry file does NOT import product modules. Files exist on disk but are disconnected. Your verdict MUST be NEEDS_REWORK.`
+        : "",
       ctoPreviewProbe.reachable
         ? `The preview is live. Verify it matches the spec.`
         : `CRITICAL: The preview is NOT reachable. The product cannot be shipped in this state. Your verdict MUST be NEEDS_REWORK.`,
@@ -4878,7 +5423,7 @@ async function startReviewPhase(): Promise<PhaseResult> {
       `Return text only with these sections:`,
       `1. Review verdict (APPROVED or NEEDS_REWORK)`,
       `2. What was built`,
-      `3. Verification evidence (include the automated preview health check above)`,
+      `3. Verification evidence (include the automated preview health check AND entry-point import check above)`,
       `4. Open risks or follow-ups`,
       `5. Recommendation to the board`,
       `6. If NEEDS_REWORK: a clear, actionable list of what the developer must fix`,
@@ -4937,6 +5482,19 @@ async function startReviewPhase(): Promise<PhaseResult> {
     }
   }
 
+  // Hard override: even if LLM says approved, entry-point must import product modules
+  if (verdict.approved) {
+    const postReviewEntryCheck = checkEntryPointImports();
+    if (!postReviewEntryCheck.pass) {
+      verdict = {
+        approved: false,
+        reworkItems: [postReviewEntryCheck.reason, ...postReviewEntryCheck.orphanedModules.map((m) => `Orphaned module not imported: ${m}`)],
+        summary: `Entry-point disconnected — overriding CTO approval to rework.`,
+      };
+      emitEmployeeActivity("cto", "error", `CTO verdict overridden — entry-point does not import product modules: ${postReviewEntryCheck.reason}`, { taskId: activeExecution.reviewTaskId });
+    }
+  }
+
   if (!verdict.approved && verdict.reworkItems.length > 0) {
     // CTO found issues — developer needs to rework
     setTaskStatus(activeExecution.reviewTaskId, "failed", `CTO review: ${verdict.summary}`);
@@ -4964,7 +5522,9 @@ async function startReviewPhase(): Promise<PhaseResult> {
   }
 
   setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished and CTO-approved.");
+  setTaskVerified(activeExecution.buildTaskId, "cto_review");
   setTaskStatus(activeExecution.reviewTaskId, "completed", "CTO review passed — proceeding to autonomous specialist execution.");
+  setTaskVerified(activeExecution.reviewTaskId, "cto_review");
   const boardPrepMeeting = recordMeeting({
     type: "eval_triggered",
     facilitatorRole: "cto",
@@ -5029,6 +5589,7 @@ export async function resetOrchestratorState() {
   executionStatus = "idle";
   eventBridgeStarted = false;
   activeExecution = null;
+  graphStore.reset();
   await stopLocalPreview();
 }
 
@@ -5323,6 +5884,9 @@ export async function approveSprintProposal(card: CeoCard) {
     upsertTask(task);
   }
 
+  // ── Graph instrumentation (Spec 22) — Sprint N+1 graph ──
+  emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");
+
   // Auto-promote tasks with no dependencies to "planned"
   for (const task of createdTasks) {
     if (task.dependsOnTaskIds.length === 0 && task.status === "created") {
@@ -5517,6 +6081,9 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     reviewTask.dependsOnTaskIds = [previewTask.id];
     replaceTasks([planTask, acceptanceTask, buildTask, previewTask, reviewTask]);
 
+    // ── Graph instrumentation (Spec 22) — sprint + initial task graph ──
+    emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, [planTask, acceptanceTask, buildTask, previewTask, reviewTask]);
+
     const kickoffMeeting = recordMeeting({
       type: "eval_triggered",
       facilitatorRole: "cto",
@@ -5670,6 +6237,9 @@ export async function beginExecution(snapshot: CompanySnapshot) {
       upsertTask(specialistTask);
       createdGraphTasks.set(node.id, specialistTask.id);
       graphNodeTaskIdByNodeId.set(node.id, specialistTask.id);
+
+      // ── Graph instrumentation (Spec 22) — specialist node added ──
+      emitGraphNodeAdded(sprint.id, specialistTask);
     }
 
     for (const node of specialistNodes) {
@@ -6275,6 +6845,14 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
+
+    // ── Graph instrumentation (Spec 22) — beat start ──
+    const beatStartTime = Date.now();
+    const beatSprintId = task.sprintId ?? resolveActiveSprintId();
+    if (beatSprintId) {
+      emitGraphBeatStarted(beatSprintId, taskId, beatId, role, task.kind === "implementation" ? "execute_task" : task.kind, taskPrompt);
+    }
+
     const output = await runPromptText(role, beatSession.id, soul.systemPrompt + getAgentSkills(role), taskPrompt, tools);
 
     touchAgentSession(role, "idle");
@@ -6389,6 +6967,11 @@ export async function executeBeatTask(
       beatId, taskId, detail: { beatViolationCount },
     });
 
+    // ── Graph instrumentation (Spec 22) — beat complete (success) ──
+    if (beatSprintId) {
+      emitGraphBeatCompleted(beatSprintId, taskId, beatId, "completed", output?.slice(0, 300), 1, Date.now() - beatStartTime);
+    }
+
     return {
       summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
       tokensUsed,
@@ -6401,6 +6984,11 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "error", `Beat ${beatId}: execution failed — ${err instanceof Error ? err.message : String(err)}`, {
       beatId, taskId, detail: { error: err instanceof Error ? err.message : String(err) },
     });
+
+    // ── Graph instrumentation (Spec 22) — beat complete (failure) ──
+    if (beatSprintId) {
+      emitGraphBeatCompleted(beatSprintId, taskId, beatId, "failed", err instanceof Error ? err.message : String(err), 0, Date.now() - beatStartTime);
+    }
 
     // ── Governance: trust lifecycle — failure (Spec 13 Step 10) ──
     const failEvent = buildTrustEvent(ctx.agentId, "task_failed", `Beat ${beatId}: ${err instanceof Error ? err.message : "unknown error"}`, new Date().toISOString());
@@ -6439,6 +7027,17 @@ export async function executeChecklistAction(
 ): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
   const role = ctx.role;
 
+  // ── Graph instrumentation (Spec 22) — beat wrapping checklist action ──
+  const clBeatId = `cl_${beatId}`;
+  const clSprintId = ctx.currentSprint?.id ?? resolveActiveSprintId() ?? "";
+  const clBeatStart = Date.now();
+  if (clSprintId) {
+    emitGraphBeatStarted(clSprintId, clSprintId, clBeatId, role, `checklist:${action.suggestedAction}`, action.detail?.slice(0, 200));
+  }
+  const finishClBeat = (status: "completed" | "failed", summary: string, toolCalls: number) => {
+    if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, status, summary, toolCalls, Date.now() - clBeatStart);
+  };
+
   // Ensure the SSE event bridge is running so runPromptText() completion
   // promises resolve (session.idle / session.error events).
   if (!eventBridgeStarted) {
@@ -6454,18 +7053,21 @@ export async function executeChecklistAction(
   if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
     if (isCeoStreaming()) {
       emitEmployeeActivity("ceo", "info", `Beat ${beatId}: CEO skipped — live chat streaming`, { beatId });
+      finishClBeat("completed", "CEO skipped — streaming", 0);
       return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
     try {
       emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
       await triggerCeoSprintProposal();
       emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: CEO sprint proposal completed`, { beatId });
+      finishClBeat("completed", "CEO sprint proposal completed", 1);
       return {
         summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
       emitEmployeeActivity("ceo", "error", `Beat ${beatId}: CEO sprint proposal failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      finishClBeat("failed", "CEO sprint proposal failed", 0);
       return {
         summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -6479,10 +7081,12 @@ export async function executeChecklistAction(
     const snapshot = getSnapshot();
     const sprintId = snapshot.company.currentSprintId;
     if (!sprintId) {
+      finishClBeat("completed", "No active sprint", 0);
       return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
     const sprint = snapshot.sprints.find((s) => s.id === sprintId);
     if (!sprint || sprint.status !== "reviewing") {
+      finishClBeat("completed", "Sprint not in reviewing state", 0);
       return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
 
@@ -6490,6 +7094,7 @@ export async function executeChecklistAction(
 
     await finalizeSprintCompletion(sprintId);
 
+    finishClBeat("completed", `CTO force-completed Sprint ${sprint.number}`, 1);
     return {
       summary: `CTO escalation: force-completed Sprint ${sprint.number} after max rework cycles`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
@@ -6513,6 +7118,7 @@ export async function executeChecklistAction(
       emitEmployeeActivity(role, "context", `Beat ${beatId}: checklist action completed — output=${(output?.length ?? 0)} chars`, {
         beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
       });
+      finishClBeat("completed", `${role} checklist action completed`, 1);
       return {
         summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
@@ -6520,6 +7126,7 @@ export async function executeChecklistAction(
     } catch (err) {
       touchAgentSession(role, "idle");
       emitEmployeeActivity(role, "error", `Beat ${beatId}: ${role} checklist action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      finishClBeat("failed", `${role} checklist action failed`, 0);
       return {
         summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -6533,15 +7140,22 @@ export async function executeChecklistAction(
     const reviewAction = action.suggestedAction;
 
     if (reviewAction === "sprint_review:run_tester_verification") {
-      return executeSprintReviewVerification(ctx, beatId);
+      const res = await executeSprintReviewVerification(ctx, beatId);
+      finishClBeat("completed", "tester verification", res.toolCalls);
+      return res;
     }
     if (reviewAction === "sprint_review:run_final_gate") {
-      return executeSprintFinalGate(ctx, beatId);
+      const res = await executeSprintFinalGate(ctx, beatId);
+      finishClBeat("completed", "final gate", res.toolCalls);
+      return res;
     }
     if (reviewAction === "sprint_review:retest_after_rework") {
-      return executeRetestAfterRework(ctx, beatId);
+      const res = await executeRetestAfterRework(ctx, beatId);
+      finishClBeat("completed", "retest after rework", res.toolCalls);
+      return res;
     }
 
+    finishClBeat("completed", `Unknown review action: ${reviewAction}`, 0);
     return {
       summary: `Unknown sprint review action: ${reviewAction}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -6555,11 +7169,13 @@ export async function executeChecklistAction(
     const snapshot = getSnapshot();
     const meeting = snapshot.meetings.find((m) => m.id === meetingId);
     if (!meeting || meeting.status !== "collecting") {
+      finishClBeat("completed", `Meeting ${meetingId} not collecting`, 0);
       return { summary: `Meeting ${meetingId} not in collecting status`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
 
     const agent = snapshot.agents.find((a) => a.id === ctx.agentId);
     if (!agent) {
+      finishClBeat("completed", `Agent not found`, 0);
       return { summary: `Agent ${ctx.agentId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
 
@@ -6591,12 +7207,14 @@ export async function executeChecklistAction(
       await flush();
 
       emitEmployeeActivity(ctx.role, "transition", `Beat ${beatId}: meeting contribution submitted`, { beatId });
+      finishClBeat("completed", "meeting contribution submitted", 1);
       return {
         summary: `Contributed to meeting "${meeting.title}"`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
       };
     } catch (err) {
       emitEmployeeActivity(ctx.role, "error", `Beat ${beatId}: meeting contribution failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      finishClBeat("failed", "meeting contribution failed", 0);
       return {
         summary: `Meeting contribution failed: ${err instanceof Error ? err.message : String(err)}`,
         tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
@@ -6606,6 +7224,7 @@ export async function executeChecklistAction(
 
   // ── Fallback: log the action without executing ──
   emitEmployeeActivity(role, "info", `Beat ${beatId}: no handler for checklist action — "${action.suggestedAction}"`, { beatId });
+  if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, "completed", `No handler: ${action.suggestedAction}`, 0, Date.now() - clBeatStart);
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,

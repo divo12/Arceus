@@ -2,6 +2,16 @@ import { desc, eq } from "drizzle-orm";
 import type { CompanySnapshot, EventEnvelope } from "@arceus/contracts";
 import { companyStatesTable, getDb, isDatabaseConfigured } from "@arceus/db";
 
+/**
+ * When ARCEUS_PERSISTENCE_MODE=local, company state is kept in-memory only.
+ * DB reads/writes are skipped so co-founders sharing a Supabase instance
+ * don't pollute each other's local runs.  Default: "local".
+ */
+function isCompanyStatePersistenceEnabled(): boolean {
+  const mode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
+  return mode === "db" && isDatabaseConfigured();
+}
+
 type PersistedCompanyState = {
   snapshot: CompanySnapshot;
   events: EventEnvelope[];
@@ -54,7 +64,7 @@ async function drainPersistQueue() {
 }
 
 export async function loadPersistedCompanyState(companyId?: string): Promise<PersistedCompanyState | null> {
-  if (!isDatabaseConfigured()) {
+  if (!isCompanyStatePersistenceEnabled()) {
     return null;
   }
 
@@ -86,7 +96,7 @@ export async function loadPersistedCompanyState(companyId?: string): Promise<Per
 }
 
 export function schedulePersistedCompanyState(snapshot: CompanySnapshot, events: EventEnvelope[]) {
-  if (!isDatabaseConfigured() || snapshot.company.id === "company_pending") {
+  if (!isCompanyStatePersistenceEnabled() || snapshot.company.id === "company_pending") {
     return Promise.resolve();
   }
 
@@ -109,7 +119,7 @@ export function schedulePersistedCompanyState(snapshot: CompanySnapshot, events:
 }
 
 export async function flushPersistedCompanyState() {
-  if (!isDatabaseConfigured()) {
+  if (!isCompanyStatePersistenceEnabled()) {
     return;
   }
 
@@ -126,7 +136,7 @@ export async function flushPersistedCompanyState() {
 }
 
 export async function deletePersistedCompanyState(companyId: string) {
-  if (!isDatabaseConfigured()) {
+  if (!isCompanyStatePersistenceEnabled()) {
     return;
   }
 

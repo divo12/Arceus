@@ -13,6 +13,7 @@ import {
   Settings,
   Sun,
   Moon,
+  CalendarDays,
 } from "lucide-react";
 import { useTheme } from "./theme-provider";
 import { cn } from "../lib/utils";
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/tasks", icon: CheckSquare, label: "Tasks" },
   { href: "/agents", icon: Users, label: "Agents" },
+  { href: "/meetings", icon: CalendarDays, label: "Meetings" },
   { href: "/inbox", icon: Inbox, label: "Inbox" },
   { href: "/preview", icon: Eye, label: "Preview" },
   { href: "/governance", icon: Shield, label: "Governance" },
