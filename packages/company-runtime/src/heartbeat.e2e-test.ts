@@ -103,6 +103,7 @@ function makeMockContext(role: AgentIdentity["role"], taskStatus = "in_progress"
     beatTokenBudget: 50000,
     beatCostCeilingCents: 100,
     companyBudgetRemainingCents: 100000,
+    latestDailySyncBrief: null,
   };
 }
 

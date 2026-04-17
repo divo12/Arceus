@@ -66,6 +66,7 @@ function installFakeDeps(options?: {
       return {
         content: "# Test Skill v2\n\n1. Write tests first\n2. Add error handling\n3. Run them",
         trigger: "When writing tests or test infrastructure",
+        description: "Test skill mutation proposal",
       };
     },
     async proposeSkillDiscovery(_attribution, _role) {
@@ -73,6 +74,7 @@ function installFakeDeps(options?: {
         content: "# Error Handling Skill\n\n1. Always use try-catch\n2. Log errors",
         trigger: "When handling errors in async code",
         name: "error-handling",
+        description: "Handle errors in async code",
       };
     },
   });

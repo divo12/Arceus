@@ -167,7 +167,9 @@ export class MeetingScheduler {
     // Check for recent task changes since last check
     const lastChecked = schedule.lastCheckedAt ? new Date(schedule.lastCheckedAt).getTime() : 0;
     const hasTaskChanges = snap.tasks.some((t) => {
-      const updated = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+      // Task has no updatedAt — approximate with the latest known timestamp
+      const lastTouched = t.completedAt ?? t.startedAt ?? t.createdAt;
+      const updated = lastTouched ? new Date(lastTouched).getTime() : 0;
       return updated > lastChecked && schedule.participantAgentIds.includes(t.assignedAgentId ?? "");
     });
 

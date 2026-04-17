@@ -10,7 +10,7 @@ import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/cont
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
 import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
-import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
+import { appendChatMessage, flush, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
 import type { Approval, CompanySnapshot, AgentIdentity, DefectArea, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
@@ -1220,7 +1220,7 @@ async function checkSprintCompletion(): Promise<boolean> {
   // ── Graph instrumentation (Spec 22) — gate verdict ──
   emitGraphDecision(currentSprintId, null, "gate_verdict",
     `Pre-review gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
-    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.buildResult?.stderr?.slice(0, 200) ?? "unknown error"}`,
     "system", gateResult.passed ? 1.0 : 0);
 
   reviewState.gateResults.push(gateResult);
@@ -1679,7 +1679,7 @@ async function executeSprintFinalGate(
   if (sprintId) {
     emitGraphDecision(sprintId, null, "gate_verdict",
       `Final gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
-      gateResult.passed ? "Final build check passed" : `Final build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+      gateResult.passed ? "Final build check passed" : `Final build check failed: ${gateResult.buildResult?.stderr?.slice(0, 200) ?? "unknown error"}`,
       "system", gateResult.passed ? 1.0 : 0);
   }
 
@@ -2540,7 +2540,7 @@ function recordMeeting(params: {
       params.summary,
       trigger,
       (params.decisions ?? []).map(d => d.description),
-      (meetingMemoryModifications ?? []).map(m => `${m.agentRole}: ${m.content.slice(0, 80)}`),
+      (meetingMemoryModifications ?? []).map(m => `${m.role}: ${m.content.slice(0, 80)}`),
       false,
     );
   }
@@ -5308,6 +5308,9 @@ export async function executeBeatTask(
   let beatSession: import("@opencode-ai/sdk").Session | null = null;
   const beatAgentState = agentSessions.get(role);
   let previousSessionId: string | undefined;
+  // Hoisted for use in both try and catch (Spec 22 graph instrumentation)
+  const beatStartTime = Date.now();
+  const beatSprintId = task.sprintId ?? resolveActiveSprintId();
 
   emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt constructed (${taskPrompt.length} chars), tools=${tools ? Object.keys(tools).filter(k => (tools as any)[k]).join(",") : "none"}`, {
     beatId, taskId, detail: { promptLength: taskPrompt.length, tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [], promptType: role === "developer" ? "developer_build" : "specialist_text" },
@@ -5329,8 +5332,6 @@ export async function executeBeatTask(
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
     // ── Graph instrumentation (Spec 22) — beat start ──
-    const beatStartTime = Date.now();
-    const beatSprintId = task.sprintId ?? resolveActiveSprintId();
     if (beatSprintId) {
       emitGraphBeatStarted(beatSprintId, taskId, beatId, role, task.kind === "implementation" ? "execute_task" : task.kind, taskPrompt);
     }
@@ -5825,3 +5826,206 @@ async function executeSkillsLeadAction(
     return { summary: `Skills Lead action failed: ${err instanceof Error ? err.message : String(err)}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Entry-point integration check — verify the app entry file actually imports
+// product modules, not just that files exist on disk.
+// ---------------------------------------------------------------------------
+
+interface EntryPointCheckResult {
+  pass: boolean;
+  entryFile: string | null;
+  reason: string;
+  orphanedModules: string[];
+}
+
+function checkEntryPointImports(): EntryPointCheckResult {
+  // Identify the entry file (stack-agnostic — try common patterns)
+  const entryFileCandidates = [
+    "src/App.tsx", "src/App.jsx", "src/App.vue", "src/App.svelte",
+    "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
+    "src/index.tsx", "src/index.ts", "src/index.jsx", "src/index.js",
+    "app.py", "main.py", "index.html",
+    "pages/index.tsx", "pages/index.jsx", "app/page.tsx", "app/page.jsx",
+  ];
+
+  let entryFile: string | null = null;
+  let entryContent = "";
+  for (const candidate of entryFileCandidates) {
+    const fullPath = join(productDir, candidate);
+    try {
+      entryContent = readFileSync(fullPath, "utf-8");
+      entryFile = candidate;
+      break;
+    } catch { /* try next */ }
+  }
+
+  if (!entryFile) {
+    return { pass: true, entryFile: null, reason: "No recognizable entry file found — skipping import check.", orphanedModules: [] };
+  }
+
+  // Collect all product source files (exclude the entry file itself, config files, css)
+  const productModules: string[] = [];
+  const codeExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"]);
+  const ignoreNames = new Set(["node_modules", ".git", "dist", "build", ".next", ".vite", "coverage"]);
+  const ignoreFiles = new Set(["vite.config.ts", "vite.config.js", "tsconfig.json", "package.json", "postcss.config.mjs", "tailwind.config.js", "tailwind.config.ts", "next.config.ts", "next.config.js", "main.tsx", "main.ts", "main.js", "index.ts", "index.js", "index.css"]);
+
+  function walkProduct(dir: string, depth = 0) {
+    if (depth > 4) return;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
+    for (const entry of entries) {
+      if (ignoreNames.has(entry.name)) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) { walkProduct(fullPath, depth + 1); continue; }
+      if (ignoreFiles.has(entry.name)) continue;
+      const ext = entry.name.slice(entry.name.lastIndexOf("."));
+      if (codeExtensions.has(ext)) {
+        const rel = relative(productDir, fullPath).replace(/\\/g, "/");
+        if (rel !== entryFile) {
+          productModules.push(rel);
+        }
+      }
+    }
+  }
+  walkProduct(productDir);
+
+  if (productModules.length === 0) {
+    return { pass: true, entryFile, reason: "No product modules found beyond entry file.", orphanedModules: [] };
+  }
+
+  // Check which modules are referenced in the entry file (or transitively via
+  // files the entry file imports). We do a simple 2-level transitive check.
+  const referencedFiles = new Set<string>();
+
+  function extractImportedPaths(content: string, fileDir: string): string[] {
+    const importPaths: string[] = [];
+    // Match import/require statements
+    const importRegex = /(?:import|require)\s*\(?['"]([^'"]+)['"]\)?/g;
+    let match: RegExpExecArray | null;
+    while ((match = importRegex.exec(content)) !== null) {
+      const importPath = match[1];
+      if (importPath.startsWith(".")) {
+        // Resolve relative import to a workspace-relative path
+        const resolved = join(fileDir, importPath).replace(/\\/g, "/");
+        importPaths.push(resolved);
+      }
+    }
+    return importPaths;
+  }
+
+  // Level 1: direct imports from entry file
+  const entryDir = entryFile.includes("/") ? entryFile.substring(0, entryFile.lastIndexOf("/")) : ".";
+  const directImports = extractImportedPaths(entryContent, entryDir);
+  for (const imp of directImports) {
+    // Match against product modules (with and without extensions)
+    for (const mod of productModules) {
+      const modNoExt = mod.replace(/\.[^.]+$/, "");
+      if (imp === mod || imp === modNoExt || imp + "/index" === modNoExt) {
+        referencedFiles.add(mod);
+      }
+    }
+  }
+
+  // Level 2: imports from files that the entry file imports
+  for (const ref of referencedFiles) {
+    try {
+      const refContent = readFileSync(join(productDir, ref), "utf-8");
+      const refDir = ref.includes("/") ? ref.substring(0, ref.lastIndexOf("/")) : ".";
+      const transImports = extractImportedPaths(refContent, refDir);
+      for (const imp of transImports) {
+        for (const mod of productModules) {
+          const modNoExt = mod.replace(/\.[^.]+$/, "");
+          if (imp === mod || imp === modNoExt || imp + "/index" === modNoExt) {
+            referencedFiles.add(mod);
+          }
+        }
+      }
+    } catch { /* skip unreadable */ }
+  }
+
+  // Find orphaned modules — files that exist but are never imported
+  const orphaned = productModules.filter((mod) => !referencedFiles.has(mod));
+
+  if (orphaned.length > 0 && referencedFiles.size === 0) {
+    return {
+      pass: false,
+      entryFile,
+      reason: `Entry file ${entryFile} does not import ANY product modules. ${orphaned.length} module(s) exist on disk but are completely disconnected: ${orphaned.join(", ")}`,
+      orphanedModules: orphaned,
+    };
+  }
+
+  if (orphaned.length > 0 && orphaned.length >= productModules.length * 0.5) {
+    return {
+      pass: false,
+      entryFile,
+      reason: `Entry file ${entryFile} only imports ${referencedFiles.size}/${productModules.length} modules. ${orphaned.length} orphaned module(s): ${orphaned.join(", ")}`,
+      orphanedModules: orphaned,
+    };
+  }
+
+  return { pass: true, entryFile, reason: `Entry file ${entryFile} imports ${referencedFiles.size}/${productModules.length} product modules.`, orphanedModules: orphaned };
+}
+
+const PreviewContentVerdict = z.object({
+  pass: z.boolean(),
+  reason: z.string(),
+  missingElements: z.array(z.string()),
+  visibleElements: z.array(z.string()),
+});
+type PreviewContentVerdict = z.infer<typeof PreviewContentVerdict>;
+
+const QAReportSchema = z.object({
+  verdict: z.enum(["pass", "fail"]),
+  tasks: z.array(z.object({
+    taskId: z.string(),
+    verdict: z.enum(["pass", "fail"]),
+    findings: z.array(z.object({
+      defect_area: z.enum(["build_failure", "test_failure", "ui_rendering", "ui_interaction", "api_behavior", "accessibility", "content", "design_mismatch", "logic_error", "performance"]),
+      severity: z.enum(["critical", "high", "medium", "low"]),
+      description: z.string(),
+      expected: z.string(),
+      actual: z.string(),
+      file: z.string(),
+      fix_suggestion: z.string(),
+    })),
+    dod_checklist: z.array(z.object({
+      item: z.string(),
+      status: z.enum(["pass", "fail"]),
+      evidence: z.string(),
+    })),
+  })),
+  test_files_written: z.array(z.string()),
+  build_status: z.enum(["pass", "fail", "skipped"]),
+  test_suite_status: z.enum(["pass", "fail", "skipped", "no_tests"]),
+});
+
+function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QAReport {
+  return {
+    verdict: result.verdict,
+    tasks: result.tasks.map((t) => ({
+      taskId: t.taskId,
+      verdict: t.verdict,
+      findings: t.findings.map((f) => ({
+        taskId: t.taskId,
+        defectArea: f.defect_area as DefectArea,
+        severity: f.severity as Task["priority"],
+        description: f.description,
+        expected: f.expected,
+        actual: f.actual,
+        file: f.file,
+        fixSuggestion: f.fix_suggestion,
+      })),
+      dodChecklist: t.dod_checklist.map((c) => ({
+        item: c.item,
+        status: c.status,
+        evidence: c.evidence,
+      })),
+    })),
+    testFilesWritten: result.test_files_written,
+    buildStatus: result.build_status,
+    testSuiteStatus: result.test_suite_status,
+  };
+}
+
