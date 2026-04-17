@@ -377,14 +377,17 @@ export function seedExistingSkills(
   companyId: string,
   skillsDir?: string,
 ): number {
-  if (seeded) return 0;
+  // Only treat the registry as seeded once at least one skill exists for this
+  // company — otherwise an earlier transient failure (missing dir, parse error,
+  // race with snapshot load) permanently blocks lazy re-seed. See
+  // `markSeeded()` call at the end of this fn, which is now count-gated.
+  if (seeded && getAllSkills(companyId).length > 0) return 0;
 
   // Resolve relative to this file so it works regardless of process.cwd()
   const thisDir = new URL(".", import.meta.url).pathname;
   const dir = skillsDir ?? resolve(thisDir, "..", "skills");
   if (!existsSync(dir)) {
     console.warn(`[SkillRegistry] Skills directory not found: ${dir}`);
-    markSeeded();
     return 0;
   }
 
@@ -428,21 +431,29 @@ export function seedExistingSkills(
     count++;
   }
 
-  markSeeded();
+  // Only mark seeded if we actually registered skills. If count=0 (all files
+  // failed to parse, or all were filtered out), leave the flag false so the
+  // next lazy-seed call gets another chance.
+  if (count > 0) markSeeded();
   return count;
 }
 
-// ── Semantic matching deps ─────────────────────────────────
-
-/**
- * Injected by apps/api/src/skill-evolution.ts (same pattern as PatternLearnerDeps).
- * When wired, matchSkillsAsync() uses cosine similarity over trigger embeddings
- * instead of bag-of-words token overlap.
- */
+// ── Registry hooks (progressive-disclosure design) ────────
+//
+// Skill matching at dispatch time is NO LONGER done inside the registry.
+// The orchestrator owns tier-1 classification via an LLM call over a
+// compact catalog (see apps/api/src/orchestrator.ts:buildSkillCatalog /
+// classifyTaskSkills). This replaces the former embedding-cosine matcher
+// and removes the race condition between seed + embed + first-match.
+//
+// Sync token-overlap `matchSkills` remains for offline use cases (tests,
+// cold-boot diagnostics, tooling). It is NOT on the runtime hot path.
+//
+// `onSkillActivated` still fires so downstream systems (pattern-learner
+// audit, telemetry) can react when new skills are activated at runtime.
 export interface SkillRegistryDeps {
-  embedText(text: string): Promise<number[]>;
   /** Called synchronously after a skill is activated (approved by ATA).
-   *  Intended for fire-and-forget async work — e.g. embedding the trigger. */
+   *  Intended for fire-and-forget async work — indexing, telemetry, etc. */
   onSkillActivated?: (skill: SkillArtifact) => void;
 }
 
@@ -454,110 +465,6 @@ export function setSkillRegistryDeps(d: SkillRegistryDeps): void {
 
 export function hasSkillRegistryDeps(): boolean {
   return registryDeps !== null;
-}
-
-/** Cosine similarity between two equal-length vectors (returns 0 on zero vectors). */
-function cosine(a: readonly number[], b: readonly number[]): number {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  return normA === 0 || normB === 0 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-/**
- * Store a pre-computed embedding on a skill.
- * Called by skill-evolution.ts after a skill is activated or seeded.
- */
-export function storeSkillEmbedding(skillId: string, embedding: number[]): void {
-  const skill = skillsById.get(skillId);
-  if (!skill) return;
-  skillsById.set(skillId, { ...skill, triggerEmbedding: embedding });
-  // No need to rebuild active index — embedding is not indexed.
-}
-
-/**
- * Semantic async version of matchSkills.
- *
- * When registryDeps is wired:
- *   - Embeds the task description
- *   - Scores skills by cosine similarity between task embedding and triggerEmbedding
- *   - Only returns skills above SEMANTIC_THRESHOLD (0.35)
- *   - For skills without a triggerEmbedding yet, falls back to token score
- *
- * When registryDeps is NOT wired (cold start, test mode):
- *   - Falls through to the sync token-overlap matchSkills
- */
-const SEMANTIC_THRESHOLD = 0.35;
-
-export async function matchSkillsAsync(
-  companyId: string,
-  role: string,
-  taskDescription: string,
-): Promise<SkillArtifact[]> {
-  const roleSkills = getSkillsForRole(companyId, role);
-  if (roleSkills.length === 0) return [];
-
-  // No deps — use token overlap
-  if (!registryDeps) return matchSkills(companyId, role, taskDescription);
-
-  let taskEmbedding: number[];
-  try {
-    taskEmbedding = await registryDeps.embedText(taskDescription);
-  } catch {
-    // Embedding failed — fall back to token overlap
-    return matchSkills(companyId, role, taskDescription);
-  }
-
-  const taskTokens = tokenize(taskDescription);
-
-  const scored = roleSkills.map((skill) => {
-    // Semantic score — prefer this when triggerEmbedding is available
-    if (skill.triggerEmbedding && skill.triggerEmbedding.length > 0) {
-      return { skill, score: cosine(taskEmbedding, skill.triggerEmbedding) };
-    }
-    // Token fallback for skills not yet embedded (cold start / just created)
-    const triggerTokens = tokenize(skill.trigger);
-    const nameTokens = tokenize(skill.name);
-    const allSkillTokens = new Set([...triggerTokens, ...nameTokens]);
-    let overlap = 0;
-    for (const token of taskTokens) {
-      if (allSkillTokens.has(token)) overlap++;
-    }
-    // Normalise token score into similar range as cosine (0–1)
-    const tokenScore = allSkillTokens.size > 0 ? overlap / allSkillTokens.size : 0;
-    return { skill, score: tokenScore * 0.8 }; // slight discount vs. semantic
-  });
-
-  return scored
-    .filter((s) => s.score >= SEMANTIC_THRESHOLD)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3)
-    .map((s) => s.skill);
-}
-
-/**
- * Embed the trigger of every active skill for a company that doesn't have an
- * embedding yet. Called once after seedExistingSkills() — fire-and-forget.
- */
-export async function embedAllSkillTriggers(companyId: string): Promise<number> {
-  if (!registryDeps) return 0;
-  const skills = getAllSkills(companyId).filter(
-    (s) => s.status === "active" && (!s.triggerEmbedding || s.triggerEmbedding.length === 0),
-  );
-  let count = 0;
-  for (const skill of skills) {
-    try {
-      const embedding = await registryDeps.embedText(skill.trigger);
-      storeSkillEmbedding(skill.id, embedding);
-      count++;
-    } catch {
-      // Non-fatal — skill falls back to token matching
-    }
-  }
-  return count;
 }
 
 // ── Helpers ───────────────────────────────────────────────

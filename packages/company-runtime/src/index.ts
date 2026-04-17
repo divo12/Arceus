@@ -39,12 +39,9 @@ export {
   getAllSkills,
   getSkillHistory,
   matchSkills,
-  matchSkillsAsync,
   recordSkillUsage,
   updateSuccessRate,
   getSkillHealth,
-  storeSkillEmbedding,
-  embedAllSkillTriggers,
   setSkillRegistryDeps,
   hasSkillRegistryDeps,
   // Phase 6 lifecycle helpers
