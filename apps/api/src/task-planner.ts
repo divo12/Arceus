@@ -1,12 +1,32 @@
 import { z } from "zod";
-import type { CompanySnapshot, Task } from "@arceus/contracts";
+import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { structuredCompletion } from "./azure-openai";
 import { plannerConfig } from "./config/index";
 
-const followUpAssignedRoleSchema = z.enum(plannerConfig.followUpAssignedRoles);
+// Static "broad" enum — the full role vocabulary. Used for the exported type
+// (type inference is static). At runtime we narrow this to the actual roster so
+// the planner cannot schedule work for roles the company has not hired.
+const broadAssignedRoleSchema = z.enum(plannerConfig.followUpAssignedRoles);
 const graphNodeKindSchema = z.enum(plannerConfig.graphNodeKinds);
 const graphStageKeySchema = z.enum(plannerConfig.graphStageKeys);
 const deliveryProfileSchema = z.enum(plannerConfig.deliveryProfiles);
+
+type PlannerRole = (typeof plannerConfig.followUpAssignedRoles)[number];
+
+/**
+ * Build the `assigned_role` validator from the currently-hired roster. Falls
+ * back to the full enum if the roster is empty (defensive — should not happen
+ * once a company is bootstrapped).
+ */
+function buildAssignedRoleSchema(roster: AgentIdentity["role"][]) {
+  const allowed = roster.filter((role): role is PlannerRole =>
+    (plannerConfig.followUpAssignedRoles as readonly string[]).includes(role)
+  );
+  if (allowed.length === 0) {
+    return broadAssignedRoleSchema;
+  }
+  return z.enum(allowed as [PlannerRole, ...PlannerRole[]]);
+}
 
 function createTaskSpecSchema() {
   return z.object({
@@ -19,12 +39,12 @@ function createTaskSpecSchema() {
   });
 }
 
-function createGraphNodeSchema() {
+function createGraphNodeSchema(assignedRoleSchema: z.ZodEnum<[PlannerRole, ...PlannerRole[]]>) {
   return z.object({
     id: z.string().min(plannerConfig.limits.graphNodeIdMinLength).max(plannerConfig.limits.graphNodeIdMaxLength).regex(/^[a-z0-9_-]+$/),
     stage_key: graphStageKeySchema.nullable(),
     kind: graphNodeKindSchema,
-    assigned_role: followUpAssignedRoleSchema,
+    assigned_role: assignedRoleSchema,
     title: z.string(),
     description: z.string(),
     depends_on: z.array(z.string().min(plannerConfig.limits.graphNodeIdMinLength).max(plannerConfig.limits.graphNodeIdMaxLength)).max(plannerConfig.limits.graphNodeDependencyMax),
@@ -34,31 +54,44 @@ function createGraphNodeSchema() {
   });
 }
 
-export const workflowTaskPlanSchema = z.object({
-  delivery_profile: deliveryProfileSchema,
-  execution_strategy: z.string(),
-  technical_plan: createTaskSpecSchema(),
-  acceptance_spec: createTaskSpecSchema(),
-  implementation: createTaskSpecSchema(),
-  local_preview: createTaskSpecSchema(),
-  board_handoff: createTaskSpecSchema(),
-  task_graph: z.array(createGraphNodeSchema()).min(plannerConfig.limits.taskGraphMin).max(plannerConfig.limits.taskGraphMax),
-  follow_up_tasks: z.array(
-    z.object({
-      title: z.string(),
-      description: z.string(),
-      problem_statement: z.string(),
-      deliverable: z.string(),
-      definition_of_done: z.array(z.string()).min(plannerConfig.limits.followUpDefinitionOfDoneMin).max(plannerConfig.limits.followUpDefinitionOfDoneMax),
-      priority: z.enum(["critical", "high", "medium", "low"]),
-      assigned_role: followUpAssignedRoleSchema,
-    })
-  ).min(plannerConfig.limits.followUpTaskMin).max(plannerConfig.limits.followUpTaskMax),
-});
+function createWorkflowTaskPlanSchema(assignedRoleSchema: z.ZodEnum<[PlannerRole, ...PlannerRole[]]>) {
+  return z.object({
+    delivery_profile: deliveryProfileSchema,
+    execution_strategy: z.string(),
+    technical_plan: createTaskSpecSchema(),
+    acceptance_spec: createTaskSpecSchema(),
+    implementation: createTaskSpecSchema(),
+    local_preview: createTaskSpecSchema(),
+    board_handoff: createTaskSpecSchema(),
+    task_graph: z.array(createGraphNodeSchema(assignedRoleSchema)).min(plannerConfig.limits.taskGraphMin).max(plannerConfig.limits.taskGraphMax),
+    follow_up_tasks: z.array(
+      z.object({
+        title: z.string(),
+        description: z.string(),
+        problem_statement: z.string(),
+        deliverable: z.string(),
+        definition_of_done: z.array(z.string()).min(plannerConfig.limits.followUpDefinitionOfDoneMin).max(plannerConfig.limits.followUpDefinitionOfDoneMax),
+        priority: z.enum(["critical", "high", "medium", "low"]),
+        assigned_role: assignedRoleSchema,
+      })
+    ).min(plannerConfig.limits.followUpTaskMin).max(plannerConfig.limits.followUpTaskMax),
+  });
+}
+
+/** Broad schema — used for type inference. Runtime validation uses the narrowed per-company schema. */
+export const workflowTaskPlanSchema = createWorkflowTaskPlanSchema(broadAssignedRoleSchema);
 
 export type WorkflowTaskPlan = z.infer<typeof workflowTaskPlanSchema>;
 
 export async function generateWorkflowTaskPlan(snapshot: CompanySnapshot): Promise<WorkflowTaskPlan> {
+  const roster = snapshot.agents.map((agent) => agent.role);
+  const assignedRoleSchema = buildAssignedRoleSchema(roster);
+  const rosterSchema = createWorkflowTaskPlanSchema(assignedRoleSchema);
+
+  const availableRolesLine = roster.length > 0
+    ? roster.join(", ")
+    : (plannerConfig.followUpAssignedRoles as readonly string[]).join(", ");
+
   return structuredCompletion(
     "workerDeployment",
     [
@@ -75,13 +108,14 @@ export async function generateWorkflowTaskPlan(snapshot: CompanySnapshot): Promi
           `Strategy summary: ${snapshot.strategy.summary}`,
           `Scope boundaries: ${snapshot.strategy.scopeBoundary.join("; ")}`,
           `Current workspace: ${snapshot.company.name ? "Available at repo-root /workspace" : "Not yet created"}`,
-          `Available roles: ${snapshot.agents.map((agent) => agent.role).join(", ") || "ceo, cto, pm, developer, tester, ui_designer, marketing, skills_lead"}`,
+          `Available roles: ${availableRolesLine}`,
+          `Hard constraint: every task's assigned_role MUST be one of the Available roles above. Tasks for roles not listed will be rejected by validation.`,
           "",
           ...plannerConfig.prompts.userInstructions,
         ].join("\n"),
       },
     ],
-    workflowTaskPlanSchema,
+    rosterSchema as unknown as typeof workflowTaskPlanSchema,
     "workflow_task_plan",
     { temperature: 0.2 }
   );
