@@ -250,7 +250,7 @@ function summarizeMeetings(snapshot: CompanySnapshot) {
     return "No meetings recorded yet.";
   }
 
-  return snapshot.meetings.slice(0, 4).map((meeting) => `${meeting.type}: ${meeting.summary}`).join("; ");
+  return snapshot.meetings.slice(0, 4).map((meeting) => `${meeting.type}: ${meeting.title}`).join("; ");
 }
 
 export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {

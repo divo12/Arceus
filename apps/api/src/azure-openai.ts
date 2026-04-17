@@ -39,10 +39,30 @@ export function drainBeatTokenAccumulator(beatId: string): number {
   return tokens;
 }
 
+// ── Per-meeting token accumulator (Phase 8) ────────────────
+// Tracks total tokens consumed during a meeting pipeline run.
+const meetingTokenAccumulators = new Map<string, number>();
+
+/** Start accumulating tokens for a meeting pipeline. */
+export function startMeetingTokenAccumulator(meetingId: string) {
+  meetingTokenAccumulators.set(meetingId, 0);
+}
+
+/** Read and clear the accumulated token count for a meeting. */
+export function drainMeetingTokenAccumulator(meetingId: string): number {
+  const tokens = meetingTokenAccumulators.get(meetingId) ?? 0;
+  meetingTokenAccumulators.delete(meetingId);
+  return tokens;
+}
+
 function accumulateBeatTokens(totalTokens: number) {
   // Add tokens to all active accumulators (usually just one active beat per agent).
   for (const [beatId, current] of beatTokenAccumulators) {
     beatTokenAccumulators.set(beatId, current + totalTokens);
+  }
+  // Also add to any active meeting accumulators.
+  for (const [meetingId, current] of meetingTokenAccumulators) {
+    meetingTokenAccumulators.set(meetingId, current + totalTokens);
   }
 }
 

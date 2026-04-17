@@ -53,6 +53,37 @@ export function setReactiveEventEmitter(fn: typeof reactiveEventEmitter) {
   reactiveEventEmitter = fn;
 }
 
+// ---------------------------------------------------------------------------
+// Escalation meeting trigger — wired to MeetingScheduler by server.ts
+// ---------------------------------------------------------------------------
+
+import type { MeetingScheduler } from "@arceus/company-runtime";
+
+let meetingSchedulerRef: MeetingScheduler | null = null;
+
+/** Called by server.ts to wire the meeting scheduler for escalation triggers. */
+export function setMeetingScheduler(scheduler: MeetingScheduler) {
+  meetingSchedulerRef = scheduler;
+}
+
+/**
+ * Trigger an escalation meeting for a blocked task.
+ * Called from setTaskStatus() when a task transitions to "blocked".
+ * Skips if no scheduler, if task has no assignee, or if an escalation
+ * meeting already exists for this task.
+ */
+function triggerEscalationMeeting(taskId: string, blockerDetail: string) {
+  if (!meetingSchedulerRef) return;
+  const snap = getSnapshot();
+  const task = snap.tasks.find((t) => t.id === taskId);
+  if (!task || !task.assignedRole) return;
+
+  const agent = snap.agents.find((a) => a.role === task.assignedRole);
+  if (!agent) return;
+
+  meetingSchedulerRef.createEscalationMeeting(snap, agent.id, blockerDetail, taskId);
+}
+
 /** Emit a reactive event for a specific role (resolves agentId from snapshot). */
 function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger) {
   if (!reactiveEventEmitter) return;
@@ -1916,7 +1947,8 @@ export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoTex
     }
   }
 
-  const meetingType = card.meeting.type ?? (card.card_type === "status_update" ? "escalation" : "ad_hoc");
+  const ceoMeetingType = card.meeting.type ?? (card.card_type === "status_update" ? "escalation" : "ad_hoc");
+  const meetingType: Meeting["type"] = ceoMeetingType === "escalation" ? "escalation" : "eval_triggered";
   const agendaType = meetingType === "escalation" ? "blocker" : card.card_type === "clarifying_question" ? "question" : "proposal";
 
   return recordMeeting({
@@ -1978,7 +2010,8 @@ function recordMeeting(params: {
   memoryModifications?: MemoryModificationInput[];
 }) {
   const snapshot = getSnapshot();
-  const participants = uniqueStrings(
+  const facilitatorAgent = getAgentByRole(snapshot, params.facilitatorRole);
+  const participantAgentIds = uniqueStrings(
     params.participantRoles
       .map((role) => getAgentByRole(snapshot, role)?.id)
       .filter(Boolean),
@@ -1987,50 +2020,65 @@ function recordMeeting(params: {
   const now = new Date().toISOString();
   const meetingMemoryModifications = deriveMeetingMemoryModifications(params);
 
+  // Build a single facilitator contribution from the legacy agenda items
+  const facilitatorContribution: Meeting["contributions"][number] = {
+    agentId: facilitatorAgent?.id ?? "unknown_agent",
+    agentName: facilitatorAgent?.name ?? params.facilitatorRole,
+    agentRole: params.facilitatorRole,
+    contribution: {
+      whatIDid: params.agenda.filter(a => a.type === "update").map(a => a.content).join("; ") || params.summary,
+      whatImDoing: "",
+      blockers: params.agenda.filter(a => a.type === "blocker").map(a => a.content).join("; "),
+      learnings: (params.learnings ?? []).map(l => l.content).join("; "),
+      questionsForTeam: params.agenda.filter(a => a.type === "question").map(a => a.content).join("; "),
+    },
+    submittedAt: now,
+  };
+
+  // Build resolutions from legacy decisions + task modifications
+  const resolutions: Meeting["resolutions"] = (params.decisions ?? []).length > 0 || (params.taskModifications ?? []).length > 0
+    ? {
+        decisions: [
+          ...(params.decisions ?? []).map(d => ({
+            conflictId: null,
+            blockerId: null,
+            decision: d.description,
+            action: "note" as const,
+          })),
+          ...(params.taskModifications ?? []).map(tm => ({
+            conflictId: null,
+            blockerId: null,
+            decision: tm.details,
+            action: (tm.modificationType === "cancel" ? "modify_task"
+                   : tm.modificationType === "assign" ? "create_task"
+                   : "modify_task") as "create_task" | "modify_task",
+            taskAction: {
+              type: (tm.modificationType === "assign" ? "create" : "update") as "create" | "update",
+              issueId: tm.taskId,
+              assigneeRole: tm.assignedRole ?? undefined,
+              newStatus: tm.resultingStatus ?? undefined,
+              newPriority: tm.priority ?? undefined,
+            },
+          })),
+        ],
+      }
+    : null;
+
   const meeting: Meeting = {
     id: `meeting_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
+    scheduleId: null,
     type: params.type,
-    participants,
-    agenda: params.agenda.map((item) => ({
-      id: `agenda_${crypto.randomUUID()}`,
-      topic: item.topic,
-      type: item.type,
-      content: item.content,
-      raisedByAgentId: getAgentByRole(snapshot, item.raisedByRole)?.id ?? "unknown_agent",
-      relatedTaskId: item.relatedTaskId ?? null,
-      needsBoardApproval: item.needsBoardApproval ?? false,
-    })),
-    decisions: (params.decisions ?? []).map((decision) => ({
-      id: `decision_${crypto.randomUUID()}`,
-      description: decision.description,
-      decidedByAgentIds: uniqueStrings(decision.decidedByRoles.map((role) => getAgentByRole(snapshot, role)?.id), 8),
-      impactIds: decision.impactIds,
-    })),
-    learnings: (params.learnings ?? []).map((learning) => ({
-      id: `learning_${crypto.randomUUID()}`,
-      agentId: getAgentByRole(snapshot, learning.role)?.id ?? "unknown_agent",
-      content: learning.content,
-      promotedToSummary: learning.promotedToSummary ?? true,
-    })),
-    taskModifications: (params.taskModifications ?? []).map((modification) => ({
-      id: `task_mod_${crypto.randomUUID()}`,
-      taskId: modification.taskId,
-      modificationType: modification.modificationType,
-      details: modification.details,
-      assignedRole: modification.assignedRole ?? null,
-      priority: modification.priority ?? null,
-      resultingStatus: modification.resultingStatus ?? null,
-    })),
-    memoryModifications: meetingMemoryModifications.map((modification) => ({
-      id: `memory_mod_${crypto.randomUUID()}`,
-      agentId: getAgentByRole(snapshot, modification.role)?.id ?? "unknown_agent",
-      modificationType: modification.modificationType,
-      content: modification.content,
-    })),
+    title: params.summary,
     status: "completed",
-    summary: params.summary,
-    scheduledAt: now,
+    facilitatorAgentId: facilitatorAgent?.id ?? "unknown_agent",
+    participantAgentIds,
+    contributions: [facilitatorContribution],
+    synthesis: null,
+    resolutions,
+    brief: null,
+    healthSnapshot: null,
+    createdAt: now,
     completedAt: now,
   };
 
@@ -2200,6 +2248,11 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
     detail: { taskId, previousStatus: prevStatus, feedback: feedback ?? null },
     correlationId: taskId,
   });
+
+  // Phase 7: Trigger escalation meeting when a task becomes blocked
+  if (status === "blocked" && prevStatus !== "blocked") {
+    triggerEscalationMeeting(taskId, feedback ?? `Task "${prev?.title ?? taskId}" is blocked`);
+  }
 
   // Auto-promote downstream tasks when a task completes
   if (status === "completed") {
@@ -3060,7 +3113,7 @@ async function executeSpecialistTask(taskId: string) {
 
   const specialistMeetingContext = getSpecialistMeetingContext(role, task, artifact.id);
   const completionMeeting = recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: role,
     participantRoles: specialistMeetingContext.participantRoles,
     summary: `${role.replace(/_/g, " ")} completed specialist task ${task.title}.`,
@@ -3089,25 +3142,25 @@ async function executeSpecialistTask(taskId: string) {
     if (approval) {
       const createdApproval = approval;
       appendTaskResult(task.id, `approval:${approval.id}`);
+      // Add board escalation to resolutions
       updateMeeting(completionMeeting.id, (meeting) => ({
         ...meeting,
-        agenda: meeting.agenda.map((item, index) => (
-          index === 0
-            ? {
-                ...item,
-                needsBoardApproval: true,
-                content: `${item.content} Board approval is required before any external distribution action can occur.`,
-              }
-            : item
-        )),
-        decisions: meeting.decisions.map((decision, index) => (
-          index === 0
-            ? {
-                ...decision,
-                impactIds: decision.impactIds.includes(createdApproval.id) ? decision.impactIds : [...decision.impactIds, createdApproval.id],
-              }
-            : decision
-        )),
+        resolutions: {
+          decisions: [
+            ...(meeting.resolutions?.decisions ?? []),
+            {
+              conflictId: null,
+              blockerId: null,
+              decision: `Board approval required for marketing external distribution. Approval ID: ${createdApproval.id}`,
+              action: "escalate_to_board" as const,
+              escalation: {
+                question: "Approve external marketing distribution?",
+                context: `Task: ${task.title}`,
+                severity: "medium" as const,
+              },
+            },
+          ],
+        },
       }));
     }
   }
@@ -3303,7 +3356,7 @@ async function completeExecutionCycle(reason: string) {
   }
 
   recordMeeting({
-    type: "ad_hoc",
+    type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],
     summary: queuedNonCoreTaskCount > 0
@@ -3339,7 +3392,7 @@ async function completeExecutionCycle(reason: string) {
 function pauseForBoardReview(reason: string) {
   executionStatus = "awaiting_board_review";
   recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: "cto",
     participantRoles: ["cto", "ceo"],
     summary: "Autonomous execution paused for a board-level decision.",
@@ -3845,7 +3898,7 @@ async function runPlanningPhase(snapshot: CompanySnapshot) {
   attachArtifactToTask(activeExecution.planTaskId, planArtifact.id);
   setTaskStatus(activeExecution.planTaskId, "completed", "Technical plan delivered.");
   const planningHandoff = recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: "cto",
     participantRoles: ["cto", "pm"],
     summary: "CTO handed the technical plan to PM for delivery specification.",
@@ -3929,7 +3982,7 @@ async function runAcceptancePhase(snapshot: CompanySnapshot) {
   attachArtifactToTask(activeExecution.acceptanceTaskId, acceptanceArtifact.id);
   setTaskStatus(activeExecution.acceptanceTaskId, "completed", "Acceptance criteria delivered.");
   const implementationHandoff = recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: "pm",
     participantRoles: ["pm", "developer"],
     summary: "PM handed the delivery specification to the developer for implementation.",
@@ -4713,7 +4766,7 @@ async function startPreviewPhase(): Promise<PhaseResult> {
   setTaskStatus(activeExecution.previewTaskId, "completed", `Local preview reachable at ${previewUrl} — content validated against acceptance spec.`);
   clearRoleBlockers("developer", [preview.lastError ?? "Local preview launch failed."]);
   const previewReviewMeeting = recordMeeting({
-    type: "ad_hoc",
+    type: "eval_triggered",
     facilitatorRole: "developer",
     participantRoles: ["developer", "cto"],
     summary: "Developer shared the local preview and smoke-check evidence with the CTO.",
@@ -4913,7 +4966,7 @@ async function startReviewPhase(): Promise<PhaseResult> {
   setTaskStatus(activeExecution.buildTaskId, "completed", "Implementation finished and CTO-approved.");
   setTaskStatus(activeExecution.reviewTaskId, "completed", "CTO review passed — proceeding to autonomous specialist execution.");
   const boardPrepMeeting = recordMeeting({
-    type: "handoff",
+    type: "eval_triggered",
     facilitatorRole: "cto",
     participantRoles: ["cto", "ceo"],
     summary: "CTO approved the implementation — company continues autonomous execution of remaining specialist tasks.",
@@ -5091,7 +5144,7 @@ export async function approveBoardReview() {
   }));
 
   recordMeeting({
-    type: "ad_hoc",
+    type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],
     summary: "Board approved the CTO handoff and closed the current execution cycle.",
@@ -5465,7 +5518,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
     replaceTasks([planTask, acceptanceTask, buildTask, previewTask, reviewTask]);
 
     const kickoffMeeting = recordMeeting({
-      type: "scrum",
+      type: "eval_triggered",
       facilitatorRole: "cto",
       participantRoles: ["cto", "pm", "developer"],
       summary: "Engineering kickoff established the sprint objective, handoff order, and task ownership.",
@@ -5652,7 +5705,7 @@ export async function beginExecution(snapshot: CompanySnapshot) {
 
     updateMeeting(kickoffMeeting.id, (meeting) => ({
       ...meeting,
-      summary: `${meeting.summary} Meeting ${meeting.id} anchors the ${taskPlan.delivery_profile.replace(/_/g, " ")} task pipeline for this sprint.`,
+      title: `${meeting.title} Meeting ${meeting.id} anchors the ${taskPlan.delivery_profile.replace(/_/g, " ")} task pipeline for this sprint.`,
     }));
     emitEmployeeActivity("system", "info", `Task pipeline created for ${taskPlan.delivery_profile.replace(/_/g, " ")}: CTO plan → PM spec → Developer implementation → Preview validation → CTO review → Specialist tasks`, {
       meetingId: kickoffMeeting.id,
@@ -6493,6 +6546,62 @@ export async function executeChecklistAction(
       summary: `Unknown sprint review action: ${reviewAction}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
     };
+  }
+
+  // ── Meeting contribution (Spec 18 Phase 4) ──
+  if (action.suggestedAction.startsWith("meeting_contribution:")) {
+    startBeatTokenAccumulator(beatId);
+    const meetingId = action.suggestedAction.split(":")[1];
+    const snapshot = getSnapshot();
+    const meeting = snapshot.meetings.find((m) => m.id === meetingId);
+    if (!meeting || meeting.status !== "collecting") {
+      return { summary: `Meeting ${meetingId} not in collecting status`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+
+    const agent = snapshot.agents.find((a) => a.id === ctx.agentId);
+    if (!agent) {
+      return { summary: `Agent ${ctx.agentId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+
+    const agentTasks = ctx.tasks.filter((t) => t.assignedRole === ctx.role);
+    try {
+      emitEmployeeActivity(ctx.role, "working", `Beat ${beatId}: producing meeting contribution for "${meeting.title}"`, { beatId });
+
+      const { generateContribution } = await import("./meeting-synthesis");
+      const contribution = await generateContribution(
+        meeting,
+        { id: agent.id, name: agent.name, role: agent.role, title: agent.title },
+        agentTasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),
+      );
+
+      // Add contribution to the meeting
+      updateMeeting(meetingId, (m) => ({
+        ...m,
+        contributions: [
+          ...m.contributions,
+          {
+            agentId: agent.id,
+            agentName: agent.name,
+            agentRole: agent.role,
+            contribution,
+            submittedAt: new Date().toISOString(),
+          },
+        ],
+      }));
+      await flush();
+
+      emitEmployeeActivity(ctx.role, "transition", `Beat ${beatId}: meeting contribution submitted`, { beatId });
+      return {
+        summary: `Contributed to meeting "${meeting.title}"`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+      };
+    } catch (err) {
+      emitEmployeeActivity(ctx.role, "error", `Beat ${beatId}: meeting contribution failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      return {
+        summary: `Meeting contribution failed: ${err instanceof Error ? err.message : String(err)}`,
+        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+      };
+    }
   }
 
   // ── Fallback: log the action without executing ──

@@ -189,10 +189,10 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
         if (meeting) {
           sseWrite(reply, "meeting", {
             meetingId: meeting.id,
-            summary: meeting.summary,
+            summary: meeting.title,
             type: meeting.type,
-            taskDeltaCount: meeting.taskModifications.length,
-            memoryDeltaCount: meeting.memoryModifications.length,
+            taskDeltaCount: meeting.resolutions?.decisions.filter(d => d.taskAction).length ?? 0,
+            memoryDeltaCount: 0,
           });
         }
         nextSnapshot = getSnapshot();

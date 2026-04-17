@@ -378,6 +378,7 @@ const emptySnapshot: CompanySnapshot = {
   artifacts: [],
   chatMessages: [],
   meetings: [],
+  meetingSchedules: [],
   approvals: [],
   memories: [],
   memoryUnits: [],
@@ -554,7 +555,7 @@ function buildReturnSummary({
   }
 
   if (recentMeeting) {
-    bullets.push(`Last meeting: ${recentMeeting.summary}`);
+    bullets.push(`Last meeting: ${recentMeeting.title}`);
   }
 
   if (bullets.length === 0) {
@@ -1796,8 +1797,8 @@ export default function Page() {
       id: `mtg-${mtg.id}`,
       kind: "meeting",
       title: `${mtg.type.replace(/_/g, " ")} meeting`,
-      detail: mtg.summary.slice(0, 100),
-      time: formatRelativeTime(mtg.scheduledAt),
+      detail: mtg.title.slice(0, 100),
+      time: formatRelativeTime(mtg.createdAt),
       href: "/meetings",
     });
   }
