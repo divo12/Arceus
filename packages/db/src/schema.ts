@@ -161,5 +161,12 @@ export const arceusTableDefinitions: Record<EntityName, TableDefinition> = {
     primaryKey: "id",
     notes: "Audit log of policy violations and escalation events (Spec 13 Governance).",
     indexes: ["company_id", "agent_id", "created_at"]
+  },
+  skillArtifacts: {
+    entity: "skillArtifacts",
+    tableName: "skill_artifacts",
+    primaryKey: "id",
+    notes: "Versioned skill artifacts for self-evolution pipeline (Spec 14). Each skill version is a separate row.",
+    indexes: ["company_id", "role", "status", "name"]
   }
 };

@@ -53,7 +53,7 @@ function makeMockContext(role: AgentIdentity["role"], taskStatus = "in_progress"
     agentId: `agent_${role}_001`,
     agentName: "TestAgent",
     role,
-    soul: "mock soul",
+    soul: { role, purpose: "mock", systemPrompt: "mock", canWriteCode: true, canEditFiles: true, canRunShell: true, canApproveStrategy: false, canRequestHiring: false, allowedDirectReports: [], defaultCapabilities: [] },
     company: {
       id: "company_test",
       name: "Test Company",
@@ -103,6 +103,7 @@ function makeMockContext(role: AgentIdentity["role"], taskStatus = "in_progress"
     beatTokenBudget: 50000,
     beatCostCeilingCents: 100,
     companyBudgetRemainingCents: 100000,
+    latestDailySyncBrief: null,
   };
 }
 

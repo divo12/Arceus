@@ -1321,6 +1321,17 @@ export default function Page() {
     return () => clearInterval(interval);
   }, [isStreaming, executionStatus, isResetting]);
 
+  // Poll runtime status so the "Runtime status is temporarily unavailable"
+  // banner self-heals once the API recovers. Without this, an initial-load
+  // fetch failure latches the banner until the next user action.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadState({ suppressRuntimeError: true });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   async function sendMessage(rawMessage?: string) {
     const trimmed = (rawMessage ?? composer).trim();
     if (!trimmed) return;
@@ -2097,10 +2108,10 @@ export default function Page() {
                       <Badge variant="outline" className="text-[0.625rem]">{productOverview.preview.framework}</Badge>
                     ) : null}
                     <Badge
-                      variant={previewStatus === "ready" ? "secondary" : previewStatus === "error" ? "destructive" : "outline"}
+                      variant={previewStatus === "ready" ? "secondary" : previewStatus === "error" && executionStatus !== "idle" ? "destructive" : "outline"}
                       className="text-[0.625rem]"
                     >
-                      {previewStatus === "ready" ? "✓ Live" : previewStatus === "starting" ? "Starting…" : previewStatus === "error" ? "Error" : "Waiting"}
+                      {previewStatus === "ready" ? "✓ Live" : previewStatus === "starting" ? "Starting…" : previewStatus === "error" && executionStatus !== "idle" ? "Error" : "Waiting"}
                     </Badge>
                   </div>
                 </div>

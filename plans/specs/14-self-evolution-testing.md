@@ -1040,33 +1040,9 @@ Spec 20 (Artifact UX)
 
 ---
 
-### Phase 4: Automated Code Review (Quality Gate)
+### Phase 4: Automated Code Review (Quality Gate) — DEFERRED to Spec 18
 
-**Goal:** Every code change from any agent gets reviewed before reaching preview/board.
-
-**Build:**
-1. Create `packages/company-runtime/src/code-reviewer.ts`:
-   - `reviewCodeChange(task, codeChanges, activeSkills)` → LLM call (gpt-4o-mini)
-   - Returns `ReviewReport { status, findings[], skillViolations[] }`
-2. Create `review_findings` table
-3. Create review prompt:
-   - `CODE_REVIEW_PROMPT` — "Check for: hardcoded secrets, SQL injection, XSS, architecture violations, skill compliance. For each finding: severity, category, description, file, suggestion."
-4. Wire into orchestrator step loop:
-   ```
-   Developer completes a step
-     → codeReviewer.reviewCodeChange(task, files, skills)
-     → if critical findings: block step, loop back with findings
-     → if high findings: flag in CTO review artifact
-     → if medium/low: log only
-   ```
-5. Feedback loop: if same skill violation found 3+ times → trigger `analyzeFailure` on the skill
-
-**Test:**
-- Developer writes code with a hardcoded API key → review catches it as critical → step blocked
-- Developer ignores a skill (uses jsonwebtoken instead of jose) → review flags skill violation
-- 3+ skill violations of same type → verify failure attribution triggers
-
-**Estimated effort:** 2 days
+> **Deferred.** This phase requires solving the code visibility problem first — today we cannot see what agents write (no git commits per beat, tool call content discarded). Moved to **Spec 18 (`plans/specs/18-automated-code-review.md`)** which covers both the visibility layer and the review gate. Phases 5 and 6 below are NOT dependent on Phase 4.
 
 ---
 
@@ -1137,14 +1113,14 @@ Spec 20 (Artifact UX)
 | 1. Skill Registry | 2 | Skills in DB, matched to tasks, injected into prompts |
 | 2. Failure Attribution + Mutation | 3 | System diagnoses failures and proposes fixes |
 | 3. ATA Pipeline | 3 | Mutations are validated before going live |
-| 4. Automated Code Review | 2 | Quality gate on every code change |
+| ~~4. Automated Code Review~~ | ~~2~~ | ~~Quality gate on every code change~~ — **Deferred to Spec 18** |
 | 5. Pattern Learning | 3 | Recurring patterns become skills |
 | 6. Cross-Sprint + Skills Lead | 2 | Proactive skill improvement |
-| **Total** | **15 days** | **Full self-evolution pipeline** |
+| **Total (this spec)** | **13 days** | **Self-evolution pipeline (review gate in Spec 18)** |
 
 **Phases 1-3 are the MVP** (8 days). Skills exist, get matched, mutate on failure, and are validated before merge. This alone makes Sprint 2+ dramatically better.
 
-**Phase 4** adds quality gates. Phase 5-6 add intelligence. These can ship after the MVP is stable.
+**Phase 4** (Automated Code Review) has been **deferred to Spec 18** — it requires solving the code visibility problem first. Phase 5-6 add intelligence and are NOT dependent on Phase 4.
 
 ---
 
@@ -1183,24 +1159,17 @@ Spec 20 (Artifact UX)
 - [ ] Total ATA cost per mutation is within budget (~$0.04-0.08 without revision)
 - [ ] ATA runs async — does not block the active sprint execution
 
-### Phase 4: Automated Code Review
-- [ ] Review runs after each Developer step completion
-- [ ] Review detects hardcoded secrets → returns critical finding
-- [ ] Review detects skill violation (e.g., wrong library) → returns high finding
-- [ ] Critical findings block step (Developer must fix before proceeding)
-- [ ] High findings are flagged in CTO review artifact
-- [ ] Medium/low findings are logged in `review_findings` table
-- [ ] 3+ identical skill violations of same type trigger `analyzeFailure` on the skill
-- [ ] Review cost per step is under $0.01
+### Phase 4: Automated Code Review — DEFERRED to Spec 18
+> See `plans/specs/18-automated-code-review.md` for verification checklist.
 
-### Phase 5: Pattern Learning
-- [ ] `extractPattern()` runs on every task completion (success or failure)
-- [ ] Patterns stored with embeddings in `patterns` table
-- [ ] Similar patterns (cosine > 0.7) clustered together
-- [ ] Pattern usage count and success rate tracked and updated via EMA
-- [ ] Cluster of 4+ related habits with no matching skill → skill candidate proposed
-- [ ] Proposed skill from cluster goes through ATA pipeline
-- [ ] Pattern extraction cost is under $0.005 per task
+### Phase 5: Pattern Learning ✅
+- [x] `extractPattern()` runs on every task completion (success or failure) — wired in `orchestrator.ts:2246` after `processTaskOutcome`
+- [x] Patterns stored with embeddings in in-memory `patternStore` (Map keyed by `id`) — persists for session; Phase 6 will promote to Supabase table
+- [x] Similar patterns (cosine > 0.7) clustered together — `CLUSTER_SIMILARITY_THRESHOLD=0.7`, near-duplicates (>= 0.9) merge via `PATTERN_MERGE_THRESHOLD`
+- [x] Pattern usage count and success rate tracked and updated via EMA — `applyEma(oldRate, outcomeScore, lr=0.15)` on every merge
+- [x] Cluster of 4+ related habits with no matching skill → skill candidate proposed — `MIN_CLUSTER_SIZE_FOR_PROMOTION=4`, `MIN_CLUSTER_SUCCESS_RATE=0.6`
+- [x] Proposed skill from cluster goes through ATA pipeline — `runPatternPromotionSweep()` in `orchestrator.ts:2276` calls `proposeSkillFromCluster` → `runATAPipeline`
+- [x] Pattern extraction cost is under $0.005 per task — **effectively $0**: local sentence-transformers (Xenova/all-MiniLM-L6-v2, 384-dim) via `@arceus/hippocampus`, no Azure embedding calls
 
 ### Phase 6: Cross-Sprint Transfer + Skills Lead
 - [ ] Skills Lead heartbeat checks skill health metrics

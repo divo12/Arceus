@@ -3,7 +3,7 @@ export { HeartbeatEngine } from "./heartbeat";
 export type { HeartbeatConfig, BeatRequest, BeatExecutor, BeatDependencies } from "./heartbeat";
 export { runChecklist } from "./heartbeat-checklist";
 export type { ChecklistResult } from "./heartbeat-checklist";
-export { ROLE_SOULS, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
+export { ROLE_SOULS, MANDATORY_ROLES, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
 export { getAgentSkills, getFullAgentPrompt, listAvailableAgents } from "./agent-skills";
 export { emitBeatEvent, onBeatEvent, getBeatEventSubscriberCount } from "./beat-event-bus";
 export type { BeatEvent, BeatEventHandler } from "./beat-event-bus";
@@ -28,6 +28,75 @@ export {
   summarizeFilterResult,
 } from "./governance-gateway";
 export type { DeniedTool, FilterResult } from "./governance-gateway";
+
+// Spec 14: Skill Registry
+export {
+  registerSkill,
+  updateSkill,
+  deprecateSkill,
+  getSkillById,
+  getSkillsForRole,
+  getAllSkills,
+  getSkillHistory,
+  matchSkills,
+  recordSkillUsage,
+  updateSuccessRate,
+  getSkillHealth,
+  setSkillRegistryDeps,
+  hasSkillRegistryDeps,
+  // Phase 6 lifecycle helpers
+  getUnusedSkills,
+  getUnderperformingSkills,
+  seedExistingSkills,
+  isSeeded as isSkillRegistrySeeded,
+  resetRegistry as resetSkillRegistry,
+  getRegistrySize,
+  // Phase 2: Mutation + attribution storage
+  storeMutation,
+  getMutationById,
+  updateMutationStatus,
+  getMutationsForCompany,
+  getPendingMutations,
+  storeAttribution,
+  getAttributionsForCompany,
+  applyMergedMutation,
+} from "./skill-registry";
+
+// Spec 14 Phase 2: Skill Mutator (pure logic)
+export {
+  processTaskOutcome,
+  setSkillMutatorDeps,
+  hasSkillMutatorDeps,
+} from "./skill-mutator";
+export type { SkillMutatorDeps, TaskOutcomeContext } from "./skill-mutator";
+export type { SkillRegistryDeps } from "./skill-registry";
+
+// Spec 14 Phase 3: ATA Pipeline (pure logic)
+export {
+  runATAPipeline,
+  setSkillTesterDeps,
+  hasSkillTesterDeps,
+} from "./skill-tester";
+export type { SkillTesterDeps } from "./skill-tester";
+
+// Spec 14 Phase 5: Pattern Learning → Skill Formation (pure logic)
+export {
+  extractPattern,
+  clusterPatterns,
+  checkSkillCandidates,
+  proposeSkillFromCluster,
+  cosineSimilarity,
+  applyEma,
+  setPatternLearnerDeps,
+  hasPatternLearnerDeps,
+  getPatternById,
+  getPatternsForCompany,
+  getPatternCount,
+  resetPatternStore,
+  // Phase 6: Cross-sprint transfer
+  analyzeSprintPatterns,
+} from "./pattern-learner";
+export type { PatternLearnerDeps, PatternObservation } from "./pattern-learner";
 
 // Spec 18: Meeting Pipeline
 export { MeetingScheduler, getManagerRole, getEscalationChain } from "./meeting-scheduler";

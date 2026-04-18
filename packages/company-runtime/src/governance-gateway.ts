@@ -49,6 +49,22 @@ function ruleMatchesTool(rule: PolicyRule, toolName: string): boolean {
   return rule.toolPatterns.some((p) => matchToolPattern(p, toolName));
 }
 
+/**
+ * Check if a rule's filePattern matches the context filePath.
+ *
+ * Three cases:
+ *   1. Rule has no filePattern → always matches (backward compatible).
+ *   2. Rule has filePattern, ctx has filePath → regex test.
+ *   3. Rule has filePattern, ctx has NO filePath → optimistic match (true).
+ *      This allows Phase 1 pre-filtering (filterToolsForAgent) to include
+ *      the tool. Phase 2 runtime calls MUST provide filePath for enforcement.
+ */
+function ruleFilePatternMatches(rule: PolicyRule, filePath?: string): boolean {
+  if (!rule.filePattern) return true;
+  if (!filePath) return true;   // Phase 1: no path yet, optimistic
+  return new RegExp(rule.filePattern).test(filePath);
+}
+
 /** Check if a trust-gated rule fires (agent trust < rule minTrust). */
 function ruleTrustGateFires(rule: PolicyRule, trustScore: number): boolean {
   // If minTrust is 0, the rule doesn't have a trust gate — it always fires on match.
@@ -80,6 +96,7 @@ export function evaluatePolicy(
     if (!rule.enabled) continue;
     if (!ruleAppliesToRole(rule, ctx.role)) continue;
     if (!ruleMatchesTool(rule, ctx.tool)) continue;
+    if (!ruleFilePatternMatches(rule, ctx.filePath)) continue;
     if (!ruleTrustGateFires(rule, ctx.trustScore)) continue;
 
     return {

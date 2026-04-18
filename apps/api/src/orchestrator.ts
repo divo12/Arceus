@@ -3,12 +3,14 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "./opencode";
-import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills } from "@arceus/company-runtime";
+import { getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult, BASE_POLICY_RULES, buildTrustEvent, getTrustTier, evaluatePolicy, TRUST_CONFIG, getAgentSkills, seedExistingSkills, getSkillsForRole as registryGetSkillsForRole, matchSkills as registryMatchSkills, recordSkillUsage, getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory, getSkillById, processTaskOutcome, getMutationsForCompany, runATAPipeline, extractPattern, checkSkillCandidates, proposeSkillFromCluster, analyzeSprintPatterns, getUnderperformingSkills, getUnusedSkills, deprecateSkill as registryDeprecateSkill } from "@arceus/company-runtime";
+import { applyGovernanceToMutation } from "./skill-governance";
+import { initSkillEvolution } from "./skill-evolution";
 import type { PolicyRule, PolicyEvalContext, PolicyDecision } from "@arceus/contracts";
 import { ensureDeployment, orchestratorConfig, previewConfig } from "./config/index";
 import { emitEmployeeActivity } from "./activity";
 import { audit, auditAgent, auditSystem, auditError } from "./audit-ledger";
-import { appendChatMessage, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
+import { appendChatMessage, flush, getSnapshot, replaceTasks, updateAgentMemory, updateApproval, updateCompanySprint, updateMeeting, updateSprint, updateTask, upsertApproval, upsertMeeting, upsertSprint, upsertTask } from "./store";
 import type { Approval, CompanySnapshot, AgentIdentity, DefectArea, Meeting, Sprint, SprintReviewState, Task, Transition, TransitionProposal } from "@arceus/contracts";
 import type { CeoCard } from "./ceo";
 import { buildCeoOperatingPrompt, classifyCeoResponse } from "./ceo";
@@ -17,7 +19,7 @@ import { emitGraphSprintStarted, emitGraphSprintCompleted, emitGraphNodeAdded, e
 import { graphStore } from "./graph-store";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, probePreviewHealth, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
-import { persistRuntimeArtifact } from "./artifact-persistence";
+import { persistRuntimeArtifact, listPersistedArtifacts } from "./artifact-persistence";
 import { describePgError } from "./pg-errors";
 import { workspaceManager } from "./workspace-manager";
 import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "./azure-openai";
@@ -241,76 +243,205 @@ export const hippocampus = createHippocampusService({
 // Skill loader — reads SKILL.md files with YAML frontmatter
 // ---------------------------------------------------------------------------
 
-const skillsDir = resolve(process.cwd(), "packages", "company-runtime", "skills");
+// ── Skill Registry + Evolution integration (Spec 14) ─────
 
-interface SkillEntry {
-  name: string;
-  description: string;
-  role: string;
-  body: string;
-  path: string;
-}
+// Wire LLM deps for Phase 2 failure attribution + skill mutation
+initSkillEvolution();
 
-function parseSkillFrontmatter(content: string): { frontmatter: Record<string, string>; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) return { frontmatter: {}, body: content };
-  const lines = match[1].split("\n");
-  const frontmatter: Record<string, string> = {};
-  for (const line of lines) {
-    const colonIndex = line.indexOf(":");
-    if (colonIndex > 0) {
-      frontmatter[line.slice(0, colonIndex).trim()] = line.slice(colonIndex + 1).trim();
-    }
+/**
+ * Ensure skills are seeded from Markdown files on first use.
+ * Idempotent — no-op if already seeded.
+ */
+function ensureSkillsSeeded(): void {
+  const snapshot = getSnapshot();
+  const companyId = snapshot.company.id;
+  if (!companyId || companyId === "company_empty") return;
+  const count = seedExistingSkills(companyId);
+  if (count > 0) {
+    console.log(`[SkillRegistry] Seeded ${count} skills for company ${companyId}`);
   }
-  return { frontmatter, body: match[2].trim() };
 }
 
-function loadSkillsForRole(role: string): SkillEntry[] {
-  const entries: SkillEntry[] = [];
-  if (!existsSync(skillsDir)) return entries;
-
-  for (const dir of readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!dir.isDirectory()) continue;
-    const skillPath = join(skillsDir, dir.name, "SKILL.md");
-    if (!existsSync(skillPath)) continue;
-
-    const raw = readFileSync(skillPath, "utf8");
-    const { frontmatter, body } = parseSkillFrontmatter(raw);
-
-    // Include skills that match this role or have no role specified (universal)
-    if (frontmatter.role && frontmatter.role !== role) continue;
-
-    entries.push({
-      name: frontmatter.name || dir.name,
-      description: frontmatter.description || "",
-      role: frontmatter.role || "",
-      body,
-      path: skillPath,
-    });
-  }
-  return entries;
+/**
+ * Tier-1 skill catalog (progressive disclosure): a compact one-line-per-skill
+ * summary for ALL active skills this role has. Fed to the classifier so the
+ * LLM can choose which skills apply — no embeddings, no thresholds.
+ *
+ * Matches the nanobot/OpenClaw pattern where the agent sees a catalog of
+ * names + descriptions and picks by understanding, not cosine similarity.
+ */
+function buildSkillCatalog(
+  role: string,
+): Array<{ id: string; name: string; trigger: string; successRate: number; version: number }> {
+  ensureSkillsSeeded();
+  const snapshot = getSnapshot();
+  const skills = registryGetSkillsForRole(snapshot.company.id, role);
+  return skills.map((s) => ({
+    id: s.id,
+    name: s.name,
+    trigger: s.trigger,
+    successRate: s.successRate,
+    version: s.version,
+  }));
 }
 
-function buildSkillMenu(role: string): string {
-  const skills = loadSkillsForRole(role);
+/**
+ * Build the skill section injected into an agent's system prompt (tier-2:
+ * full skill bodies). When `matchedSkillIds` is provided, only those skills'
+ * bodies are rendered. When omitted, all active role skills are rendered
+ * (legacy direct-session paths).
+ */
+function buildSkillSection(
+  role: string,
+  matchedSkillIds?: string[],
+  cap = 3,
+): string {
+  ensureSkillsSeeded();
+  const snapshot = getSnapshot();
+  let skills = registryGetSkillsForRole(snapshot.company.id, role);
   if (skills.length === 0) return "";
-  const lines = ["", "# Available skills for this role"];
+
+  if (matchedSkillIds && matchedSkillIds.length > 0) {
+    const idSet = new Set(matchedSkillIds);
+    skills = skills.filter((s) => idSet.has(s.id)).slice(0, cap);
+  }
+  if (skills.length === 0) return "";
+
+  const lines = [
+    "",
+    "## Relevant Skills",
+    "The following procedural skills are available for this task:",
+  ];
   for (const skill of skills) {
-    lines.push(`- **${skill.name}**: ${skill.description}`);
+    lines.push(
+      "",
+      `### ${skill.name} (v${skill.version}, success: ${Math.round(skill.successRate * 100)}%)`,
+      `Trigger: ${skill.trigger}`,
+      skill.content,
+    );
   }
   return lines.join("\n");
 }
 
+/** @deprecated Use buildSkillSection(role, undefined) — kept for call sites that haven't migrated. */
+function buildSkillMenu(role: string): string {
+  return buildSkillSection(role);
+}
+
+/** @deprecated Use buildSkillSection(role, undefined) — kept for call sites that haven't migrated. */
 function getSkillBody(role: string, skillName?: string): string {
-  const skills = loadSkillsForRole(role);
-  if (skills.length === 0) return "";
-  // If a specific skill is requested, return its body
   if (skillName) {
-    const match = skills.find(s => s.name === skillName);
-    return match ? `\n# Skill: ${match.name}\n\n${match.body}` : "";
+    ensureSkillsSeeded();
+    const snapshot = getSnapshot();
+    const skills = registryGetSkillsForRole(snapshot.company.id, role);
+    const match = skills.find((s) => s.name === skillName);
+    return match ? `\n# Skill: ${match.name}\n\n${match.content}` : "";
   }
-  // Otherwise return all skills for this role (there's usually just one)
-  return skills.map(s => `\n# Skill: ${s.name}\n\n${s.body}`).join("\n");
+  // Delegating to buildSkillSection avoids duplicating the section in prompts
+  // that call both buildSkillMenu() and getSkillBody() — they now return "" from
+  // getSkillBody since buildSkillMenu already has the full content.
+  return "";
+}
+
+/**
+ * Zod schema for the classifier's structured output.
+ * Kept tiny — 0-3 skill IDs plus a short justification for audit.
+ */
+const skillClassifierSchema = z.object({
+  appliedSkillIds: z
+    .array(z.string())
+    .max(3)
+    .describe("IDs of 0-3 skills from the catalog that most apply to this task."),
+  reasoning: z
+    .string()
+    .max(240)
+    .describe("One short sentence explaining why these skills (or none) apply."),
+});
+
+/**
+ * Classify which skills apply to a task using a cheap LLM call.
+ *
+ * Progressive disclosure, tier-1: the LLM is given a compact catalog of
+ * all role skills and picks 0-3 IDs. This replaces the former
+ * embedding-cosine matcher — the LLM's language understanding does the
+ * matching, no precomputed embeddings needed.
+ *
+ * Falls back to an empty list on failure (skills still available but not
+ * pre-applied — the agent can still read the catalog via buildSkillSection
+ * when `matchedSkillIds` is undefined at the call site).
+ */
+async function classifyTaskSkills(
+  role: string,
+  taskDescription: string,
+  catalog: ReturnType<typeof buildSkillCatalog>,
+): Promise<string[]> {
+  if (catalog.length === 0) return [];
+
+  const catalogText = catalog
+    .map(
+      (s) =>
+        `- ${s.id} [${s.name} v${s.version}] — ${s.trigger} (success ${Math.round(s.successRate * 100)}%)`,
+    )
+    .join("\n");
+
+  const messages = [
+    {
+      role: "system" as const,
+      content:
+        `You select procedural skills for an agent with role "${role}". ` +
+        `From the catalog, pick 0-3 skill IDs most relevant to the task. ` +
+        `If none apply, return an empty array. Prefer higher success rates ` +
+        `when relevance is tied. Return only IDs that appear in the catalog.`,
+    },
+    {
+      role: "user" as const,
+      content:
+        `## Available skills for role "${role}"\n${catalogText}\n\n` +
+        `## Task\n${taskDescription}\n\n` +
+        `Return 0-3 skill IDs from the catalog.`,
+    },
+  ];
+
+  try {
+    const result = await structuredCompletion(
+      "workerDeployment",
+      messages,
+      skillClassifierSchema,
+      "skill_classifier",
+      { temperature: 0.1 },
+      {
+        companyId: getSnapshot().company.id,
+        agentRole: role,
+        label: "skill_classifier",
+      },
+    );
+    // Drop hallucinated IDs — keep only those that exist in the catalog.
+    const validIds = new Set(catalog.map((s) => s.id));
+    return result.appliedSkillIds.filter((id) => validIds.has(id));
+  } catch (err) {
+    console.warn(
+      `[SkillClassifier] ${role} classifier failed, no skills applied: ${err instanceof Error ? err.message : err}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Classify skills applicable to a task and record usage.
+ *
+ * Tier-1 pre-call: build compact catalog → ask LLM to pick ≤3 IDs → record
+ * usage for each picked ID → return IDs. The caller threads these IDs into
+ * runPromptText() so buildSkillSection() can render the full bodies (tier-2)
+ * in the agent's system prompt.
+ */
+async function matchAndRecordSkills(role: string, taskDescription: string): Promise<string[]> {
+  const catalog = buildSkillCatalog(role);
+  if (catalog.length === 0) return [];
+  const picked = await classifyTaskSkills(role, taskDescription, catalog);
+  for (const id of picked) {
+    recordSkillUsage(id);
+  }
+  return picked;
 }
 
 type AgentSessionState = {
@@ -906,12 +1037,31 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
  */
 let ceoProposalInFlight = false;
 
+// Failure-backoff state: if the CEO proposal LLM path keeps failing
+// (truncated output, malformed JSON, classifier errors), the heartbeat would
+// otherwise retry every 60s forever and spam tokens. Track consecutive failures
+// and enforce a cooldown window so the system degrades gracefully instead of
+// looping on the same unreachable state.
+let ceoProposalFailureCount = 0;
+let ceoProposalCooldownUntilMs = 0;
+const CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN = 3;
+const CEO_PROPOSAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
 async function triggerCeoSprintProposal(): Promise<void> {
   if (ceoProposalInFlight) {
     emitEmployeeActivity(
       "ceo",
       "info",
       "CEO proposal already in flight — skipping duplicate trigger.",
+    );
+    return;
+  }
+  if (Date.now() < ceoProposalCooldownUntilMs) {
+    const remainingSec = Math.ceil((ceoProposalCooldownUntilMs - Date.now()) / 1000);
+    emitEmployeeActivity(
+      "ceo",
+      "info",
+      `CEO proposal in cooldown after ${ceoProposalFailureCount} failures — retrying in ${remainingSec}s. Board can send a message to request a proposal manually.`,
     );
     return;
   }
@@ -1007,13 +1157,23 @@ async function triggerCeoSprintProposal(): Promise<void> {
           : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
         emitEmployeeActivity("ceo", "info", reason);
       }
+      // Success — clear failure counter so the cooldown resets.
+      ceoProposalFailureCount = 0;
+      ceoProposalCooldownUntilMs = 0;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       console.error("[Sprint] CEO sprint proposal generation failed:", message);
+      ceoProposalFailureCount += 1;
+      const hitCooldown = ceoProposalFailureCount >= CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN;
+      if (hitCooldown) {
+        ceoProposalCooldownUntilMs = Date.now() + CEO_PROPOSAL_COOLDOWN_MS;
+      }
       emitEmployeeActivity(
         "system",
         "error",
-        `Failed to auto-generate sprint proposal: ${message}. Board can message the CEO directly to request a proposal.`,
+        hitCooldown
+          ? `CEO sprint proposal failed ${ceoProposalFailureCount}x in a row (last: ${message}). Backing off for ${Math.round(CEO_PROPOSAL_COOLDOWN_MS / 60000)}m. Board can message the CEO directly to request a proposal.`
+          : `Failed to auto-generate sprint proposal (attempt ${ceoProposalFailureCount}/${CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN}): ${message}. Board can message the CEO directly to request a proposal.`,
       );
     }
   } finally {
@@ -1089,7 +1249,7 @@ async function checkSprintCompletion(): Promise<boolean> {
   // ── Graph instrumentation (Spec 22) — gate verdict ──
   emitGraphDecision(currentSprintId, null, "gate_verdict",
     `Pre-review gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
-    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.buildResult?.stderr?.slice(0, 200) ?? "unknown error"}`,
     "system", gateResult.passed ? 1.0 : 0);
 
   reviewState.gateResults.push(gateResult);
@@ -1145,6 +1305,12 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
 
+  // Reset preview state when a sprint closes so any stale "error" from the
+  // final developer beat (e.g. no runnable workspace yet) doesn't leak into
+  // the next CEO refinement phase. The UI polls /api/product/overview and
+  // would otherwise show a red "Error" badge until the next sprint starts.
+  await stopLocalPreview();
+
   const sprintTasks = snapshot.tasks.filter(
     (t) => t.sprintId === sprintId && t.kind !== "follow_up",
   );
@@ -1168,6 +1334,18 @@ async function finalizeSprintCompletion(sprintId: string): Promise<void> {
   emitGraphSprintCompleted(sprintId, "completed");
 
   await tagCurrentSprintSnapshot();
+
+  // Spec 14 Phase 6: Cross-sprint pattern transfer at sprint boundary.
+  // Filters patterns first-seen in THIS sprint with usageCount>=3, clusters,
+  // governs each candidate, and hands approved mutations to ATA.
+  // Fire-and-forget — never blocks next-sprint proposal.
+  runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
+    if (result.candidatesFound > 0) {
+      console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
+    }
+  }).catch((err) => {
+    console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
+  });
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
   appendChatMessage({
@@ -1235,6 +1413,52 @@ async function executeSprintReviewVerification(
   // Entry-point import check
   const sprintEntryCheck = checkEntryPointImports();
 
+  // ── Cycle-over-cycle diff (Fix #5) ───────────────────────────────
+  // On rework cycles, surface the previous cycle's QA findings so the tester
+  // can categorize current findings as resolved / recurring / new regressions.
+  // Gracefully disables when the DB is not configured (listPersistedArtifacts
+  // returns []).
+  let previousCycleContext = "";
+  if (reviewState.reworkCycleCount > 0) {
+    try {
+      const priorArtifacts = await listPersistedArtifacts(snapshot.company.id);
+      const priorFailReports = priorArtifacts
+        .filter(
+          (a) =>
+            a.kind === "qa_report" &&
+            a.sprintId === sprintId &&
+            a.title.includes("FAIL"),
+        )
+        .slice(0, 1);
+      if (priorFailReports.length > 0) {
+        const prior = priorFailReports[0];
+        const snippet = prior.content.slice(0, 4000);
+        previousCycleContext = [
+          "",
+          `## Previous Cycle Findings (cycle ${reviewState.reworkCycleCount})`,
+          "The developer has completed another rework pass. The report below is from the PREVIOUS verification cycle.",
+          "Your job this cycle:",
+          "  • RESOLVED — findings from the previous cycle that are now fixed (no longer reproducible).",
+          "  • RECURRING — findings from the previous cycle that are STILL present (the fix didn't land or didn't work).",
+          "  • NEW — findings in the current build that were NOT present in the previous cycle (regressions).",
+          "",
+          "Treat RECURRING findings as higher severity — they indicate the developer cannot fix the underlying issue.",
+          "",
+          "── Previous cycle report (verbatim excerpt) ──",
+          snippet,
+          prior.content.length > 4000 ? "…(truncated)" : "",
+          "── End previous cycle report ──",
+          "",
+          "At the very TOP of your output, add a one-line cycle diff in exactly this format:",
+          `CYCLE_DIFF: resolved=<N> recurring=<N> new=<N>`,
+          "Then produce your normal QA report below that line.",
+        ].join("\n");
+      }
+    } catch {
+      // best-effort — never block verification on diff lookup
+    }
+  }
+
   const prompt = [
     `You are verifying Sprint ${sprint.number}: "${sprint.goal}".`,
     "",
@@ -1256,23 +1480,25 @@ async function executeSprintReviewVerification(
     `Import check passed: ${sprintEntryCheck.pass}`,
     `Details: ${sprintEntryCheck.reason}`,
     sprintEntryCheck.orphanedModules.length > 0 ? `Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}` : "",
-    !sprintEntryCheck.pass ? "CRITICAL: Entry file does NOT import product modules. Components exist as files but are never used. The sprint MUST fail." : "",
+    !sprintEntryCheck.pass ? "Note: The entry file currently does not import the product modules — this is a structural issue that will be tracked as a single bug task. Consider it when forming your verdict but do not duplicate it in your findings." : "",
+    previousCycleContext,
     "",
-    "IMPORTANT: If the preview is UNREACHABLE, the sprint MUST fail. A product that cannot be accessed is not shippable.",
-    "IMPORTANT: If the entry-point integration check FAILED, the sprint MUST fail. Files on disk that aren't imported are not a product.",
+    "If the preview is UNREACHABLE, the sprint cannot pass — a product that cannot be accessed is not shippable.",
     "",
     "## Your Verification Steps",
-    "1. Check the automated preview health and entry-point results above — if either failed, verdict MUST be fail",
-    "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal",
+    "1. Review the automated preview health and entry-point results above as context for your verdict.",
+    "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal.",
     `   - Read the entry file (start with ${productDir}/src/App.tsx or equivalent) and verify it imports product modules`,
     "   - Do NOT produce a theoretical report — cite actual files and import statements you verified",
-    "3. Analyze each completed task against its Definition of Done",
-    "4. Identify any defects or gaps",
-    "5. Produce a structured QA report",
+    "3. Analyze each completed task against its Definition of Done.",
+    "4. List concrete, reproducible defects with file evidence. It is valid to return an empty findings list if nothing is broken — do not invent findings to fill the schema.",
+    "5. Produce a QA report.",
     "",
     "## QA Report Requirements",
     "For each completed task, assess whether it passes or fails its Definition of Done.",
-    "For failures, describe the defect area, severity, what was expected vs actual, the file involved, and a fix suggestion.",
+    "For each real defect, describe the defect area, severity (critical/high/medium/low), what was expected vs actual, the file involved, and a fix suggestion.",
+    "Only file a finding when you have concrete evidence (a file path, a reproducible behavior). Vague observations should be omitted.",
+    "Do not duplicate the entry-point structural issue in your findings — it is tracked separately.",
     "For each DoD item, state whether it passes or fails with evidence.",
     "State overall build and test suite status.",
     "Conclude with an overall verdict: PASS or FAIL.",
@@ -1288,6 +1514,19 @@ async function executeSprintReviewVerification(
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
 
+    // Emit CYCLE_DIFF line (Fix #5) if tester complied with the instruction.
+    if (output && reviewState.reworkCycleCount > 0) {
+      const diffMatch = output.match(/CYCLE_DIFF:\s*resolved=(\d+)\s+recurring=(\d+)\s+new=(\d+)/i);
+      if (diffMatch) {
+        emitEmployeeActivity(
+          "tester",
+          "working",
+          `Sprint ${sprint.number} cycle ${reviewState.reworkCycleCount + 1}: ${diffMatch[1]} resolved, ${diffMatch[2]} recurring, ${diffMatch[3]} new regressions`,
+          { beatId },
+        );
+      }
+    }
+
     // Extract structured QA report from the agent's freeform output
     let qaReport: QAReport | null = null;
     if (output) {
@@ -1297,7 +1536,7 @@ async function executeSprintReviewVerification(
           [
             {
               role: "system",
-              content: "Extract a structured QA report from the tester's analysis below. Map each task assessment, finding, and DoD checklist item. Preserve the tester's verdicts exactly.",
+              content: "Extract a structured QA report from the tester's analysis below. Only record findings the tester stated as concrete, reproducible defects with a specific file or behavior — do NOT fabricate findings from vague prose, general observations, or speculative remarks. If the tester did not list explicit defects for a task, its findings array must be empty. Preserve the tester's verdicts exactly.",
             },
             { role: "user", content: output },
           ],
@@ -1311,11 +1550,16 @@ async function executeSprintReviewVerification(
       }
     }
 
-    // Hard override: if preview is unreachable OR entry-point is disconnected, force fail
+    // Hard override: if preview is unreachable OR entry-point is disconnected, force fail.
+    // Entry-point is still a fail gate (a product whose entry file doesn't import its
+    // components isn't shippable), but downstream we emit it as ONE targeted bug task
+    // instead of letting the tester's findings cascade multiply it into N bugs.
     const effectiveVerdict = !previewProbe.reachable ? "fail"
       : !sprintEntryCheck.pass ? "fail"
       : qaReport ? qaReport.verdict
       : null;
+    const entryPointIsSoleFailCause =
+      !sprintEntryCheck.pass && previewProbe.reachable && qaReport?.verdict !== "fail";
 
     if (effectiveVerdict === "pass") {
       // Tester approves → advance to final gate
@@ -1388,9 +1632,73 @@ async function executeSprintReviewVerification(
         emitGraphNodeAdded(sprintId, bugTask);
       }
 
-      for (const taskReport of (qaReport?.tasks ?? [])) {
+      // Entry-point structural defect → ONE targeted bug task (not cascaded via findings).
+      // Fire whenever the entry-point check failed, regardless of tester verdict. Findings
+      // iteration below is instructed not to duplicate this via the softened prompt.
+      if (!sprintEntryCheck.pass) {
+        const orphanList = sprintEntryCheck.orphanedModules.length > 0
+          ? ` Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}.`
+          : "";
+        const wiringPrescription = generateOrphanWiringPrescription(
+          sprintEntryCheck.orphanedModules,
+          sprintEntryCheck.entryFile,
+        );
+        const prescriptionSection = wiringPrescription.length > 0
+          ? [
+              "",
+              "── Wire each orphan like this ──",
+              wiringPrescription,
+              "",
+              "Target entry-file structure (adapt to this product's domain):",
+              `<Layout>`,
+              `  {/* import + render every orphan listed above */}`,
+              `</Layout>`,
+              "",
+              "Rules:",
+              "1. Every orphan module above MUST be imported by the entry file (direct or transitive).",
+              "2. Every imported component MUST be rendered in the JSX tree — not just imported.",
+              "3. Pass realistic props where required — do NOT leave components with empty/placeholder props only.",
+              "4. Do NOT create new components — only wire the ones already on disk.",
+            ].join("\n")
+          : "";
+
+        const entryBug = createWorkflowTask(
+          getSnapshot(), "bug_fix", "developer",
+          "Wire entry file to product modules",
+          `Entry file ${sprintEntryCheck.entryFile ?? "(not found)"} does not import this sprint's components. ${sprintEntryCheck.reason}${orphanList} Components exist on disk but are never rendered.${prescriptionSection}`,
+          "Entry file is disconnected from the product modules this sprint produced.",
+          "Entry file imports and renders the sprint's components so they appear in the running app.",
+          [
+            "Entry file imports the sprint's product modules",
+            "No orphaned modules remain in sprint scope",
+            "Preview renders the sprint's components",
+          ],
+          "critical", "planned", sprintId,
+        );
+        upsertTask(entryBug);
+        newBugTaskIds.push(entryBug.id);
+        rolesWithBugs.add("developer");
+        emitGraphNodeAdded(sprintId, entryBug);
+      }
+
+      // When entry-point is the ONLY reason we failed (tester said pass), skip the
+      // findings cascade entirely — we've already filed the single structural bug above.
+      const taskReports = entryPointIsSoleFailCause ? [] : (qaReport?.tasks ?? []);
+
+      // Severity + per-task cap to prevent runaway bug explosion. Only critical/high
+      // findings become bug_fix tasks; medium/low are retained in the persisted QA
+      // report artifact as context but do not spawn their own work items.
+      const MAX_FINDINGS_PER_TASK = 3;
+
+      for (const taskReport of taskReports) {
         if (taskReport.verdict !== "fail") continue;
-        for (const finding of taskReport.findings) {
+        const hiredRoles = new Set(
+          getSnapshot().agents.map((a) => a.role as AgentIdentity["role"]),
+        );
+        const actionableFindings = taskReport.findings
+          .filter((f) => f.severity === "critical" || f.severity === "high")
+          .slice(0, MAX_FINDINGS_PER_TASK);
+        for (const finding of actionableFindings) {
           const bugFields = buildBugFixTaskFields({
             finding: {
               ...finding,
@@ -1398,6 +1706,7 @@ async function executeSprintReviewVerification(
             },
             sprintId,
             parentTaskId: taskReport.taskId,
+            hiredRoles,
           });
           const bugTask = createWorkflowTask(
             getSnapshot(), bugFields.kind, bugFields.assignedRole,
@@ -1439,6 +1748,7 @@ async function executeSprintReviewVerification(
       if (shouldEscalate(updatedReviewState)) {
         updatedReviewState.phase = "escalated";
         updatedReviewState.escalatedToCto = true;
+        if (!updatedReviewState.escalatedAt) updatedReviewState.escalatedAt = nowIso();
         emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
         emitReactive("cto", "escalation_received");
 
@@ -1479,14 +1789,65 @@ async function executeSprintReviewVerification(
       };
 
     } else {
-      // Couldn't parse QA report — treat as FAIL (don't let ambiguity pass)
-      emitEmployeeActivity("tester", "error", `Sprint ${sprint.number} tester output could not be parsed as QA report — treating as FAIL`, { beatId });
+      // Couldn't parse QA report — this is a TOOL failure, not a QA failure.
+      // Keep phase in "tester_verification" so the next tester beat re-runs
+      // verification (checkReviewPhaseActive will re-emit run_tester_verification).
+      // Bump reworkCycleCount so we eventually escalate to CTO if the tester
+      // is deterministically broken — but do NOT flip phase to "rework"
+      // without bug tasks (that combination wedges the sprint; see
+      // heartbeat-checklist checkBugFixesReady).
+      const nextCycleCount = (reviewState.reworkCycleCount ?? 0) + 1;
+      const willEscalate = nextCycleCount >= reviewState.maxReworkCycles;
+
+      emitEmployeeActivity("tester", "error", `Sprint ${sprint.number} tester output could not be parsed as QA report — treating as tool failure (cycle ${nextCycleCount}/${reviewState.maxReworkCycles})`, { beatId });
+
+      if (willEscalate) {
+        emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} parse-failure limit reached — escalating to CTO`, { beatId });
+        emitReactive("cto", "escalation_received");
+      }
+
       updateSprint(sprintId, (s) => ({
         ...s,
-        reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "fail" as const, phase: "rework" as const, reworkCycleCount: (s.reviewState.reworkCycleCount ?? 0) + 1 } : s.reviewState,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          reworkCycleCount: nextCycleCount,
+          // Stay in tester_verification so next beat retries. On escalation,
+          // flip to rework + mark escalated so checkEscalationPending fires.
+          phase: willEscalate ? "rework" as const : "tester_verification" as const,
+          escalatedToCto: willEscalate ? true : s.reviewState.escalatedToCto,
+          escalatedAt: willEscalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
+        } : s.reviewState,
       }));
-      emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", "Output unparseable — treated as fail", 0, Date.now() - reviewBeatStart);
-      return { summary: `Tester output unparseable — treating as fail, returning to rework`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+      emitGraphBeatCompleted(
+        reviewBeatSprintId,
+        sprintId,
+        reviewBeatId,
+        "failed",
+        willEscalate ? "Output unparseable — escalating" : "Output unparseable — retrying",
+        0,
+        Date.now() - reviewBeatStart,
+      );
+
+      // Persist the raw output as a forensic artifact so operators can see
+      // what the tester actually said on the parse-failure path.
+      await persistRuntimeArtifact(snapshot.company.id, {
+        id: `artifact_${crypto.randomUUID()}`,
+        agent: "tester",
+        kind: "qa_report",
+        title: `Sprint ${sprint.number} QA Report — UNPARSEABLE (cycle ${nextCycleCount})`,
+        content: output ?? "(no output)",
+        createdAt: nowIso(),
+        sprintId,
+        taskId: null,
+        fileReferences: [],
+      });
+
+      return {
+        summary: willEscalate
+          ? `Tester output unparseable — parse-failure limit reached, escalating to CTO`
+          : `Tester output unparseable — retrying next beat (cycle ${nextCycleCount}/${reviewState.maxReworkCycles})`,
+        tokensUsed, actionsCount: 1, toolCalls: 1,
+      };
     }
   } catch (err) {
     touchAgentSession(role, "idle");
@@ -1530,7 +1891,7 @@ async function executeSprintFinalGate(
   if (sprintId) {
     emitGraphDecision(sprintId, null, "gate_verdict",
       `Final gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
-      gateResult.passed ? "Final build check passed" : `Final build check failed: ${gateResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+      gateResult.passed ? "Final build check passed" : `Final build check failed: ${gateResult.buildResult?.stderr?.slice(0, 200) ?? "unknown error"}`,
       "system", gateResult.passed ? 1.0 : 0);
   }
 
@@ -1580,6 +1941,7 @@ async function executeSprintFinalGate(
         reworkCycleCount: newReworkCount,
         phase: (escalate ? "escalated" : "rework") as any,
         escalatedToCto: escalate || s.reviewState.escalatedToCto,
+        escalatedAt: escalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
       } : s.reviewState,
     }));
 
@@ -1626,6 +1988,152 @@ async function executeRetestAfterRework(
     summary: `Bug fixes resolved — tester will re-verify on next beat`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
   };
+}
+
+// ── CTO Escalation Review (Spec 21) ─────────────────────────
+
+const ctoEscalationDecisionSchema = z.object({
+  decision: z.enum(["fix", "skip", "abort"]),
+  reasoning: z.string(),
+  criticalBugs: z.array(z.string()).optional(),
+});
+
+async function executeCtoBeatEscalationReview(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  startBeatTokenAccumulator(beatId);
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  const reviewState = sprint?.reviewState;
+  if (!sprint || !reviewState || !reviewState.escalatedToCto) {
+    return { summary: "No escalation pending", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  emitEmployeeActivity("cto", "working", `Beat ${beatId}: reviewing escalated Sprint ${sprint.number} (${reviewState.reworkCycleCount} rework cycles exhausted)`, { beatId });
+
+  // Gather context: bug tasks and their status
+  const bugTasks = reviewState.bugTaskIds
+    .map((id) => snapshot.tasks.find((t) => t.id === id))
+    .filter(Boolean);
+
+  const bugSummary = bugTasks.map((t) =>
+    `- [${t!.status}] ${t!.title}: ${t!.description?.slice(0, 150) ?? "no description"}`
+  ).join("\n");
+
+  const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+  const completedCount = sprintTasks.filter((t) => t.status === "completed").length;
+  const failedCount = sprintTasks.filter((t) => t.status === "failed").length;
+
+  const prompt = [
+    `Sprint ${sprint.number} "${sprint.title}" has been escalated to you after ${reviewState.reworkCycleCount} failed rework cycles (max ${reviewState.maxReworkCycles}).`,
+    ``,
+    `Sprint progress: ${completedCount}/${sprintTasks.length} tasks completed, ${failedCount} failed.`,
+    `Tester verdict: ${reviewState.testerVerdict ?? "unknown"}`,
+    ``,
+    `Remaining bug tasks:`,
+    bugSummary || "(none tracked)",
+    ``,
+    `You must decide:`,
+    `- "fix": Force one more targeted rework cycle on the critical bugs only`,
+    `- "skip": Ship the sprint as-is, accepting known defects as tech debt`,
+    `- "abort": Cancel the sprint entirely and re-plan`,
+    ``,
+    `Consider: severity of remaining bugs, business impact, and whether another rework cycle is likely to succeed.`,
+  ].join("\n");
+
+  try {
+    const result = await structuredCompletion(
+      "workerDeployment",
+      [
+        { role: "system", content: "You are the CTO making a ship-or-kill decision on an escalated sprint. Be decisive and justify your reasoning." },
+        { role: "user", content: prompt },
+      ],
+      ctoEscalationDecisionSchema,
+      "cto_escalation_review",
+      { temperature: 0.3 },
+    );
+
+    const decision = result.decision;
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+
+    emitEmployeeActivity("cto", "decision", `Beat ${beatId}: CTO escalation decision = ${decision} — ${result.reasoning.slice(0, 200)}`, {
+      beatId, detail: { decision, reasoning: result.reasoning },
+    });
+
+    // Apply the decision
+    updateSprint(sprintId, (s) => ({
+      ...s,
+      reviewState: s.reviewState ? {
+        ...s.reviewState,
+        ctoDecision: decision,
+      } : s.reviewState,
+    }));
+
+    if (decision === "fix") {
+      // Allow one more rework cycle — reset phase to rework, bump max by 1
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: "rework" as const,
+          maxReworkCycles: s.reviewState.maxReworkCycles + 1,
+        } : s.reviewState,
+      }));
+      // Wake affected roles
+      for (const bugTask of bugTasks) {
+        if (bugTask?.assignedRole) {
+          emitReactive(bugTask.assignedRole, "bug_reported");
+        }
+      }
+      emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO granted extra rework cycle — Sprint ${sprint.number} back to rework`, { beatId });
+    } else if (decision === "skip") {
+      // Ship as-is — advance to final gate (tests may still fail, but CTO accepts)
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: "complete" as const,
+          completedAt: new Date().toISOString(),
+        } : s.reviewState,
+      }));
+      await finalizeSprintCompletion(sprintId);
+      emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO shipped Sprint ${sprint.number} with known defects`, { beatId });
+    } else if (decision === "abort") {
+      // Cancel sprint
+      updateSprint(sprintId, (s) => ({
+        ...s,
+        status: "completed" as const,
+        completedAt: new Date().toISOString(),
+        summary: `Aborted by CTO after ${reviewState.reworkCycleCount} rework cycles: ${result.reasoning.slice(0, 300)}`,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: "complete" as const,
+          completedAt: new Date().toISOString(),
+        } : s.reviewState,
+      }));
+      emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO aborted Sprint ${sprint.number} — will need re-planning`, { beatId });
+      // Wake CEO to propose next sprint
+      emitReactive("ceo", "sprint_completed");
+    }
+
+    return {
+      summary: `CTO escalation review: ${decision} — ${result.reasoning.slice(0, 300)}`,
+      tokensUsed, actionsCount: 1, toolCalls: 1,
+    };
+  } catch (err) {
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+    emitEmployeeActivity("cto", "error", `Beat ${beatId}: CTO escalation review failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    return {
+      summary: `CTO escalation review failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed, actionsCount: 0, toolCalls: 0,
+    };
+  }
 }
 
 async function tagCurrentSprintSnapshot() {
@@ -2245,7 +2753,7 @@ function recordMeeting(params: {
       params.summary,
       trigger,
       (params.decisions ?? []).map(d => d.description),
-      (meetingMemoryModifications ?? []).map(m => `${m.agentRole}: ${m.content.slice(0, 80)}`),
+      (meetingMemoryModifications ?? []).map(m => `${m.role}: ${m.content.slice(0, 80)}`),
       false,
     );
   }
@@ -2513,8 +3021,173 @@ function setTaskStatus(taskId: string, status: Task["status"], feedback?: string
           console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${describePgError(err)}`);
         });
       }
+
+      // Spec 14 Phase 2: update success rates + trigger failure attribution
+      // Replaces old inline matchSkills+updateSuccessRate (Path B).
+      // processTaskOutcome handles: success rate EMA, failure attribution, mutation proposal.
+      // Fire-and-forget — never blocks task progression.
+      if (status === "completed" || status === "failed") {
+        processTaskOutcome({
+          taskId: task.id,
+          taskTitle: task.title,
+          taskDescription: task.description,
+          assignedRole: task.assignedRole,
+          companyId: snapshot.company.id,
+          status,
+          iterationCount: task.iterationCount,
+          executionTrace: feedback ?? undefined,
+        }).then(async (mutation) => {
+          if (mutation) {
+            console.log(`[SkillMutator] Proposed ${mutation.originalSkillId ? "mutation" : "discovery"}: ${mutation.id} (${mutation.reason})`);
+
+            // Phase 6: apply governance gate (trust, own-role, sprint cap,
+            // budget, shell lint). "system" proposer bypasses trust + own-role.
+            const gov = await applyGovernanceToMutation({
+              mutation,
+              companyId: snapshot.company.id,
+              sprintId: task.sprintId ?? snapshot.company.currentSprintId ?? null,
+              proposerAgentId: null,
+              proposerRole: "system",
+              estimatedCostCents: mutation.originalSkillId ? 1 : 2, // attribution ~$0.003 + discovery ~$0.015
+            });
+            if (!gov.allowed) {
+              console.warn(`[Governance] Mutation ${mutation.id} refused — ${gov.code}: ${gov.reason}`);
+              return;
+            }
+
+            // Phase 3: Auto-trigger ATA pipeline (async, never blocks)
+            runATAPipeline(mutation.id).then((result) => {
+              console.log(`[ATA] ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore}, revisions=${result.revisionCycles})`);
+            }).catch((err) => {
+              console.warn(`[ATA] Pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+            });
+          }
+        }).catch((err) => {
+          console.warn(`[SkillMutator] processTaskOutcome error for ${task.id}: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+
+      // Spec 14 Phase 5: record task trajectory as a Pattern (cluster input).
+      // high_friction = completed but with iterationCount > 1 (rework).
+      // Fire-and-forget — never blocks.
+      if (status === "completed" || status === "failed") {
+        const patternOutcome = status === "failed"
+          ? "failure" as const
+          : task.iterationCount > 1
+            ? "high_friction" as const
+            : "success" as const;
+        const activeSkillIds = registryMatchSkills(
+          snapshot.company.id,
+          task.assignedRole,
+          `${task.title} ${task.description}`,
+        ).map((s) => s.id);
+        extractPattern({
+          taskId: task.id,
+          taskTitle: task.title,
+          taskDescription: task.description,
+          assignedRole: task.assignedRole,
+          companyId: snapshot.company.id,
+          outcome: patternOutcome,
+          trajectory: feedback ?? undefined,
+          activeSkillIds,
+          sprintId: task.sprintId ?? snapshot.company.currentSprintId ?? null,
+        }).then((pattern) => {
+          if (pattern.usageCount === 1) {
+            console.log(`[PatternLearner] New pattern ${pattern.id} for "${task.title.slice(0, 40)}"`);
+          }
+        }).catch((err) => {
+          console.warn(`[PatternLearner] extractPattern error for ${task.id}: ${err instanceof Error ? err.message : err}`);
+        });
+      }
     }
   }
+}
+
+/**
+ * Spec 14 Phase 6: Cross-sprint pattern transfer.
+ *
+ * Runs at sprint boundary. Filters patterns to those first observed in the
+ * just-completed sprint that recurred ≥3 times AND are shared across multiple
+ * sprints, clusters them, applies promotion gate, governs each candidate, and
+ * hands approved mutations to the ATA pipeline.
+ *
+ * Unlike the older all-time sweep (runPatternPromotionSweep), this sprint-
+ * scoped version ensures only the *current* sprint's patterns propagate to the
+ * next one — satisfying spec §1095 ("propagate to next sprint").
+ *
+ * Fire-and-forget from the caller; returns observability counts.
+ */
+export async function runCrossSprintTransfer(
+  companyId: string,
+  sprintId: string,
+): Promise<{
+  candidatesFound: number;
+  mutationsProposed: number;
+  mutationsRefused: number;
+}> {
+  const candidates = analyzeSprintPatterns(companyId, sprintId, 3);
+  let mutationsProposed = 0;
+  let mutationsRefused = 0;
+
+  for (const candidate of candidates) {
+    try {
+      const mutation = await proposeSkillFromCluster(candidate);
+
+      // Phase 6: governance gate before ATA (pattern_learner bypasses trust/own-role).
+      const gov = await applyGovernanceToMutation({
+        mutation,
+        companyId,
+        sprintId,
+        proposerAgentId: null,
+        proposerRole: "pattern_learner",
+        estimatedCostCents: 2, // synthesizeSkill via gpt-4o ≈ $0.015
+      });
+      if (!gov.allowed) {
+        mutationsRefused++;
+        console.warn(`[Governance] Emergent mutation ${mutation.id} refused — ${gov.code}: ${gov.reason}`);
+        continue;
+      }
+
+      mutationsProposed++;
+      console.log(
+        `[CrossSprintTransfer] Promoted cluster ${candidate.clusterId} → mutation ${mutation.id} ` +
+        `(${candidate.memberCount} members, success=${candidate.combinedSuccessRate.toFixed(2)})`,
+      );
+      runATAPipeline(mutation.id).then((result) => {
+        console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
+      }).catch((err) => {
+        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } catch (err) {
+      console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  return { candidatesFound: candidates.length, mutationsProposed, mutationsRefused };
+}
+
+/**
+ * @deprecated Use runCrossSprintTransfer(companyId, sprintId) instead.
+ * Retained only for tests that exercise the all-time sweep path.
+ */
+export async function runPatternPromotionSweep(companyId: string): Promise<{
+  candidatesFound: number;
+  mutationsProposed: number;
+}> {
+  const candidates = checkSkillCandidates(companyId);
+  let mutationsProposed = 0;
+  for (const candidate of candidates) {
+    try {
+      const mutation = await proposeSkillFromCluster(candidate);
+      mutationsProposed++;
+      runATAPipeline(mutation.id).catch((err) => {
+        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } catch (err) {
+      console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  return { candidatesFound: candidates.length, mutationsProposed };
 }
 
 /**
@@ -3793,12 +4466,22 @@ function getToolsForPrompt(role: AgentIdentity["role"]): Record<string, boolean>
   };
 }
 
-async function runPromptText(role: AgentIdentity["role"], sessionId: string, systemPrompt: string, text: string, tools?: Record<string, boolean>) {
+async function runPromptText(
+  role: AgentIdentity["role"],
+  sessionId: string,
+  systemPrompt: string,
+  text: string,
+  tools?: Record<string, boolean>,
+  matchedSkillIds?: string[],
+) {
   const deployment = ensureDeployment("workerDeployment");
 
-  // Inject role-specific skills into the system prompt
-  const skillMenu = buildSkillMenu(role);
-  const skillBody = getSkillBody(role);
+  // Inject skills (tier-2 bodies): when matchedSkillIds is provided
+  // (heartbeat path), only the classifier-picked subset (≤3) is included.
+  // Otherwise all role skills are included (legacy direct-session paths).
+  // See buildSkillCatalog + buildSkillSection for the progressive-disclosure
+  // design.
+  const skillSection = buildSkillSection(role, matchedSkillIds);
 
   // Inject Hippocampus memory context (never fatal — graceful degradation)
   let memoryBlock = "";
@@ -3819,13 +4502,13 @@ async function runPromptText(role: AgentIdentity["role"], sessionId: string, sys
     emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }
 
-  const enrichedSystemPrompt = [systemPrompt, skillMenu, skillBody, memoryBlock].filter(Boolean).join("\n");
+  const enrichedSystemPrompt = [systemPrompt, skillSection, memoryBlock].filter(Boolean).join("\n");
 
-  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skill=${skillMenu.length + skillBody.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
+  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skills=${skillSection.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
     detail: {
       systemPromptLen: systemPrompt.length,
-      skillMenuLen: skillMenu.length,
-      skillBodyLen: skillBody.length,
+      skillSectionLen: skillSection.length,
+      matchedSkillCount: matchedSkillIds?.length ?? 0,
       memoryBlockLen: memoryBlock.length,
       memoryCount,
       habitCount,
@@ -4183,16 +4866,69 @@ export async function approveSprintProposal(card: CeoCard) {
     }
   }
 
-  // Implicit ordering: tester/QA tasks must wait for all developer + ui_designer tasks
+  // Collect implementation task IDs (developer + ui_designer produce code artifacts)
   const implementationTaskIds = createdTasks
     .filter((t) => t.assignedRole === "developer" || t.assignedRole === "ui_designer")
     .map((t) => t.id);
-  if (implementationTaskIds.length > 0) {
+
+  // Auto-add integration task: wire component work into the app entry file.
+  // Without this, components exist on disk but are never imported by App.tsx,
+  // which causes the entry-point check to fail review downstream.
+  // Only emit when there are 2+ implementation tasks (integration is trivial otherwise).
+  let integrationTaskId: string | null = null;
+  if (implementationTaskIds.length >= 2) {
+    const implementationTitles = createdTasks
+      .filter((t) => implementationTaskIds.includes(t.id))
+      .map((t) => `- ${t.title}`);
+    const integrationDescription = [
+      "Wire every component produced in this sprint into the application entry file (src/App.tsx or equivalent).",
+      "",
+      "Why: individual components must be imported and rendered by the app shell — existing on disk is not enough.",
+      "",
+      "Components produced in this sprint:",
+      ...implementationTitles,
+      "",
+      "Steps:",
+      "1. Open the entry file (src/App.tsx or whichever exists for this stack).",
+      "2. Import each sprint component by its relative path.",
+      "3. Render every imported component inside the app's JSX tree in a coherent layout.",
+      "4. If routing is required, wire it here using the project's router.",
+      "5. Pass realistic props — no placeholder-only renders.",
+    ].join("\n");
+
+    const integrationTask = createWorkflowTask(
+      freshSnapshot,
+      "implementation",
+      "developer",
+      "Wire sprint components into app entry (App.tsx)",
+      integrationDescription,
+      integrationDescription,
+      "Every sprint component is imported and rendered by the entry file.",
+      [
+        "Entry file imports every component produced this sprint",
+        "Entry file renders every component in a coherent layout",
+        "App builds and the main view shows the integrated components",
+      ],
+      "critical",
+      "created",
+      sprint.id,
+    );
+    integrationTask.dependsOnTaskIds = [...implementationTaskIds];
+    integrationTask.parentTaskId = implementationTaskIds[0];
+    createdTasks.push(integrationTask);
+    integrationTaskId = integrationTask.id;
+  }
+
+  // Implicit ordering: tester/QA tasks must wait for implementation AND integration
+  const preTestDepIds = integrationTaskId
+    ? [...implementationTaskIds, integrationTaskId]
+    : implementationTaskIds;
+  if (preTestDepIds.length > 0) {
     for (let i = 0; i < createdTasks.length; i++) {
       if (createdTasks[i].assignedRole !== "tester") continue;
       const existing = new Set(createdTasks[i].dependsOnTaskIds);
       const merged = [...createdTasks[i].dependsOnTaskIds];
-      for (const depId of implementationTaskIds) {
+      for (const depId of preTestDepIds) {
         if (!existing.has(depId)) merged.push(depId);
       }
       createdTasks[i] = {
@@ -4675,8 +5411,15 @@ export async function executeBeatTask(
   }
 
   const role = ctx.role;
-  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority}`, {
-    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone },
+
+  // Spec 14 (progressive disclosure): pick relevant skills via an LLM
+  // classifier over a compact catalog. Replaces the former embedding-cosine
+  // matcher — the LLM's language understanding handles matching natively.
+  const availableSkillCount = buildSkillCatalog(role).length;
+  const matchedSkillIds = await matchAndRecordSkills(role, `${task.title} ${task.description}`);
+
+  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority} availableSkills=${availableSkillCount} appliedSkills=${matchedSkillIds.length}`, {
+    beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, availableSkillCount, appliedSkillIds: matchedSkillIds },
   });
 
   // ── CEO beat: sprint lifecycle detection ──────────────────
@@ -4831,6 +5574,9 @@ export async function executeBeatTask(
   let beatSession: import("@opencode-ai/sdk").Session | null = null;
   const beatAgentState = agentSessions.get(role);
   let previousSessionId: string | undefined;
+  // Hoisted for use in both try and catch (Spec 22 graph instrumentation)
+  const beatStartTime = Date.now();
+  const beatSprintId = task.sprintId ?? resolveActiveSprintId();
 
   emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt constructed (${taskPrompt.length} chars), tools=${tools ? Object.keys(tools).filter(k => (tools as any)[k]).join(",") : "none"}`, {
     beatId, taskId, detail: { promptLength: taskPrompt.length, tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [], promptType: role === "developer" ? "developer_build" : "specialist_text" },
@@ -4851,15 +5597,14 @@ export async function executeBeatTask(
     emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
-
     // ── Graph instrumentation (Spec 22) — beat start ──
-    const beatStartTime = Date.now();
-    const beatSprintId = task.sprintId ?? resolveActiveSprintId();
     if (beatSprintId) {
       emitGraphBeatStarted(beatSprintId, taskId, beatId, role, task.kind === "implementation" ? "execute_task" : task.kind, taskPrompt);
     }
 
-    const output = await runPromptText(role, beatSession.id, soul.systemPrompt + getAgentSkills(role), taskPrompt, tools);
+    // Pass matchedSkillIds so runPromptText injects only the classifier-picked
+    // skills (≤3) rather than every skill for the role (spec §14 Phase 1).
+    const output = await runPromptText(role, beatSession.id, soul.systemPrompt, taskPrompt, tools, matchedSkillIds);
 
     touchAgentSession(role, "idle");
 
@@ -5086,8 +5831,16 @@ export async function executeChecklistAction(
     }
   }
 
-  // ── CTO: sprint review escalation (Spec 21) ──
-  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_decision") {
+  // ── CTO: sprint escalation review (Spec 21) ──
+  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_review") {
+    return executeCtoBeatEscalationReview(ctx, beatId);
+  }
+
+  // ── CTO: escalation timeout safety valve ──
+  // Fires when checkEscalationPending detects an escalation that has been
+  // pending longer than ESCALATION_TIMEOUT_MS without a CTO decision.
+  // Force-completes the sprint rather than retrying the 3-way review again.
+  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_force_complete") {
     startBeatTokenAccumulator(beatId);
     const snapshot = getSnapshot();
     const sprintId = snapshot.company.currentSprintId;
@@ -5101,13 +5854,15 @@ export async function executeChecklistAction(
       return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
 
-    emitEmployeeActivity("cto", "transition", `Sprint ${sprint.number} escalated — CTO force-completing sprint after max rework cycles`, { beatId });
+    emitEmployeeActivity("cto", "transition", `Beat ${beatId}: escalation timeout — force-completing Sprint ${sprint.number}`, {
+      beatId, detail: { reason: action.detail },
+    });
 
     await finalizeSprintCompletion(sprintId);
 
-    finishClBeat("completed", `CTO force-completed Sprint ${sprint.number}`, 1);
+    finishClBeat("completed", `CTO force-completed Sprint ${sprint.number} (escalation timeout)`, 1);
     return {
-      summary: `CTO escalation: force-completed Sprint ${sprint.number} after max rework cycles`,
+      summary: `CTO escalation timeout: force-completed Sprint ${sprint.number}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
     };
   }
@@ -5171,6 +5926,11 @@ export async function executeChecklistAction(
       summary: `Unknown sprint review action: ${reviewAction}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
     };
+  }
+
+  // ── Skills Lead: skill governance actions (Spec 14 Phase 6) ──
+  if (role === "skills_lead" && action.suggestedAction.startsWith("skills_lead:")) {
+    return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
   }
 
   // ── Meeting contribution (Spec 18 Phase 4) ──
@@ -5241,3 +6001,455 @@ export async function executeChecklistAction(
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
   };
 }
+
+// ── Skills Lead action handlers (Spec 14 Phase 6) ──────────
+
+/**
+ * Skills Lead dispatches to one of three actions emitted by the proactive
+ * heartbeat checks (checkSkillHealth, checkUnusedSkills, checkSkillGaps).
+ *
+ * All three route through `applyGovernanceToMutation` so they respect the
+ * trust/cap/budget/lint gate like any other mutation.
+ */
+async function executeSkillsLeadAction(
+  _ctx: import("@arceus/contracts").AgentBeatContext,
+  beatId: string,
+  suggestedAction: string,
+): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  startBeatTokenAccumulator(beatId);
+  const snapshot = getSnapshot();
+  const companyId = snapshot.company.id;
+  const sprintId = snapshot.company.currentSprintId ?? null;
+
+  try {
+    // ── mutate_underperformer: rewrite the worst active skill ──
+    if (suggestedAction === "skills_lead:mutate_underperformer") {
+      const underperformers = getUnderperformingSkills(companyId, 0.6);
+      if (underperformers.length === 0) {
+        emitEmployeeActivity("skills_lead", "context", `Beat ${beatId}: no underperformers to mutate`, { beatId });
+        return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      const worst = underperformers[0]!;
+      emitEmployeeActivity("skills_lead", "working", `Beat ${beatId}: proposing mutation for ${worst.name} (rate=${worst.successRate.toFixed(2)})`, { beatId });
+
+      // Trigger failure attribution pipeline using a synthetic TaskOutcome representing the
+      // skill's accumulated underperformance. We use role + skill name as anchor.
+      const mutation = await processTaskOutcome({
+        taskId: `skills_lead_mutation_${worst.id}_${Date.now()}`,
+        taskTitle: `Improve underperforming skill: ${worst.name}`,
+        taskDescription: `Skill ${worst.name} has a ${(worst.successRate * 100).toFixed(0)}% success rate over ${worst.usageCount} uses. Identify root cause and propose an improved version.`,
+        assignedRole: worst.role as AgentIdentity["role"],
+        companyId,
+        status: "failed",
+        iterationCount: 3,
+        executionTrace: `Historical rate ${worst.successRate.toFixed(2)} across ${worst.usageCount} invocations.`,
+      });
+
+      if (!mutation) {
+        return { summary: `No mutation produced for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+      }
+
+      const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
+      const gov = await applyGovernanceToMutation({
+        mutation, companyId, sprintId,
+        proposerAgentId: skillsLeadAgent?.id ?? null,
+        proposerRole: "skills_lead",
+        estimatedCostCents: 2,
+      });
+      if (!gov.allowed) {
+        return { summary: `Mutation for ${worst.name} refused: ${gov.reason}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+      }
+
+      runATAPipeline(mutation.id).catch((err) => {
+        console.warn(`[ATA] Skills Lead pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      });
+      return { summary: `Proposed mutation ${mutation.id} for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+    }
+
+    // ── deprecate_unused: flip unused skills to deprecated ──
+    if (suggestedAction === "skills_lead:deprecate_unused") {
+      const unused = getUnusedSkills(companyId, 30);
+      if (unused.length === 0) {
+        return { summary: "No unused skills to deprecate", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      const deprecated: string[] = [];
+      for (const s of unused.slice(0, 3)) { // cap at 3/beat
+        registryDeprecateSkill(s.id, `Unused for 30+ days (0 invocations since ${s.lastUsedAt ?? "creation"})`);
+        deprecated.push(s.name);
+        auditAgent(companyId, "skills_lead", "skill_deprecated", `Skills Lead deprecated unused skill ${s.name}`, {
+          severity: "info", detail: { skillId: s.id, lastUsedAt: s.lastUsedAt },
+        });
+      }
+      emitEmployeeActivity("skills_lead", "context", `Beat ${beatId}: deprecated ${deprecated.length} unused skills`, { beatId });
+      return { summary: `Deprecated ${deprecated.length} unused skills: ${deprecated.join(", ")}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: deprecated.length, toolCalls: 1 };
+    }
+
+    // ── fill_skill_gap: synthesize skill from sprint cluster ──
+    if (suggestedAction === "skills_lead:fill_skill_gap") {
+      if (!sprintId) {
+        return { summary: "No current sprint — skipping skill-gap fill", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      const candidates = analyzeSprintPatterns(companyId, sprintId, 3);
+      if (candidates.length === 0) {
+        return { summary: "No sprint skill gaps detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+      }
+      let proposed = 0;
+      let refused = 0;
+      for (const candidate of candidates.slice(0, 2)) { // cap per-beat to preserve budget
+        try {
+          const mutation = await proposeSkillFromCluster(candidate);
+          const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
+          const gov = await applyGovernanceToMutation({
+            mutation, companyId, sprintId,
+            proposerAgentId: skillsLeadAgent?.id ?? null,
+            proposerRole: "skills_lead",
+            estimatedCostCents: 2,
+          });
+          if (!gov.allowed) { refused++; continue; }
+          proposed++;
+          runATAPipeline(mutation.id).catch((err) => {
+            console.warn(`[ATA] Skills Lead gap-fill error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+          });
+        } catch (err) {
+          console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+      return { summary: `Proposed ${proposed} emergent skills, ${refused} refused by governance`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: proposed, toolCalls: proposed + refused };
+    }
+
+    return { summary: `Unknown Skills Lead action: ${suggestedAction}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  } catch (err) {
+    emitEmployeeActivity("skills_lead", "error", `Beat ${beatId}: Skills Lead action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    return { summary: `Skills Lead action failed: ${err instanceof Error ? err.message : String(err)}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Entry-point integration check — verify the app entry file actually imports
+// product modules, not just that files exist on disk.
+// ---------------------------------------------------------------------------
+
+interface EntryPointCheckResult {
+  pass: boolean;
+  entryFile: string | null;
+  reason: string;
+  orphanedModules: string[];
+}
+
+/**
+ * Should a file be excluded from the orphan/reachability calculation?
+ * Returns true for build configs, type declarations, tests, and other files
+ * that are NEVER supposed to be imported by an app entry file at runtime.
+ */
+function isExcludedFromEntryCheck(rel: string): boolean {
+  const name = rel.includes("/") ? rel.slice(rel.lastIndexOf("/") + 1) : rel;
+
+  // Hidden files
+  if (name.startsWith(".")) return true;
+
+  // TypeScript ambient declarations — auto-loaded, never imported
+  if (name.endsWith(".d.ts")) return true;
+
+  // Tests and specs — not part of runtime bundle
+  if (/\.(test|spec|stories)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(name)) return true;
+
+  // Build-tool configs at any depth
+  if (/\.config\.(ts|tsx|js|jsx|mjs|cjs)$/.test(name)) return true;
+
+  // Common config/boilerplate filenames
+  const configNames = new Set([
+    "vite.config.ts", "vite.config.js", "vite.config.mjs",
+    "vitest.config.ts", "vitest.config.js",
+    "tailwind.config.js", "tailwind.config.ts", "tailwind.config.cjs",
+    "postcss.config.js", "postcss.config.mjs", "postcss.config.cjs", "postcss.config.ts",
+    "next.config.ts", "next.config.js", "next.config.mjs",
+    "webpack.config.js", "rollup.config.js", "esbuild.config.js",
+    "tsconfig.json", "package.json", "jest.config.ts", "jest.config.js",
+    "babel.config.js", ".eslintrc.js", ".prettierrc.js",
+    "vite-env.d.ts", "next-env.d.ts",
+    "setupTests.ts", "setup-tests.ts",
+  ]);
+  if (configNames.has(name)) return true;
+
+  // Entry bootstrap files used to mount the app — not "orphans", they
+  // reference the entry rather than being referenced by it.
+  if (name === "main.tsx" || name === "main.ts" || name === "main.jsx" || name === "main.js") return true;
+  if (name === "index.tsx" || name === "index.ts" || name === "index.jsx" || name === "index.js") {
+    // only exclude if at repo root or src root (not nested index.ts which may be a barrel)
+    if (rel === name || rel === `src/${name}`) return true;
+  }
+
+  return false;
+}
+
+function checkEntryPointImports(): EntryPointCheckResult {
+  // Identify the entry file (stack-agnostic — try common patterns)
+  const entryFileCandidates = [
+    "src/App.tsx", "src/App.jsx", "src/App.vue", "src/App.svelte",
+    "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
+    "src/index.tsx", "src/index.ts", "src/index.jsx", "src/index.js",
+    "app.py", "main.py", "index.html",
+    "pages/index.tsx", "pages/index.jsx", "app/page.tsx", "app/page.jsx",
+  ];
+
+  let entryFile: string | null = null;
+  let entryContent = "";
+  for (const candidate of entryFileCandidates) {
+    const fullPath = join(productDir, candidate);
+    try {
+      entryContent = readFileSync(fullPath, "utf-8");
+      entryFile = candidate;
+      break;
+    } catch { /* try next */ }
+  }
+
+  if (!entryFile) {
+    return { pass: true, entryFile: null, reason: "No recognizable entry file found — skipping import check.", orphanedModules: [] };
+  }
+
+  // Collect all product source files, excluding configs/types/tests/etc.
+  const productModules: string[] = [];
+  const codeExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"]);
+  const ignoreNames = new Set(["node_modules", ".git", "dist", "build", ".next", ".vite", "coverage", "__tests__", "__mocks__", "tests"]);
+
+  function walkProduct(dir: string, depth = 0) {
+    if (depth > 4) return;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
+    for (const entry of entries) {
+      if (ignoreNames.has(entry.name)) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) { walkProduct(fullPath, depth + 1); continue; }
+      const ext = entry.name.slice(entry.name.lastIndexOf("."));
+      if (!codeExtensions.has(ext)) continue;
+      const rel = relative(productDir, fullPath).replace(/\\/g, "/");
+      if (rel === entryFile) continue;
+      if (isExcludedFromEntryCheck(rel)) continue;
+      productModules.push(rel);
+    }
+  }
+  walkProduct(productDir);
+
+  if (productModules.length === 0) {
+    return { pass: true, entryFile, reason: "No product modules found beyond entry file.", orphanedModules: [] };
+  }
+
+  // Extract import/require paths (relative only — we don't care about package imports)
+  function extractImportedPaths(content: string, fileDir: string): string[] {
+    const importPaths: string[] = [];
+    const importRegex = /(?:import|require|from)\s*\(?['"]([^'"]+)['"]\)?/g;
+    let match: RegExpExecArray | null;
+    while ((match = importRegex.exec(content)) !== null) {
+      const importPath = match[1];
+      if (importPath.startsWith(".")) {
+        const resolved = join(fileDir, importPath).replace(/\\/g, "/");
+        importPaths.push(resolved);
+      }
+    }
+    return importPaths;
+  }
+
+  // Resolve an import-path (possibly extensionless, possibly a directory) to
+  // the matching productModules entry, if any.
+  function resolveToModule(importRef: string): string | null {
+    for (const mod of productModules) {
+      const modNoExt = mod.replace(/\.[^.]+$/, "");
+      if (
+        importRef === mod ||
+        importRef === modNoExt ||
+        importRef + "/index" === modNoExt
+      ) {
+        return mod;
+      }
+    }
+    return null;
+  }
+
+  // BFS: walk the full transitive import graph starting from the entry file.
+  // A module is "reachable" if it appears anywhere in the transitive closure.
+  const referencedFiles = new Set<string>();
+  const queue: Array<{ path: string; content: string }> = [{ path: entryFile, content: entryContent }];
+  const visited = new Set<string>([entryFile]);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const fileDir = current.path.includes("/") ? current.path.substring(0, current.path.lastIndexOf("/")) : ".";
+    const imports = extractImportedPaths(current.content, fileDir);
+    for (const imp of imports) {
+      const mod = resolveToModule(imp);
+      if (!mod) continue;
+      if (visited.has(mod)) continue;
+      visited.add(mod);
+      referencedFiles.add(mod);
+      try {
+        const modContent = readFileSync(join(productDir, mod), "utf-8");
+        queue.push({ path: mod, content: modContent });
+      } catch { /* skip unreadable */ }
+    }
+  }
+
+  // Orphans = modules on disk that the entry file can't reach transitively
+  const orphaned = productModules.filter((mod) => !referencedFiles.has(mod));
+
+  if (orphaned.length > 0 && referencedFiles.size === 0) {
+    return {
+      pass: false,
+      entryFile,
+      reason: `Entry file ${entryFile} does not import ANY product modules. ${orphaned.length} module(s) exist on disk but are completely disconnected: ${orphaned.join(", ")}`,
+      orphanedModules: orphaned,
+    };
+  }
+
+  if (orphaned.length > 0 && orphaned.length >= productModules.length * 0.5) {
+    return {
+      pass: false,
+      entryFile,
+      reason: `Entry file ${entryFile} only reaches ${referencedFiles.size}/${productModules.length} modules transitively. ${orphaned.length} orphaned module(s): ${orphaned.join(", ")}`,
+      orphanedModules: orphaned,
+    };
+  }
+
+  return { pass: true, entryFile, reason: `Entry file ${entryFile} reaches ${referencedFiles.size}/${productModules.length} product modules transitively.`, orphanedModules: orphaned };
+}
+
+/**
+ * Build a prescriptive wiring hint for each orphan module.
+ * For every orphan, reads the file, extracts likely React component exports
+ * (default + named `export function`/`export const` in PascalCase), and returns
+ * concrete import + placement snippets the developer can paste into the entry file.
+ */
+function generateOrphanWiringPrescription(orphans: string[], entryFile: string | null): string {
+  if (orphans.length === 0 || !entryFile) return "";
+  const entryDir = entryFile.includes("/") ? entryFile.slice(0, entryFile.lastIndexOf("/")) : "";
+
+  const lines: string[] = [];
+  for (const orphan of orphans.slice(0, 20)) {
+    let content = "";
+    try {
+      content = readFileSync(join(productDir, orphan), "utf-8");
+    } catch {
+      continue;
+    }
+
+    // Default export detection
+    const defaultExportMatch =
+      content.match(/export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)/) ||
+      content.match(/export\s+default\s+class\s+([A-Z][A-Za-z0-9_]*)/) ||
+      content.match(/export\s+default\s+([A-Z][A-Za-z0-9_]*)\s*;?/);
+    const hasUnnamedDefault = /export\s+default\s+(\(|function\s*\(|{|\[)/.test(content);
+
+    // Named React-component exports (PascalCase only — heuristic for components vs utils)
+    const namedExports = new Set<string>();
+    const namedFnRe = /export\s+(?:async\s+)?function\s+([A-Z][A-Za-z0-9_]*)/g;
+    const namedConstRe = /export\s+(?:const|let|var)\s+([A-Z][A-Za-z0-9_]*)\s*[:=]/g;
+    let m: RegExpExecArray | null;
+    while ((m = namedFnRe.exec(content)) !== null) namedExports.add(m[1]);
+    while ((m = namedConstRe.exec(content)) !== null) namedExports.add(m[1]);
+
+    // Compute import path relative to entry file, without extension
+    const orphanNoExt = orphan.replace(/\.[^.]+$/, "");
+    let importPath: string;
+    if (entryDir && orphanNoExt.startsWith(entryDir + "/")) {
+      importPath = "./" + orphanNoExt.slice(entryDir.length + 1);
+    } else if (entryDir) {
+      // Entry lives in a sub-dir, orphan is above or sibling — step up
+      const ups = entryDir.split("/").length;
+      importPath = "../".repeat(ups) + orphanNoExt;
+    } else {
+      importPath = "./" + orphanNoExt;
+    }
+
+    // Prefer default name, then first PascalCase named export
+    const defaultName = defaultExportMatch?.[1];
+    const firstNamed = namedExports.size > 0 ? Array.from(namedExports)[0] : null;
+
+    if (defaultName) {
+      lines.push(
+        `- ${orphan} → import ${defaultName} from "${importPath}";  // render as <${defaultName} />`
+      );
+    } else if (hasUnnamedDefault) {
+      // Derive an import alias from the filename
+      const basename = (orphan.split("/").pop() ?? "Component").replace(/\.[^.]+$/, "");
+      const alias = basename.replace(/[^A-Za-z0-9]/g, "");
+      const pascalAlias = alias.charAt(0).toUpperCase() + alias.slice(1);
+      lines.push(
+        `- ${orphan} → import ${pascalAlias} from "${importPath}";  // render as <${pascalAlias} />`
+      );
+    } else if (firstNamed) {
+      const rest = Array.from(namedExports).slice(1);
+      const more = rest.length > 0 ? ` (also exports: ${rest.join(", ")})` : "";
+      lines.push(
+        `- ${orphan} → import { ${firstNamed} } from "${importPath}";  // render as <${firstNamed} />${more}`
+      );
+    } else {
+      lines.push(
+        `- ${orphan} → inspect this file, then import its primary export into ${entryFile}.`
+      );
+    }
+  }
+
+  const suffix = orphans.length > 20 ? `\n…and ${orphans.length - 20} more orphan(s) — apply the same pattern.` : "";
+  return lines.join("\n") + suffix;
+}
+
+const PreviewContentVerdict = z.object({
+  pass: z.boolean(),
+  reason: z.string(),
+  missingElements: z.array(z.string()),
+  visibleElements: z.array(z.string()),
+});
+type PreviewContentVerdict = z.infer<typeof PreviewContentVerdict>;
+
+const QAReportSchema = z.object({
+  verdict: z.enum(["pass", "fail"]),
+  tasks: z.array(z.object({
+    taskId: z.string(),
+    verdict: z.enum(["pass", "fail"]),
+    findings: z.array(z.object({
+      defect_area: z.enum(["build_failure", "test_failure", "ui_rendering", "ui_interaction", "api_behavior", "accessibility", "content", "design_mismatch", "logic_error", "performance"]),
+      severity: z.enum(["critical", "high", "medium", "low"]),
+      description: z.string(),
+      expected: z.string(),
+      actual: z.string(),
+      file: z.string(),
+      fix_suggestion: z.string(),
+    })),
+    dod_checklist: z.array(z.object({
+      item: z.string(),
+      status: z.enum(["pass", "fail"]),
+      evidence: z.string(),
+    })),
+  })),
+  test_files_written: z.array(z.string()),
+  build_status: z.enum(["pass", "fail", "skipped"]),
+  test_suite_status: z.enum(["pass", "fail", "skipped", "no_tests"]),
+});
+
+function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QAReport {
+  return {
+    verdict: result.verdict,
+    tasks: result.tasks.map((t) => ({
+      taskId: t.taskId,
+      verdict: t.verdict,
+      findings: t.findings.map((f) => ({
+        taskId: t.taskId,
+        defectArea: f.defect_area as DefectArea,
+        severity: f.severity as Task["priority"],
+        description: f.description,
+        expected: f.expected,
+        actual: f.actual,
+        file: f.file,
+        fixSuggestion: f.fix_suggestion,
+      })),
+      dodChecklist: t.dod_checklist.map((c) => ({
+        item: c.item,
+        status: c.status,
+        evidence: c.evidence,
+      })),
+    })),
+    testFilesWritten: result.test_files_written,
+    buildStatus: result.build_status,
+    testSuiteStatus: result.test_suite_status,
+  };
+}
+

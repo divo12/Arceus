@@ -15,6 +15,7 @@ import type {
   PolicyViolation,
   PrimingState,
   SessionBinding,
+  SkillArtifact,
   Sprint,
   SprintSnapshot,
   StrategyBrief,
@@ -48,7 +49,8 @@ export type EntityName =
   | "primingStates"
   | "beatRecords"
   | "trustScores"
-  | "policyViolations";
+  | "policyViolations"
+  | "skillArtifacts";
 
 export type EntityRecordMap = {
   companies: Company;
@@ -74,6 +76,7 @@ export type EntityRecordMap = {
   beatRecords: BeatRecord;
   trustScores: TrustScore;
   policyViolations: PolicyViolation;
+  skillArtifacts: SkillArtifact;
 };
 
 export type DatabaseHealth = {

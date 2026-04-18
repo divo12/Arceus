@@ -94,6 +94,11 @@ function checkReviewQueue(ctx: AgentBeatContext): CheckResult {
 }
 
 function checkBuildStatus(ctx: AgentBeatContext): CheckResult {
+  // During sprint review the tester drives verification — build errors surface
+  // there rather than blocking developer/CTO beats with a no-handler action.
+  if (ctx.currentSprint?.status === "reviewing") {
+    return { status: "ok", detail: "Sprint in review — build health checked by tester verification" };
+  }
   const build = ctx.lastBuildCheck;
   if (!build || build.status === "unknown") {
     return { status: "ok", detail: "Build check not yet run" };
@@ -129,11 +134,21 @@ function checkDevProgress(ctx: AgentBeatContext): CheckResult {
 }
 
 function checkAssignedTasks(ctx: AgentBeatContext): CheckResult {
-  const actionable = ctx.tasks.filter(
+  // CEO/PM receive ALL sprint tasks in ctx.tasks (for sprint-completion visibility
+  // in control-plane.ts), but their checklist should only drive THEIR OWN work —
+  // otherwise PM ends up "working on" CEO-assigned tasks every beat, burning tokens
+  // without ever transitioning state. Filter down to tasks actually owned by this
+  // agent before deciding on the next action.
+  const mine = ctx.tasks.filter(
+    (t) =>
+      t.assignedAgentId === ctx.agentId ||
+      (t.assignedRole === ctx.role && !t.assignedAgentId)
+  );
+  const actionable = mine.filter(
     (t) => t.status === "planned" || t.status === "created" || t.status === "in_progress"
   );
   if (actionable.length === 0) {
-    return { status: "ok", detail: "No actionable tasks" };
+    return { status: "ok", detail: "No actionable tasks assigned to me" };
   }
   // Prioritize: in_progress first, then planned, then created
   const next =
@@ -142,7 +157,7 @@ function checkAssignedTasks(ctx: AgentBeatContext): CheckResult {
     actionable[0];
   return {
     status: "action_needed",
-    detail: `${actionable.length} actionable task(s)`,
+    detail: `${actionable.length} actionable task(s) assigned to me`,
     suggestedAction: `Work on: ${next.title} (${next.status})`,
   };
 }
@@ -253,7 +268,19 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
   if (!reviewState || reviewState.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
 
   const bugTaskIds: string[] = reviewState.bugTaskIds ?? [];
-  if (bugTaskIds.length === 0) return { status: "ok", detail: "No bug tasks tracked" };
+  if (bugTaskIds.length === 0) {
+    // Defensive: if we're in rework with no bug tasks tracked (e.g. a tester
+    // parse-failure path advanced phase to rework without creating bugs),
+    // don't wedge the sprint — re-verify on the next beat. The only other
+    // check that looks at rework is checkEscalationPending, which only fires
+    // when escalatedToCto === true, so without this branch the sprint is
+    // permanently stuck.
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} in rework with no bug tasks — re-verifying`,
+      suggestedAction: "sprint_review:retest_after_rework",
+    };
+  }
 
   // Check if ALL bug_fix tasks are terminal
   const allResolved = bugTaskIds.every((id: string) => {
@@ -275,6 +302,73 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
     return task && !["completed", "cancelled", "failed"].includes(task.status);
   });
   return { status: "ok", detail: `${remaining.length} bug fix(es) still pending` };
+}
+
+// ── Spec 21: CTO Escalation Check ─────────────────────────
+
+/**
+ * Safety-valve: if an escalation sits without a CTO decision longer than
+ * this timeout, force-complete the sprint instead of repeatedly retrying
+ * the 3-way review. Keeps stuck sprints from consuming the CTO's beats
+ * indefinitely when the LLM can't produce a parseable decision.
+ */
+const ESCALATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * CTO check: has the sprint been escalated after max rework cycles?
+ * Fires `sprint_review:cto_escalation_review` for a fresh escalation,
+ * or `sprint_review:cto_escalation_force_complete` if the escalation
+ * has been pending longer than {@link ESCALATION_TIMEOUT_MS}.
+ */
+function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
+  const sprint = ctx.currentSprint;
+  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+
+  const reviewState = (sprint as any).reviewState;
+  if (!reviewState) return { status: "ok", detail: "No review state" };
+
+  if (reviewState.escalatedToCto === true && reviewState.ctoDecision === null) {
+    // Safety valve — if escalation has been pending for too long without a
+    // decision, force-complete rather than looping the CTO indefinitely.
+    const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > ESCALATION_TIMEOUT_MS) {
+      const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
+      return {
+        status: "action_needed",
+        detail: `Sprint ${sprint.number} escalation pending ${ageMinutes}m without decision — force-completing as safety valve`,
+        suggestedAction: "sprint_review:cto_escalation_force_complete",
+      };
+    }
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles — awaiting CTO decision (fix/skip/abort)`,
+      suggestedAction: "sprint_review:cto_escalation_review",
+    };
+  }
+
+  // Extended safety valve (Option 5): CTO already decided "fix" but the sprint
+  // is still stuck in tester_verification or rework past a generous timeout.
+  // This happens when the developer beat has no dispatchable handler for build
+  // errors during review, or the rework cycle fails to advance.
+  // Use 2× the base timeout to give genuine fix attempts a fair window first.
+  if (
+    reviewState.escalatedToCto === true &&
+    reviewState.ctoDecision === "fix" &&
+    ["tester_verification", "rework"].includes(reviewState.phase)
+  ) {
+    const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
+    const STUCK_AFTER_FIX_TIMEOUT_MS = ESCALATION_TIMEOUT_MS * 2; // 10 minutes
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > STUCK_AFTER_FIX_TIMEOUT_MS) {
+      const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
+      return {
+        status: "action_needed",
+        detail: `Sprint ${sprint.number} stuck in ${reviewState.phase} for ${ageMinutes}m after CTO "fix" decision — force-completing`,
+        suggestedAction: "sprint_review:cto_escalation_force_complete",
+      };
+    }
+  }
+
+  return { status: "ok", detail: "No pending escalation" };
 }
 
 function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
@@ -342,23 +436,58 @@ function checkMeetingContribution(ctx: AgentBeatContext): CheckResult {
   };
 }
 
-// ── Spec 21: CTO escalation check ──────────────────────────
+// ── Spec 14 Phase 6: Skills Lead proactive checks ─────────
 
 /**
- * CTO check: has the sprint review been escalated to the CTO?
- * Fires when reviewState.phase is "escalated" so the CTO can force-complete the sprint.
+ * Skills Lead — flag skills with successRate < 0.6 for mutation.
+ * The beat handler picks the worst-performing one and routes it to
+ * Phase 2 failure-attribution → mutation proposal.
+ *
+ * Data flows through ctx.skillHealth (injected by loadAgentContext).
  */
-function checkEscalatedReview(ctx: AgentBeatContext): CheckResult {
-  const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
-
-  const reviewState = (sprint as any).reviewState;
-  if (!reviewState || reviewState.phase !== "escalated") return { status: "ok", detail: "No escalation" };
-
+function checkSkillHealth(ctx: AgentBeatContext): CheckResult {
+  const health = ctx.skillHealth;
+  if (!health || health.worstPerformers.length === 0) {
+    return { status: "ok", detail: "All skills healthy" };
+  }
+  const worst = health.worstPerformers[0];
   return {
     status: "action_needed",
-    detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles`,
-    suggestedAction: "sprint_review:cto_escalation_decision",
+    detail: `${health.worstPerformers.length} underperforming skill(s), worst: ${worst.name} (${Math.round(worst.successRate * 100)}%)`,
+    suggestedAction: "skills_lead:mutate_underperformer",
+  };
+}
+
+/**
+ * Skills Lead — flag skills that have not been used for 30+ days.
+ * The beat handler proposes deprecation via an ATA-gated mutation
+ * (so the system can veto if the skill is actually valuable).
+ */
+function checkUnusedSkills(ctx: AgentBeatContext): CheckResult {
+  const unused = ctx.unusedSkills ?? [];
+  if (unused.length === 0) {
+    return { status: "ok", detail: "No stale skills" };
+  }
+  return {
+    status: "action_needed",
+    detail: `${unused.length} skill(s) unused for 30+ days`,
+    suggestedAction: "skills_lead:deprecate_unused",
+  };
+}
+
+/**
+ * Skills Lead — detect skill gaps from recurring patterns in the current sprint.
+ * The beat handler routes matching candidates through cross-sprint transfer.
+ */
+function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
+  const gapCount = ctx.sprintSkillGapCount ?? 0;
+  if (gapCount === 0) {
+    return { status: "ok", detail: "No skill gaps in current sprint" };
+  }
+  return {
+    status: "action_needed",
+    detail: `${gapCount} skill gap(s) in current sprint`,
+    suggestedAction: "skills_lead:fill_skill_gap",
   };
 }
 
@@ -368,13 +497,22 @@ type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   ceo: [checkMeetingContribution, checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
-  cto: [checkMeetingContribution, checkEscalatedReview, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
   tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
   ui_designer: [checkMeetingContribution, checkDesignQueue, checkAssignedTasks],
   marketing: [checkMeetingContribution, checkContentQueue, checkAssignedTasks],
-  skills_lead: [checkMeetingContribution, checkSkillQueue, checkAssignedTasks],
+  skills_lead: [
+    checkMeetingContribution,
+    // Phase 6 proactive checks first — fire even with no assigned task
+    checkSkillHealth,
+    checkSkillGaps,
+    checkUnusedSkills,
+    // Reactive task-based checks after
+    checkSkillQueue,
+    checkAssignedTasks,
+  ],
 };
 
 // ── Public API ─────────────────────────────────────────────

@@ -599,6 +599,7 @@ export const beatEventTriggerSchema = z.enum([
   "approval_granted",
   "feedback_received",
   "sprint_started",
+  "sprint_completed",
   "escalation_received",
   "bug_reported",
   "meeting_contribution",
@@ -729,6 +730,24 @@ export const agentBeatContextSchema = z.object({
     detail: z.string(),
     checkedAt: z.string(),
   }).optional(),
+
+  // Spec 14 Phase 6 — Skills Lead proactive heartbeat context
+  skillHealth: z.object({
+    totalSkills: z.number().int().nonnegative(),
+    activeSkills: z.number().int().nonnegative(),
+    averageSuccessRate: z.number().min(0).max(1),
+    worstPerformers: z.array(z.object({
+      skillId: z.string(),
+      name: z.string(),
+      successRate: z.number().min(0).max(1),
+    })),
+  }).optional(),
+  unusedSkills: z.array(z.object({
+    skillId: z.string(),
+    name: z.string(),
+    lastUsedAt: z.string().nullable(),
+  })).optional(),
+  sprintSkillGapCount: z.number().int().nonnegative().optional(),
 });
 
 export const companySnapshotSchema = z.object({
@@ -795,6 +814,9 @@ export const sprintReviewStateSchema = z.object({
   testerVerdict: z.enum(["pending", "pass", "fail"]).nullable(),
   escalatedToCto: z.boolean(),
   ctoDecision: z.enum(["fix", "skip", "abort"]).nullable(),
+  /** ISO timestamp set when escalatedToCto first flips to true. Used by the
+   * force-complete safety valve to bound how long CTO review can stall. */
+  escalatedAt: z.string().nullable().default(null),
   startedAt: z.string(),
   completedAt: z.string().nullable(),
 });
@@ -831,6 +853,8 @@ export const policyRuleSchema = z.object({
   /** If true, rule is currently active */
   enabled: z.boolean().default(true),
   priority: z.number().int().default(0),
+  /** Optional regex pattern for file-path enforcement (e.g. "\\.(test|spec)\\.") */
+  filePattern: z.string().optional(),
 });
 
 export const policyEvalContextSchema = z.object({
@@ -840,6 +864,8 @@ export const policyEvalContextSchema = z.object({
   trustScore: z.number().min(0).max(1),
   beatId: z.string().optional(),
   companyId: z.string(),
+  /** File path being accessed — used for file-pattern rules (Spec 21) */
+  filePath: z.string().optional(),
 });
 
 export const policyDecisionSchema = z.object({
@@ -955,6 +981,223 @@ export type TrustEventKind = z.infer<typeof trustEventKindSchema>;
 export type TrustEvent = z.infer<typeof trustEventSchema>;
 export type PolicySeverity = z.infer<typeof policySeveritySchema>;
 export type PolicyViolation = z.infer<typeof policyViolationSchema>;
+
+// Skill Evolution types (Spec 14)
+
+export const skillStatusSchema = z.enum(["draft", "testing", "active", "deprecated"]);
+
+export const skillTestCaseSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  input: z.string(),
+  expectedBehavior: z.string(),
+  validationCriteria: z.array(z.string()),
+});
+
+export const skillArtifactSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  name: z.string(),
+  role: z.string(),
+  version: z.number().int().min(1).default(1),
+  status: skillStatusSchema,
+  trigger: z.string(),
+  content: z.string(),
+  testCases: z.array(skillTestCaseSchema).default([]),
+  successRate: z.number().min(0).max(1).default(0.5),
+  usageCount: z.number().int().default(0),
+  lastUsedAt: z.string().nullable().default(null),
+  mutatedFromId: z.string().nullable().default(null),
+  mutatedBy: z.string().nullable().default(null),
+  mutationReason: z.string().nullable().default(null),
+  createdAt: z.string(),
+  approvedAt: z.string().nullable().default(null),
+  /** @deprecated No longer populated. Kept optional so legacy records still
+   *  parse. Skill matching is now handled by an LLM classifier in the
+   *  orchestrator (see buildSkillCatalog / classifyTaskSkills); trigger
+   *  embeddings are no longer needed. */
+  triggerEmbedding: z.array(z.number()).optional(),
+});
+
+export const skillHealthReportSchema = z.object({
+  totalSkills: z.number(),
+  activeSkills: z.number(),
+  averageSuccessRate: z.number(),
+  worstPerformers: z.array(z.object({
+    skillId: z.string(),
+    name: z.string(),
+    successRate: z.number(),
+    issues: z.array(z.string()),
+  })),
+  gaps: z.array(z.object({
+    taskPattern: z.string(),
+    frequency: z.number(),
+    suggestedSkill: z.string(),
+  })),
+  recentMutationCount: z.number(),
+});
+
+// Spec 14 Phase 2: Failure Attribution + Skill Mutation
+
+export const failureAttributionSchema = z.object({
+  taskId: z.string(),
+  outcome: z.enum(["failed", "high_friction", "success"]),
+  attributedSkillId: z.string().nullable(),
+  failureMode: z.string(),
+  confidence: z.number().min(0).max(1),
+  suggestedFix: z.string(),
+  isSkillGap: z.boolean(),
+  createdAt: z.string(),
+});
+
+export const skillMutationStatusSchema = z.enum([
+  "proposed", "testing", "approved", "rejected", "revision", "merged",
+]);
+
+export const skillTestResultSchema = z.object({
+  testCaseId: z.string(),
+  status: z.enum(["pass", "fail", "error"]),
+  output: z.string(),
+  durationMs: z.number(),
+  executedAt: z.string(),
+});
+
+export const skillMutationSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  originalSkillId: z.string().nullable(),
+  proposedSkill: skillArtifactSchema,
+  reason: z.string(),
+  failureTraceId: z.string().nullable(),
+  status: skillMutationStatusSchema,
+  revisionCycle: z.number().int().min(0).default(0),
+  testResults: z.array(skillTestResultSchema).default([]),
+  reviewFeedback: z.string().nullable().default(null),
+  proposedBy: z.string(),
+  proposedAt: z.string(),
+  resolvedAt: z.string().nullable().default(null),
+});
+
+// Spec 14 Phase 3: ATA Pipeline types
+
+export const ataTestScenarioSchema = z.object({
+  id: z.string(),
+  scenario: z.string(),
+  taskPrompt: z.string(),
+  expectedOutcomes: z.array(z.string()),
+  edgeCases: z.array(z.string()),
+});
+
+export const ataDryRunResultSchema = z.object({
+  testId: z.string(),
+  agentPlan: z.string(),
+  outcomeMatches: z.array(z.boolean()),
+  edgeCaseMatches: z.array(z.boolean()),
+  notes: z.string(),
+});
+
+export const ataReviewVerdictSchema = z.object({
+  verdict: z.enum(["approve", "reject", "revise"]),
+  overallScore: z.number().min(0).max(1),
+  fixesOriginalFailure: z.boolean(),
+  coreOutcomesPassing: z.string(),
+  edgeCasesPassing: z.string(),
+  securityConcerns: z.array(z.string()),
+  revisionGuidance: z.string().nullable(),
+});
+
+export const ataPipelineResultSchema = z.object({
+  mutationId: z.string(),
+  verdict: z.enum(["approve", "reject", "revise"]),
+  testScenarios: z.array(ataTestScenarioSchema),
+  dryRunResults: z.array(ataDryRunResultSchema),
+  reviewVerdict: ataReviewVerdictSchema,
+  revisionCycles: z.number().int().min(0),
+  completedAt: z.string(),
+});
+
+// ── Phase 5: Pattern Learning → Skill Formation ──────────
+
+/**
+ * A Pattern is a compressed record of a task trajectory, with an embedding that
+ * lets us compute similarity to other tasks. Patterns accumulate across sprints
+ * and form the raw material for emergent skill discovery.
+ */
+export const patternOutcomeSchema = z.enum(["success", "failure", "high_friction"]);
+
+export const patternSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  role: z.string(),
+  taskTitle: z.string(),
+  taskDescription: z.string(),
+  summary: z.string().describe("One-line summary of what was attempted + outcome"),
+  outcome: patternOutcomeSchema,
+  embedding: z.array(z.number()).describe("Vector embedding of the task trajectory"),
+  usageCount: z.number().int().nonnegative().describe("How many source tasks have rolled into this pattern"),
+  successRate: z.number().min(0).max(1).describe("EMA success across source tasks"),
+  sourceTaskIds: z.array(z.string()),
+  matchedSkillIds: z.array(z.string()).describe("Skills that were active when this pattern was observed"),
+  tags: z.array(z.string()),
+  firstSeenSprintId: z.string().nullable().describe("Sprint where this pattern was first observed (Phase 6 cross-sprint transfer)"),
+  sprintIds: z.array(z.string()).describe("All sprints where this pattern has been observed"),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+/**
+ * A cluster groups patterns whose embeddings are mutually similar (cosine >= threshold).
+ * A cluster with 4+ members, high combined success, and no matching skill becomes
+ * a "skill candidate" that can be promoted through the ATA pipeline.
+ */
+export const patternClusterSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  role: z.string(),
+  patternIds: z.array(z.string()).describe("IDs of patterns that form this cluster"),
+  representativeTitle: z.string().describe("Short human-readable label"),
+  representativeSummary: z.string().describe("Combined behavioral summary across members"),
+  combinedUsageCount: z.number().int().nonnegative(),
+  combinedSuccessRate: z.number().min(0).max(1),
+  dominantRole: z.string(),
+  hasMatchingSkill: z.boolean(),
+  matchingSkillId: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+/**
+ * A candidate is a cluster that satisfies the promotion criteria.
+ * It carries the minimum data needed for an LLM to synthesize a SKILL.md.
+ */
+export const skillCandidateSchema = z.object({
+  clusterId: z.string(),
+  companyId: z.string(),
+  role: z.string(),
+  representativeTitle: z.string(),
+  representativeSummary: z.string(),
+  memberCount: z.number().int().nonnegative(),
+  combinedUsageCount: z.number().int().nonnegative(),
+  combinedSuccessRate: z.number().min(0).max(1),
+  memberSummaries: z.array(z.string()).describe("Summaries of cluster members for LLM context"),
+  proposedAt: z.string(),
+});
+
+export type SkillStatus = z.infer<typeof skillStatusSchema>;
+export type SkillTestCase = z.infer<typeof skillTestCaseSchema>;
+export type SkillArtifact = z.infer<typeof skillArtifactSchema>;
+export type SkillHealthReport = z.infer<typeof skillHealthReportSchema>;
+export type FailureAttribution = z.infer<typeof failureAttributionSchema>;
+export type SkillMutation = z.infer<typeof skillMutationSchema>;
+export type SkillMutationStatus = z.infer<typeof skillMutationStatusSchema>;
+export type SkillTestResult = z.infer<typeof skillTestResultSchema>;
+export type ATATestScenario = z.infer<typeof ataTestScenarioSchema>;
+export type ATADryRunResult = z.infer<typeof ataDryRunResultSchema>;
+export type ATAReviewVerdict = z.infer<typeof ataReviewVerdictSchema>;
+export type ATAPipelineResult = z.infer<typeof ataPipelineResultSchema>;
+export type PatternOutcome = z.infer<typeof patternOutcomeSchema>;
+export type Pattern = z.infer<typeof patternSchema>;
+export type PatternCluster = z.infer<typeof patternClusterSchema>;
+export type SkillCandidate = z.infer<typeof skillCandidateSchema>;
 
 // Sprint Verification types (Spec 21)
 export type VerificationGateResult = z.infer<typeof verificationGateResultSchema>;

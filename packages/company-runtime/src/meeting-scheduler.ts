@@ -96,6 +96,35 @@ export class MeetingScheduler {
         const nextCheck = schedule.nextCheckAt ? new Date(schedule.nextCheckAt).getTime() : 0;
         if (now < nextCheck) continue;
 
+        // ── One-per-sprint gate for daily_sync ───────────────
+        // A daily_sync meeting should fire at most once per sprint. If
+        // one has already been created for the current sprint (or if
+        // there's no active sprint yet), advance the schedule clock
+        // without incrementing skipCount and without firing.
+        if (schedule.type === "daily_sync") {
+          const sprintId = snap.company.currentSprintId;
+          const sprint = sprintId ? snap.sprints.find((s) => s.id === sprintId) : null;
+          const sprintStartMs = sprint?.startedAt ? new Date(sprint.startedAt).getTime() : null;
+          const alreadyFiredThisSprint =
+            sprintStartMs !== null &&
+            snap.meetings.some(
+              (m) =>
+                m.type === "daily_sync" &&
+                m.createdAt &&
+                new Date(m.createdAt).getTime() >= sprintStartMs,
+            );
+          if (!sprintId || alreadyFiredThisSprint) {
+            const nowIso = new Date().toISOString();
+            const nextCheckIso = new Date(now + schedule.intervalMs).toISOString();
+            this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+              ...s,
+              lastCheckedAt: nowIso,
+              nextCheckAt: nextCheckIso,
+            }));
+            continue;
+          }
+        }
+
         const needsMeeting = this.assessMeetingNeed(snap, schedule);
 
         // Update schedule metadata
@@ -167,7 +196,9 @@ export class MeetingScheduler {
     // Check for recent task changes since last check
     const lastChecked = schedule.lastCheckedAt ? new Date(schedule.lastCheckedAt).getTime() : 0;
     const hasTaskChanges = snap.tasks.some((t) => {
-      const updated = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+      // Task has no updatedAt — approximate with the latest known timestamp
+      const lastTouched = t.completedAt ?? t.startedAt ?? t.createdAt;
+      const updated = lastTouched ? new Date(lastTouched).getTime() : 0;
       return updated > lastChecked && schedule.participantAgentIds.includes(t.assignedAgentId ?? "");
     });
 

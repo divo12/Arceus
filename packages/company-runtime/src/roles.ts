@@ -115,6 +115,9 @@ export function canManageRole(managerRole: RoleSoul["role"], childRole: RoleSoul
   return ROLE_SOULS[managerRole].allowedDirectReports.includes(childRole);
 }
 
+/** Roles that must always be present in every company org chart. */
+export const MANDATORY_ROLES: ReadonlyArray<string> = ["tester", "skills_lead"];
+
 export function assertRoleHierarchy(roles: Array<{ role: string; parent_role: string | null }>) {
   const seen = new Set<string>();
 
@@ -136,6 +139,12 @@ export function assertRoleHierarchy(roles: Array<{ role: string; parent_role: st
       if (!canManageRole(entry.parent_role as RoleSoul["role"], entry.role as RoleSoul["role"])) {
         throw new Error(`Role policy violation: ${entry.parent_role} cannot directly orchestrate ${entry.role}`);
       }
+    }
+  }
+
+  for (const required of MANDATORY_ROLES) {
+    if (!seen.has(required)) {
+      throw new Error(`Org chart is missing mandatory role: "${required}". Every company must include tester and skills_lead.`);
     }
   }
 }

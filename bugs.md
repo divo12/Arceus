@@ -2,6 +2,22 @@
 - ceo chat does not have context of all agents work - never tested
 - ceo chat unaware of observability
 - ceo chat takes a lot of time - have sse
+  - observed: a single "yep" from the board → `GET /api/chat/ceo/stream` took **87 seconds** before the `proposal` card surfaced
+  - measured breakdown (req-an, second `yep` that triggered strategy_proposal):
+    - OpenCode CEO text streaming (Azure LLM via `startCeoPromptAsync` + event loop, chat.ts:132-178): **~75s**
+    - `classifyCeoResponse` → `ceo_card` structured completion (ceo.ts:395-453): **~12s** (audit: `LLM ceo_card → 3255 tokens (2580+675) 11736ms`)
+    - total: ~87s end-to-end; no other audit lines emitted during the window
+  - root causes:
+    1. **Double-LLM serial architecture:** every chat turn makes TWO sequential Azure calls — (1) OpenCode streams free text, then (2) `classifyCeoResponse` re-reads the text + full snapshot to emit the structured `ceoCardSchema`. Call #2 is pure format conversion; structured-output mode on Call #1 would eliminate it.
+    2. **Snapshot + history bloat on every call:** `buildCeoOperatingPrompt(snapshot, executionStatus)` + full `buildSnapshotContext` + entire conversation history is re-sent on each turn. By message 5-7 the input token count has grown significantly.
+    3. **Strategy_proposal is the largest card shape:** roles[]×4-8, execution_sequence[], board_checkpoints[], key_risks[], role_rationale[] — a clarifying_question card is 3-5× faster than a strategy_proposal card.
+    4. Both LLM calls use the same `ceoDeployment` (heavy model) — Call #2 is a simple text→JSON task that a smaller model would handle in 2-3s.
+  - pre-existing, not rebase-induced: none of the spec-14 commits touch chat.ts, ceo.ts, or buildCeoOperatingPrompt; the conflict resolutions (orchestrator dead-code delete, heartbeat-checklist Phase 6 blend, 3 signature fixups) don't intersect the CEO chat hot path
+  - proposed fixes (ranked by leverage):
+    - Fix A (largest win, ~12s saved, ~14%): eliminate Call #2 — have OpenCode CEO generate `ceoCardSchema` structured output directly in Call #1, with a classify-on-parse-failure fallback
+    - Fix B (variable 10-30s saved, highest ceiling): trim the CEO context — send only last N messages and a minimal snapshot slice (company + currentSprint) instead of the full `buildSnapshotContext`
+    - Fix C (~8s saved, low risk): swap `classifyCeoResponse` to a smaller/faster deployment (e.g. gpt-4o-mini) since the card schema is structurally simple
+    - Fix D (UX): stream the classifier output incrementally so the UI shows `connecting → running → classifying → proposal` with real progress instead of a single 87s spinner (status events are emitted but user-visible progress during the 75s OpenCode phase is just `phase: running`)
 - create a doc of all the endpoints that exist
 - create a doc of all the flows that exist
 - sprint transition takes a lot of time and its a blackbox
@@ -38,3 +54,8 @@
     - Fix 2 (strategic): add `syncWorkspaceCheckpoint(task.id, "developer", message)` call to the developer beat completion path (same spot that fires tryAutoPreview). Restores the "commit per task, tag per sprint" design from Spec 08
     - Fix 3 (cleanup): hoist the HEAD guard into ensureGitRepository so every downstream call (diffWorkspaceRefs, etc.) is safe
   - recommended: Fix 1 + Fix 2 together — Fix 1 unblocks the error, Fix 2 closes the underlying "developer work is never versioned" root cause
+- trust-scores table leaks across company bootstraps
+  - observed: rows grew 92 → 95 → 104 across three consecutive `DELETE /api/company` + re-bootstrap cycles during spec-14 playbook verification
+  - root cause: `DELETE /api/company` does not purge trust rows whose agentId belongs to the destroyed company — agents are deleted but their governance telemetry (trust scores, attribution, mutation history) is orphaned
+  - effect: fresh-company T0 baseline is polluted — `curl /api/governance/trust-scores` returns stale 0.73/0.79 rows mixed with the expected 0.5 baseline for newly-hired agents, making Phase 4 verification noisy
+  - proposed fix: extend the company-delete handler to cascade-delete trust scores, attribution events, and mutation proposals scoped to the destroyed agents so T0 snapshots read cleanly

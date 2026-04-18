@@ -152,13 +152,21 @@ async function testPolicyEvaluation() {
   const d7 = evaluatePolicy(pmWrite, BASE_POLICY_RULES);
   assert(d7.decision === "deny", `PM + write → deny (got: ${d7.decision})`);
 
-  // Tester + write → allow (Spec 21: tester-write-tests-only carve-out)
+  // Tester + write test file → allow (Spec 21: tester-write-tests-only carve-out)
   const testerWrite: PolicyEvalContext = {
     agentId: "agent_tester", role: "tester", tool: "write",
-    trustScore: 0.9, companyId: "c1",
+    trustScore: 0.9, companyId: "c1", filePath: "src/auth.test.ts",
   };
   const d8 = evaluatePolicy(testerWrite, BASE_POLICY_RULES);
-  assert(d8.decision === "allow", `Tester + write → allow (got: ${d8.decision})`);
+  assert(d8.decision === "allow", `Tester + write test file → allow (got: ${d8.decision})`);
+
+  // Tester + write production file → deny (filePattern enforcement)
+  const testerWriteProd: PolicyEvalContext = {
+    agentId: "agent_tester", role: "tester", tool: "write",
+    trustScore: 0.9, companyId: "c1", filePath: "src/auth.ts",
+  };
+  const d8b = evaluatePolicy(testerWriteProd, BASE_POLICY_RULES);
+  assert(d8b.decision === "deny", `Tester + write prod file → deny (got: ${d8b.decision})`);
 
   // ui_designer + bash → deny
   const uiBash: PolicyEvalContext = {

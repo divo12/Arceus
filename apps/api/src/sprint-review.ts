@@ -41,6 +41,34 @@ export function routeDefect(area: DefectArea): AgentIdentity["role"] {
   return DEFECT_ROUTE[area] ?? "developer";
 }
 
+/**
+ * Fallback chain when the ideal role for a defect isn't hired.
+ * Priority: ideal → fallback → "developer" (always hired in practice).
+ */
+const DEFECT_FALLBACK: Partial<Record<AgentIdentity["role"], AgentIdentity["role"][]>> = {
+  ui_designer: ["developer"],
+  marketing:   ["pm", "cto", "developer"],
+};
+
+/**
+ * Like routeDefect but validates against the set of actually-hired roles.
+ * Falls back through DEFECT_FALLBACK until it finds a hired role.
+ * Last-resort is "developer" — every company has one.
+ */
+export function resolveDefectRole(
+  area: DefectArea,
+  hiredRoles: Set<AgentIdentity["role"]>,
+): AgentIdentity["role"] {
+  const ideal = DEFECT_ROUTE[area] ?? "developer";
+  if (hiredRoles.has(ideal)) return ideal;
+
+  for (const fallback of (DEFECT_FALLBACK[ideal] ?? [])) {
+    if (hiredRoles.has(fallback)) return fallback;
+  }
+
+  return "developer";
+}
+
 // ── Review state factory ────────────────────────────────────
 
 export function createReviewState(maxReworkCycles = 3): SprintReviewState {
@@ -53,6 +81,7 @@ export function createReviewState(maxReworkCycles = 3): SprintReviewState {
     testerVerdict: null,
     escalatedToCto: false,
     ctoDecision: null,
+    escalatedAt: null,
     startedAt: new Date().toISOString(),
     completedAt: null,
   };
@@ -130,6 +159,8 @@ export interface BugFixTaskInput {
   finding: QAFinding;
   sprintId: string;
   parentTaskId: string;
+  /** Roles of agents currently hired — used to fall back from unhired roles. */
+  hiredRoles?: Set<AgentIdentity["role"]>;
 }
 
 /**
@@ -148,7 +179,9 @@ export function buildBugFixTaskFields(input: BugFixTaskInput): {
   parentTaskId: string;
   sprintId: string;
 } {
-  const role = routeDefect(input.finding.defectArea);
+  const role = input.hiredRoles
+    ? resolveDefectRole(input.finding.defectArea, input.hiredRoles)
+    : routeDefect(input.finding.defectArea);
   return {
     kind: "bug_fix",
     title: `Bug fix: ${input.finding.description.slice(0, 80)}`,
