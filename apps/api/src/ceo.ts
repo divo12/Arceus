@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
-import { structuredCompletion } from "./azure-openai";
+import { structuredCompletion, LlmTruncatedOutputError } from "./azure-openai";
 
 const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
 // Mandatory hierarchy floor. Enforced deterministically after the LLM returns
@@ -474,16 +474,76 @@ export async function classifyCeoResponse(
     ceoText,
   ].join("\n");
 
-  const card = await structuredCompletion(
-    "ceoDeployment",
-    [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    ceoCardSchema,
-    "ceo_card",
-    { temperature: 0.3 },
-  );
+  const runClassifier = async (extraSystem?: string) => {
+    const systemContent = extraSystem ? `${systemPrompt}\n\n${extraSystem}` : systemPrompt;
+    return structuredCompletion(
+      "ceoDeployment",
+      [
+        { role: "system", content: systemContent },
+        { role: "user", content: userPrompt },
+      ],
+      ceoCardSchema,
+      "ceo_card",
+      { temperature: 0.3 },
+    );
+  };
+
+  let card: CeoCard;
+  try {
+    card = await runClassifier();
+  } catch (err) {
+    // Truncation or malformed-JSON responses blow up both the strict json_schema
+    // path and (occasionally) the strict validator. Retry once with an explicit
+    // brevity directive so the classifier can finish within the token budget.
+    const isTruncated = err instanceof LlmTruncatedOutputError;
+    const isSyntax = err instanceof SyntaxError || (err instanceof Error && /JSON/i.test(err.message));
+    if (!isTruncated && !isSyntax) throw err;
+
+    console.warn(
+      `[ceo_card] classifier ${isTruncated ? "truncated" : "malformed-JSON"}; retrying with compact directive:`,
+      err instanceof Error ? err.message : err,
+    );
+
+    try {
+      card = await runClassifier(
+        [
+          "BREVITY RULES (response was previously truncated — you MUST fit in 4k tokens):",
+          "- Limit any arrays (key_tasks, suggested_prompts, roles, board_checkpoints, risks) to the minimum viable count: prefer 3-5 items max.",
+          "- Keep every string under 280 characters. No paragraphs.",
+          "- Do not restate the CEO message verbatim. Extract structure only.",
+          "- If the CEO message is long, summarize aggressively and drop low-value fields to null.",
+        ].join("\n"),
+      );
+    } catch (retryErr) {
+      // Final safety net: produce a minimal status_update card so chat still
+      // makes forward progress. Without this, a persistently-truncating CEO
+      // response would loop the heartbeat forever and never publish anything.
+      console.error(
+        "[ceo_card] classifier retry also failed — emitting fallback status_update card:",
+        retryErr instanceof Error ? retryErr.message : retryErr,
+      );
+      const fallback: CeoCard = {
+        card_type: "status_update",
+        stage,
+        title: "CEO update (fallback)",
+        summary: ceoText.slice(0, 400),
+        welcome: null,
+        mission: null,
+        strategy: null,
+        question: null,
+        status: {
+          headline: "CEO classifier failed — emitting raw update",
+          current_focus: [ceoText.slice(0, 280)],
+          blockers: ["Structured classifier produced malformed/truncated output"],
+          next_actions: [],
+          board_requests: [],
+        },
+        sprint_proposal: null,
+        meeting: { create: false, type: null, summary: "", rationale: "", task_deltas: [] },
+      };
+      return fallback;
+    }
+  }
 
   // Deterministic mandatory-role injection for strategy_proposal cards — never
   // trust the LLM to include tester + skills_lead. This guarantees the floor

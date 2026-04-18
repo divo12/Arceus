@@ -147,12 +147,39 @@ export async function chatCompletion(
  *
  * Principle 4: Structured Outputs Over String Parsing.
  */
+/**
+ * Error thrown when the LLM response was truncated because the deployment's
+ * completion-token cap was reached before the structured output finished.
+ * Callers can catch this to retry with a compacted prompt or a smaller schema
+ * path instead of trying to parse the (guaranteed-broken) partial JSON.
+ */
+export class LlmTruncatedOutputError extends Error {
+  readonly schemaName: string;
+  readonly completionTokens: number;
+  readonly maxTokens: number;
+  constructor(schemaName: string, completionTokens: number, maxTokens: number) {
+    super(
+      `Azure OpenAI structured output (${schemaName}) truncated at ${completionTokens} tokens (max_tokens=${maxTokens}). ` +
+      `Reduce prompt context, narrow the schema, or raise max_tokens.`,
+    );
+    this.name = "LlmTruncatedOutputError";
+    this.schemaName = schemaName;
+    this.completionTokens = completionTokens;
+    this.maxTokens = maxTokens;
+  }
+}
+
+/** Default completion cap for structured outputs. Generous enough for
+ * sprint_proposal cards while still preventing runaway responses that
+ * hit deployment defaults and produce truncated JSON. */
+const DEFAULT_STRUCTURED_MAX_TOKENS = 12000;
+
 export async function structuredCompletion<T>(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
   schema: ZodType<T>,
   schemaName: string,
-  options?: { temperature?: number },
+  options?: { temperature?: number; maxTokens?: number },
   auditCtx?: LlmAuditContext,
 ): Promise<T> {
   const deployment = ensureDeployment(deploymentKey);
@@ -163,6 +190,8 @@ export async function structuredCompletion<T>(
     target: "openAi",
     $refStrategy: "none",
   });
+
+  const maxTokens = options?.maxTokens ?? DEFAULT_STRUCTURED_MAX_TOKENS;
 
   return resilientCall(
     async () => {
@@ -176,6 +205,7 @@ export async function structuredCompletion<T>(
         body: JSON.stringify({
           messages,
           temperature: options?.temperature ?? 0.7,
+          max_tokens: maxTokens,
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -193,16 +223,28 @@ export async function structuredCompletion<T>(
       }
 
       const json = (await response.json()) as {
-        choices: Array<{ message: { content: string } }>;
+        choices: Array<{ message: { content: string }; finish_reason?: string }>;
         usage?: AzureOpenAIUsage;
       };
       const latencyMs = Math.round(performance.now() - start);
 
       auditLlmCall(deployment, json.usage, latencyMs, auditCtx, schemaName);
 
-      const raw = json.choices[0]?.message?.content;
+      const choice = json.choices[0];
+      const raw = choice?.message?.content;
       if (!raw) {
         throw new Error(`Azure OpenAI returned no content for structured output (${schemaName}).`);
+      }
+
+      // Detect truncation FIRST — if the LLM hit max_tokens, its JSON is
+      // guaranteed to be malformed. Throw a typed error so callers can
+      // retry with compacted context instead of silently failing.
+      if (choice.finish_reason === "length") {
+        throw new LlmTruncatedOutputError(
+          schemaName,
+          json.usage?.completion_tokens ?? -1,
+          maxTokens,
+        );
       }
 
       return schema.parse(JSON.parse(raw));

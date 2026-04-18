@@ -19,7 +19,7 @@ import { emitGraphSprintStarted, emitGraphSprintCompleted, emitGraphNodeAdded, e
 import { graphStore } from "./graph-store";
 import { clearReportedPreviewCandidate, getLocalPreviewState, hasLocalPreviewCandidate, hasReportedPreviewCandidate, probePreviewHealth, registerReportedPreviewUrl, startLocalPreview, stopLocalPreview } from "./preview";
 import { generateWorkflowTaskPlan, mapTaskPriority } from "./task-planner";
-import { persistRuntimeArtifact } from "./artifact-persistence";
+import { persistRuntimeArtifact, listPersistedArtifacts } from "./artifact-persistence";
 import { describePgError } from "./pg-errors";
 import { workspaceManager } from "./workspace-manager";
 import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "./azure-openai";
@@ -1037,12 +1037,31 @@ function createSprintRecord(snapshot: CompanySnapshot, title: string, goal: stri
  */
 let ceoProposalInFlight = false;
 
+// Failure-backoff state: if the CEO proposal LLM path keeps failing
+// (truncated output, malformed JSON, classifier errors), the heartbeat would
+// otherwise retry every 60s forever and spam tokens. Track consecutive failures
+// and enforce a cooldown window so the system degrades gracefully instead of
+// looping on the same unreachable state.
+let ceoProposalFailureCount = 0;
+let ceoProposalCooldownUntilMs = 0;
+const CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN = 3;
+const CEO_PROPOSAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
 async function triggerCeoSprintProposal(): Promise<void> {
   if (ceoProposalInFlight) {
     emitEmployeeActivity(
       "ceo",
       "info",
       "CEO proposal already in flight — skipping duplicate trigger.",
+    );
+    return;
+  }
+  if (Date.now() < ceoProposalCooldownUntilMs) {
+    const remainingSec = Math.ceil((ceoProposalCooldownUntilMs - Date.now()) / 1000);
+    emitEmployeeActivity(
+      "ceo",
+      "info",
+      `CEO proposal in cooldown after ${ceoProposalFailureCount} failures — retrying in ${remainingSec}s. Board can send a message to request a proposal manually.`,
     );
     return;
   }
@@ -1138,13 +1157,23 @@ async function triggerCeoSprintProposal(): Promise<void> {
           : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
         emitEmployeeActivity("ceo", "info", reason);
       }
+      // Success — clear failure counter so the cooldown resets.
+      ceoProposalFailureCount = 0;
+      ceoProposalCooldownUntilMs = 0;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       console.error("[Sprint] CEO sprint proposal generation failed:", message);
+      ceoProposalFailureCount += 1;
+      const hitCooldown = ceoProposalFailureCount >= CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN;
+      if (hitCooldown) {
+        ceoProposalCooldownUntilMs = Date.now() + CEO_PROPOSAL_COOLDOWN_MS;
+      }
       emitEmployeeActivity(
         "system",
         "error",
-        `Failed to auto-generate sprint proposal: ${message}. Board can message the CEO directly to request a proposal.`,
+        hitCooldown
+          ? `CEO sprint proposal failed ${ceoProposalFailureCount}x in a row (last: ${message}). Backing off for ${Math.round(CEO_PROPOSAL_COOLDOWN_MS / 60000)}m. Board can message the CEO directly to request a proposal.`
+          : `Failed to auto-generate sprint proposal (attempt ${ceoProposalFailureCount}/${CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN}): ${message}. Board can message the CEO directly to request a proposal.`,
       );
     }
   } finally {
@@ -1384,6 +1413,52 @@ async function executeSprintReviewVerification(
   // Entry-point import check
   const sprintEntryCheck = checkEntryPointImports();
 
+  // ── Cycle-over-cycle diff (Fix #5) ───────────────────────────────
+  // On rework cycles, surface the previous cycle's QA findings so the tester
+  // can categorize current findings as resolved / recurring / new regressions.
+  // Gracefully disables when the DB is not configured (listPersistedArtifacts
+  // returns []).
+  let previousCycleContext = "";
+  if (reviewState.reworkCycleCount > 0) {
+    try {
+      const priorArtifacts = await listPersistedArtifacts(snapshot.company.id);
+      const priorFailReports = priorArtifacts
+        .filter(
+          (a) =>
+            a.kind === "qa_report" &&
+            a.sprintId === sprintId &&
+            a.title.includes("FAIL"),
+        )
+        .slice(0, 1);
+      if (priorFailReports.length > 0) {
+        const prior = priorFailReports[0];
+        const snippet = prior.content.slice(0, 4000);
+        previousCycleContext = [
+          "",
+          `## Previous Cycle Findings (cycle ${reviewState.reworkCycleCount})`,
+          "The developer has completed another rework pass. The report below is from the PREVIOUS verification cycle.",
+          "Your job this cycle:",
+          "  • RESOLVED — findings from the previous cycle that are now fixed (no longer reproducible).",
+          "  • RECURRING — findings from the previous cycle that are STILL present (the fix didn't land or didn't work).",
+          "  • NEW — findings in the current build that were NOT present in the previous cycle (regressions).",
+          "",
+          "Treat RECURRING findings as higher severity — they indicate the developer cannot fix the underlying issue.",
+          "",
+          "── Previous cycle report (verbatim excerpt) ──",
+          snippet,
+          prior.content.length > 4000 ? "…(truncated)" : "",
+          "── End previous cycle report ──",
+          "",
+          "At the very TOP of your output, add a one-line cycle diff in exactly this format:",
+          `CYCLE_DIFF: resolved=<N> recurring=<N> new=<N>`,
+          "Then produce your normal QA report below that line.",
+        ].join("\n");
+      }
+    } catch {
+      // best-effort — never block verification on diff lookup
+    }
+  }
+
   const prompt = [
     `You are verifying Sprint ${sprint.number}: "${sprint.goal}".`,
     "",
@@ -1406,6 +1481,7 @@ async function executeSprintReviewVerification(
     `Details: ${sprintEntryCheck.reason}`,
     sprintEntryCheck.orphanedModules.length > 0 ? `Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}` : "",
     !sprintEntryCheck.pass ? "Note: The entry file currently does not import the product modules — this is a structural issue that will be tracked as a single bug task. Consider it when forming your verdict but do not duplicate it in your findings." : "",
+    previousCycleContext,
     "",
     "If the preview is UNREACHABLE, the sprint cannot pass — a product that cannot be accessed is not shippable.",
     "",
@@ -1437,6 +1513,19 @@ async function executeSprintReviewVerification(
     touchAgentSession(role, "idle");
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
+
+    // Emit CYCLE_DIFF line (Fix #5) if tester complied with the instruction.
+    if (output && reviewState.reworkCycleCount > 0) {
+      const diffMatch = output.match(/CYCLE_DIFF:\s*resolved=(\d+)\s+recurring=(\d+)\s+new=(\d+)/i);
+      if (diffMatch) {
+        emitEmployeeActivity(
+          "tester",
+          "working",
+          `Sprint ${sprint.number} cycle ${reviewState.reworkCycleCount + 1}: ${diffMatch[1]} resolved, ${diffMatch[2]} recurring, ${diffMatch[3]} new regressions`,
+          { beatId },
+        );
+      }
+    }
 
     // Extract structured QA report from the agent's freeform output
     let qaReport: QAReport | null = null;
@@ -1550,10 +1639,33 @@ async function executeSprintReviewVerification(
         const orphanList = sprintEntryCheck.orphanedModules.length > 0
           ? ` Orphaned modules: ${sprintEntryCheck.orphanedModules.join(", ")}.`
           : "";
+        const wiringPrescription = generateOrphanWiringPrescription(
+          sprintEntryCheck.orphanedModules,
+          sprintEntryCheck.entryFile,
+        );
+        const prescriptionSection = wiringPrescription.length > 0
+          ? [
+              "",
+              "── Wire each orphan like this ──",
+              wiringPrescription,
+              "",
+              "Target entry-file structure (adapt to this product's domain):",
+              `<Layout>`,
+              `  {/* import + render every orphan listed above */}`,
+              `</Layout>`,
+              "",
+              "Rules:",
+              "1. Every orphan module above MUST be imported by the entry file (direct or transitive).",
+              "2. Every imported component MUST be rendered in the JSX tree — not just imported.",
+              "3. Pass realistic props where required — do NOT leave components with empty/placeholder props only.",
+              "4. Do NOT create new components — only wire the ones already on disk.",
+            ].join("\n")
+          : "";
+
         const entryBug = createWorkflowTask(
           getSnapshot(), "bug_fix", "developer",
           "Wire entry file to product modules",
-          `Entry file ${sprintEntryCheck.entryFile ?? "(not found)"} does not import this sprint's components. ${sprintEntryCheck.reason}${orphanList} Components exist on disk but are never rendered.`,
+          `Entry file ${sprintEntryCheck.entryFile ?? "(not found)"} does not import this sprint's components. ${sprintEntryCheck.reason}${orphanList} Components exist on disk but are never rendered.${prescriptionSection}`,
           "Entry file is disconnected from the product modules this sprint produced.",
           "Entry file imports and renders the sprint's components so they appear in the running app.",
           [
@@ -4754,16 +4866,69 @@ export async function approveSprintProposal(card: CeoCard) {
     }
   }
 
-  // Implicit ordering: tester/QA tasks must wait for all developer + ui_designer tasks
+  // Collect implementation task IDs (developer + ui_designer produce code artifacts)
   const implementationTaskIds = createdTasks
     .filter((t) => t.assignedRole === "developer" || t.assignedRole === "ui_designer")
     .map((t) => t.id);
-  if (implementationTaskIds.length > 0) {
+
+  // Auto-add integration task: wire component work into the app entry file.
+  // Without this, components exist on disk but are never imported by App.tsx,
+  // which causes the entry-point check to fail review downstream.
+  // Only emit when there are 2+ implementation tasks (integration is trivial otherwise).
+  let integrationTaskId: string | null = null;
+  if (implementationTaskIds.length >= 2) {
+    const implementationTitles = createdTasks
+      .filter((t) => implementationTaskIds.includes(t.id))
+      .map((t) => `- ${t.title}`);
+    const integrationDescription = [
+      "Wire every component produced in this sprint into the application entry file (src/App.tsx or equivalent).",
+      "",
+      "Why: individual components must be imported and rendered by the app shell — existing on disk is not enough.",
+      "",
+      "Components produced in this sprint:",
+      ...implementationTitles,
+      "",
+      "Steps:",
+      "1. Open the entry file (src/App.tsx or whichever exists for this stack).",
+      "2. Import each sprint component by its relative path.",
+      "3. Render every imported component inside the app's JSX tree in a coherent layout.",
+      "4. If routing is required, wire it here using the project's router.",
+      "5. Pass realistic props — no placeholder-only renders.",
+    ].join("\n");
+
+    const integrationTask = createWorkflowTask(
+      freshSnapshot,
+      "implementation",
+      "developer",
+      "Wire sprint components into app entry (App.tsx)",
+      integrationDescription,
+      integrationDescription,
+      "Every sprint component is imported and rendered by the entry file.",
+      [
+        "Entry file imports every component produced this sprint",
+        "Entry file renders every component in a coherent layout",
+        "App builds and the main view shows the integrated components",
+      ],
+      "critical",
+      "created",
+      sprint.id,
+    );
+    integrationTask.dependsOnTaskIds = [...implementationTaskIds];
+    integrationTask.parentTaskId = implementationTaskIds[0];
+    createdTasks.push(integrationTask);
+    integrationTaskId = integrationTask.id;
+  }
+
+  // Implicit ordering: tester/QA tasks must wait for implementation AND integration
+  const preTestDepIds = integrationTaskId
+    ? [...implementationTaskIds, integrationTaskId]
+    : implementationTaskIds;
+  if (preTestDepIds.length > 0) {
     for (let i = 0; i < createdTasks.length; i++) {
       if (createdTasks[i].assignedRole !== "tester") continue;
       const existing = new Set(createdTasks[i].dependsOnTaskIds);
       const merged = [...createdTasks[i].dependsOnTaskIds];
-      for (const depId of implementationTaskIds) {
+      for (const depId of preTestDepIds) {
         if (!existing.has(depId)) merged.push(depId);
       }
       createdTasks[i] = {
@@ -5971,6 +6136,52 @@ interface EntryPointCheckResult {
   orphanedModules: string[];
 }
 
+/**
+ * Should a file be excluded from the orphan/reachability calculation?
+ * Returns true for build configs, type declarations, tests, and other files
+ * that are NEVER supposed to be imported by an app entry file at runtime.
+ */
+function isExcludedFromEntryCheck(rel: string): boolean {
+  const name = rel.includes("/") ? rel.slice(rel.lastIndexOf("/") + 1) : rel;
+
+  // Hidden files
+  if (name.startsWith(".")) return true;
+
+  // TypeScript ambient declarations — auto-loaded, never imported
+  if (name.endsWith(".d.ts")) return true;
+
+  // Tests and specs — not part of runtime bundle
+  if (/\.(test|spec|stories)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(name)) return true;
+
+  // Build-tool configs at any depth
+  if (/\.config\.(ts|tsx|js|jsx|mjs|cjs)$/.test(name)) return true;
+
+  // Common config/boilerplate filenames
+  const configNames = new Set([
+    "vite.config.ts", "vite.config.js", "vite.config.mjs",
+    "vitest.config.ts", "vitest.config.js",
+    "tailwind.config.js", "tailwind.config.ts", "tailwind.config.cjs",
+    "postcss.config.js", "postcss.config.mjs", "postcss.config.cjs", "postcss.config.ts",
+    "next.config.ts", "next.config.js", "next.config.mjs",
+    "webpack.config.js", "rollup.config.js", "esbuild.config.js",
+    "tsconfig.json", "package.json", "jest.config.ts", "jest.config.js",
+    "babel.config.js", ".eslintrc.js", ".prettierrc.js",
+    "vite-env.d.ts", "next-env.d.ts",
+    "setupTests.ts", "setup-tests.ts",
+  ]);
+  if (configNames.has(name)) return true;
+
+  // Entry bootstrap files used to mount the app — not "orphans", they
+  // reference the entry rather than being referenced by it.
+  if (name === "main.tsx" || name === "main.ts" || name === "main.jsx" || name === "main.js") return true;
+  if (name === "index.tsx" || name === "index.ts" || name === "index.jsx" || name === "index.js") {
+    // only exclude if at repo root or src root (not nested index.ts which may be a barrel)
+    if (rel === name || rel === `src/${name}`) return true;
+  }
+
+  return false;
+}
+
 function checkEntryPointImports(): EntryPointCheckResult {
   // Identify the entry file (stack-agnostic — try common patterns)
   const entryFileCandidates = [
@@ -5996,11 +6207,10 @@ function checkEntryPointImports(): EntryPointCheckResult {
     return { pass: true, entryFile: null, reason: "No recognizable entry file found — skipping import check.", orphanedModules: [] };
   }
 
-  // Collect all product source files (exclude the entry file itself, config files, css)
+  // Collect all product source files, excluding configs/types/tests/etc.
   const productModules: string[] = [];
   const codeExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"]);
-  const ignoreNames = new Set(["node_modules", ".git", "dist", "build", ".next", ".vite", "coverage"]);
-  const ignoreFiles = new Set(["vite.config.ts", "vite.config.js", "tsconfig.json", "package.json", "postcss.config.mjs", "tailwind.config.js", "tailwind.config.ts", "next.config.ts", "next.config.js", "main.tsx", "main.ts", "main.js", "index.ts", "index.js", "index.css"]);
+  const ignoreNames = new Set(["node_modules", ".git", "dist", "build", ".next", ".vite", "coverage", "__tests__", "__mocks__", "tests"]);
 
   function walkProduct(dir: string, depth = 0) {
     if (depth > 4) return;
@@ -6010,14 +6220,12 @@ function checkEntryPointImports(): EntryPointCheckResult {
       if (ignoreNames.has(entry.name)) continue;
       const fullPath = join(dir, entry.name);
       if (entry.isDirectory()) { walkProduct(fullPath, depth + 1); continue; }
-      if (ignoreFiles.has(entry.name)) continue;
       const ext = entry.name.slice(entry.name.lastIndexOf("."));
-      if (codeExtensions.has(ext)) {
-        const rel = relative(productDir, fullPath).replace(/\\/g, "/");
-        if (rel !== entryFile) {
-          productModules.push(rel);
-        }
-      }
+      if (!codeExtensions.has(ext)) continue;
+      const rel = relative(productDir, fullPath).replace(/\\/g, "/");
+      if (rel === entryFile) continue;
+      if (isExcludedFromEntryCheck(rel)) continue;
+      productModules.push(rel);
     }
   }
   walkProduct(productDir);
@@ -6026,19 +6234,14 @@ function checkEntryPointImports(): EntryPointCheckResult {
     return { pass: true, entryFile, reason: "No product modules found beyond entry file.", orphanedModules: [] };
   }
 
-  // Check which modules are referenced in the entry file (or transitively via
-  // files the entry file imports). We do a simple 2-level transitive check.
-  const referencedFiles = new Set<string>();
-
+  // Extract import/require paths (relative only — we don't care about package imports)
   function extractImportedPaths(content: string, fileDir: string): string[] {
     const importPaths: string[] = [];
-    // Match import/require statements
-    const importRegex = /(?:import|require)\s*\(?['"]([^'"]+)['"]\)?/g;
+    const importRegex = /(?:import|require|from)\s*\(?['"]([^'"]+)['"]\)?/g;
     let match: RegExpExecArray | null;
     while ((match = importRegex.exec(content)) !== null) {
       const importPath = match[1];
       if (importPath.startsWith(".")) {
-        // Resolve relative import to a workspace-relative path
         const resolved = join(fileDir, importPath).replace(/\\/g, "/");
         importPaths.push(resolved);
       }
@@ -6046,37 +6249,46 @@ function checkEntryPointImports(): EntryPointCheckResult {
     return importPaths;
   }
 
-  // Level 1: direct imports from entry file
-  const entryDir = entryFile.includes("/") ? entryFile.substring(0, entryFile.lastIndexOf("/")) : ".";
-  const directImports = extractImportedPaths(entryContent, entryDir);
-  for (const imp of directImports) {
-    // Match against product modules (with and without extensions)
+  // Resolve an import-path (possibly extensionless, possibly a directory) to
+  // the matching productModules entry, if any.
+  function resolveToModule(importRef: string): string | null {
     for (const mod of productModules) {
       const modNoExt = mod.replace(/\.[^.]+$/, "");
-      if (imp === mod || imp === modNoExt || imp + "/index" === modNoExt) {
-        referencedFiles.add(mod);
+      if (
+        importRef === mod ||
+        importRef === modNoExt ||
+        importRef + "/index" === modNoExt
+      ) {
+        return mod;
       }
+    }
+    return null;
+  }
+
+  // BFS: walk the full transitive import graph starting from the entry file.
+  // A module is "reachable" if it appears anywhere in the transitive closure.
+  const referencedFiles = new Set<string>();
+  const queue: Array<{ path: string; content: string }> = [{ path: entryFile, content: entryContent }];
+  const visited = new Set<string>([entryFile]);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const fileDir = current.path.includes("/") ? current.path.substring(0, current.path.lastIndexOf("/")) : ".";
+    const imports = extractImportedPaths(current.content, fileDir);
+    for (const imp of imports) {
+      const mod = resolveToModule(imp);
+      if (!mod) continue;
+      if (visited.has(mod)) continue;
+      visited.add(mod);
+      referencedFiles.add(mod);
+      try {
+        const modContent = readFileSync(join(productDir, mod), "utf-8");
+        queue.push({ path: mod, content: modContent });
+      } catch { /* skip unreadable */ }
     }
   }
 
-  // Level 2: imports from files that the entry file imports
-  for (const ref of referencedFiles) {
-    try {
-      const refContent = readFileSync(join(productDir, ref), "utf-8");
-      const refDir = ref.includes("/") ? ref.substring(0, ref.lastIndexOf("/")) : ".";
-      const transImports = extractImportedPaths(refContent, refDir);
-      for (const imp of transImports) {
-        for (const mod of productModules) {
-          const modNoExt = mod.replace(/\.[^.]+$/, "");
-          if (imp === mod || imp === modNoExt || imp + "/index" === modNoExt) {
-            referencedFiles.add(mod);
-          }
-        }
-      }
-    } catch { /* skip unreadable */ }
-  }
-
-  // Find orphaned modules — files that exist but are never imported
+  // Orphans = modules on disk that the entry file can't reach transitively
   const orphaned = productModules.filter((mod) => !referencedFiles.has(mod));
 
   if (orphaned.length > 0 && referencedFiles.size === 0) {
@@ -6092,12 +6304,92 @@ function checkEntryPointImports(): EntryPointCheckResult {
     return {
       pass: false,
       entryFile,
-      reason: `Entry file ${entryFile} only imports ${referencedFiles.size}/${productModules.length} modules. ${orphaned.length} orphaned module(s): ${orphaned.join(", ")}`,
+      reason: `Entry file ${entryFile} only reaches ${referencedFiles.size}/${productModules.length} modules transitively. ${orphaned.length} orphaned module(s): ${orphaned.join(", ")}`,
       orphanedModules: orphaned,
     };
   }
 
-  return { pass: true, entryFile, reason: `Entry file ${entryFile} imports ${referencedFiles.size}/${productModules.length} product modules.`, orphanedModules: orphaned };
+  return { pass: true, entryFile, reason: `Entry file ${entryFile} reaches ${referencedFiles.size}/${productModules.length} product modules transitively.`, orphanedModules: orphaned };
+}
+
+/**
+ * Build a prescriptive wiring hint for each orphan module.
+ * For every orphan, reads the file, extracts likely React component exports
+ * (default + named `export function`/`export const` in PascalCase), and returns
+ * concrete import + placement snippets the developer can paste into the entry file.
+ */
+function generateOrphanWiringPrescription(orphans: string[], entryFile: string | null): string {
+  if (orphans.length === 0 || !entryFile) return "";
+  const entryDir = entryFile.includes("/") ? entryFile.slice(0, entryFile.lastIndexOf("/")) : "";
+
+  const lines: string[] = [];
+  for (const orphan of orphans.slice(0, 20)) {
+    let content = "";
+    try {
+      content = readFileSync(join(productDir, orphan), "utf-8");
+    } catch {
+      continue;
+    }
+
+    // Default export detection
+    const defaultExportMatch =
+      content.match(/export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)/) ||
+      content.match(/export\s+default\s+class\s+([A-Z][A-Za-z0-9_]*)/) ||
+      content.match(/export\s+default\s+([A-Z][A-Za-z0-9_]*)\s*;?/);
+    const hasUnnamedDefault = /export\s+default\s+(\(|function\s*\(|{|\[)/.test(content);
+
+    // Named React-component exports (PascalCase only — heuristic for components vs utils)
+    const namedExports = new Set<string>();
+    const namedFnRe = /export\s+(?:async\s+)?function\s+([A-Z][A-Za-z0-9_]*)/g;
+    const namedConstRe = /export\s+(?:const|let|var)\s+([A-Z][A-Za-z0-9_]*)\s*[:=]/g;
+    let m: RegExpExecArray | null;
+    while ((m = namedFnRe.exec(content)) !== null) namedExports.add(m[1]);
+    while ((m = namedConstRe.exec(content)) !== null) namedExports.add(m[1]);
+
+    // Compute import path relative to entry file, without extension
+    const orphanNoExt = orphan.replace(/\.[^.]+$/, "");
+    let importPath: string;
+    if (entryDir && orphanNoExt.startsWith(entryDir + "/")) {
+      importPath = "./" + orphanNoExt.slice(entryDir.length + 1);
+    } else if (entryDir) {
+      // Entry lives in a sub-dir, orphan is above or sibling — step up
+      const ups = entryDir.split("/").length;
+      importPath = "../".repeat(ups) + orphanNoExt;
+    } else {
+      importPath = "./" + orphanNoExt;
+    }
+
+    // Prefer default name, then first PascalCase named export
+    const defaultName = defaultExportMatch?.[1];
+    const firstNamed = namedExports.size > 0 ? Array.from(namedExports)[0] : null;
+
+    if (defaultName) {
+      lines.push(
+        `- ${orphan} → import ${defaultName} from "${importPath}";  // render as <${defaultName} />`
+      );
+    } else if (hasUnnamedDefault) {
+      // Derive an import alias from the filename
+      const basename = (orphan.split("/").pop() ?? "Component").replace(/\.[^.]+$/, "");
+      const alias = basename.replace(/[^A-Za-z0-9]/g, "");
+      const pascalAlias = alias.charAt(0).toUpperCase() + alias.slice(1);
+      lines.push(
+        `- ${orphan} → import ${pascalAlias} from "${importPath}";  // render as <${pascalAlias} />`
+      );
+    } else if (firstNamed) {
+      const rest = Array.from(namedExports).slice(1);
+      const more = rest.length > 0 ? ` (also exports: ${rest.join(", ")})` : "";
+      lines.push(
+        `- ${orphan} → import { ${firstNamed} } from "${importPath}";  // render as <${firstNamed} />${more}`
+      );
+    } else {
+      lines.push(
+        `- ${orphan} → inspect this file, then import its primary export into ${entryFile}.`
+      );
+    }
+  }
+
+  const suffix = orphans.length > 20 ? `\n…and ${orphans.length - 20} more orphan(s) — apply the same pattern.` : "";
+  return lines.join("\n") + suffix;
 }
 
 const PreviewContentVerdict = z.object({
