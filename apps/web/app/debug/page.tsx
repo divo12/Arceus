@@ -1,6 +1,6 @@
 "use client";
 
-import { DebugGraph } from "../../components/debug-graph";
+import { DebugGraph } from "../../components/debug/debug-graph";
 
 export default function DebugPage() {
   return (

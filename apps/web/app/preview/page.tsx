@@ -6,7 +6,7 @@ import type { CompanySnapshot, Task } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiUrl } from "../../lib/api";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 
 type EmployeeActivityEvent = {
   id: string;

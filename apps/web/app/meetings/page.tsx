@@ -6,7 +6,7 @@ import type { CompanySnapshot } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiUrl } from "../../lib/api";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 
 export default function MeetingsPage() {
   const [snapshot, setSnapshot] = useState<CompanySnapshot | null>(null);

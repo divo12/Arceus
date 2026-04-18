@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
-import { ChatProvider } from "../components/chat-context";
+import { ChatProvider } from "../components/chat/chat-context";
 import { ThemeProvider } from "../components/theme-provider";
-import { LayoutShell } from "../components/layout-shell";
+import { LayoutShell } from "../components/layout/layout-shell";
 import "./globals.css";
 
 const plusJakarta = Plus_Jakarta_Sans({

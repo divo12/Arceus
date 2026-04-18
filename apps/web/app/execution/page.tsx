@@ -1,7 +1,7 @@
 "use client";
 
 import { ExecutionFlow } from "../../components/execution-flow";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 
 export default function ExecutionPage() {
   return (

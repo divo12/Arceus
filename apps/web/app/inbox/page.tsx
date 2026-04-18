@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 import { apiUrl } from "../../lib/api";
 import { Bell, CheckCircle, XCircle, Clock, MessageSquare, GitPullRequest } from "lucide-react";
 
