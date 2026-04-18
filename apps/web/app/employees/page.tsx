@@ -6,7 +6,7 @@ import type { AgentIdentity, MemorySummary } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiUrl } from "../../lib/api";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 
 type EmployeeDirectoryEntry = {
   id: string;

@@ -15,6 +15,7 @@
     "@arceus/company-runtime": "file:../../packages/company-runtime",
     "@arceus/contracts": "file:../../packages/contracts",
     "@arceus/hippocampus": "file:../../packages/hippocampus",
+    "@arceus/task-engine": "file:../../packages/task-engine",
     "@fastify/cors": "^10.0.2",
     "@opencode-ai/sdk": "^1.3.13",
     "dotenv": "^16.4.7",

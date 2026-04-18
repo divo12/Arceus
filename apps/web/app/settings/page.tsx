@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 import { apiUrl } from "../../lib/api";
 import { Settings2, Cpu, Database, Heart, RefreshCw, Trash2 } from "lucide-react";
 

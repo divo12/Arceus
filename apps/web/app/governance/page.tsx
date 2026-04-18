@@ -5,7 +5,7 @@ import { Shield, AlertTriangle, CheckCircle, TrendingUp, RefreshCw } from "lucid
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Separator } from "../../components/ui/separator";
-import { PageShell } from "../../components/page-shell";
+import { PageShell } from "../../components/layout/page-shell";
 import { apiUrl } from "../../lib/api";
 
 // ── Types ──────────────────────────────────────────────────

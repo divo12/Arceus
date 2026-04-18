@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 import { apiUrl } from "../lib/api";
-import { useChatMessages } from "../components/chat-context";
+import { useChatMessages } from "../components/chat/chat-context";
 import { ResizableSplit } from "../components/resizable-split";
 
 type RuntimeStatus = {

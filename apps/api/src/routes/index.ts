@@ -1,0 +1,21 @@
+// routes/ — HTTP route plugins, one file per domain
+export { default as healthRoutes } from "./health.routes.js";
+export { default as companyRoutes } from "./company.routes.js";
+export { default as strategyRoutes } from "./strategy.routes.js";
+export { default as chatRoutes } from "./chat.routes.js";
+export { default as tasksRoutes } from "./tasks.routes.js";
+export { default as sprintsRoutes } from "./sprints.routes.js";
+export { default as meetingsRoutes } from "./meetings.routes.js";
+export { default as agentsRoutes } from "./agents.routes.js";
+export { default as heartbeatRoutes } from "./heartbeat.routes.js";
+export { default as orchestratorRoutes } from "./orchestrator.routes.js";
+export { default as governanceRoutes } from "./governance.routes.js";
+export { default as controlPlaneRoutes } from "./control-plane.routes.js";
+export { default as auditRoutes } from "./audit.routes.js";
+export { default as workspaceRoutes } from "./workspace.routes.js";
+export { default as previewRoutes } from "./preview.routes.js";
+export { default as artifactsRoutes } from "./artifacts.routes.js";
+export { default as debugRoutes } from "./debug.routes.js";
+export { default as serviceRegistryRoutes } from "./service-registry.routes.js";
+export { default as hippocampusRoutes } from "./hippocampus.routes.js";
+export { default as skillsRoutes } from "./skills.routes.js";
