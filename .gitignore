@@ -8,7 +8,7 @@ coverage/
 
 # folders for local development
 product/
-workspace/
+/workspace/
 
 .playwright-mcp
 */node_modules/*
