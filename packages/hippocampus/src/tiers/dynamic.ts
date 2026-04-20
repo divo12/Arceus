@@ -1,6 +1,10 @@
 import type { MemoryUnit } from "@arceus/contracts";
 import type { DynamicMemoryStore } from "../types";
 
+/**
+ * In-memory implementation of DynamicMemoryStore for testing and local dev.
+ * Stores temporary facts that may expire. GC removes expired entries by companyId.
+ */
 export class InMemoryDynamicStore implements DynamicMemoryStore {
   private readonly byAgent = new Map<string, MemoryUnit[]>();
 

@@ -11,6 +11,7 @@ import { emitBeatEvent } from "@arceus/company-runtime";
 
 /** Guard: set while CEO is streaming a live chat response. */
 let ceoStreaming = false;
+/** Returns whether the CEO agent is currently streaming a response. */
 export function isCeoStreaming(): boolean { return ceoStreaming; }
 
 type OpenCodeEvent = {
@@ -104,6 +105,10 @@ async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot) {
   return session.id;
 }
 
+/**
+ * Stream a board message to the CEO agent via SSE.
+ * Handles bootstrapping, classification, and meeting recording.
+ */
 export async function streamBoardMessageToCeo(reply: FastifyReply, message: string) {
   const trimmedMessage = message.trim();
   if (!trimmedMessage) {
@@ -234,6 +239,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   }
 }
 
+/** Send a board message to the CEO and return a structured strategy card (non-streaming). */
 export async function sendBoardMessageToCeo(message: string) {
   const trimmedMessage = message.trim();
   if (!trimmedMessage) {

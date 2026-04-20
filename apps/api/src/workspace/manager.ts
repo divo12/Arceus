@@ -238,19 +238,27 @@ async function listWorkspaceFiles(dir: string, base: string): Promise<WorkspaceF
   return results.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
 }
 
+/**
+ * Manages the product workspace lifecycle — provisioning, git commit/sync,
+ * sprint snapshots, bundle export, and archive/cleanup.
+ */
 export class WorkspaceManager {
+  /** Return the legacy workspace directory path. */
   getLegacyProductDir() {
     return legacyProductDir;
   }
 
+  /** Resolve the local filesystem path for a company's workspace. */
   getLocalPath(_companyId: string) {
     return legacyProductDir;
   }
 
+  /** Alias for `get()` — retrieve workspace metadata for a company. */
   async getWorkspaceInfo(companyId: string) {
     return this.get(companyId);
   }
 
+  /** Load persisted workspace info, falling back to in-memory state. */
   async get(companyId: string) {
     const persisted = await loadWorkspaceInfo(companyId);
     if (persisted) {
@@ -264,6 +272,7 @@ export class WorkspaceManager {
     return null;
   }
 
+  /** Create and initialise the workspace directory and git repo for a company. */
   async provision(companyId: string): Promise<WorkspaceOperationResult> {
     const warnings: string[] = [];
     await ensureLegacyWorkspaceDir();
@@ -286,6 +295,7 @@ export class WorkspaceManager {
     };
   }
 
+  /** Ensure the workspace exists locally, restoring from a bundle if needed. */
   async ensureLocal(companyId: string) {
     const warnings: string[] = [];
     const existing = (await this.get(companyId)) ?? buildWorkspaceInfo(companyId);
@@ -314,6 +324,7 @@ export class WorkspaceManager {
     return legacyProductDir;
   }
 
+  /** Commit all workspace changes and upload the bundle to remote storage. */
   async commitAndSync(companyId: string, taskId: string, agentRole: string, message: string) {
     const warnings: string[] = [];
     const localPath = await this.ensureLocal(companyId);
@@ -361,6 +372,7 @@ export class WorkspaceManager {
     };
   }
 
+  /** List all sprint snapshots for a company, newest first. */
   async listSprintSnapshots(companyId: string) {
     if (!isDatabaseConfigured()) {
       return fallbackSprintSnapshots.get(companyId) ?? [];
@@ -377,6 +389,7 @@ export class WorkspaceManager {
     }
   }
 
+  /** Tag the current workspace state as a sprint snapshot and persist the bundle. */
   async tagSprint(companyId: string, sprintNumber: number, snapshot: CompanySnapshot) {
     const warnings: string[] = [];
     const localPath = await this.ensureLocal(companyId);
@@ -475,11 +488,13 @@ export class WorkspaceManager {
     };
   }
 
+  /** Return a git diff stat between two sprint tags. */
   async getDiff(companyId: string, fromSprint: number, toSprint: number) {
     const localPath = await this.ensureLocal(companyId);
     return diffWorkspaceRefs(localPath, `sprint-${fromSprint}`, `sprint-${toSprint}`);
   }
 
+  /** Generate a signed download URL for the latest workspace bundle. */
   async exportTarball(companyId: string): Promise<ExportResult> {
     const workspace = (await this.get(companyId)) ?? buildWorkspaceInfo(companyId);
     if (!workspace.latestBundleKey) {
@@ -497,6 +512,7 @@ export class WorkspaceManager {
     };
   }
 
+  /** Archive a workspace by cleaning up local files and marking it inactive. */
   async archive(companyId: string): Promise<WorkspaceOperationResult> {
     const warnings: string[] = [];
     const existing = (await this.get(companyId)) ?? buildWorkspaceInfo(companyId);
@@ -537,6 +553,7 @@ export class WorkspaceManager {
     };
   }
 
+  /** List all non-ignored files in the workspace with modification timestamps. */
   async listFiles(companyId: string) {
     const workspace = await this.get(companyId);
 

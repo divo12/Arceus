@@ -63,6 +63,7 @@ import {
 
 // ── Fastify instance ───────────────────────────────────────
 
+/** Arceus API server — bootstraps Fastify, hydrates state, wires heartbeat/meeting engines, and registers all route plugins. */
 const app = Fastify({ logger: true });
 const productDir = workspaceManager.getLegacyProductDir();
 cpSetBuildCheckDir(productDir);
@@ -117,55 +118,81 @@ const meetingPipeline = new MeetingPipeline({
   startTokenTracking: (meetingId) => startMeetingTokenAccumulator(meetingId),
   drainTokens: (meetingId) => drainMeetingTokenAccumulator(meetingId),
 
-  // Phase 4: Collect contributions by emitting meeting_contribution events to all participants
+  // Phase 4a (Spec 24): Collect contributions by directly prompting each agent's session
   async collectContributions(meeting) {
     const snap = getSnapshot();
-    const collectionTimeoutMs = 300_000; // 5 minutes
-    const pollIntervalMs = 5_000;
-    const deadline = Date.now() + collectionTimeoutMs;
 
-    // Emit meeting_contribution events to trigger beats for each participant
     for (const agentId of meeting.participantAgentIds) {
       const agent = snap.agents.find((a) => a.id === agentId);
-      if (agent) {
-        heartbeatEngine.emitEvent(snap.company.id, agentId, agent.role, "meeting_contribution");
+      if (!agent) continue;
+
+      try {
+        const { ensureAgentSession, runPromptText } = await import("./prompts/llm.js");
+        const { getRoleSoul } = await import("@arceus/company-runtime");
+        const soul = getRoleSoul(agent.role);
+        const session = await ensureAgentSession(snap, agent.role);
+
+        const agentTasks = snap.tasks.filter((t) => t.assignedRole === agent.role);
+        const taskSummary = agentTasks.length > 0
+          ? agentTasks.map((t) => `- [${t.status}] ${t.title}`).join("\n")
+          : "No tasks assigned.";
+
+        const prompt = [
+          `You are contributing to a ${meeting.type.replace(/_/g, " ")} meeting: "${meeting.title}".`,
+          "Provide a concise status update. Respond with JSON: { whatIDid, whatImDoing, blockers, learnings, questionsForTeam }",
+          "",
+          "Your current tasks:",
+          taskSummary,
+        ].join("\n");
+
+        const output = await runPromptText(agent.role, session.sessionId, soul.systemPrompt, prompt);
+        const jsonMatch = output.match(/\{[\s\S]*\}/);
+        const contribution = jsonMatch
+          ? JSON.parse(jsonMatch[0])
+          : { whatIDid: output, whatImDoing: "", blockers: "", learnings: "", questionsForTeam: "" };
+
+        updateMeeting(meeting.id, (m) => ({
+          ...m,
+          contributions: [
+            ...m.contributions,
+            {
+              agentId: agent.id,
+              agentName: agent.name,
+              agentRole: agent.role,
+              contribution,
+              submittedAt: new Date().toISOString(),
+            },
+          ],
+        }));
+        await flush();
+      } catch (err) {
+        console.warn(`[MEETING] Failed to collect contribution from ${agent.role}: ${err instanceof Error ? err.message : err}`);
       }
-    }
-
-    // Wait for contributions to arrive (agents add them via executeChecklistAction)
-    while (Date.now() < deadline) {
-      const current = getSnapshot().meetings.find((m) => m.id === meeting.id);
-      if (!current || current.status !== "collecting") break;
-
-      const contributed = current.contributions.length;
-      if (contributed >= meeting.participantAgentIds.length) break;
-
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
 
     return getSnapshot().meetings.find((m) => m.id === meeting.id) ?? meeting;
   },
 
-  // Phase 4: Synthesize contributions via LLM
+  // Phase 4b (Spec 24): Facilitator Agent — synthesize, resolve, brief in one session
   async synthesizeMeeting(meeting) {
-    const { synthesizeMeeting: synthesize } = await import("./meetings/synthesis.js");
+    const { runFacilitatorSession } = await import("./meetings/facilitator.js");
     const snap = getSnapshot();
-    const synthesis = await synthesize(meeting, snap);
+    const result = await runFacilitatorSession(meeting, snap);
 
-    const updated = updateMeeting(meeting.id, (m) => ({ ...m, synthesis }));
+    const updated = updateMeeting(meeting.id, (m) => ({
+      ...m,
+      synthesis: result.synthesis,
+      resolutions: result.resolutions,
+      brief: result.brief ?? m.brief,
+    }));
     await flush();
     return updated ?? meeting;
   },
 
-  // Phase 5: Resolve conflicts/blockers via CEO LLM call
+  // Resolution is now handled inside synthesizeMeeting via facilitator session
   async resolveMeeting(meeting) {
-    const { resolveMeeting: resolve } = await import("./meetings/resolution.js");
-    const snap = getSnapshot();
-    const resolutions = await resolve(meeting, snap);
-
-    const updated = updateMeeting(meeting.id, (m) => ({ ...m, resolutions }));
-    await flush();
-    return updated ?? meeting;
+    // Resolutions already set by facilitator in synthesizeMeeting
+    return meeting;
   },
 
   // Phase 5: Execute resolution decisions
@@ -177,16 +204,14 @@ const meetingPipeline = new MeetingPipeline({
     return result;
   },
 
-  // Phase 5: Produce daily sync brief + post summary card
+  // Phase 5: Produce daily sync brief — already generated by facilitator, just post the card
   async produceBrief(meeting) {
-    const { buildDailySyncBrief, postDailySyncSummary } = await import("./meetings/resolution.js");
+    if (!meeting.brief) return meeting;
+    const { postDailySyncSummary } = await import("./meetings/resolution.js");
     const snap = getSnapshot();
-    const brief = await buildDailySyncBrief(meeting, snap);
-
-    const updated = updateMeeting(meeting.id, (m) => ({ ...m, brief }));
-    postDailySyncSummary(meeting, brief, snap, appendChatMessage);
+    postDailySyncSummary(meeting, meeting.brief, snap, appendChatMessage);
     await flush();
-    return updated ?? meeting;
+    return meeting;
   },
 
   // Phase 6: Extract meeting memories for each participant

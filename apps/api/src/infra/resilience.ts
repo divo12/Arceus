@@ -27,6 +27,7 @@ const DEFAULT_RETRY: RetryOptions = {
   backoff: 2,
 };
 
+/** Execute `fn` with exponential backoff retries and jitter. */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   opts: Partial<RetryOptions> = {},
@@ -183,6 +184,7 @@ export async function resilientCall<T>(
 /*  Pre-built breakers for each integration                            */
 /* ------------------------------------------------------------------ */
 
+/** Log circuit breaker state transitions to console at appropriate severity. */
 function logStateChange(from: CircuitState, to: CircuitState, name: string) {
   const level = to === "open" ? "error" : to === "closed" ? "info" : "warn";
   const msg = `[circuit-breaker] ${name}: ${from} → ${to}`;
@@ -222,11 +224,13 @@ export function getBreakersHealth() {
 /* ------------------------------------------------------------------ */
 
 /** HTTP status codes worth retrying (server-side transient). */
+/** Return true for HTTP status codes that indicate transient server errors. */
 export function isRetryableHttpStatus(status: number): boolean {
   return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
 /** Classify fetch errors and HTTP error responses. */
+/** Classify whether a fetch/HTTP error is transient and worth retrying. */
 export function isRetryableError(error: unknown): boolean {
   if (error instanceof CircuitOpenError) return false;
 

@@ -1,7 +1,12 @@
+/**
+ * Orchestrator shared state — mutable singletons, constants, and convenience getters.
+ */
+
 import type { AgentIdentity, BeatEventTrigger, CompanySnapshot, Task } from "@arceus/contracts";
 import type { MeetingScheduler } from "@arceus/company-runtime";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { isInternalAgentRole } from "@arceus/company-runtime";
 import { orchestratorConfig } from "../config/index.js";
 import { getSnapshot } from "../persistence/store.js";
 
@@ -121,39 +126,69 @@ export let ceoProposalCooldownUntilMs = 0;
 export let sprintCompletionTriggered = false;
 
 // ─── State setters (for `let` exports that can't be reassigned from outside) ──
+/** Set the current execution status. */
 export function setExecutionStatus(s: ExecutionStatus) { executionStatus = s; }
+/** Set whether the event bridge has been started. */
 export function setEventBridgeStarted(v: boolean) { eventBridgeStarted = v; }
+/** Set the prompt completion poller interval handle. */
 export function setPromptCompletionPollerHandle(h: NodeJS.Timeout | null) { promptCompletionPollerHandle = h; }
+/** Set the active execution context (or null to clear). */
 export function setActiveExecution(ctx: ExecutionContext | null) { activeExecution = ctx; }
+/** Set the developer stall watchdog timer. */
 export function setDeveloperWatchdog(t: NodeJS.Timeout | null) { developerWatchdog = t; }
+/** Set the developer workspace monitor interval. */
 export function setDeveloperWorkspaceMonitor(t: NodeJS.Timeout | null) { developerWorkspaceMonitor = t; }
+/** Replace the developer workspace file-size snapshot. */
 export function setDeveloperWorkspaceSnapshot(m: Map<string, number>) { developerWorkspaceSnapshot = m; }
+/** Set whether the developer step loop is currently active. */
 export function setDeveloperStepLoopActive(v: boolean) { developerStepLoopActive = v; }
+/** Set whether a CEO proposal LLM call is in flight. */
 export function setCeoProposalInFlight(v: boolean) { ceoProposalInFlight = v; }
+/** Set the CEO proposal consecutive failure count. */
 export function setCeoProposalFailureCount(n: number) { ceoProposalFailureCount = n; }
+/** Set the CEO proposal cooldown expiry timestamp (epoch ms). */
 export function setCeoProposalCooldownUntilMs(ms: number) { ceoProposalCooldownUntilMs = ms; }
+/** Set whether sprint completion has already been triggered this cycle. */
 export function setSprintCompletionTriggered(v: boolean) { sprintCompletionTriggered = v; }
 
 // ─── Reactive event emitter (wired by server.ts) ─────────────────
 let reactiveEventEmitter: ((companyId: string, agentId: string, role: AgentIdentity["role"], event: BeatEventTrigger) => void) | null = null;
+/** Wire the reactive event emitter (called once from server.ts). */
 export function setReactiveEventEmitter(fn: typeof reactiveEventEmitter) { reactiveEventEmitter = fn; }
+/** Get the current reactive event emitter (may be null before wiring). */
 export function getReactiveEventEmitter() { return reactiveEventEmitter; }
 
 // ─── Meeting scheduler ref (wired by server.ts) ──────────────────
 let meetingSchedulerRef: MeetingScheduler | null = null;
+/** Wire the meeting scheduler instance (called once from server.ts). */
 export function setMeetingScheduler(scheduler: MeetingScheduler) { meetingSchedulerRef = scheduler; }
+/** Get the meeting scheduler (may be null before wiring). */
 export function getMeetingSchedulerRef() { return meetingSchedulerRef; }
 
 // ─── Convenience getters (for route handlers) ────────────────────
+/** Get the raw agent sessions map (includes internal agents). */
 export function getAgentSessionsMap() { return agentSessions; }
-export function getAgentSessions() { return Object.fromEntries(agentSessions); }
+/** Get public-facing agent sessions, filtering out internal system agents. */
+export function getAgentSessions() {
+  // Filter out internal system agents from public-facing session state
+  return Object.fromEntries(
+    [...agentSessions].filter(([role]) => !isInternalAgentRole(role)),
+  );
+}
+/** Get all stored artifacts. */
 export function getArtifacts() { return artifacts; }
+/** Get the current execution status string. */
 export function getExecutionStatus() { return executionStatus; }
+/** Get the active execution context (or null). */
 export function getActiveExecution() { return activeExecution; }
+/** Get task state transitions from the snapshot. */
 export function getTransitions() { return getSnapshot().transitions ?? []; }
+/** Get feedback rounds from the snapshot. */
 export function getFeedbackRounds() { return getSnapshot().feedbackRounds ?? []; }
 
 // ─── Reset (for tests / server restart) ──────────────────────────
+
+/** Reset all orchestrator state to initial values. Used in tests and server restart. */
 export function resetOrchestratorState() {
   agentSessions.clear();
   artifacts.length = 0;
@@ -175,12 +210,15 @@ export function resetOrchestratorState() {
 }
 
 // ─── Snapshot query helpers ───────────────────────────────────────
+
+/** Count non-core tasks still in created/planned status. */
 export function getQueuedNonCoreTaskCount(snapshot: CompanySnapshot) {
   return snapshot.tasks.filter(
     (task) => !CORE_EXECUTION_TASK_KINDS.has(task.kind) && ["created", "planned"].includes(task.status),
   ).length;
 }
 
+/** Determine whether execution should pause for board review (pending approvals or incomplete core tasks). */
 export function shouldPauseForBoardReview(snapshot: CompanySnapshot) {
   const pendingApprovals = snapshot.approvals.filter((approval) => approval.status === "pending");
   if (pendingApprovals.length > 0) {

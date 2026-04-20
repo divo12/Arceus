@@ -1,3 +1,4 @@
+/** @module preview.routes — Routes for local preview lifecycle (start/stop/status). */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "../workspace/preview.js";

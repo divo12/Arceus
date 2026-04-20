@@ -98,6 +98,16 @@ export {
 } from "./pattern-learner";
 export type { PatternLearnerDeps, PatternObservation } from "./pattern-learner";
 
+// Spec 24: Internal System Agents
+export {
+  INTERNAL_AGENTS,
+  internalAgentRole,
+  isInternalAgentRole,
+  internalAgentKeyFromRole,
+  getInternalAgent,
+} from "./internal-agents";
+export type { InternalAgentDefinition } from "./internal-agents";
+
 // Spec 18: Meeting Pipeline
 export { MeetingScheduler, getManagerRole, getEscalationChain } from "./meeting-scheduler";
 export type { MeetingSchedulerConfig, MeetingSchedulerDeps } from "./meeting-scheduler";

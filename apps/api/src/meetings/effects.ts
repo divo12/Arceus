@@ -6,6 +6,7 @@ import { enrichRoleMemory, clearRoleBlockers } from "../memory/operations.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import type { TaskModificationInput, MemoryModificationInput, MeetingAgendaInput, MeetingDecisionInput, MeetingLearningInput } from "../orchestration/state.js";
 
+/** Apply a single task modification (assign, cancel, unblock, etc.) to the store and emit audit/reactive events. */
 export function applyTaskModification(modification: TaskModificationInput) {
   updateTask(modification.taskId, (task) => {
     const assignedAgent = modification.assignedRole ? getAgentByRole(getSnapshot(), modification.assignedRole) : null;
@@ -105,6 +106,10 @@ function applyMemoryModification(modification: MemoryModificationInput) {
   }
 }
 
+/**
+ * Derive deduplicated memory modifications from meeting agenda, decisions, learnings,
+ * and task unblock actions.
+ */
 export function deriveMeetingMemoryModifications(params: {
   agenda: MeetingAgendaInput[];
   decisions?: MeetingDecisionInput[];
@@ -166,6 +171,7 @@ export function deriveMeetingMemoryModifications(params: {
   });
 }
 
+/** Apply all task and memory modifications produced by a meeting. */
 export function applyMeetingEffects(taskModifications: TaskModificationInput[], memoryModifications: MemoryModificationInput[]) {
   for (const modification of taskModifications) {
     applyTaskModification(modification);

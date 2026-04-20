@@ -304,6 +304,7 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
   return detectPythonLaunchCommand(productDir, preference);
 }
 
+/** Return true if any workspace directory has a detectable dev server command. */
 export async function hasLocalPreviewCandidate(productDir: string, preferredTargetPath?: string | null) {
   return (await detectLaunchCommand(productDir, { preferredTargetPath })) !== null;
 }
@@ -373,14 +374,17 @@ async function applyReportedPreviewCandidate(timeoutMs = previewConfig.reportedC
   return previewState;
 }
 
+/** Return true if an agent has reported a preview URL that hasn't been cleared. */
 export function hasReportedPreviewCandidate() {
   return reportedPreviewCandidate !== null;
 }
 
+/** Discard the agent-reported preview URL candidate. */
 export function clearReportedPreviewCandidate() {
   reportedPreviewCandidate = null;
 }
 
+/** Register an agent-reported preview URL, stopping any existing preview first. */
 export async function registerReportedPreviewUrl(url: string) {
   const normalizedUrl = normalizePreviewUrl(url);
   if (!normalizedUrl) {
@@ -401,6 +405,7 @@ export async function registerReportedPreviewUrl(url: string) {
   return Boolean(applied);
 }
 
+/** Return the current preview state (status, URLs, runtime info). */
 export function getLocalPreviewState() {
   return previewState;
 }
@@ -486,6 +491,7 @@ async function terminatePreviewProcessTree(childProcess: ChildProcess) {
   childProcess.kill("SIGTERM");
 }
 
+/** Terminate the preview process/server and reset all preview state to idle. */
 export async function stopLocalPreview() {
   if (previewProcess) {
     await terminatePreviewProcessTree(previewProcess);
@@ -549,6 +555,10 @@ async function startStaticPreviewServer(rootDir: string) {
   previewStaticServer = server;
 }
 
+/**
+ * Detect and launch a local preview server for the product workspace.
+ * Tries agent-reported URLs first, then auto-detects Node/Python dev servers.
+ */
 export async function startLocalPreview(productDir: string, preferredTargetPath?: string | null) {
   await stopLocalPreview();
 

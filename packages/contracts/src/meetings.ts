@@ -1,3 +1,18 @@
+/**
+ * @module meetings
+ * Meeting lifecycle, contribution, synthesis, and resolution schemas.
+ *
+ * Meetings follow a pipeline: scheduled → collecting (agents submit contributions)
+ * → synthesizing (LLM identifies conflicts/blockers) → resolving (decisions made)
+ * → executing (actions applied) → learning → completed.
+ *
+ * Key types:
+ * - MeetingContribution — an agent's standup update (what I did, blockers, learnings)
+ * - SynthesisOutput — LLM-detected conflicts, blockers, and highlights
+ * - ResolutionDecision — action taken per conflict/blocker (create_task, escalate, etc.)
+ * - DailySyncBrief — summary posted to the board chat
+ * - MeetingHealthSnapshot — telemetry for the meeting pipeline
+ */
 import { z } from "zod";
 
 export const meetingTypeSchema = z.enum(["daily_sync", "eval_triggered", "escalation"]);

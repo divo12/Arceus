@@ -1,3 +1,17 @@
+/**
+ * @module agents
+ * Agent identity and session schemas.
+ *
+ * Defines the org-chart structure: each agent occupies a HierarchyNode,
+ * has an AgentIdentity (with role, capabilities, soul), and binds to an
+ * LLM session via SessionBinding.
+ *
+ * Key types:
+ * - RoleSoul — per-role personality, permissions, and system prompt
+ * - HierarchyNode — position in the org chart (parent/children)
+ * - AgentIdentity — runtime identity of a hired agent
+ * - SessionBinding — link between agent and its OpenCode LLM session
+ */
 import { z } from "zod";
 
 export const agentStatusSchema = z.enum(["active", "idle", "running", "error", "paused", "terminated"]);

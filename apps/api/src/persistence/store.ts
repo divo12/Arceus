@@ -64,6 +64,7 @@ function titleCase(value: string) {
     .join(" ");
 }
 
+/** Derive a company name from a free-text idea string. */
 export function deriveCompanyNameFromIdea(idea: string) {
   const core = idea
     .replace(/[^a-zA-Z0-9\s]/g, " ")
@@ -87,14 +88,17 @@ function buildAgentName(role: string) {
   return titleCase(role.replace(/_/g, " "));
 }
 
+/** Return the current in-memory company snapshot. */
 export function getSnapshot() {
   return snapshot;
 }
 
+/** Return the current in-memory event log. */
 export function getEvents() {
   return events;
 }
 
+/** Reset the in-memory company state to a blank snapshot. */
 export function resetCompany() {
   snapshot = createEmptyCompanySnapshot();
   events = [];
@@ -177,6 +181,7 @@ export const hydrateStoreFromPersistence = hydrate;
 /** @deprecated Use flush() */
 export const flushStorePersistence = flush;
 
+/** Append a chat message to the snapshot. */
 export function appendChatMessage(message: ChatMessage) {
   replaceState({
     ...snapshot,
@@ -186,6 +191,7 @@ export function appendChatMessage(message: ChatMessage) {
   return message;
 }
 
+/** Replace the entire tasks array in the snapshot. */
 export function replaceTasks(tasks: Task[]) {
   replaceState({
     ...snapshot,
@@ -194,6 +200,7 @@ export function replaceTasks(tasks: Task[]) {
   return snapshot.tasks;
 }
 
+/** Insert or update a task in the snapshot by ID. */
 export function upsertTask(task: Task) {
   const existing = snapshot.tasks.findIndex((entry) => entry.id === task.id);
   const nextTasks = [...snapshot.tasks];
@@ -212,6 +219,7 @@ export function upsertTask(task: Task) {
   return task;
 }
 
+/** Update a task by ID using an updater function. */
 export function updateTask(taskId: string, updater: (task: Task) => Task) {
   const current = snapshot.tasks.find((task) => task.id === taskId);
   if (!current) return null;
@@ -227,22 +235,27 @@ export function updateTask(taskId: string, updater: (task: Task) => Task) {
 
 const taskProgressMap = new Map<string, TaskProgress>();
 
+/** Record incremental task progress for multi-beat tracking. */
 export function updateTaskProgress(taskId: string, progress: TaskProgress) {
   taskProgressMap.set(taskId, progress);
 }
 
+/** Get the recorded progress for a specific task. */
 export function getTaskProgress(taskId: string): TaskProgress | null {
   return taskProgressMap.get(taskId) ?? null;
 }
 
+/** Get all recorded task progress entries. */
 export function getAllTaskProgress(): TaskProgress[] {
   return Array.from(taskProgressMap.values());
 }
 
+/** Clear recorded progress for a specific task. */
 export function clearTaskProgress(taskId: string) {
   taskProgressMap.delete(taskId);
 }
 
+/** Insert or update a sprint in the snapshot by ID. */
 export function upsertSprint(sprint: Sprint) {
   const existing = snapshot.sprints.findIndex((entry) => entry.id === sprint.id);
   const nextSprints = [...snapshot.sprints];
@@ -261,6 +274,7 @@ export function upsertSprint(sprint: Sprint) {
   return sprint;
 }
 
+/** Update a sprint by ID using an updater function. */
 export function updateSprint(sprintId: string, updater: (sprint: Sprint) => Sprint) {
   const current = snapshot.sprints.find((sprint) => sprint.id === sprintId);
   if (!current) return null;
@@ -270,6 +284,7 @@ export function updateSprint(sprintId: string, updater: (sprint: Sprint) => Spri
   return next;
 }
 
+/** Set the active sprint ID and number on the company record. */
 export function updateCompanySprint(sprintId: string | null, sprintNumber: number | null) {
   replaceState({
     ...snapshot,
@@ -281,6 +296,7 @@ export function updateCompanySprint(sprintId: string | null, sprintNumber: numbe
   });
 }
 
+/** Insert or update a meeting in the snapshot by ID. */
 export function upsertMeeting(meeting: Meeting) {
   const existing = snapshot.meetings.findIndex((entry) => entry.id === meeting.id);
   const nextMeetings = [...snapshot.meetings];
@@ -299,6 +315,7 @@ export function upsertMeeting(meeting: Meeting) {
   return meeting;
 }
 
+/** Insert or update an approval in the snapshot by ID. */
 export function upsertApproval(approval: Approval) {
   const existing = snapshot.approvals.findIndex((entry) => entry.id === approval.id);
   const nextApprovals = [...snapshot.approvals];
@@ -317,6 +334,7 @@ export function upsertApproval(approval: Approval) {
   return approval;
 }
 
+/** Update an approval by ID using an updater function. */
 export function updateApproval(approvalId: string, updater: (approval: Approval) => Approval) {
   const current = snapshot.approvals.find((approval) => approval.id === approvalId);
   if (!current) return null;
@@ -326,6 +344,7 @@ export function updateApproval(approvalId: string, updater: (approval: Approval)
   return next;
 }
 
+/** Update a meeting by ID using an updater function. */
 export function updateMeeting(meetingId: string, updater: (meeting: Meeting) => Meeting) {
   const current = snapshot.meetings.find((meeting) => meeting.id === meetingId);
   if (!current) return null;
@@ -335,6 +354,7 @@ export function updateMeeting(meetingId: string, updater: (meeting: Meeting) => 
   return next;
 }
 
+/** Insert or update a meeting schedule in the snapshot by ID. */
 export function upsertMeetingSchedule(schedule: MeetingSchedule) {
   const schedules = snapshot.meetingSchedules ?? [];
   const existing = schedules.findIndex((s) => s.id === schedule.id);
@@ -348,6 +368,7 @@ export function upsertMeetingSchedule(schedule: MeetingSchedule) {
   return schedule;
 }
 
+/** Update a meeting schedule by ID using an updater function. */
 export function updateMeetingSchedule(scheduleId: string, updater: (s: MeetingSchedule) => MeetingSchedule) {
   const schedules = snapshot.meetingSchedules ?? [];
   const current = schedules.find((s) => s.id === scheduleId);
@@ -357,6 +378,7 @@ export function updateMeetingSchedule(scheduleId: string, updater: (s: MeetingSc
   return next;
 }
 
+/** Update an agent's memory summary using an updater function. */
 export function updateAgentMemory(agentId: string, updater: (memory: MemorySummary) => MemorySummary) {
   const memories = snapshot.memories.map((memory) => (memory.agentId === agentId ? updater(memory) : memory));
   replaceState({
@@ -366,6 +388,7 @@ export function updateAgentMemory(agentId: string, updater: (memory: MemorySumma
   return snapshot.memories.find((memory) => memory.agentId === agentId) ?? null;
 }
 
+/** Append a transition to the snapshot. */
 export function appendTransition(transition: Transition) {
   replaceState({
     ...snapshot,
@@ -374,12 +397,14 @@ export function appendTransition(transition: Transition) {
   return transition;
 }
 
+/** Update a transition by ID using an updater function. */
 export function updateTransition(transitionId: string, updater: (t: Transition) => Transition) {
   const transitions = (snapshot.transitions ?? []).map((t) => (t.id === transitionId ? updater(t) : t));
   replaceState({ ...snapshot, transitions });
   return transitions.find((t) => t.id === transitionId) ?? null;
 }
 
+/** Append a feedback round to the snapshot. */
 export function appendFeedbackRound(round: FeedbackRound) {
   replaceState({
     ...snapshot,
@@ -390,6 +415,7 @@ export function appendFeedbackRound(round: FeedbackRound) {
 
 // ── Status mutations (Phase 4: wired from control-plane) ───
 
+/** Update an agent's status field by agent ID. */
 export function updateAgentStatus(agentId: string, status: string) {
   const agents = snapshot.agents.map((a) =>
     a.id === agentId ? { ...a, status: status as AgentIdentity["status"] } : a,
@@ -398,6 +424,7 @@ export function updateAgentStatus(agentId: string, status: string) {
   return agents.find((a) => a.id === agentId) ?? null;
 }
 
+/** Update the company's top-level status. */
 export function updateCompanyStatus(status: string) {
   replaceState({
     ...snapshot,
@@ -405,6 +432,7 @@ export function updateCompanyStatus(status: string) {
   });
 }
 
+/** Bootstrap a new company with initial snapshot and event log. */
 export function bootstrapCompany(input: BootstrapInput) {
   const companyId = `company_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
@@ -445,6 +473,7 @@ export function bootstrapCompany(input: BootstrapInput) {
   return snapshot;
 }
 
+/** Apply a CEO strategy output: build the org hierarchy, agents, sessions, and memories. */
 export function applyStrategy(output: StrategyOutput) {
   assertRoleHierarchy(output.roles);
   const roleToAgentId = new Map<string, string>();

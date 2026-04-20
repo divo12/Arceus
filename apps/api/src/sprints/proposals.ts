@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { AgentIdentity, Sprint, Task } from "@arceus/contracts";
 import { createWorkflowTask, getAgentByRole, nowIso } from "@arceus/task-engine";
 import { createSprintRecord } from "@arceus/task-engine";
@@ -14,11 +13,13 @@ import {
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
-import { structuredCompletion } from "../infra/azure-openai.js";
-import { buildCeoOperatingPrompt, classifyCeoResponse, type CeoCard } from "../agents/ceo.js";
+import { classifyCeoResponse, type CeoCard } from "../agents/ceo.js";
+import { getRoleSoul } from "@arceus/company-runtime";
 import { orchestratorConfig } from "../config/index.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { checkSprintCompletion } from "./lifecycle.js";
+import { ensureAgentSession, runPromptText } from "../prompts/llm.js";
+import { CEO_SPRINT_PROPOSAL_USER_PROMPT } from "../prompts/ceo-sprint.js";
 import {
   executionStatus,
   setExecutionStatus,
@@ -36,6 +37,12 @@ import {
   CEO_PROPOSAL_COOLDOWN_MS,
 } from "../orchestration/state.js";
 
+/**
+ * Trigger the CEO to generate a sprint proposal via LLM.
+ *
+ * Guarded against concurrent calls, cooldown after repeated failures, and
+ * duplicate proposals. Auto-approves unless board review is due.
+ */
 export async function triggerCeoSprintProposal(): Promise<void> {
   if (ceoProposalInFlight) {
     emitEmployeeActivity(
@@ -98,18 +105,16 @@ export async function triggerCeoSprintProposal(): Promise<void> {
     setExecutionStatus("done");
 
     try {
-      const ceoPrompt = buildCeoOperatingPrompt(snapshot, executionStatus);
-      const ceoResponse = await structuredCompletion(
-        "ceoDeployment",
-        [
-          { role: "system", content: ceoPrompt },
-          { role: "user", content: "The previous sprint has completed. Analyze the results and propose the next sprint. Include sprint goal, key tasks with assigned roles and dependencies, carried-forward items, risks, and rationale." },
-        ],
-        z.object({ response: z.string() }),
-        "ceo_sprint_proposal",
+      // Route through the CEO's existing agent session — Spec 24
+      const ceoSession = await ensureAgentSession(snapshot, "ceo");
+      const ceoSoul = getRoleSoul("ceo");
+      const ceoText = await runPromptText(
+        "ceo",
+        ceoSession.sessionId,
+        ceoSoul.systemPrompt,
+        CEO_SPRINT_PROPOSAL_USER_PROMPT,
       );
 
-      const ceoText = ceoResponse.response;
       const card = await classifyCeoResponse(ceoText, snapshot, executionStatus);
 
       appendChatMessage({
@@ -165,6 +170,10 @@ export async function triggerCeoSprintProposal(): Promise<void> {
   }
 }
 
+/**
+ * Approve a CEO sprint proposal: create the sprint record, build the task
+ * graph (with dependency wiring and integration task), and kick off execution.
+ */
 export async function approveSprintProposal(card: CeoCard) {
   if (!card.sprint_proposal) {
     throw new Error("No sprint_proposal data in the provided card.");

@@ -206,6 +206,14 @@ export class HeartbeatEngine {
   /** Legacy BeatExecutor for backward compat. Overridden when deps are supplied. */
   private executor: BeatExecutor;
 
+  /**
+   * HeartbeatEngine manages beat scheduling and execution for all agents.
+   *
+   * Beats follow a 4-phase lifecycle: Wake → Observe → Execute → Serialize.
+   * Concurrency is bounded by a semaphore and per-agent locks prevent overlapping beats.
+   * Reactive events (e.g., task assignment) can trigger immediate beats or queue
+   * while an agent is mid-beat.
+   */
   constructor(config: HeartbeatConfig, deps?: BeatDependencies, legacyExecutor?: BeatExecutor) {
     this.config = config;
     this.deps = deps ?? null;

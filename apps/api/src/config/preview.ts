@@ -1,3 +1,7 @@
+/**
+ * Local preview server configuration.
+ * Host, port, probe intervals, timeouts, and workspace-scanning settings.
+ */
 import { readListEnv, readNumberEnv, readOptionalEnv } from "./env";
 
 const defaultIgnoredDirectories = ["node_modules", ".git", ".next", "dist", "build", "coverage"];

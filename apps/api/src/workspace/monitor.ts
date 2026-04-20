@@ -1,3 +1,9 @@
+/**
+ * Developer workspace file-system monitor — polls for changed files,
+ * emits activity events, and auto-starts live preview when a runnable
+ * project is detected.
+ */
+
 import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import {
@@ -20,6 +26,7 @@ import { touchAgentSession, updateAgentSessionState } from "../agents/sessions.j
 import { scheduleDeveloperWatchdog, failDeveloperStall } from "./watchdog.js";
 import { appendTaskResult, setTaskPreviewUrl } from "../tasks/mutations.js";
 
+/** Recursively collect file paths and modification times from the product directory. */
 export async function collectWorkspaceSnapshot(dir = productDir, base = productDir, result = new Map<string, number>()) {
   let entries;
   try {
@@ -50,6 +57,7 @@ export async function collectWorkspaceSnapshot(dir = productDir, base = productD
   return result;
 }
 
+/** Stop the periodic workspace polling interval and clear the cached snapshot. */
 export function stopDeveloperWorkspaceMonitor() {
   if (developerWorkspaceMonitor) {
     clearInterval(developerWorkspaceMonitor);
@@ -58,6 +66,7 @@ export function stopDeveloperWorkspaceMonitor() {
   setDeveloperWorkspaceSnapshot(new Map<string, number>());
 }
 
+/** Compare the current workspace to the last snapshot and emit events for changed files. */
 export async function pollDeveloperWorkspaceChanges() {
   if (!activeExecution || executionStatus !== "executing") {
     return;
@@ -107,6 +116,7 @@ export async function pollDeveloperWorkspaceChanges() {
   }
 }
 
+/** Take an initial snapshot and start polling for workspace file changes. */
 export async function startDeveloperWorkspaceMonitor() {
   stopDeveloperWorkspaceMonitor();
   setDeveloperWorkspaceSnapshot(await collectWorkspaceSnapshot());
@@ -115,6 +125,7 @@ export async function startDeveloperWorkspaceMonitor() {
   }, WORKSPACE_MONITOR_INTERVAL_MS));
 }
 
+/** If no preview is running and the workspace has a runnable project, start a live preview. */
 export async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   if (!activeExecution || executionStatus !== "executing") {
     return;
@@ -159,6 +170,7 @@ export async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   });
 }
 
+/** Attempt to start a preview server if a runnable project exists in the workspace. */
 export async function tryAutoPreview() {
   const previewState = getLocalPreviewState();
   if (previewState.status === "starting" || previewState.status === "ready") {

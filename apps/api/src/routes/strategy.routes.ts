@@ -1,3 +1,7 @@
+/**
+ * @module strategy.routes
+ * Routes for strategy generation, approval, execution, and quick-execute bootstrap flow.
+ */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSnapshot, applyStrategy } from "../persistence/store.js";

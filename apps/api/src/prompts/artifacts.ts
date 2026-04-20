@@ -25,11 +25,13 @@ export function resolveIncomingArtifacts(task: Task): string[] {
   return lines;
 }
 
+/** Get the best available preview URL for verification evidence. */
 export function getPreviewEvidenceUrl() {
   const preview = getLocalPreviewState();
   return preview.validationUrl ?? preview.entryUrl ?? preview.url;
 }
 
+/** Build a tester verification summary artifact from task context and tester output. */
 export function buildTesterArtifact(task: Task, output: string) {
   const preview = getLocalPreviewState();
   const evidenceUrl = getPreviewEvidenceUrl();
@@ -53,6 +55,7 @@ export function buildTesterArtifact(task: Task, output: string) {
   ].join("\n");
 }
 
+/** Build a design direction artifact from task context and UI designer output. */
 export function buildDesignDirectionArtifact(task: Task, output: string) {
   const preview = getLocalPreviewState();
 
@@ -72,6 +75,7 @@ export function buildDesignDirectionArtifact(task: Task, output: string) {
   ].join("\n");
 }
 
+/** Build a launch readiness artifact from task context and marketing output. */
 export function buildMarketingArtifact(task: Task, output: string) {
   const preview = getLocalPreviewState();
 

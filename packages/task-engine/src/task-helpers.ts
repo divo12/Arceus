@@ -29,6 +29,7 @@ export function getAgentByRole(
   return snapshot.agents.find((agent) => agent.role === role) ?? null;
 }
 
+/** Create an empty planner state with the given objective. */
 export function emptyPlannerState(objective: string): PlannerState {
   return {
     objective,
@@ -38,6 +39,7 @@ export function emptyPlannerState(objective: string): PlannerState {
   };
 }
 
+/** Create a blank executor state (no commands run). */
 export function emptyExecutorState(): ExecutorState {
   return {
     currentCommand: null,
@@ -46,6 +48,7 @@ export function emptyExecutorState(): ExecutorState {
   };
 }
 
+/** Create a blank verifier state (unverified, no feedback). */
 export function emptyVerifierState(): VerifierState {
   return {
     isVerified: false,

@@ -114,16 +114,19 @@ export function applyEma(oldRate: number, outcome: number, lr: number = SUCCESS_
   return Math.max(0, Math.min(1, oldRate * (1 - lr) + clampedOutcome * lr));
 }
 
+/** Convert a task outcome to a numeric score: success=1, high_friction=0.5, failure=0. */
 function outcomeToScore(outcome: PatternOutcome): number {
   if (outcome === "success") return 1.0;
   if (outcome === "high_friction") return 0.5;
   return 0.0; // failure
 }
 
+/** Build the trajectory text for embedding from title + description + optional trace. */
 function buildTrajectoryText(obs: PatternObservation): string {
   return [obs.taskTitle, obs.taskDescription, obs.trajectory ?? ""].filter(Boolean).join("\n");
 }
 
+/** Build a human-readable summary describing the task outcome. */
 function buildSummary(obs: PatternObservation): string {
   const outcomeLabel = obs.outcome === "success"
     ? "succeeded"
@@ -200,6 +203,7 @@ export async function extractPattern(obs: PatternObservation): Promise<Pattern> 
   return pattern;
 }
 
+/** Find an existing pattern in the same company/role with cosine >= PATTERN_MERGE_THRESHOLD. */
 function findNearDuplicate(
   companyId: string,
   role: string,
@@ -216,6 +220,7 @@ function findNearDuplicate(
   return best?.pattern ?? null;
 }
 
+/** Merge two string arrays into a unique set. */
 function mergeUnique(a: readonly string[], b: readonly string[]): string[] {
   const set = new Set<string>(a);
   for (const item of b) set.add(item);
@@ -267,6 +272,7 @@ export function clusterPatterns(companyId: string): PatternCluster[] {
     .map((c) => buildClusterArtifact(companyId, c.members, activeSkills));
 }
 
+/** Incrementally update a cluster centroid when a new member is added. */
 function updateCentroid(centroid: number[], previousSize: number, newVector: readonly number[]): number[] {
   // centroid_new = (centroid * previousSize + newVector) / (previousSize + 1)
   const newSize = previousSize + 1;
@@ -513,10 +519,12 @@ export async function proposeSkillFromCluster(candidate: SkillCandidate): Promis
 
 // ── Query + admin ────────────────────────────────────────
 
+/** Retrieve a single pattern by ID, or null if not found. */
 export function getPatternById(id: string): Pattern | null {
   return patternsById.get(id) ?? null;
 }
 
+/** Get all patterns for a company, sorted by creation time. */
 export function getPatternsForCompany(companyId: string): Pattern[] {
   const results: Pattern[] = [];
   for (const p of patternsById.values()) {
@@ -525,10 +533,12 @@ export function getPatternsForCompany(companyId: string): Pattern[] {
   return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+/** Get the total number of patterns across all companies. */
 export function getPatternCount(): number {
   return patternsById.size;
 }
 
+/** Clear all patterns from the in-memory store (testing only). */
 export function resetPatternStore(): void {
   patternsById.clear();
 }

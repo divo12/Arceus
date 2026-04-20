@@ -128,6 +128,13 @@ type BeatResult = { summary: string; tokensUsed: number; actionsCount: number; t
 
 // ── Sprint Review Verification (Spec 21) ────────────────────────
 
+/**
+ * Run the tester's QA verification beat for a sprint in the reviewing phase.
+ *
+ * Probes preview health, checks entry-point wiring, runs the tester agent
+ * to produce a structured QA report, files bug_fix tasks for failures,
+ * and advances the review state accordingly.
+ */
 export async function executeSprintReviewVerification(
   ctx: AgentBeatContext,
   beatId: string,
@@ -555,6 +562,7 @@ export async function executeSprintReviewVerification(
 
 // ── Final Gate (Spec 21) ────────────────────────────────────────
 
+/** Run the final build+test gate and finalize or re-enter rework. */
 export async function executeSprintFinalGate(
   _ctx: AgentBeatContext,
   beatId: string,
@@ -648,6 +656,7 @@ export async function executeSprintFinalGate(
 
 // ── Retest After Rework ─────────────────────────────────────────
 
+/** Advance from rework to tester re-verification after all bug fixes resolve. */
 export async function executeRetestAfterRework(
   _ctx: AgentBeatContext,
   beatId: string,
@@ -678,6 +687,7 @@ export async function executeRetestAfterRework(
 
 // ── CTO Escalation Review (Spec 21) ─────────────────────────────
 
+/** CTO escalation beat: make a fix/skip/abort decision on a stuck sprint. */
 export async function executeCtoBeatEscalationReview(
   _ctx: AgentBeatContext,
   beatId: string,

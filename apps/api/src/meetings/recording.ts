@@ -8,6 +8,10 @@ import { emitReactive } from "../orchestration/reactive.js";
 import type { MeetingAgendaInput, MeetingDecisionInput, MeetingLearningInput, TaskModificationInput, MemoryModificationInput } from "../orchestration/state.js";
 import { deriveMeetingMemoryModifications, applyMeetingEffects } from "./effects.js";
 
+/**
+ * Record a completed meeting: persist it, apply task/memory effects,
+ * emit activity + graph events, and trigger reactive wakes.
+ */
 export function recordMeeting(params: {
   type: Meeting["type"];
   facilitatorRole: AgentIdentity["role"];
@@ -168,6 +172,7 @@ function resolveTaskFromHint(targetTaskHint: string | null | undefined) {
   );
 }
 
+/** Record a meeting derived from a CEO card, creating tasks and routing board directives. */
 export function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoText: string) {
   if (!card.meeting.create) return null;
   const snapshot = getSnapshot();

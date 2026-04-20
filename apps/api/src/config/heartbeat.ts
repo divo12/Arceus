@@ -1,3 +1,7 @@
+/**
+ * Heartbeat scheduler configuration.
+ * Controls beat intervals, concurrency, budgets, and pause rules per role.
+ */
 import type { AgentIdentity } from "@arceus/contracts";
 import { readOptionalEnv, readNumberEnv, readListEnv } from "./env";
 import { createRequire } from "node:module";

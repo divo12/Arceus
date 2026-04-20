@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "packages/contracts/src/**/*.ts",
+    "packages/db/src/**/*.ts",
+    "packages/hippocampus/src/**/*.ts",
+    "packages/company-runtime/src/**/*.ts",
+    "packages/task-engine/src/**/*.ts",
+    "apps/api/src/**/*.ts"
+  ]
+}

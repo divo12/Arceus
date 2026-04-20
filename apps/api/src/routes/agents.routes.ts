@@ -1,3 +1,7 @@
+/**
+ * @module agents.routes
+ * Routes for the employee/agent directory, memories, and activity stream.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { getAgentSessions } from "../orchestration/state.js";

@@ -18,6 +18,7 @@ import { buildSkillSection } from "../skills/catalog.js";
 // Agent session management
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Create a new OpenCode session for an agent and register it in the session map. */
 export async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
   const soul = getRoleSoul(agent.role as AgentIdentity["role"]);
   if (!soul) throw new Error(`No SOUL policy for role: ${agent.role}`);
@@ -59,6 +60,7 @@ export async function createAgentSession(agent: AgentIdentity): Promise<AgentSes
   return state;
 }
 
+/** Ensure an agent has an active session, creating one if needed. */
 export async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity["role"]) {
   const existing = agentSessions.get(role);
   if (existing) return existing;
@@ -76,6 +78,7 @@ export async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentI
 let promptCompletionPollerHandle: NodeJS.Timeout | null = null;
 const PROMPT_COMPLETION_POLL_INTERVAL_MS = 8_000;
 
+/** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = 5 * 60 * 1000): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
   if (existing) {
@@ -93,6 +96,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = 5 * 60 *
   });
 }
 
+/** Resolve a pending prompt completion for a session. */
 export function resolvePromptCompletion(sessionId: string) {
   const entry = pendingPromptCompletions.get(sessionId);
   if (entry) {
@@ -102,6 +106,7 @@ export function resolvePromptCompletion(sessionId: string) {
   }
 }
 
+/** Reject a pending prompt completion for a session with an error. */
 export function rejectPromptCompletion(sessionId: string, error: Error) {
   const entry = pendingPromptCompletions.get(sessionId);
   if (entry) {
@@ -118,6 +123,7 @@ function startPromptCompletionPoller() {
   }, PROMPT_COMPLETION_POLL_INTERVAL_MS);
 }
 
+/** Stop the background poller that checks for stalled prompt completions. */
 export function stopPromptCompletionPoller() {
   if (promptCompletionPollerHandle) {
     clearInterval(promptCompletionPollerHandle);
@@ -163,6 +169,10 @@ async function pollPendingPromptCompletions() {
 // runPromptText — send prompt to OpenCode session, wait for completion
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Send a prompt to an agent's OpenCode session with enriched system prompt
+ * (skills + hippocampus memory), wait for completion, and return the response text.
+ */
 export async function runPromptText(
   role: AgentIdentity["role"],
   sessionId: string,

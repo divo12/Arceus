@@ -1,3 +1,8 @@
+/**
+ * Employee activity log — in-memory ring buffer with SSE streaming.
+ * Tracks agent actions, tool calls, beat lifecycle, and system events.
+ */
+
 import type { FastifyReply } from "fastify";
 
 export type EmployeeActivityEntry = {
@@ -18,10 +23,12 @@ export type ActivityEvent = EmployeeActivityEntry;
 const log: EmployeeActivityEntry[] = [];
 const subs = new Set<(e: EmployeeActivityEntry) => void>();
 
+/** Clear all entries from the in-memory activity log. */
 export function resetEmployeeActivityLog() {
   log.splice(0, log.length);
 }
 
+/** Append an activity entry to the log, broadcast to SSE subscribers, and cap the buffer at 2000. */
 export function emitEmployeeActivity(
   employee: string,
   type: EmployeeActivityEntry["type"],
@@ -51,10 +58,12 @@ export function emitEmployeeActivity(
   }
 }
 
+/** Return the full in-memory activity log (newest last). */
 export function getEmployeeActivityLog() {
   return log;
 }
 
+/** Open an SSE stream: replay the current log then push live events until the client disconnects. */
 export function streamEmployeeActivity(reply: FastifyReply) {
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");

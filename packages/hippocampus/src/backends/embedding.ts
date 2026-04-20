@@ -6,6 +6,11 @@ const EMBEDDING_DIM = 384;
 let extractor: FeatureExtractionPipeline | null = null;
 let loadingPromise: Promise<FeatureExtractionPipeline> | null = null;
 
+/**
+ * Lazily load the HuggingFace feature-extraction pipeline.
+ * First call downloads + caches the ONNX model (~23 MB); subsequent calls reuse it.
+ * Uses a singleton promise to prevent duplicate loads under concurrent access.
+ */
 async function getExtractor(): Promise<FeatureExtractionPipeline> {
   if (extractor) return extractor;
 

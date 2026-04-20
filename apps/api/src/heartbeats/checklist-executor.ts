@@ -31,6 +31,11 @@ import {
 } from "../sprints/review.js";
 import { startEventBridge } from "./event-bridge.js";
 
+/**
+ * Execute a checklist-driven action when no task is assigned.
+ * Handles sprint proposals, escalation reviews, skill governance,
+ * and meeting contributions based on the suggested action type.
+ */
 export async function executeChecklistAction(
   ctx: AgentBeatContext,
   action: { detail: string; suggestedAction: string },
@@ -184,63 +189,13 @@ export async function executeChecklistAction(
     return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
   }
 
-  // ── Meeting contribution (Spec 18 Phase 4) ──
+  // ── Meeting contribution — now handled directly by pipeline (Spec 24 Phase 4a) ──
   if (action.suggestedAction.startsWith("meeting_contribution:")) {
-    startBeatTokenAccumulator(beatId);
-    const meetingId = action.suggestedAction.split(":")[1];
-    const snapshot = getSnapshot();
-    const meeting = snapshot.meetings.find((m) => m.id === meetingId);
-    if (!meeting || meeting.status !== "collecting") {
-      finishClBeat("completed", `Meeting ${meetingId} not collecting`, 0);
-      return { summary: `Meeting ${meetingId} not in collecting status`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-
-    const agent = snapshot.agents.find((a) => a.id === ctx.agentId);
-    if (!agent) {
-      finishClBeat("completed", `Agent not found`, 0);
-      return { summary: `Agent ${ctx.agentId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-
-    const agentTasks = ctx.tasks.filter((t) => t.assignedRole === ctx.role);
-    try {
-      emitEmployeeActivity(ctx.role, "working", `Beat ${beatId}: producing meeting contribution for "${meeting.title}"`, { beatId });
-
-      const { generateContribution } = await import("../meetings/synthesis.js");
-      const contribution = await generateContribution(
-        meeting,
-        { id: agent.id, name: agent.name, role: agent.role, title: agent.title },
-        agentTasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),
-      );
-
-      updateMeeting(meetingId, (m) => ({
-        ...m,
-        contributions: [
-          ...m.contributions,
-          {
-            agentId: agent.id,
-            agentName: agent.name,
-            agentRole: agent.role,
-            contribution,
-            submittedAt: new Date().toISOString(),
-          },
-        ],
-      }));
-      await flush();
-
-      emitEmployeeActivity(ctx.role, "transition", `Beat ${beatId}: meeting contribution submitted`, { beatId });
-      finishClBeat("completed", "meeting contribution submitted", 1);
-      return {
-        summary: `Contributed to meeting "${meeting.title}"`,
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
-      };
-    } catch (err) {
-      emitEmployeeActivity(ctx.role, "error", `Beat ${beatId}: meeting contribution failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
-      finishClBeat("failed", "meeting contribution failed", 0);
-      return {
-        summary: `Meeting contribution failed: ${err instanceof Error ? err.message : String(err)}`,
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
-      };
-    }
+    finishClBeat("completed", "meeting contributions now collected by pipeline", 0);
+    return {
+      summary: `Meeting contribution skipped — collected directly by pipeline`,
+      tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+    };
   }
 
   // ── Fallback: log the action without executing ──
@@ -254,6 +209,7 @@ export async function executeChecklistAction(
 
 // ── Skills Lead action handlers (Spec 14 Phase 6) ──────────
 
+/** Handle Skills Lead governance actions: mutate underperformers, deprecate unused, fill gaps. */
 async function executeSkillsLeadAction(
   _ctx: AgentBeatContext,
   beatId: string,

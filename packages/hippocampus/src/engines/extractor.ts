@@ -28,6 +28,10 @@ Rules:
 - Each fact should be a self-contained sentence useful without additional context
 - Prefer specific facts ("Uses Vite on port 3210") over vague ones ("Project is set up")`;
 
+/**
+ * Build the user-side prompt for fact extraction, combining agent role, task title,
+ * and the agent's output (capped at 6k chars to stay within token budget).
+ */
 export function buildExtractionUserPrompt(taskTitle: string, role: string, agentOutput: string): string {
   return [
     `Agent role: ${role}`,
@@ -60,6 +64,11 @@ Rules:
 - Each fact should be self-contained and actionable without additional context
 - Decisions that affect the whole team should still be extracted, but scoped to this participant's perspective`;
 
+/**
+ * Build the user-side prompt for meeting-based fact extraction, scoped to a
+ * specific participant's role/name. Uses a larger context window (8k chars)
+ * since meeting transcripts tend to be longer.
+ */
 export function buildMeetingExtractionPrompt(
   participantRole: string,
   participantName: string,

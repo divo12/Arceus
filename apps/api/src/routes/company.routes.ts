@@ -1,3 +1,7 @@
+/**
+ * @module company.routes
+ * Routes for company lifecycle — bootstrap, reset, snapshot, and SSE event stream.
+ */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSnapshot, resetCompany, applyStrategy, clearPersistedStoreState } from "../persistence/store.js";

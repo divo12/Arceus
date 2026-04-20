@@ -1,3 +1,18 @@
+/**
+ * @module governance
+ * Policy rules, trust scores, and violation tracking schemas.
+ *
+ * The governance layer gates every tool call through policy rules.
+ * Each agent has a trust score (0–1) that rises/falls based on outcomes.
+ * Rules match by role, tool pattern, trust threshold, and file patterns.
+ *
+ * Key types:
+ * - PolicyRule — a governance rule with role/tool matching and decision
+ * - PolicyEvalContext — input to the governance gateway for a single tool call
+ * - PolicyDecision — the gateway's allow/deny/escalate verdict
+ * - TrustScore — per-agent trust with delta history
+ * - PolicyViolation — recorded when a rule fires
+ */
 import { z } from "zod";
 
 import { roleTypeSchema } from "./agents";

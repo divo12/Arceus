@@ -27,6 +27,7 @@ import { runtimeConfig, ensureDeployment } from "../config/index.js";
 /** companyId → toolName → entry */
 const registry = new Map<string, Map<string, ServiceRegistryEntry>>();
 
+/** Get or create the in-memory tool registry for a company. */
 function getCompanyRegistry(companyId: string): Map<string, ServiceRegistryEntry> {
   let co = registry.get(companyId);
   if (!co) {
@@ -224,6 +225,7 @@ const ARCEUS_TOOLS: ToolSeed[] = [
 
 // ── Seed logic ─────────────────────────────────────────────
 
+/** Convert a ToolSeed into a full ServiceRegistryEntry with a fresh UUID. */
 function buildSeedEntry(companyId: string, seed: ToolSeed): ServiceRegistryEntry {
   return {
     id: `svc_${randomUUID()}`,

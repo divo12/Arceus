@@ -1,3 +1,4 @@
+/** @module meetings.routes — Routes for listing meetings. */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 

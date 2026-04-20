@@ -284,6 +284,7 @@ export type ControlPlaneStatus = {
   };
 };
 
+/** Get the Control Plane health and component status summary. */
 export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
   const snap = getSnapshot();
   const isPending = snap.company.id === "company_pending";
@@ -777,6 +778,7 @@ export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
   return lastBuildCheck;
 }
 
+/** Get the cached last build check result. */
 export function cpGetLastBuildCheck() {
   return lastBuildCheck;
 }

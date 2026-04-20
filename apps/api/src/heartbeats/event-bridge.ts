@@ -26,6 +26,11 @@ import { registerReportedPreviewUrl } from "../workspace/preview.js";
 import { recordMeeting } from "../meetings/recording.js";
 import { setTaskStatus, setTaskPreviewUrl, appendTaskResult, appendTaskCommand } from "../tasks/mutations.js";
 
+/**
+ * Start the SSE event bridge that streams events from OpenCode
+ * into agent state, governance audit, and prompt completion tracking.
+ * Auto-reconnects on disconnect after a brief delay.
+ */
 export async function startEventBridge() {
   try {
     const opencode = await getOpencode();
@@ -79,6 +84,7 @@ export async function startEventBridge() {
   }
 }
 
+/** Dispatch a single SSE event to the appropriate agent state / governance handler. */
 async function processEvent(event: { type: string; properties?: Record<string, any> }) {
   const props = event.properties;
   if (!props) return;

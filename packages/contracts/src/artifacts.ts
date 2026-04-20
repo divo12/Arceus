@@ -1,3 +1,13 @@
+/**
+ * @module artifacts
+ * Artifact schemas — output files and deliverables.
+ *
+ * Artifacts are versioned outputs produced by agents during task execution:
+ * architecture docs, specs, code, QA reports, meeting notes, etc.
+ *
+ * Key types:
+ * - Artifact — a deliverable with kind, location, and metadata
+ */
 import { z } from "zod";
 
 export const artifactKindSchema = z.enum([

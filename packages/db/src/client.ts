@@ -1,3 +1,11 @@
+/**
+ * @module db/client
+ * Database connection management and adapter layer.
+ *
+ * Provides Drizzle ORM (postgres.js) and Supabase clients, plus a
+ * NoopDatabaseAdapter for in-memory testing/development. Reads connection
+ * config from env vars with multiple alias fallbacks.
+ */
 import "./load-env";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -9,6 +17,7 @@ function cloneRecord<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** Reads the first non-empty value from a list of env var names. */
 function readAliasedEnv(names: string[]) {
   for (const name of names) {
     const value = process.env[name]?.trim();
@@ -20,6 +29,7 @@ function readAliasedEnv(names: string[]) {
   return "";
 }
 
+/** Determines if the database is direct-connected or using a fallback URL. */
 function getDatabaseRuntimeMode(databaseUrl: string): DatabaseConnectionConfig["mode"] {
   if (!databaseUrl) {
     return "disabled";
@@ -34,6 +44,7 @@ let dbClient: DbClient | null = null;
 let sqlClient: postgres.Sql | null = null;
 let supabaseClient: SupabaseClient | null = null;
 
+/** Builds a DatabaseConnectionConfig from env vars, or null if unconfigured. */
 export function getDatabaseConnectionConfig(): DatabaseConnectionConfig | null {
   const supabaseUrl = readAliasedEnv(["SUPABASE_URL", "PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL"]);
   const supabaseServiceRoleKey = readAliasedEnv(["SUPABASE_SERVICE_ROLE_KEY", "PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY"]);
@@ -51,15 +62,18 @@ export function getDatabaseConnectionConfig(): DatabaseConnectionConfig | null {
   };
 }
 
+/** Returns true if Supabase URL + service role key are set. */
 export function isSupabaseConfigured() {
   const config = getDatabaseConnectionConfig();
   return Boolean(config?.supabaseUrl && config.supabaseServiceRoleKey);
 }
 
+/** Returns true if any supported database URL env var is set. */
 export function isDatabaseConfigured() {
   return Boolean(getDatabaseConnectionConfig()?.databaseUrl);
 }
 
+/** Returns the singleton Drizzle client, creating it on first call. Throws if DB not configured. */
 export function getDb() {
   const config = getDatabaseConnectionConfig();
   if (!config?.databaseUrl) {
@@ -82,6 +96,7 @@ export function getDb() {
   return dbClient;
 }
 
+/** Returns the singleton Supabase client. Throws if not configured. */
 export function getSupabaseClient() {
   const config = getDatabaseConnectionConfig();
   if (!config?.supabaseUrl || !config.supabaseServiceRoleKey) {
@@ -100,6 +115,7 @@ export function getSupabaseClient() {
   return supabaseClient;
 }
 
+/** Pings the database and returns health status. */
 export async function getDatabaseHealth(): Promise<DatabaseHealth> {
   const config = getDatabaseConnectionConfig();
   if (!config) {
@@ -126,6 +142,7 @@ export async function getDatabaseHealth(): Promise<DatabaseHealth> {
   }
 }
 
+/** Closes all database connections and resets singletons. */
 export async function closeDbConnections() {
   if (sqlClient) {
     await sqlClient.end({ timeout: 5 });
@@ -136,6 +153,10 @@ export async function closeDbConnections() {
   supabaseClient = null;
 }
 
+/**
+ * In-memory DatabaseAdapter for dev/test. All data lives in Maps.
+ * Replace with the real Drizzle adapter for production persistence.
+ */
 export class NoopDatabaseAdapter implements DatabaseAdapter {
   readonly kind = "noop" as const;
 

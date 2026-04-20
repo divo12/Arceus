@@ -4,6 +4,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+/** Create a blank CompanySnapshot with placeholder IDs, ready for bootstrap. */
 export function createEmptyCompanySnapshot(): CompanySnapshot {
   const createdAt = nowIso();
 
@@ -59,6 +60,7 @@ export function createEmptyCompanySnapshot(): CompanySnapshot {
   };
 }
 
+/** Create an EventEnvelope for a bootstrap-phase mutation (actor = board). */
 export function createBootstrapEvent(summary: string, payload: Record<string, unknown>): EventEnvelope {
   return {
     eventId: crypto.randomUUID(),

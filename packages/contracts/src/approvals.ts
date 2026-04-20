@@ -1,3 +1,13 @@
+/**
+ * @module approvals
+ * Board approval schemas.
+ *
+ * Approvals gate important decisions that require human (board) sign-off:
+ * strategy changes, agent hiring, meeting blockers, and tool governance.
+ *
+ * Key types:
+ * - Approval — a pending/approved/rejected request with resolution summary
+ */
 import { z } from "zod";
 
 export const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "applied"]);

@@ -11,6 +11,7 @@ const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "u
 const coreStrategyRoles = ["ceo", "cto", "pm", "developer", "tester", "skills_lead"] as const;
 type CoreStrategyRole = (typeof coreStrategyRoles)[number];
 const ceoMeetingTypeSchema = z.enum(["ad_hoc", "sync", "escalation"]);
+/** Valid CEO conversation stages. */
 export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
 
 const ceoTaskDeltaSchema = z.object({
@@ -99,6 +100,7 @@ function validateStrategyRoles(
   // roles server-side.
 }
 
+/** Schema for the structured strategy output produced by the CEO agent. */
 export const strategyOutputSchema = z.object({
   strategy_title: z.string(),
   summary: z.string(),
@@ -212,6 +214,7 @@ const sprintProposalBlockSchema = z.object({
   rationale: z.string(),
 });
 
+/** Schema for structured CEO boardroom cards sent to the UI. */
 export const ceoCardSchema = z.object({
   card_type: z.enum(["welcome_brief", "mission_brief", "clarifying_question", "strategy_proposal", "status_update", "sprint_proposal"]),
   stage: ceoStageSchema,
@@ -287,6 +290,7 @@ function summarizeMeetings(snapshot: CompanySnapshot) {
   return snapshot.meetings.slice(0, 4).map((meeting) => `${meeting.type}: ${meeting.title}`).join("; ");
 }
 
+/** Infer the current CEO conversation stage from company snapshot state. */
 export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
   if (snapshot.company.id === "company_pending") {
     return "welcome";
@@ -392,6 +396,7 @@ function buildSnapshotContext(snapshot: CompanySnapshot, executionStatus?: strin
   ].join("\n");
 }
 
+/** Build the full system prompt for the CEO agent, including company context. */
 export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStatus?: string) {
   const ceoSoul = getRoleSoul("ceo");
   const stage = inferCeoStage(snapshot, executionStatus);
@@ -426,6 +431,10 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStat
   return lines.join("\n");
 }
 
+/**
+ * Classify a free-text CEO response into a structured boardroom card.
+ * Retries with a brevity directive on truncation; falls back to a status_update card.
+ */
 export async function classifyCeoResponse(
   ceoText: string,
   snapshot: CompanySnapshot,
@@ -554,6 +563,7 @@ export async function classifyCeoResponse(
   return card;
 }
 
+/** Generate a structured strategy proposal from the current company snapshot. */
 export async function generateStrategy(snapshot: CompanySnapshot): Promise<StrategyOutput> {
   const userPrompt = [
     buildSnapshotContext(snapshot),

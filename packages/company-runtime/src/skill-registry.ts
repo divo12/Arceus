@@ -42,11 +42,13 @@ function rebuildActiveIndex(): void {
 
 // ── CRUD operations ───────────────────────────────────────
 
+/** Register or overwrite a skill in the in-memory store and rebuild the active index. */
 export function registerSkill(skill: SkillArtifact): void {
   skillsById.set(skill.id, { ...skill });
   rebuildActiveIndex();
 }
 
+/** Apply partial updates to an existing skill, return the updated skill or null if not found. */
 export function updateSkill(skillId: string, updates: Partial<SkillArtifact>): SkillArtifact | null {
   const existing = skillsById.get(skillId);
   if (!existing) return null;
@@ -56,6 +58,7 @@ export function updateSkill(skillId: string, updates: Partial<SkillArtifact>): S
   return updated;
 }
 
+/** Mark a skill as deprecated with a reason. Returns false if skill not found. */
 export function deprecateSkill(skillId: string, reason: string): boolean {
   const existing = skillsById.get(skillId);
   if (!existing) return false;
@@ -68,6 +71,7 @@ export function deprecateSkill(skillId: string, reason: string): boolean {
   return true;
 }
 
+/** Retrieve a single skill by ID, or null if not found. */
 export function getSkillById(skillId: string): SkillArtifact | null {
   return skillsById.get(skillId) ?? null;
 }
@@ -175,6 +179,10 @@ export function updateSuccessRate(skillId: string, outcome: number): void {
 
 // ── Health metrics ────────────────────────────────────────
 
+/**
+ * Compute the overall skill health report for a company:
+ * total/active counts, average success rate, worst performers.
+ */
 export function getSkillHealth(companyId: string): SkillHealthReport {
   const all = getAllSkills(companyId);
   const active = all.filter((s) => s.status === "active");
@@ -271,14 +279,17 @@ export function getRegistrySize(): number {
 const mutationsById = new Map<string, SkillMutation>();
 const attributionsStore: FailureAttribution[] = [];
 
+/** Store a SkillMutation (proposed, testing, approved, etc.) in the in-memory store. */
 export function storeMutation(mutation: SkillMutation): void {
   mutationsById.set(mutation.id, { ...mutation });
 }
 
+/** Retrieve a mutation by ID, or null if not found. */
 export function getMutationById(id: string): SkillMutation | null {
   return mutationsById.get(id) ?? null;
 }
 
+/** Update a mutation's status and optional fields. Sets resolvedAt for terminal states. */
 export function updateMutationStatus(
   id: string,
   status: SkillMutation["status"],
@@ -298,6 +309,7 @@ export function updateMutationStatus(
   return updated;
 }
 
+/** Get all mutations for a company, sorted newest first. */
 export function getMutationsForCompany(companyId: string): SkillMutation[] {
   const results: SkillMutation[] = [];
   for (const m of mutationsById.values()) {
@@ -306,16 +318,19 @@ export function getMutationsForCompany(companyId: string): SkillMutation[] {
   return results.sort((a, b) => b.proposedAt.localeCompare(a.proposedAt));
 }
 
+/** Get mutations in "proposed" or "revision" status for a company. */
 export function getPendingMutations(companyId: string): SkillMutation[] {
   return getMutationsForCompany(companyId).filter(
     (m) => m.status === "proposed" || m.status === "revision",
   );
 }
 
+/** Store a failure attribution record. */
 export function storeAttribution(attribution: FailureAttribution): void {
   attributionsStore.push({ ...attribution });
 }
 
+/** Get all failure attributions linked to skills in this company (plus gap attributions). */
 export function getAttributionsForCompany(companyId: string): FailureAttribution[] {
   // Attributions link to skills; for company filter, check if the skill belongs to this company.
   // Attributions with null skillId (gaps) are always returned.
@@ -479,6 +494,7 @@ const STOP_WORDS = new Set([
   "when", "where", "how", "what", "which", "who", "whom",
 ]);
 
+/** Tokenize text into lowercase tokens >2 chars with stop words removed. */
 function tokenize(text: string): Set<string> {
   const tokens = text
     .toLowerCase()

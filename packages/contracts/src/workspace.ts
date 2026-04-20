@@ -1,3 +1,15 @@
+/**
+ * @module workspace
+ * Workspace and asset storage schemas.
+ *
+ * Each company has a workspace — a local directory where agents write code.
+ * Workspaces are bundled (tar.gz) and synced to cloud storage for persistence.
+ *
+ * Key types:
+ * - WorkspaceInfo — workspace metadata with sync state and git ref
+ * - AssetRecord — cloud storage object record
+ * - ExportResult — signed URL for downloading a workspace bundle
+ */
 import { z } from "zod";
 
 export const workspaceStatusSchema = z.enum(["active", "archived", "restoring"]);

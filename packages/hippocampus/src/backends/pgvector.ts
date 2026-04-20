@@ -8,6 +8,7 @@ import { embed } from "./embedding.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Convert a Drizzle memory_units row to the domain MemoryUnit type. */
 function memoryRowToUnit(row: typeof memoryUnitsTable.$inferSelect): MemoryUnit {
   return {
     id: row.id,
@@ -27,6 +28,7 @@ function memoryRowToUnit(row: typeof memoryUnitsTable.$inferSelect): MemoryUnit 
   };
 }
 
+/** Convert a Drizzle habits row to the domain Habit type. */
 function habitRowToHabit(row: typeof habitsTable.$inferSelect): Habit {
   return {
     id: row.id,
@@ -44,6 +46,7 @@ function habitRowToHabit(row: typeof habitsTable.$inferSelect): Habit {
   };
 }
 
+/** Convert a Drizzle priming_state row to the domain PrimingState type. */
 function primingRowToState(row: typeof primingStateTable.$inferSelect): PrimingState {
   return {
     id: `priming_${row.agentId}`,
@@ -58,13 +61,14 @@ function primingRowToState(row: typeof primingStateTable.$inferSelect): PrimingS
   };
 }
 
-/** Extract raw UUID from prefixed IDs like "agent_developer_36a2d2bb-..." or "company_e95b57fd-..." */
+/** Extract the raw UUID from prefixed IDs like "agent_developer_36a2d2bb-..." or "company_e95b57fd-...". */
 function extractUuid(prefixedId: string): string {
   const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const match = prefixedId.match(uuidRegex);
   return match ? match[0] : prefixedId;
 }
 
+/** Build the Drizzle insert values for a memory unit, extracting UUIDs from prefixed IDs. */
 function buildInsertValues(unit: MemoryUnit, memoryType: "static" | "dynamic") {
   return {
     id: crypto.randomUUID(),
@@ -86,6 +90,11 @@ function buildInsertValues(unit: MemoryUnit, memoryType: "static" | "dynamic") {
 // PgVectorStaticStore — permanent facts, never expire
 // ---------------------------------------------------------------------------
 
+/**
+ * PostgreSQL + pgvector implementation of StaticMemoryStore.
+ * Stores permanent facts with embedding-based vector similarity search.
+ * Embeddings are generated on add/update and used for cosine distance ranking.
+ */
 export class PgVectorStaticStore implements StaticMemoryStore {
   async list(agentId: string): Promise<MemoryUnit[]> {
     const db = getDb();
@@ -176,6 +185,13 @@ export class PgVectorStaticStore implements StaticMemoryStore {
 // PgVectorDynamicStore — temporary facts with decay
 // ---------------------------------------------------------------------------
 
+/**
+ * PostgreSQL + pgvector implementation of DynamicMemoryStore.
+ * Stores temporary facts with time-decay scoring:
+ * decayed_score = cosine_similarity × relevance_score × 0.5^(age_days / 30).
+ * GC expires temporal facts, prunes decayed relevance below 0.1, and removes
+ * old low-confidence entries.
+ */
 export class PgVectorDynamicStore implements DynamicMemoryStore {
   async list(agentId: string): Promise<MemoryUnit[]> {
     const db = getDb();
@@ -320,6 +336,11 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
 // PgVectorProceduralStore — habits
 // ---------------------------------------------------------------------------
 
+/**
+ * PostgreSQL implementation of ProceduralMemoryStore.
+ * Stores habits (trigger → action patterns) with naive token matching.
+ * GC deactivates unused habits (usageCount=0) older than 30 days.
+ */
 export class PgVectorProceduralStore implements ProceduralMemoryStore {
   async list(agentId: string): Promise<Habit[]> {
     const db = getDb();
@@ -424,6 +445,10 @@ export class PgVectorProceduralStore implements ProceduralMemoryStore {
 // PgVectorPrimingStore
 // ---------------------------------------------------------------------------
 
+/**
+ * PostgreSQL implementation of PrimingStore.
+ * Uses upsert (ON CONFLICT DO UPDATE) keyed on agentId.
+ */
 export class PgVectorPrimingStore implements PrimingStore {
   async get(agentId: string): Promise<PrimingState | null> {
     const db = getDb();
@@ -464,6 +489,7 @@ export class PgVectorPrimingStore implements PrimingStore {
 // Set embedding on an existing memory unit
 // ---------------------------------------------------------------------------
 
+/** Set or replace the embedding vector on an existing memory unit row. */
 export async function setMemoryEmbedding(memoryId: string, embedding: number[]): Promise<void> {
   const db = getDb();
   await db
@@ -476,6 +502,11 @@ export async function setMemoryEmbedding(memoryId: string, embedding: number[]):
 // Factory: create pgvector-backed stores (or return null for in-memory fallback)
 // ---------------------------------------------------------------------------
 
+/**
+ * Factory: create pgvector-backed stores for all four tiers.
+ * Returns null if DATABASE_URL is not configured, allowing callers
+ * to fall back to in-memory stores.
+ */
 export function createPgVectorStores() {
   if (!isDatabaseConfigured()) {
     return null;

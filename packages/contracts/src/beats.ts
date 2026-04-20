@@ -1,3 +1,18 @@
+/**
+ * @module beats
+ * Heartbeat scheduling engine schemas (Spec 12).
+ *
+ * Beats are the fundamental execution unit — each agent gets periodic heartbeats
+ * (interval-triggered) or event-triggered beats. A beat goes through phases:
+ * contextAssembly → observation (checklist checks) → execution (LLM + tools)
+ * → serialization (state mutations).
+ *
+ * Key types:
+ * - BeatRecord — full record of one heartbeat cycle with timing and cost
+ * - BeatTrigger — interval or event-based trigger
+ * - BeatOutcome — result enum (HEARTBEAT_OK, WORK_DONE, ERROR, etc.)
+ * - TaskProgress / TaskResult — per-task progress tracking within beats
+ */
 import { z } from "zod";
 
 import { roleTypeSchema, roleSoulSchema, hierarchyNodeSchema } from "./agents";

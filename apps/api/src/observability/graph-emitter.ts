@@ -12,6 +12,7 @@ import type { Task, AgentIdentity } from "@arceus/contracts";
 // Sprint lifecycle
 // ---------------------------------------------------------------------------
 
+/** Emit a sprint-started event: creates the CEO planning node and task nodes with dependency edges. */
 export function emitGraphSprintStarted(
   sprintId: string,
   sprintNumber: number,
@@ -105,6 +106,7 @@ export function emitGraphSprintStarted(
   }
 }
 
+/** Mark a sprint as completed in the graph store. */
 export function emitGraphSprintCompleted(sprintId: string, status: string): void {
   graphStore.completeSprint(sprintId, status);
 }
@@ -113,6 +115,7 @@ export function emitGraphSprintCompleted(sprintId: string, status: string): void
 // Node lifecycle
 // ---------------------------------------------------------------------------
 
+/** Add a new task node (with dependency edges) to the sprint graph. */
 export function emitGraphNodeAdded(sprintId: string, task: Task): void {
   const node = taskToGraphNode(task);
   const edges: GraphEdge[] = [];
@@ -129,6 +132,7 @@ export function emitGraphNodeAdded(sprintId: string, task: Task): void {
   graphStore.addNode(sprintId, node, edges);
 }
 
+/** Record a status transition on an existing graph node. */
 export function emitGraphStatusChanged(
   sprintId: string,
   taskId: string,
@@ -150,6 +154,7 @@ export function emitGraphStatusChanged(
 // Artifacts
 // ---------------------------------------------------------------------------
 
+/** Register an artifact as produced by a graph node. */
 export function emitGraphArtifactProduced(
   sprintId: string,
   taskId: string,
@@ -187,6 +192,7 @@ export function emitGraphArtifactConsumed(
 // Beat lifecycle
 // ---------------------------------------------------------------------------
 
+/** Record the start of a beat (agent action) on a graph node. */
 export function emitGraphBeatStarted(
   sprintId: string,
   nodeId: string,
@@ -214,6 +220,7 @@ export function emitGraphBeatStarted(
   graphStore.addBeat(sprintId, nodeId, beat);
 }
 
+/** Mark a beat as completed or failed, recording output summary and duration. */
 export function emitGraphBeatCompleted(
   sprintId: string,
   nodeId: string,
@@ -236,6 +243,7 @@ export function emitGraphBeatCompleted(
 // Decisions
 // ---------------------------------------------------------------------------
 
+/** Record a decision (router, gate, approval, etc.) on the sprint graph. */
 export function emitGraphDecision(
   sprintId: string,
   nodeId: string | null,
@@ -269,6 +277,7 @@ const GRAPH_FILE_IGNORE = new Set([
   ".env", ".env.local", "tsconfig.tsbuildinfo",
 ]);
 
+/** Record file changes on a graph node, filtering out common noise (node_modules, lockfiles, etc.). */
 export function emitGraphFileChanges(
   sprintId: string,
   nodeId: string,
@@ -293,6 +302,7 @@ export function emitGraphFileChanges(
 // Rework
 // ---------------------------------------------------------------------------
 
+/** Start tracking a rework cycle group on a graph node. */
 export function emitGraphReworkStarted(
   sprintId: string,
   nodeId: string,
@@ -307,6 +317,7 @@ export function emitGraphReworkStarted(
   graphStore.setReworkGroup(sprintId, nodeId, group);
 }
 
+/** Append a rework iteration verdict to an existing rework group. */
 export function emitGraphReworkIteration(
   sprintId: string,
   nodeId: string,
@@ -339,6 +350,7 @@ function detectCeremonyKind(summary: string): string | null {
   return null;
 }
 
+/** Record a meeting as its own graph node, linking it to the source task node if provided. */
 export function emitGraphMeeting(
   sprintId: string,
   nodeId: string | null,
@@ -414,6 +426,7 @@ export function emitGraphMeeting(
 // Memory writes
 // ---------------------------------------------------------------------------
 
+/** Record a memory write event on the sprint graph. */
 export function emitGraphMemoryWrite(
   sprintId: string,
   nodeId: string | null,

@@ -1,3 +1,18 @@
+/**
+ * @module skills
+ * Skill artifact, mutation, and health-report schemas.
+ *
+ * Skills are reusable prompt-templates that agents apply to tasks.
+ * They go through a lifecycle: draft → testing → active → deprecated.
+ * Skills can be mutated (improved) via the ATA pipeline when failures
+ * are attributed to them.
+ *
+ * Key types:
+ * - SkillArtifact — a versioned skill with trigger, content, test cases, and success rate
+ * - SkillMutation — a proposed improvement to a skill with test results
+ * - FailureAttribution — links a task failure to a specific skill
+ * - SkillHealthReport — aggregate metrics across all skills
+ */
 import { z } from "zod";
 
 export const skillStatusSchema = z.enum(["draft", "testing", "active", "deprecated"]);

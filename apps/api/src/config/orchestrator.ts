@@ -1,3 +1,7 @@
+/**
+ * Orchestrator configuration.
+ * Execution modes, developer limits, sprint settings, and autonomous-pass controls.
+ */
 import type { AgentIdentity, Task } from "@arceus/contracts";
 import { readListEnv, readNumberEnv, readOptionalEnv } from "./env";
 

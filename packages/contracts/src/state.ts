@@ -1,3 +1,16 @@
+/**
+ * @module state
+ * Company snapshot schema — the complete in-memory state of a company.
+ *
+ * CompanySnapshot is the single source of truth passed to every LLM call
+ * and heartbeat. It contains the entire company: agents, tasks, sprints,
+ * meetings, approvals, memories, and more. Snapshots are versioned for
+ * optimistic concurrency control.
+ *
+ * Key types:
+ * - CompanySnapshot — full company state (all entities flattened)
+ * - SprintSnapshot — git-tagged archive of a completed sprint
+ */
 import { z } from "zod";
 
 import { companySchema, fundamentalIdeaSchema, strategyBriefSchema } from "./company";

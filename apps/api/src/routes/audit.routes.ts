@@ -1,3 +1,7 @@
+/**
+ * @module audit.routes
+ * Routes for the audit ledger — event queries, stats, SSE stream, and log viewer.
+ */
 import type { FastifyInstance } from "fastify";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

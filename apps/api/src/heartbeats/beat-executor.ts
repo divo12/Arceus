@@ -38,6 +38,11 @@ import {
 import { triggerCeoSprintProposal } from "../sprints/proposals.js";
 import { startEventBridge } from "./event-bridge.js";
 
+/**
+ * Execute a single task within a heartbeat cycle.
+ * Routes to specialist executors, CEO governance, or OpenCode prompt
+ * depending on the agent role. Returns execution metrics.
+ */
 export async function executeBeatTask(
   ctx: AgentBeatContext,
   taskId: string,

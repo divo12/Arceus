@@ -107,10 +107,12 @@ export const ROLE_SOULS: Record<RoleSoul["role"], RoleSoul> = {
   }
 };
 
+/** Look up the RoleSoul definition for a given role key. */
 export function getRoleSoul(role: RoleSoul["role"]) {
   return ROLE_SOULS[role];
 }
 
+/** Check if managerRole is allowed to have childRole as a direct report. */
 export function canManageRole(managerRole: RoleSoul["role"], childRole: RoleSoul["role"]) {
   return ROLE_SOULS[managerRole].allowedDirectReports.includes(childRole);
 }
@@ -118,6 +120,11 @@ export function canManageRole(managerRole: RoleSoul["role"], childRole: RoleSoul
 /** Roles that must always be present in every company org chart. */
 export const MANDATORY_ROLES: ReadonlyArray<string> = ["tester", "skills_lead"];
 
+/**
+ * Validate a proposed org-chart hierarchy against role policies.
+ * Throws on unsupported roles, duplicates, illegal reporting lines,
+ * or missing mandatory roles (tester, skills_lead).
+ */
 export function assertRoleHierarchy(roles: Array<{ role: string; parent_role: string | null }>) {
   const seen = new Set<string>();
 

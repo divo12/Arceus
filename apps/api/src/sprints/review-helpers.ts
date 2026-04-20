@@ -37,6 +37,7 @@ const DEFECT_ROUTE: Record<DefectArea, AgentIdentity["role"]> = {
   performance: "developer",
 };
 
+/** Map a defect area to the role best suited to fix it. */
 export function routeDefect(area: DefectArea): AgentIdentity["role"] {
   return DEFECT_ROUTE[area] ?? "developer";
 }
@@ -71,6 +72,7 @@ export function resolveDefectRole(
 
 // ── Review state factory ────────────────────────────────────
 
+/** Create a fresh SprintReviewState at the pre_gate phase. */
 export function createReviewState(maxReworkCycles = 3): SprintReviewState {
   return {
     phase: "pre_gate",
@@ -207,6 +209,7 @@ export function buildBugFixTaskFields(input: BugFixTaskInput): {
 
 // ── Gate-failure → bug task helper ──────────────────────────
 
+/** Build a bug_fix task from a gate failure (build or test). Returns null if the gate passed. */
 export function buildGateFailureBugFields(
   gateResult: VerificationGateResult,
   sprintId: string,

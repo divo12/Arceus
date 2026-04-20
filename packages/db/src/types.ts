@@ -1,3 +1,8 @@
+/**
+ * @module db/types
+ * Core database type definitions: EntityName, EntityRecordMap, DatabaseAdapter,
+ * DatabaseConnectionConfig, DatabaseHealth, and TableDefinition.
+ */
 import type {
   AgentIdentity,
   AssetRecord,

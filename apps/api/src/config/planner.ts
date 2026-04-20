@@ -1,3 +1,8 @@
+/**
+ * Task planner configuration.
+ * Graph node kinds, stage keys, limits, and system prompt templates
+ * for the CEO-driven planning pipeline.
+ */
 export const plannerConfig = {
   followUpAssignedRoles: ["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"] as const,
   graphNodeKinds: [

@@ -53,6 +53,7 @@ const SHELL_COMMAND_PATTERNS: RegExp[] = [
   /\bsudo\s+/,
 ];
 
+/** Scan skill content for forbidden shell/system command patterns. */
 export function lintSkillContent(content: string): {
   clean: boolean;
   findings: string[];
@@ -97,14 +98,17 @@ function getOrInitSprintBudget(sprintId: string): SprintBudgetRecord {
   return existing;
 }
 
+/** Return a snapshot of the mutation budget counters for a sprint. */
 export function getSprintBudget(sprintId: string): Readonly<SprintBudgetRecord> {
   return { ...getOrInitSprintBudget(sprintId) };
 }
 
+/** Reset the mutation budget counters for a single sprint. */
 export function resetSprintBudget(sprintId: string): void {
   sprintBudgets.delete(sprintId);
 }
 
+/** Reset mutation budget counters for all sprints (test helper). */
 export function resetAllSprintBudgets(): void {
   sprintBudgets.clear();
 }

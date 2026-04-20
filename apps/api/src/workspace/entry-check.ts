@@ -39,6 +39,10 @@ function isExcludedFromEntryCheck(rel: string): boolean {
   return false;
 }
 
+/**
+ * Walk the product workspace's import graph starting from the entry file
+ * and report whether all source modules are transitively reachable.
+ */
 export function checkEntryPointImports(): EntryPointCheckResult {
   const entryFileCandidates = [
     "src/App.tsx", "src/App.jsx", "src/App.vue", "src/App.svelte",
@@ -155,6 +159,7 @@ export function checkEntryPointImports(): EntryPointCheckResult {
   return { pass: true, entryFile, reason: `Entry file ${entryFile} reaches ${referencedFiles.size}/${productModules.length} product modules transitively.`, orphanedModules: orphaned };
 }
 
+/** Generate human-readable import statements for orphaned modules to wire them into the entry file. */
 export function generateOrphanWiringPrescription(orphans: string[], entryFile: string | null): string {
   if (orphans.length === 0 || !entryFile) return "";
   const entryDir = entryFile.includes("/") ? entryFile.slice(0, entryFile.lastIndexOf("/")) : "";

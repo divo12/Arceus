@@ -1,3 +1,9 @@
+/**
+ * @module db/schema
+ * Declarative table definitions (entity name → metadata).
+ * Used for documentation and generic CRUD routing, NOT for Drizzle queries
+ * (see tables.ts and memory-tables.ts for Drizzle column definitions).
+ */
 import type { EntityName, TableDefinition } from "./types";
 
 export const arceusTableDefinitions: Record<EntityName, TableDefinition> = {

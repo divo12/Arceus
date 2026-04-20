@@ -1,3 +1,17 @@
+/**
+ * @module events
+ * Event envelope, audit ledger, control-plane mutations, and service registry schemas.
+ *
+ * All state changes go through StateMutations applied via the control plane.
+ * Every mutation is recorded as an AuditEvent for full traceability.
+ * The ServiceRegistryEntry describes each tool's blast radius and parameters.
+ *
+ * Key types:
+ * - EventEnvelope — generic event wrapper with causation/correlation tracking
+ * - AuditEvent — immutable audit log entry with category, severity, and detail
+ * - StateMutation — discriminated union of all possible state changes
+ * - SnapshotVersion — version checkpoint for optimistic concurrency
+ */
 import { z } from "zod";
 
 export const actorTypeSchema = z.enum(["board", "agent", "system", "runtime"]);
