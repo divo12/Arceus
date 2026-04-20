@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
+import { getRoleSoul } from "@arceus/company-runtime";
 import { structuredCompletion } from "../infra/azure-openai.js";
 import { plannerConfig } from "../config/index.js";
+import { ensureAgentSession, runPromptText } from "../prompts/llm.js";
+import { buildCtoPlanPrompt } from "../prompts/cto-plan.js";
+import { agentSessions } from "../orchestration/state.js";
 
 // Static "broad" enum — the full role vocabulary. Used for the exported type
 // (type inference is static). At runtime we narrow this to the actual roster so
@@ -83,11 +87,34 @@ export const workflowTaskPlanSchema = createWorkflowTaskPlanSchema(broadAssigned
 
 export type WorkflowTaskPlan = z.infer<typeof workflowTaskPlanSchema>;
 
+/** Generate a structured workflow task plan via LLM, using the CTO session when available. */
 export async function generateWorkflowTaskPlan(snapshot: CompanySnapshot): Promise<WorkflowTaskPlan> {
   const roster = snapshot.agents.map((agent) => agent.role);
   const assignedRoleSchema = buildAssignedRoleSchema(roster);
   const rosterSchema = createWorkflowTaskPlanSchema(assignedRoleSchema);
 
+  // Route through the CTO's existing session if available — Spec 24
+  const ctoSession = agentSessions.get("cto");
+  if (ctoSession) {
+    const ctoSoul = getRoleSoul("cto");
+    const prompt = buildCtoPlanPrompt(snapshot);
+    const output = await runPromptText(
+      "cto",
+      ctoSession.sessionId,
+      ctoSoul.systemPrompt,
+      prompt,
+    );
+
+    // Parse structured JSON from the CTO's text response
+    const jsonMatch = output.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = rosterSchema.safeParse(JSON.parse(jsonMatch[0]));
+      if (parsed.success) return parsed.data as WorkflowTaskPlan;
+    }
+    // If CTO session output failed to parse, fall through to structuredCompletion
+  }
+
+  // Fallback: structuredCompletion when CTO session isn't available (e.g. startup)
   const availableRolesLine = roster.length > 0
     ? roster.join(", ")
     : (plannerConfig.followUpAssignedRoles as readonly string[]).join(", ");
@@ -121,6 +148,7 @@ export async function generateWorkflowTaskPlan(snapshot: CompanySnapshot): Promi
   );
 }
 
+/** Identity mapping from plan priority to task priority. */
 export function mapTaskPriority(priority: WorkflowTaskPlan["technical_plan"]["priority"]): Task["priority"] {
   return priority;
 }

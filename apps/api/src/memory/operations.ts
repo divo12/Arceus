@@ -1,9 +1,12 @@
+/** Agent memory read/write operations: focus updates, enrichment, blocker clearing, and formatting. */
+
 import type { AgentIdentity } from "@arceus/contracts";
 import type { PreparedAgentContext } from "@arceus/hippocampus";
 import { getSnapshot, updateAgentMemory } from "../persistence/store.js";
 import { uniqueStrings } from "@arceus/task-engine";
 import { getAgentByRole } from "@arceus/task-engine";
 
+/** Replace an agent's currentFocus memory with the given entries. */
 export function updateRoleMemory(role: AgentIdentity["role"], currentFocus: string[]) {
   const agent = getAgentByRole(getSnapshot(), role);
   if (!agent) return;
@@ -15,6 +18,7 @@ export function updateRoleMemory(role: AgentIdentity["role"], currentFocus: stri
   }));
 }
 
+/** Merge new entries into an agent's memory fields (focus, learnings, patterns, blockers, decisions). */
 export function enrichRoleMemory(
   role: AgentIdentity["role"],
   update: {
@@ -39,6 +43,7 @@ export function enrichRoleMemory(
   }));
 }
 
+/** Remove specific blockers from an agent's openBlockers list. */
 export function clearRoleBlockers(role: AgentIdentity["role"], blockersToClear: string[]) {
   const agent = getAgentByRole(getSnapshot(), role);
   if (!agent || blockersToClear.length === 0) return;
@@ -51,6 +56,7 @@ export function clearRoleBlockers(role: AgentIdentity["role"], blockersToClear: 
   }));
 }
 
+/** Format a PreparedAgentContext into a human-readable prompt section. */
 export function formatHippocampusContext(ctx: PreparedAgentContext): string {
   const sections: string[] = [];
 

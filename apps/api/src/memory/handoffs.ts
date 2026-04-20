@@ -9,6 +9,7 @@ import { artifacts } from "../orchestration/state.js";
 // Post-specialist memory handoffs
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Inject UI Designer design specs into developer and tester memory after delivery. */
 export function deliverUiDesignerMemoryHandoff(task: Task, artifactId: string) {
   const artifact = artifacts.find((a) => a.id === artifactId);
   const designContent = artifact?.content
@@ -37,6 +38,7 @@ export function deliverUiDesignerMemoryHandoff(task: Task, artifactId: string) {
   });
 }
 
+/** Inject Skills Lead skill-package availability into CTO, developer, and tester memory. */
 export function deliverSkillsLeadMemoryHandoff(task: Task, artifactId: string, skillPath: string) {
   const handoff = `Reusable skill package ${skillPath} was authored from ${task.title}. Supporting artifact: /api/artifacts/${artifactId}.`;
 
@@ -59,6 +61,7 @@ export function deliverSkillsLeadMemoryHandoff(task: Task, artifactId: string, s
 // Marketing external approval flow
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Create a pending board approval for marketing external/outbound actions. */
 export function createMarketingExternalApproval(task: Task, artifactId: string, meetingId: string | null) {
   const snapshot = getSnapshot();
   const marketingAgent = getAgentByRole(snapshot, "marketing");
@@ -83,6 +86,7 @@ export function createMarketingExternalApproval(task: Task, artifactId: string, 
   return approval;
 }
 
+/** Approve all pending board approvals and emit reactive events to requestors. */
 export function approvePendingBoardApprovals() {
   const pendingApprovals = getSnapshot().approvals.filter((approval) => approval.status === "pending");
 
@@ -109,6 +113,7 @@ export function approvePendingBoardApprovals() {
 // Specialist meeting context (shapes data for recordMeeting after specialist)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Build participant roles and learning entries for a post-specialist handoff meeting. */
 export function getSpecialistMeetingContext(role: AgentIdentity["role"], task: Task, artifactId: string) {
   if (role === "ui_designer") {
     return {

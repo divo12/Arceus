@@ -28,6 +28,10 @@ Do NOT:
 - Mention the numeric scores directly
 - Be generic ("do your best") — be specific about approach`;
 
+/**
+ * Build the user-side prompt for priming disposition generation,
+ * presenting the agent's current emotional state scores and recent events.
+ */
 export function buildPrimingGeneratorUserPrompt(state: PrimingState): string {
   const lines = [
     `confidence: ${state.confidence.toFixed(2)}`,

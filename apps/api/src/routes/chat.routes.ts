@@ -1,3 +1,7 @@
+/**
+ * @module chat.routes
+ * Routes for board-to-CEO chat (send and SSE stream).
+ */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSnapshot } from "../persistence/store.js";

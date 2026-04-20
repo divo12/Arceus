@@ -23,6 +23,10 @@ Rules:
 - Return an empty array if no habits apply
 - Never invent habit IDs — only return IDs from the provided list`;
 
+/**
+ * Build the user-side prompt listing the task description and all candidate habits
+ * for the LLM to evaluate trigger relevance.
+ */
 export function buildHabitMatcherUserPrompt(
   taskDescription: string,
   habits: Habit[],

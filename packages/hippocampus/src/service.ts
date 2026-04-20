@@ -8,6 +8,11 @@ import { rankAndSelect, DEFAULT_RETRIEVAL_OPTIONS } from "./engines/retrieval.js
 import type { RawCandidate } from "./engines/retrieval.js";
 import type { Habit, MemoryUnit } from "@arceus/contracts";
 
+/**
+ * Build a MemoryUnit from a completed task's output.
+ * Maps task outcome to memory type (success → static, failure/partial → dynamic with 7-day TTL)
+ * and assigns a confidence score proportional to outcome quality.
+ */
 function buildCompletionMemoryUnit(input: ProcessTaskCompletionInput): MemoryUnit {
   const now = new Date().toISOString();
 
@@ -44,6 +49,19 @@ export type HippocampusDependencies = {
   generatePriming?: PrimingGenerator;
 };
 
+/**
+ * Core memory service orchestrating all four tiers (static, dynamic, procedural, priming).
+ *
+ * Implements the HippocampusGateway interface with two main flows:
+ * - **prepareAgentContext**: Retrieves relevant memories, habits, and priming disposition
+ *   before an agent starts a task (embedding → vector search → MMR ranking).
+ * - **processTaskCompletion**: Extracts facts from agent output, deduplicates via action
+ *   decision pipeline, and stores into the appropriate tier.
+ *
+ * LLM engines (extractor, action-decider, habit-matcher, priming-generator) are injected
+ * via constructor to keep this package decoupled from the API/Azure OpenAI layer.
+ * Falls back to non-LLM heuristics when engines are not provided.
+ */
 export class HippocampusService implements HippocampusGateway {
   private readonly staticStore: StaticMemoryStore;
   private readonly dynamicStore: DynamicMemoryStore;
@@ -65,6 +83,13 @@ export class HippocampusService implements HippocampusGateway {
     this.generatePriming = dependencies.generatePriming ?? null;
   }
 
+  /**
+   * Assemble memories, habits, and priming disposition for an agent about to start a task.
+   *
+   * Pipeline: embed query → parallel fetch (vector search + habits + priming state)
+   * → LLM habit filtering → MMR-based memory ranking → LLM priming generation.
+   * Each LLM step has a non-LLM fallback.
+   */
   async prepareAgentContext(
     agentId: string,
     taskDescription: string,
@@ -156,6 +181,13 @@ export class HippocampusService implements HippocampusGateway {
     return { memories, habits, priming };
   }
 
+  /**
+   * Process a completed task: extract facts → deduplicate → store → update priming.
+   *
+   * Uses LLM extraction if available, otherwise falls back to storing the raw output
+   * as a single memory unit. Always updates the agent's priming state and increments
+   * usage counters on matched habits.
+   */
   async processTaskCompletion(input: ProcessTaskCompletionInput): Promise<void> {
     // Extract facts via LLM if available, otherwise fall back to raw dump
     if (this.extractFacts) {
@@ -349,6 +381,11 @@ export class HippocampusService implements HippocampusGateway {
     }
   }
 
+  /**
+   * Store pre-built memory units directly, bypassing LLM extraction.
+   * Runs the action decider on each unit to avoid duplicates.
+   * Returns the count of units actually stored (ADD or UPDATE).
+   */
   async storeMemories(units: MemoryUnit[]): Promise<number> {
     let stored = 0;
     for (const unit of units) {
@@ -391,6 +428,10 @@ export class HippocampusService implements HippocampusGateway {
     return stored;
   }
 
+  /**
+   * Run garbage collection: expire temporal dynamic facts, prune low-relevance
+   * memories, and deactivate unused habits older than 30 days.
+   */
   async runGC(companyId: string): Promise<GCResult> {
     const [deletedDynamicUnits, deactivatedHabits] = await Promise.all([
       this.dynamicStore.gc(companyId),
@@ -405,6 +446,7 @@ export class HippocampusService implements HippocampusGateway {
   }
 }
 
+/** Factory: create a HippocampusService with optional dependency injection. */
 export function createHippocampusService(dependencies?: HippocampusDependencies) {
   return new HippocampusService(dependencies);
 }

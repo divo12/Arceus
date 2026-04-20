@@ -1,10 +1,12 @@
 import type { PrimingState } from "@arceus/contracts";
 import type { PrimingStore, TaskOutcome } from "../types";
 
+/** Clamp a value to the [0, 1] range. */
 function clamp(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
+/** Create a neutral priming state for a new agent (confidence=0.5, caution=0.5, morale=0.7). */
 export function createDefaultPrimingState(agentId: string, companyId: string): PrimingState {
   return {
     id: `priming_${agentId}`,
@@ -19,6 +21,10 @@ export function createDefaultPrimingState(agentId: string, companyId: string): P
   };
 }
 
+/**
+ * Generate a hardcoded priming disposition string from the current state.
+ * Used as a fallback when the LLM priming generator is unavailable.
+ */
 export function renderPrimingDisposition(state: PrimingState) {
   if (state.confidence >= 0.7 && state.morale >= 0.7) {
     return "Confident from recent progress. Take a direct approach.";
@@ -31,6 +37,11 @@ export function renderPrimingDisposition(state: PrimingState) {
   return "Neutral. Start with a direct first pass.";
 }
 
+/**
+ * Update priming state based on a task outcome using exponential moving averages.
+ * Success boosts confidence/morale and reduces caution; failure does the opposite.
+ * Keeps a sliding window of the 5 most recent event summaries.
+ */
 export function updatePrimingStateFromOutcome(state: PrimingState, outcome: TaskOutcome, eventSummary: string): PrimingState {
   const confidenceDelta = outcome === "success" ? 0.1 : outcome === "partial" ? 0.02 : -0.08;
   const cautionDelta = outcome === "failure" ? 0.12 : outcome === "partial" ? 0.05 : -0.04;
@@ -50,6 +61,7 @@ export function updatePrimingStateFromOutcome(state: PrimingState, outcome: Task
   };
 }
 
+/** In-memory implementation of PrimingStore for testing and local dev. */
 export class InMemoryPrimingStore implements PrimingStore {
   private readonly byAgent = new Map<string, PrimingState>();
 

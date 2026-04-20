@@ -1,3 +1,17 @@
+/**
+ * @module company
+ * Company, strategy, and fundamental-idea schemas.
+ *
+ * A Company is the top-level entity — created when the board owner starts
+ * a new autonomous venture. It has a budget, a status lifecycle
+ * (ideation → active → paused → archived), and references the current
+ * strategy and sprint.
+ *
+ * Key types:
+ * - Company — top-level entity with budget tracking
+ * - FundamentalIdea — the board's original product vision
+ * - StrategyBrief — CEO-generated plan approved by the board
+ */
 import { z } from "zod";
 
 export const companyStatusSchema = z.enum(["ideation", "active", "paused", "archived"]);

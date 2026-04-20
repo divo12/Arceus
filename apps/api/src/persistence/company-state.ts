@@ -63,6 +63,7 @@ async function drainPersistQueue() {
   }
 }
 
+/** Load the most recent persisted company state from the DB, optionally filtered by company ID. */
 export async function loadPersistedCompanyState(companyId?: string): Promise<PersistedCompanyState | null> {
   if (!isCompanyStatePersistenceEnabled()) {
     return null;
@@ -95,6 +96,7 @@ export async function loadPersistedCompanyState(companyId?: string): Promise<Per
   }
 }
 
+/** Schedule a coalescing persist of company state — only the latest snapshot is written. */
 export function schedulePersistedCompanyState(snapshot: CompanySnapshot, events: EventEnvelope[]) {
   if (!isCompanyStatePersistenceEnabled() || snapshot.company.id === "company_pending") {
     return Promise.resolve();
@@ -118,6 +120,7 @@ export function schedulePersistedCompanyState(snapshot: CompanySnapshot, events:
   return persistQueue;
 }
 
+/** Flush all pending company state writes. Ignores errors since in-memory state is authoritative. */
 export async function flushPersistedCompanyState() {
   if (!isCompanyStatePersistenceEnabled()) {
     return;
@@ -135,6 +138,7 @@ export async function flushPersistedCompanyState() {
   }
 }
 
+/** Delete persisted company state for a given company ID and clear the pending queue. */
 export async function deletePersistedCompanyState(companyId: string) {
   if (!isCompanyStatePersistenceEnabled()) {
     return;

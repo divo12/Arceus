@@ -1,6 +1,10 @@
 import type { MemoryUnit } from "@arceus/contracts";
 import type { StaticMemoryStore } from "../types";
 
+/**
+ * In-memory implementation of StaticMemoryStore for testing and local dev.
+ * Stores permanent (non-expiring) facts keyed by agentId.
+ */
 export class InMemoryStaticStore implements StaticMemoryStore {
   private readonly byAgent = new Map<string, MemoryUnit[]>();
 

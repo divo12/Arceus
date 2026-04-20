@@ -1,8 +1,14 @@
+/**
+ * Skill packaging utilities — builds summary artifacts, slugifies names,
+ * and writes skill packages to the product workspace.
+ */
+
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Task } from "@arceus/contracts";
 import { productDir } from "../orchestration/state.js";
 
+/** Build a Markdown summary artifact for a completed skill-authoring task. */
 export function buildSkillAuthoringArtifact(task: Task, output: string) {
   return [
     "# Skill Package Summary",
@@ -17,6 +23,7 @@ export function buildSkillAuthoringArtifact(task: Task, output: string) {
   ].join("\n");
 }
 
+/** Convert a human-readable name to a kebab-case slug (max 48 chars). */
 export function slugifySkillName(value: string) {
   return value
     .toLowerCase()
@@ -25,6 +32,7 @@ export function slugifySkillName(value: string) {
     .slice(0, 48) || "generated-skill";
 }
 
+/** Write a SKILL.md package to the product workspace and return its path. */
 export async function materializeSkillPackage(task: Task, output: string) {
   const slug = slugifySkillName(task.title.replace(/skill authoring|skill|package/gi, " "));
   const skillsRoot = join(productDir, ".arceus", "skills", slug);

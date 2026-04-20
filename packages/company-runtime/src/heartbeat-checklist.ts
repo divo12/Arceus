@@ -19,6 +19,7 @@ import type {
 
 // ── Individual check functions ─────────────────────────────
 
+/** Check if the agent has pending approvals to review. */
 function checkPendingApprovals(ctx: AgentBeatContext): CheckResult {
   const pending = ctx.approvals.filter((a) => a.status === "pending");
   if (pending.length === 0) return { status: "ok", detail: "No pending approvals" };
@@ -29,6 +30,7 @@ function checkPendingApprovals(ctx: AgentBeatContext): CheckResult {
   };
 }
 
+/** Check company budget utilization — blocks at 0%, warns above 90%. */
 function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
   if (ctx.companyBudgetRemainingCents <= 0) {
     return { status: "blocked", detail: "Budget exhausted", suggestedAction: "Pause work — budget is 0" };
@@ -40,6 +42,7 @@ function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: `Budget at ${usedPct}%` };
 }
 
+/** Check for blocked/failed tasks in the current sprint. */
 function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
   if (!ctx.currentSprint) {
     return { status: "ok", detail: "No active sprint" };
@@ -56,6 +59,7 @@ function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "Sprint healthy" };
 }
 
+/** CEO proactive check: propose next sprint when current is done or absent. */
 function checkRoadmap(ctx: AgentBeatContext): CheckResult {
   // CEO proactive: if sprint is complete or no sprint, propose next
   if (!ctx.currentSprint) {
@@ -80,6 +84,7 @@ function checkRoadmap(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "Sprint in progress" };
 }
 
+/** CTO check: detect tasks in "verifying" status awaiting code review. */
 function checkReviewQueue(ctx: AgentBeatContext): CheckResult {
   // CTO: check for tasks in verifying state that need review
   const verifying = ctx.tasks.filter((t) => t.status === "verifying");
@@ -93,6 +98,7 @@ function checkReviewQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No tasks awaiting review" };
 }
 
+/** Check build status — flags build errors as actionable (skipped during sprint review). */
 function checkBuildStatus(ctx: AgentBeatContext): CheckResult {
   // During sprint review the tester drives verification — build errors surface
   // there rather than blocking developer/CTO beats with a no-handler action.
@@ -113,6 +119,7 @@ function checkBuildStatus(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: build.detail };
 }
 
+/** CTO check: flag developer tasks that appear stale (no progress for >10min). */
 function checkDevProgress(ctx: AgentBeatContext): CheckResult {
   const inProgress = ctx.tasks.filter(
     (t) => t.status === "in_progress" && t.assignedRole === "developer"
@@ -133,6 +140,7 @@ function checkDevProgress(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: `${inProgress.length} dev task(s) in progress` };
 }
 
+/** Find the highest-priority actionable task assigned to this specific agent. */
 function checkAssignedTasks(ctx: AgentBeatContext): CheckResult {
   // CEO/PM receive ALL sprint tasks in ctx.tasks (for sprint-completion visibility
   // in control-plane.ts), but their checklist should only drive THEIR OWN work —
@@ -162,6 +170,7 @@ function checkAssignedTasks(ctx: AgentBeatContext): CheckResult {
   };
 }
 
+/** Check if any of the agent's tasks have unresolved upstream dependencies. */
 function checkDependenciesMet(ctx: AgentBeatContext): CheckResult {
   // Check if any of this agent's tasks have unmet dependencies
   const blocked = ctx.tasks.filter((t) => {
@@ -182,6 +191,7 @@ function checkDependenciesMet(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "All dependencies met" };
 }
 
+/** CEO check: detect unanswered board messages requiring a response. */
 function checkBoardMessages(ctx: AgentBeatContext): CheckResult {
   if (ctx.recentBoardMessages.length === 0) return { status: "ok", detail: "No recent board messages" };
   // Check for unanswered board messages (board role only)
@@ -196,6 +206,7 @@ function checkBoardMessages(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "Board messages handled" };
 }
 
+/** PM check: detect tasks not assigned to any sprint (scope creep). */
 function checkScopeControl(ctx: AgentBeatContext): CheckResult {
   // PM: ensure no unplanned tasks or scope creep
   const unplanned = ctx.tasks.filter((t) => !t.sprintId && t.status !== "cancelled");
@@ -209,6 +220,7 @@ function checkScopeControl(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "Scope is clean" };
 }
 
+/** Tester check: find tasks in "verifying" status assigned to the tester role. */
 function checkTestQueue(ctx: AgentBeatContext): CheckResult {
   const readyForTest = ctx.tasks.filter(
     (t) => t.status === "verifying" && t.assignedRole === "tester"
@@ -371,6 +383,7 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No pending escalation" };
 }
 
+/** UI Designer check: find actionable design tasks. */
 function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
   const designTasks = ctx.tasks.filter(
     (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "ui_designer"
@@ -385,6 +398,7 @@ function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No design work queued" };
 }
 
+/** Marketing check: find actionable content/campaign tasks. */
 function checkContentQueue(ctx: AgentBeatContext): CheckResult {
   const contentTasks = ctx.tasks.filter(
     (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "marketing"
@@ -399,6 +413,7 @@ function checkContentQueue(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No marketing tasks" };
 }
 
+/** Skills Lead check: find actionable skill authoring/curation tasks. */
 function checkSkillQueue(ctx: AgentBeatContext): CheckResult {
   const skillTasks = ctx.tasks.filter(
     (t) => (t.status === "planned" || t.status === "in_progress") && t.assignedRole === "skills_lead"

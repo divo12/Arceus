@@ -1,3 +1,4 @@
+/** @module sprints.routes — Routes for sprint listing and proposal approval/rejection. */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { approveSprintProposal, rejectSprintProposal } from "../sprints/proposals.js";

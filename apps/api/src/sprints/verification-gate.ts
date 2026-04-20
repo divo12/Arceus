@@ -14,6 +14,7 @@ import { probePreviewHealth, getLocalPreviewState } from "../workspace/preview.j
 
 // ── Configuration ───────────────────────────────────────────
 
+/** Configuration for the build/test verification gate. */
 export interface VerificationGateConfig {
   gateTimeoutMs: number;      // per-command timeout (default 120 000)
   enableBuildGate: boolean;
@@ -21,6 +22,7 @@ export interface VerificationGateConfig {
   autoSkipOnNoPackageJson: boolean;
 }
 
+/** Sensible defaults: 2-minute timeout, both gates enabled, skip if no package.json. */
 export const DEFAULT_GATE_CONFIG: VerificationGateConfig = {
   gateTimeoutMs: 120_000,
   enableBuildGate: true,

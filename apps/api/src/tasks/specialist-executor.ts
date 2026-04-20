@@ -34,6 +34,10 @@ import {
   setTaskStatus,
 } from "./mutations.js";
 
+/**
+ * Execute a single specialist task end-to-end: check deps, run the role's LLM
+ * session, produce artifacts, record meetings, and transition task status.
+ */
 export async function executeSpecialistTask(taskId: string) {
   const snapshot = getSnapshot();
   const task = snapshot.tasks.find((entry) => entry.id === taskId);
@@ -274,6 +278,10 @@ const SpecialistPruneVerdict = z.object({
   })),
 });
 
+/**
+ * Use an LLM workspace audit to auto-resolve queued specialist tasks
+ * whose definition-of-done is already satisfied by the developer implementation.
+ */
 export async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnapshot): Promise<number> {
   const pendingSpecialist = snapshot.tasks.filter(
     (task) =>
@@ -351,6 +359,7 @@ export async function pruneAlreadyCompletedSpecialistTasks(snapshot: CompanySnap
 // Autonomous ready task runner
 // ---------------------------------------------------------------------------
 
+/** Run all autonomously-ready specialist tasks in priority order, repeating until none remain. */
 export async function runAutonomousReadyTasks(checkpoint: string) {
   let pass = 0;
 

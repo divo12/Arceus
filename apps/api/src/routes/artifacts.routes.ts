@@ -1,3 +1,7 @@
+/**
+ * @module artifacts.routes
+ * Routes for listing and retrieving build artifacts.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { getArtifacts } from "../orchestration/state.js";

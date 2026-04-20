@@ -1,3 +1,7 @@
+/**
+ * @module heartbeat.routes
+ * Routes for the heartbeat engine — start/stop, manual triggers, status, history, and config.
+ */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSnapshot } from "../persistence/store.js";

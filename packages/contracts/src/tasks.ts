@@ -1,3 +1,21 @@
+/**
+ * @module tasks
+ * Task, transition, and feedback schemas.
+ *
+ * Tasks are the unit of work — each has a kind (technical_plan, implementation,
+ * qa_verification, etc.), an assigned role/agent, and tracks planner/executor/
+ * verifier state internally. Tasks form a DAG via dependsOnTaskIds.
+ *
+ * Transitions record state changes with full audit trail.
+ * FeedbackRounds track iterative review loops between roles.
+ *
+ * Key types:
+ * - Task — unit of work with planner/executor/verifier sub-states
+ * - Transition — auditable record of task state changes
+ * - TransitionProposal — proposed state change with confidence score
+ * - RouterDecision — batch of transition proposals from the orchestrator
+ * - FeedbackRound — review iteration between two roles
+ */
 import { z } from "zod";
 
 import { roleTypeSchema } from "./agents";

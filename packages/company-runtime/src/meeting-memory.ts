@@ -113,6 +113,12 @@ export interface MeetingMemoryResult {
  * - Container: meeting:{meetingId}
  * - Source: "meeting"
  */
+/**
+ * Extract memories from a completed meeting for each participant.
+ *
+ * Runs LLM extraction per participant with role-scoped context.
+ * Shared decisions get visibility "team", container: "meeting:{meetingId}".
+ */
 export async function extractMeetingMemories(
   meeting: Meeting,
   snap: CompanySnapshot,

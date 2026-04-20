@@ -1,10 +1,16 @@
 import type { Habit } from "@arceus/contracts";
 import type { ProceduralMemoryStore } from "../types";
 
+/** Tokenize a string into lowercase alphanumeric tokens for naive matching. */
 function tokenize(input: string) {
   return input.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 }
 
+/**
+ * In-memory implementation of ProceduralMemoryStore for testing and local dev.
+ * Stores habits (trigger → action pairs) with naive token-based matching.
+ * GC deactivates unused habits (usageCount === 0) by companyId.
+ */
 export class InMemoryProceduralStore implements ProceduralMemoryStore {
   private readonly byAgent = new Map<string, Habit[]>();
 

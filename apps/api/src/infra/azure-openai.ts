@@ -15,6 +15,7 @@ export type LlmAuditContext = {
   label?: string;
 };
 
+/** Build the Azure OpenAI chat completions URL for a given deployment. */
 function deploymentUrl(deployment: string) {
   const base = runtimeConfig.azureEndpoint.replace(/\/+$/, "");
   return `${base}/openai/deployments/${deployment}/chat/completions?api-version=${runtimeConfig.azureApiVersion}`;
@@ -55,6 +56,7 @@ export function drainMeetingTokenAccumulator(meetingId: string): number {
   return tokens;
 }
 
+/** Distribute consumed tokens across all active beat and meeting accumulators. */
 function accumulateBeatTokens(totalTokens: number) {
   // Add tokens to all active accumulators (usually just one active beat per agent).
   for (const [beatId, current] of beatTokenAccumulators) {
@@ -66,6 +68,7 @@ function accumulateBeatTokens(totalTokens: number) {
   }
 }
 
+/** Record an LLM call in the audit ledger with token counts and latency. */
 function auditLlmCall(
   deployment: string,
   usage: AzureOpenAIUsage | undefined,
@@ -100,6 +103,7 @@ function auditLlmCall(
   });
 }
 
+/** Send a chat completion request to Azure OpenAI with resilience and audit logging. */
 export async function chatCompletion(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
@@ -253,6 +257,7 @@ export async function structuredCompletion<T>(
   );
 }
 
+/** Stream a chat completion response from Azure OpenAI, returning the raw byte stream. */
 export async function chatCompletionStream(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],

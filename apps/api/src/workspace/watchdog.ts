@@ -1,3 +1,9 @@
+/**
+ * Developer stall detection — monitors the developer agent session and
+ * escalates to leadership if no workspace activity is observed within
+ * the configured timeout window.
+ */
+
 import {
   activeExecution,
   executionStatus,
@@ -15,12 +21,14 @@ import { setTaskStatus } from "../tasks/mutations.js";
 import { recordMeeting } from "../meetings/recording.js";
 import { stopDeveloperWorkspaceMonitor } from "./monitor.js";
 
+/** Cancel any pending developer stall timer. */
 export function clearDeveloperWatchdog() {
   if (!developerWatchdog) return;
   clearTimeout(developerWatchdog);
   setDeveloperWatchdog(null);
 }
 
+/** (Re)schedule the developer stall timer; fires the callback after the configured timeout. */
 export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: string) => Promise<void>) {
   clearDeveloperWatchdog();
 
@@ -35,6 +43,7 @@ export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: stri
   setDeveloperWatchdog(timer);
 }
 
+/** Mark the developer session as stalled, fail the build task, and escalate via meeting. */
 export async function failDeveloperStall(sessionId: string) {
   const developerSession = agentSessions.get("developer");
   if (!activeExecution || executionStatus !== "executing") return;

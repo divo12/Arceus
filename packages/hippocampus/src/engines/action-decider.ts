@@ -27,6 +27,10 @@ Rules:
 - When in doubt between ADD and NONE, lean toward NONE — avoid memory bloat
 - Return exactly one action per decision`;
 
+/**
+ * Build the user-side prompt for action decision, presenting the new fact
+ * alongside existing similar memories for comparison.
+ */
 export function buildActionDecisionUserPrompt(
   newFact: string,
   existingMemories: Array<{ id: string; content: string; type: string; confidence: number }>,

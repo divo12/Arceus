@@ -32,6 +32,7 @@ import { hippocampus } from "../memory/extractors.js";
 // Artifact helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Create a runtime artifact, persist it, and append to the in-memory list. */
 export function addArtifact(agent: string, kind: Artifact["kind"], title: string, content: string) {
   const artifact: Artifact = {
     id: `artifact_${crypto.randomUUID()}`,
@@ -46,6 +47,7 @@ export function addArtifact(agent: string, kind: Artifact["kind"], title: string
   return artifact;
 }
 
+/** Write an artifact's content as a markdown file into the product docs directory. */
 export async function writeArtifactToWorkspace(
   taskId: string,
   role: string,
@@ -64,6 +66,7 @@ export async function writeArtifactToWorkspace(
   }
 }
 
+/** Commit and push the product workspace via git; logs warnings on failure. */
 export async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, message: string) {
   const companyId = getSnapshot().company.id;
   if (!companyId || companyId === "company_pending") {
@@ -93,6 +96,7 @@ export async function syncWorkspaceCheckpoint(taskId: string, agentRole: string,
 // Task field mutations
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Build a text summary of a task's state, results, and artifacts for memory storage. */
 export function buildTaskMemoryOutput(task: Task, feedback?: string | null): string {
   const sections: string[] = [
     `Task: ${task.title}`,
@@ -132,6 +136,7 @@ export function buildTaskMemoryOutput(task: Task, feedback?: string | null): str
   return sections.join("\n");
 }
 
+/** Append a result string to a task's executor results (capped at 50). */
 export function appendTaskResult(taskId: string, result: string) {
   updateTask(taskId, (task) => ({
     ...task,
@@ -142,6 +147,7 @@ export function appendTaskResult(taskId: string, result: string) {
   }));
 }
 
+/** Link an artifact to a task and emit a graph event for the sprint. */
 export function attachArtifactToTask(taskId: string, artifactId: string) {
   updateTask(taskId, (task) => ({
     ...task,
@@ -156,6 +162,7 @@ export function attachArtifactToTask(taskId: string, artifactId: string) {
   }
 }
 
+/** Update the task's local preview URL. */
 export function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null) {
   updateTask(taskId, (task) => ({
     ...task,
@@ -163,6 +170,7 @@ export function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null
   }));
 }
 
+/** Populate a task's title, description, DoD, and priority from a planner spec. */
 export function hydrateTaskFromSpec(taskId: string, spec: {
   title: string;
   description: string;
@@ -186,6 +194,7 @@ export function hydrateTaskFromSpec(taskId: string, spec: {
   }));
 }
 
+/** Append a plan step to the task's planner state (deduped, capped at 12). */
 export function appendTaskPlanStep(taskId: string, step: string) {
   updateTask(taskId, (task) => ({
     ...task,
@@ -196,6 +205,7 @@ export function appendTaskPlanStep(taskId: string, step: string) {
   }));
 }
 
+/** Record a command execution on the task's executor state (capped at 50). */
 export function appendTaskCommand(taskId: string, command: string) {
   updateTask(taskId, (task) => ({
     ...task,
@@ -212,6 +222,11 @@ export function appendTaskCommand(taskId: string, command: string) {
 // hippocampus memory, skill outcome tracking, pattern extraction
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Transition a task's status with full side-effects: graph instrumentation,
+ * audit logging, escalation on block, downstream dependency promotion,
+ * hippocampus memory, and skill outcome tracking.
+ */
 export function setTaskStatus(taskId: string, status: Task["status"], feedback?: string | null) {
   const prev = getSnapshot().tasks.find((t) => t.id === taskId);
   const prevStatus = prev?.status ?? "unknown";

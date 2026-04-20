@@ -1,18 +1,21 @@
+/**
+ * Memory extraction, action decision, priming, and habit matching via LLM agents.
+ * Provides the Hippocampus service singleton wired to Memory Agent prompts.
+ */
+
 import { z } from "zod";
 import { structuredCompletion } from "../infra/azure-openai.js";
 import {
   createHippocampusService,
-  EXTRACTION_SYSTEM_PROMPT,
   buildExtractionUserPrompt,
-  ACTION_DECISION_SYSTEM_PROMPT,
   buildActionDecisionUserPrompt,
   HABIT_MATCHER_SYSTEM_PROMPT,
   buildHabitMatcherUserPrompt,
-  PRIMING_GENERATOR_SYSTEM_PROMPT,
   buildPrimingGeneratorUserPrompt,
   createPgVectorStores,
 } from "@arceus/hippocampus";
 import type { ExtractedFact, MemoryAction } from "@arceus/hippocampus";
+import { runInternalAgentPrompt } from "../prompts/internal-agent.js";
 
 // ---------------------------------------------------------------------------
 // Zod schemas for LLM structured outputs
@@ -45,63 +48,63 @@ export const habitMatcherSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// LLM-backed extractors / deciders
+// Memory Agent–backed extractors / deciders (Spec 24 Phase 3)
+// All three share the same Memory Agent session for context continuity.
 // ---------------------------------------------------------------------------
 
-export async function llmFactExtractor(agentOutput: string, taskTitle: string, role: string): Promise<ExtractedFact[]> {
-  const userPrompt = buildExtractionUserPrompt(taskTitle, role, agentOutput);
-  const result = await structuredCompletion(
-    "workerDeployment",
-    [
-      { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    extractedFactSchema,
-    "fact_extraction",
-    { temperature: 0.3 },
-  );
-  return result.facts.map((f) => ({
+/** Extract structured facts from an agent's output via the Memory Agent. */
+export async function memoryAgentExtractFacts(agentOutput: string, taskTitle: string, role: string): Promise<ExtractedFact[]> {
+  const userPrompt = [
+    "Phase 1 — EXTRACT. Respond with JSON matching this schema: { facts: [{ content, type, confidence, is_temporal, expiry_days, trigger, action }] }",
+    "",
+    buildExtractionUserPrompt(taskTitle, role, agentOutput),
+  ].join("\n");
+
+  const output = await runInternalAgentPrompt("memory_agent", null, userPrompt);
+  const jsonMatch = output.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Memory Agent extraction returned no JSON");
+  const parsed = extractedFactSchema.parse(JSON.parse(jsonMatch[0]));
+  return parsed.facts.map((f) => ({
     ...f,
     trigger: f.trigger ?? undefined,
     action: f.action ?? undefined,
   }));
 }
 
-export async function llmActionDecider(
+/** Decide whether to ADD, UPDATE, DELETE, or ignore a fact against existing memories. */
+export async function memoryAgentDecideAction(
   newFact: string,
   existingMemories: Array<{ id: string; content: string; type: string; confidence: number }>,
 ): Promise<MemoryAction> {
-  const userPrompt = buildActionDecisionUserPrompt(newFact, existingMemories);
-  const result = await structuredCompletion(
-    "workerDeployment",
-    [
-      { role: "system", content: ACTION_DECISION_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    memoryActionSchema,
-    "memory_action_decision",
-    { temperature: 0.1 },
-  );
-  return result;
+  const userPrompt = [
+    "Phase 2 — DECIDE. Respond with JSON: { action, target_id, reason }",
+    "",
+    buildActionDecisionUserPrompt(newFact, existingMemories),
+  ].join("\n");
+
+  const output = await runInternalAgentPrompt("memory_agent", null, userPrompt);
+  const jsonMatch = output.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Memory Agent action decision returned no JSON");
+  return memoryActionSchema.parse(JSON.parse(jsonMatch[0]));
 }
 
-export async function llmPrimingGenerator(
+/** Generate a priming disposition string from agent emotional/confidence state. */
+export async function memoryAgentGeneratePriming(
   state: { confidence: number; caution: number; morale: number; recentEvents: string[] },
 ): Promise<string> {
-  const userPrompt = buildPrimingGeneratorUserPrompt(state as any);
-  const result = await structuredCompletion(
-    "workerDeployment",
-    [
-      { role: "system", content: PRIMING_GENERATOR_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    primingDispositionSchema,
-    "priming_generation",
-    { temperature: 0.4 },
-  );
-  return result.disposition;
+  const userPrompt = [
+    "Phase 3 — PRIME. Respond with JSON: { disposition }",
+    "",
+    buildPrimingGeneratorUserPrompt(state as any),
+  ].join("\n");
+
+  const output = await runInternalAgentPrompt("memory_agent", null, userPrompt);
+  const jsonMatch = output.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Memory Agent priming returned no JSON");
+  return primingDispositionSchema.parse(JSON.parse(jsonMatch[0])).disposition;
 }
 
+/** Match a task description against known habits and return matching habit IDs. */
 export async function llmHabitMatcher(
   taskDescription: string,
   habits: Array<{ id: string; trigger: string; action: string }>,
@@ -133,10 +136,11 @@ if (pgStores) {
   console.log("[Hippocampus] Database not configured — using in-memory stores (memories lost on restart)");
 }
 
+/** Singleton Hippocampus service wired to Memory Agent extractors and pgvector stores. */
 export const hippocampus = createHippocampusService({
   ...pgStores,
-  extractFacts: llmFactExtractor,
-  decideAction: llmActionDecider,
+  extractFacts: memoryAgentExtractFacts,
+  decideAction: memoryAgentDecideAction,
   matchHabits: llmHabitMatcher,
-  generatePriming: llmPrimingGenerator,
+  generatePriming: memoryAgentGeneratePriming,
 });

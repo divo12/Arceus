@@ -1,3 +1,7 @@
+/**
+ * @module health.routes
+ * Routes for health checks and runtime status.
+ */
 import type { FastifyInstance } from "fastify";
 import { getRuntimeStatus } from "../infra/runtime.js";
 import { getBreakersHealth } from "../infra/resilience.js";

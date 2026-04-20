@@ -1,3 +1,14 @@
+/**
+ * @module chat
+ * Chat message schemas — the board ↔ agent communication channel.
+ *
+ * Messages flow between the board (human), CEO agent, and system.
+ * Each message can optionally carry a typed card (strategy_proposal,
+ * sprint_proposal, status_update, etc.) for structured UI rendering.
+ *
+ * Key types:
+ * - ChatMessage — a message with optional card type and structured card data
+ */
 import { z } from "zod";
 
 export const chatMessageRoleSchema = z.enum(["board", "ceo", "agent", "system"]);

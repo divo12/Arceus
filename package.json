@@ -15,14 +15,22 @@
     "db:migrate": "npm run db:migrate --workspace @arceus/db",
     "db:push": "npm run db:push --workspace @arceus/db",
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "docs:typedoc": "typedoc",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "typedoc && vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@types/node": "^22.19.17",
     "@vitejs/plugin-react": "^6.0.1",
+    "typedoc": "^0.28.19",
+    "typedoc-plugin-markdown": "^4.11.0",
+    "typedoc-vitepress-theme": "^1.1.2",
     "typescript": "^5.9.3",
-    "vite": "^8.0.4"
+    "vite": "^8.0.4",
+    "vitepress": "^1.6.4"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

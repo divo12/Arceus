@@ -1,3 +1,4 @@
+/** @module tasks.routes — Routes for listing tasks. */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 

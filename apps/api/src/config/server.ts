@@ -1,3 +1,7 @@
+/**
+ * HTTP server configuration.
+ * Port and host for the Fastify server.
+ */
 import { readNumberEnv, readOptionalEnv } from "./env";
 
 export const serverConfig = {

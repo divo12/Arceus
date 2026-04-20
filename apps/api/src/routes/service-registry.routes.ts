@@ -1,3 +1,7 @@
+/**
+ * @module service-registry.routes
+ * Routes for the service registry — tool inventory, role-based access, and blast-radius checks.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { seedRegistry, getRegistrySnapshot, getToolsForRole, getRegistryStats, isToolAvailable, getBlastRadius } from "../governance/service-registry.js";

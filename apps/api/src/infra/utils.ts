@@ -1,3 +1,7 @@
+/**
+ * Shared utility helpers: argument sanitization, telemetry truncation,
+ * and preview URL extraction.
+ */
 import { uniqueStrings } from "@arceus/task-engine";
 
 /** Sanitize tool arguments for audit logging — scrub potential secrets. */
@@ -16,6 +20,7 @@ export function sanitizeToolArgs(args: Record<string, any>): Record<string, unkn
   return result;
 }
 
+/** Collapse whitespace and truncate a telemetry string to `limit` characters. */
 export function truncateTelemetry(value: string | null | undefined, limit = 220) {
   if (!value) return null;
 
@@ -27,6 +32,7 @@ export function truncateTelemetry(value: string | null | undefined, limit = 220)
   return `${normalized.slice(0, limit - 3)}...`;
 }
 
+/** Extract localhost/127.0.0.1 preview URLs from free-form text. */
 export function extractPreviewUrls(text: string) {
   return uniqueStrings(
     Array.from(text.matchAll(/https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0):\d+(?:\/[^\s"'`)]*)?/gi)).map((match) => match[0]),

@@ -1,3 +1,7 @@
+/**
+ * @module orchestrator.routes
+ * Routes for the orchestrator — execution control, board review, approvals, and transitions.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot, flush } from "../persistence/store.js";
 import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orchestration/state.js";

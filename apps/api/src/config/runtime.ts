@@ -1,3 +1,7 @@
+/**
+ * Runtime configuration.
+ * Azure OpenAI credentials, deployment names, and OpenCode host/port.
+ */
 import { readNumberEnv, readOptionalEnv, readRequiredEnv } from "./env";
 
 export const runtimeConfig = {
@@ -16,6 +20,7 @@ export const runtimeConfig = {
   opencodePort: readNumberEnv("ARCEUS_OPENCODE_PORT", 4096),
 };
 
+/** Resolve a named deployment, throwing if not configured. */
 export function ensureDeployment(name: "ceoDeployment" | "workerDeployment") {
   const value = runtimeConfig[name];
   if (!value) {

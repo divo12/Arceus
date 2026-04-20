@@ -1,12 +1,14 @@
 import type { AgentSessionState } from "../orchestration/state.js";
 import { agentSessions } from "../orchestration/state.js";
 
+/** Update an agent session with a partial state patch. */
 export function updateAgentSessionState(role: string, patch: Partial<AgentSessionState>) {
   const session = agentSessions.get(role);
   if (!session) return;
   Object.assign(session, patch);
 }
 
+/** Touch an agent session's timestamp and optionally update its status. */
 export function touchAgentSession(role: string, status?: AgentSessionState["status"]) {
   const session = agentSessions.get(role);
   if (!session) return;
@@ -16,6 +18,7 @@ export function touchAgentSession(role: string, status?: AgentSessionState["stat
   }
 }
 
+/** Build a human-readable summary of why a developer session may be stalled. */
 export function summarizeDeveloperStall(session: AgentSessionState) {
   const details = [
     session.awaiting ? `Awaiting: ${session.awaiting}.` : null,
@@ -27,6 +30,7 @@ export function summarizeDeveloperStall(session: AgentSessionState) {
   return details.join(" ");
 }
 
+/** Reverse-lookup the agent role that owns a given OpenCode session ID. */
 export function resolveRoleBySessionId(sessionId: string): string | null {
   for (const [role, session] of agentSessions) {
     if (session.sessionId === sessionId) return role;

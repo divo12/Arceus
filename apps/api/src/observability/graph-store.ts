@@ -201,12 +201,17 @@ export type GraphEvent =
 
 type GraphEventListener = (event: GraphEvent) => void;
 
+/**
+ * In-memory store for execution graph data.
+ * Manages sprint graphs, nodes, edges, beats, and emits events to SSE subscribers.
+ */
 export class ExecutionGraphStore {
   private graphs = new Map<string, ExecutionGraph>();
   private listeners = new Set<GraphEventListener>();
 
   // ── Mutations ──
 
+  /** Initialize a new sprint graph. */
   startSprint(sprintId: string, meta: { number: number; goal: string; startedAt: string }): void {
     const graph: ExecutionGraph = {
       sprintId,
@@ -221,6 +226,7 @@ export class ExecutionGraphStore {
     this.graphs.set(sprintId, graph);
   }
 
+  /** Add a node and its edges to a sprint graph. */
   addNode(sprintId: string, node: GraphNode, edges: GraphEdge[]): void {
     const graph = this.graphs.get(sprintId);
     if (!graph) return;
@@ -229,6 +235,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "node_added", sprintId, node, edges });
   }
 
+  /** Apply a status transition to a graph node. */
   updateNodeStatus(sprintId: string, nodeId: string, transition: StatusTransition): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -243,6 +250,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "status_changed", sprintId, nodeId, transition });
   }
 
+  /** Append a beat (agent action) to a graph node. */
   addBeat(sprintId: string, nodeId: string, beat: BeatNode): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -250,6 +258,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "beat_started", sprintId, nodeId, beat });
   }
 
+  /** Patch a beat with completion data (status, output, duration). */
   completeBeat(sprintId: string, nodeId: string, beatId: string, patch: Partial<BeatNode>): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -259,6 +268,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "beat_completed", sprintId, nodeId, beatId, patch });
   }
 
+  /** Register an artifact output on a node, optionally adding a flow edge. */
   addArtifact(sprintId: string, nodeId: string, artifactId: string, edge: GraphEdge | null): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -272,6 +282,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "artifact_produced", sprintId, nodeId, artifactId, edge });
   }
 
+  /** Record a decision entry on a node (or sprint-level if nodeId is null). */
   addDecision(sprintId: string, nodeId: string | null, entry: DecisionEntry): void {
     if (nodeId) {
       const node = this.findNode(sprintId, nodeId);
@@ -280,6 +291,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "decision", sprintId, nodeId, entry });
   }
 
+  /** Append file change records to a graph node. */
   addFileChanges(sprintId: string, nodeId: string, files: FileChange[]): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -287,6 +299,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "files_changed", sprintId, nodeId, files });
   }
 
+  /** Set a state diff snapshot on a graph node. */
   setStateDiff(sprintId: string, nodeId: string, diff: StateDiff): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -294,6 +307,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "state_diff", sprintId, nodeId, diff });
   }
 
+  /** Attach a rework group to a graph node. */
   setReworkGroup(sprintId: string, nodeId: string, group: ReworkGroup): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node) return;
@@ -301,6 +315,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "rework_started", sprintId, nodeId, group });
   }
 
+  /** Append a rework iteration to an existing rework group. */
   addReworkIteration(sprintId: string, nodeId: string, cycle: number, verdict: string, reason: string): void {
     const node = this.findNode(sprintId, nodeId);
     if (!node || !node.reworkGroup) return;
@@ -315,6 +330,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "rework_iteration", sprintId, nodeId, cycle, verdict, reason });
   }
 
+  /** Record a meeting entry on a node (or sprint-level if nodeId is null). */
   addMeeting(sprintId: string, nodeId: string | null, meeting: MeetingEntry): void {
     if (nodeId) {
       const node = this.findNode(sprintId, nodeId);
@@ -323,6 +339,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "meeting_recorded", sprintId, nodeId, meeting });
   }
 
+  /** Record a memory write on a node (or sprint-level if nodeId is null). */
   addMemoryWrite(sprintId: string, nodeId: string | null, entry: MemoryWriteEntry): void {
     if (nodeId) {
       const node = this.findNode(sprintId, nodeId);
@@ -331,6 +348,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "memory_written", sprintId, nodeId, entry });
   }
 
+  /** Mark a sprint graph as completed with the given status. */
   completeSprint(sprintId: string, status: string): void {
     const graph = this.graphs.get(sprintId);
     if (!graph) return;
@@ -339,6 +357,7 @@ export class ExecutionGraphStore {
     this.notify({ type: "sprint_completed", sprintId, status });
   }
 
+  /** Add an edge to a sprint graph (deduplicates by id). */
   addEdge(sprintId: string, edge: GraphEdge): void {
     const graph = this.graphs.get(sprintId);
     if (!graph) return;
@@ -350,10 +369,12 @@ export class ExecutionGraphStore {
 
   // ── Queries ──
 
+  /** Get the full execution graph for a sprint. */
   getGraph(sprintId: string): ExecutionGraph | null {
     return this.graphs.get(sprintId) ?? null;
   }
 
+  /** List all tracked sprints with id, number, and status. */
   listSprints(): Array<{ sprintId: string; number: number; status: string }> {
     return Array.from(this.graphs.values()).map((g) => ({
       sprintId: g.sprintId,
@@ -362,12 +383,14 @@ export class ExecutionGraphStore {
     }));
   }
 
+  /** Look up a single graph node by sprint and node id. */
   getNode(sprintId: string, nodeId: string): GraphNode | null {
     return this.findNode(sprintId, nodeId);
   }
 
   // ── SSE subscription ──
 
+  /** Subscribe to graph events. Returns an unsubscribe function. */
   subscribe(listener: GraphEventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -375,6 +398,7 @@ export class ExecutionGraphStore {
 
   // ── Reset (for tests / orchestrator reset) ──
 
+  /** Clear all graphs and reset to empty state. */
   reset(): void {
     this.graphs.clear();
   }

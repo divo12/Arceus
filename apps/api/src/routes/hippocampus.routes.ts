@@ -1,3 +1,7 @@
+/**
+ * @module hippocampus.routes
+ * Routes for the hippocampus memory system — seeding, test extraction, and context retrieval.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { getArtifacts } from "../orchestration/state.js";

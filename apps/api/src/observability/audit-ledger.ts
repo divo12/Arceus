@@ -37,6 +37,7 @@ function nextSequence(companyId: string): number {
 type SseWriter = (event: AuditEvent) => void;
 const subscribers = new Set<SseWriter>();
 
+/** Subscribe an SSE writer to receive live audit events. Returns an unsubscribe function. */
 export function subscribeSse(writer: SseWriter) {
   subscribers.add(writer);
   return () => { subscribers.delete(writer); };
@@ -291,6 +292,7 @@ export async function drainAuditLedger() {
   await flushToDb();
 }
 
+/** Start the periodic DB flush. Call on server startup. */
 /** Start the periodic DB flush. Call on server startup. */
 export function startAuditLedger() {
   startFlushTimer();

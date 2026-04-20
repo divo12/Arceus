@@ -1,5 +1,9 @@
+/**
+ * Runtime readiness checks for Azure OpenAI deployment configuration.
+ */
 import { runtimeConfig } from "../config/index.js";
 
+/** Check which Azure OpenAI deployments are configured and return readiness flags. */
 export function getRuntimeStatus() {
   const missing: string[] = [];
   const missingChat: string[] = [];

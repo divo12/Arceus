@@ -1,3 +1,7 @@
+/**
+ * @module debug.routes
+ * Routes for debugging — execution flow, sprint graph inspection, and graph SSE stream.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orchestration/state.js";

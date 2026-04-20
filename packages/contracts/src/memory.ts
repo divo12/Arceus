@@ -1,3 +1,18 @@
+/**
+ * @module memory
+ * Memory system schemas — the "hippocampus" of each agent.
+ *
+ * Agents accumulate memories from task completions, meetings, and chats.
+ * Memory units have types (static, dynamic, episodic, semantic, delegation)
+ * and visibility levels. The priming state tracks an agent's current
+ * emotional/confidence disposition.
+ *
+ * Key types:
+ * - MemorySummary — per-agent rolling summary (focus, learnings, blockers)
+ * - MemoryUnit — individual memory with type, source, confidence, and expiry
+ * - Habit — learned behavioral pattern with trigger/action
+ * - PrimingState — agent's confidence/caution/morale state
+ */
 import { z } from "zod";
 
 export const memoryUnitTypeSchema = z.enum(["static", "dynamic", "episodic", "semantic", "delegation"]);

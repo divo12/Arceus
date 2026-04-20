@@ -1,3 +1,17 @@
+/**
+ * @module sprints
+ * Sprint lifecycle and review-gate schemas.
+ *
+ * A Sprint is a time-boxed iteration with goal, tasks, and a multi-phase
+ * review process (pre_gate → tester_verification → rework → final_gate).
+ * VerificationGateResults capture build/test/preview outcomes.
+ *
+ * Key types:
+ * - Sprint — iteration with status lifecycle (planning → executing → reviewing → completed)
+ * - SprintReviewState — tracks the review pipeline phases and rework cycles
+ * - VerificationGateResult — build, test, and preview check outcomes
+ * - DefectArea — categorization of failures (build, test, UI, logic, etc.)
+ */
 import { z } from "zod";
 
 export const sprintStatusSchema = z.enum(["planning", "executing", "reviewing", "completed", "between_sprints", "paused", "cancelled"]);

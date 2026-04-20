@@ -21,3 +21,6 @@ product/
 */.cache/*
 */.tsbuildinfo/*
 */.env*
+
+docs/.vitepress/cache
+docs/reference/api

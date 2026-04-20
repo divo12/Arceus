@@ -1,3 +1,7 @@
+/**
+ * Persistence configuration.
+ * Supabase credentials, database URLs, storage buckets, and workspace root.
+ */
 import { readAliasedOptionalEnv, readOptionalEnv } from "./env";
 
 const defaultWorkspaceRoot = process.platform === "win32" ? "Q:/arceus-ws" : "/tmp/workspaces";
@@ -39,14 +43,17 @@ export const persistenceConfig = {
   },
 };
 
+/** Check whether Supabase storage credentials are configured. */
 export function isSupabaseConfigured() {
   return persistenceConfig.supabase.configured;
 }
 
+/** Check whether both Supabase and database are configured. */
 export function isPersistenceConfigured() {
   return persistenceConfig.supabase.configured && persistenceConfig.database.configured;
 }
 
+/** Return the resolved database URL, or null if unconfigured. */
 export function getConfiguredDatabaseUrl() {
   return persistenceConfig.database.url || null;
 }

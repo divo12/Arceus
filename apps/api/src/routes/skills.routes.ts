@@ -1,3 +1,7 @@
+/**
+ * @module skills.routes
+ * Routes for the skill registry — CRUD, mutations, ATA pipeline, pattern learning, and cross-sprint promotion.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import {

@@ -1,3 +1,7 @@
+/**
+ * @module workspace.routes
+ * Routes for workspace management — file listing, snapshots, diffs, sync, export, and persistence health.
+ */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSnapshot } from "../persistence/store.js";

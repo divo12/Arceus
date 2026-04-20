@@ -1,3 +1,7 @@
+/**
+ * @module control-plane.routes
+ * Routes for the control-plane — status, versioning, snapshot summary, and mutation application.
+ */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getExecutionStatus } from "../orchestration/state.js";

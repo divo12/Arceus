@@ -1,3 +1,7 @@
+/**
+ * Audit subsystem configuration.
+ * Reads from environment variables with JSON-file defaults.
+ */
 import { readOptionalEnv, readNumberEnv } from "./env";
 import { createRequire } from "node:module";
 

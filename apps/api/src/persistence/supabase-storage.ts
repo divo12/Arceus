@@ -68,10 +68,12 @@ async function upsertAssetRecord(params: {
   return params.assetId;
 }
 
+/** Whether Supabase storage is configured and available. */
 export function isStorageConfigured() {
   return isSupabaseConfigured();
 }
 
+/** Health-check the Supabase REST and Storage endpoints. */
 export async function getSupabaseEndpointHealth() {
   const config = getDatabaseConnectionConfig();
   if (!config) {
@@ -121,6 +123,7 @@ export async function getSupabaseEndpointHealth() {
   };
 }
 
+/** Upload a local file to a Supabase storage bucket. */
 export async function uploadFileToBucket(bucket: string, objectKey: string, localFilePath: string, contentType: string) {
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase storage is not configured.");
@@ -150,6 +153,7 @@ export async function uploadFileToBucket(bucket: string, objectKey: string, loca
   );
 }
 
+/** Download a file from a Supabase storage bucket to a local path. */
 export async function downloadFileFromBucket(bucket: string, objectKey: string, localFilePath: string) {
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase storage is not configured.");
@@ -177,6 +181,7 @@ export async function downloadFileFromBucket(bucket: string, objectKey: string, 
   );
 }
 
+/** Upload a workspace bundle to Supabase and record it as an asset. */
 export async function uploadWorkspaceBundle(companyId: string, localFilePath: string, objectKey = `${companyId}/bundles/latest.bundle`) {
   const upload = await uploadFileToBucket(persistenceConfig.storage.workspaceBucket, objectKey, localFilePath, "application/octet-stream");
   const assetId = await upsertAssetRecord({
@@ -197,10 +202,12 @@ export async function uploadWorkspaceBundle(companyId: string, localFilePath: st
   } satisfies UploadResult;
 }
 
+/** Download a workspace bundle from Supabase storage to a local path. */
 export async function downloadWorkspaceBundle(objectKey: string, localFilePath: string) {
   return downloadFileFromBucket(persistenceConfig.storage.workspaceBucket, objectKey, localFilePath);
 }
 
+/** Upload artifact text content to Supabase and track it in the assets table. */
 export async function uploadArtifactPayload(companyId: string, artifactId: string, content: string, title: string) {
   if (!isSupabaseConfigured()) {
     return null;
@@ -244,6 +251,7 @@ export async function uploadArtifactPayload(companyId: string, artifactId: strin
   );
 }
 
+/** Look up an asset record by company ID and object key. */
 export async function getAssetRecordByObjectKey(companyId: string, objectKey: string) {
   if (!isDatabaseConfigured()) {
     return null;
@@ -258,6 +266,7 @@ export async function getAssetRecordByObjectKey(companyId: string, objectKey: st
   return rows[0] ?? null;
 }
 
+/** Create a time-limited signed URL for a Supabase storage object. */
 export async function createSignedBucketUrl(bucket: string, objectKey: string, expiresInSeconds = 3600) {
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase storage is not configured.");
@@ -276,6 +285,7 @@ export async function createSignedBucketUrl(bucket: string, objectKey: string, e
   );
 }
 
+/** Get byte size and SHA-256 hash of a local file. */
 export async function getLocalFileInfo(path: string) {
   const info = await stat(path);
   const buffer = await readFile(path);

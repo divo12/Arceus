@@ -64,6 +64,7 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   }
 }
 
+/** Populate process.env with Azure OpenAI credentials from runtime config. */
 function ensureAzureRuntimeEnvironment() {
   process.env.AZURE_RESOURCE_NAME = runtimeConfig.azureResourceName;
   process.env.AZURE_OPENAI_ENDPOINT = runtimeConfig.azureEndpoint;
@@ -73,6 +74,7 @@ function ensureAzureRuntimeEnvironment() {
   process.env.AZURE_API_KEY = runtimeConfig.azureApiKey;
 }
 
+/** Probe whether an OpenCode server is already listening at the given URL. */
 async function detectExistingOpencodeServer(url: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
@@ -98,6 +100,7 @@ async function detectExistingOpencodeServer(url: string) {
   }
 }
 
+/** Create an authenticated OpenCode SDK client connected to the given URL. */
 async function connectOpencodeClient(url: string, close: () => void): Promise<OpencodeInstance> {
   const client = createOpencodeClient({ baseUrl: url });
 
@@ -112,6 +115,7 @@ async function connectOpencodeClient(url: string, close: () => void): Promise<Op
   };
 }
 
+/** Temporarily bind a port to confirm availability, then release it. */
 function reservePort(hostname: string, port: number) {
   return new Promise<number>((resolve, reject) => {
     const server = createServer();
@@ -142,6 +146,7 @@ function reservePort(hostname: string, port: number) {
   });
 }
 
+/** Pick an available port, falling back to an OS-assigned port on conflict. */
 async function pickLaunchPort(hostname: string, preferredPort: number) {
   try {
     return await reservePort(hostname, preferredPort);
@@ -154,11 +159,13 @@ async function pickLaunchPort(hostname: string, preferredPort: number) {
   }
 }
 
+/** Check whether an error indicates an EADDRINUSE port conflict. */
 function isPortConflictError(error: unknown, port: number) {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(`Failed to start server on port ${port}`) || message.includes("EADDRINUSE");
 }
 
+/** Launch an OpenCode server, retrying with alternate ports on conflict. */
 async function launchOpencodeServer(hostname: string, preferredPort: number, config: Record<string, unknown>) {
   const attemptedPorts = new Set<number>();
   let launchPort = await pickLaunchPort(hostname, preferredPort);
@@ -187,6 +194,7 @@ async function launchOpencodeServer(hostname: string, preferredPort: number, con
     : new Error(`Unable to start OpenCode after trying ports ${Array.from(attemptedPorts).join(", ")}.`);
 }
 
+/** Spawn the OpenCode CLI `serve` process and wait for the "listening" log line. */
 function spawnOpencodeServer(hostname: string, port: number, config: Record<string, unknown>): Promise<{ url: string; proc: ChildProcess }> {
   const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
   const mergedConfig = loadOpencodeConfig(config);
@@ -240,6 +248,7 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
   });
 }
 
+/** Get (or lazily create) the singleton OpenCode server instance. */
 export async function getOpencode() {
   ensureAzureRuntimeEnvironment();
 
@@ -306,6 +315,7 @@ export async function warmUpOpencode(): Promise<boolean> {
   }
 }
 
+/** POST JSON to the OpenCode server with circuit-breaker resilience. */
 export async function postOpencodeJson<T>(path: string, body: unknown): Promise<T> {
   return resilientCall(
     async () => {
@@ -332,6 +342,7 @@ export async function postOpencodeJson<T>(path: string, body: unknown): Promise<
   );
 }
 
+/** Open the SSE event stream from the OpenCode server. */
 export async function openOpencodeEventStream() {
   return resilientCall(
     async () => {
@@ -348,6 +359,7 @@ export async function openOpencodeEventStream() {
   );
 }
 
+/** Get (or lazily create) the singleton CEO session on OpenCode. */
 export async function getCeoSession() {
   if (!ceoSessionPromise) {
     const attempt = (async () => {

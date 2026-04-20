@@ -1,3 +1,17 @@
+/**
+ * @module ata
+ * Automated Test & Approve (ATA) pipeline schemas.
+ *
+ * When a skill mutation is proposed, the ATA pipeline generates test
+ * scenarios, runs dry-run simulations, and produces a review verdict
+ * (approve/reject/revise). This automates skill quality assurance.
+ *
+ * Key types:
+ * - ATATestScenario — generated test case for a skill mutation
+ * - ATADryRunResult — simulation result against a scenario
+ * - ATAReviewVerdict — final judgment with security concerns and guidance
+ * - ATAPipelineResult — complete pipeline output for a mutation
+ */
 import { z } from "zod";
 
 // Spec 14 Phase 3: ATA Pipeline types

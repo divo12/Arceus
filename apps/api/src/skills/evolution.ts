@@ -9,7 +9,6 @@
  */
 
 import { z } from "zod";
-import { structuredCompletion } from "../infra/azure-openai.js";
 import { embed as embedWithSentenceTransformers } from "@arceus/hippocampus";
 import {
   setSkillMutatorDeps,
@@ -25,6 +24,7 @@ import type {
   ATATestScenario,
   SkillCandidate,
 } from "@arceus/contracts";
+import { runInternalAgentPrompt } from "../prompts/internal-agent.js";
 
 // ── Zod schemas for LLM structured output ────────────────
 
@@ -390,137 +390,121 @@ ${feedback}
 - Be specific: include exact values, code snippets, commands where relevant.`;
 }
 
-// ── Initialization ───────────────────────────────────────
+// ── Initialization (Spec 24 Phase 5 — Skill Evolution Agent) ─
 
+function extractJson(output: string): unknown {
+  const match = output.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Skill Evolution Agent returned no JSON");
+  return JSON.parse(match[0]);
+}
+
+/**
+ * Wire all LLM dependencies for skill evolution at startup.
+ *
+ * Connects the skill mutator (Phase 2), ATA tester (Phase 3), pattern
+ * learner (Phase 5), and registry activation hook so the pure decision
+ * logic in company-runtime can call Azure OpenAI via the Skill Evolution Agent.
+ */
 export function initSkillEvolution(): void {
   setSkillMutatorDeps({
     async analyzeFailure(ctx, matchedSkills) {
-      return structuredCompletion(
-        "workerDeployment",    // gpt-4o-mini — cheap (~$0.003)
-        [
-          { role: "system", content: "You are a skill analyst for an AI agent system. Analyze task failures and attribute them to specific skills or identify skill gaps. Return structured JSON." },
-          { role: "user", content: buildAttributionPrompt(ctx, matchedSkills) },
-        ],
-        failureAttributionResponseSchema,
-        "failure_attribution",
-        { temperature: 0.3 },
-        { companyId: ctx.companyId, agentRole: ctx.assignedRole, label: "failure_attribution" },
-      );
+      const prompt = [
+        "Phase 1 — ATTRIBUTE. Analyze this task failure. Respond with JSON: { attributedSkillId, failureMode, confidence, suggestedFix, isSkillGap }",
+        "",
+        buildAttributionPrompt(ctx, matchedSkills),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return failureAttributionResponseSchema.parse(extractJson(output));
     },
 
     async proposeSkillMutation(original, attribution) {
-      return structuredCompletion(
-        "ceoDeployment",       // gpt-4o — strong (~$0.01)
-        [
-          { role: "system", content: "You are a skill author for an AI agent system. Rewrite skills to fix identified failures. Return structured JSON." },
-          { role: "user", content: buildMutationPrompt(original, attribution) },
-        ],
-        skillMutationResponseSchema,
-        "skill_mutation",
-        { temperature: 0.5 },
-      );
+      const prompt = [
+        "Phase 2 — PROPOSE (mutation). Rewrite this skill. Respond with JSON: { content, trigger, description }",
+        "",
+        buildMutationPrompt(original, attribution),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return skillMutationResponseSchema.parse(extractJson(output));
     },
 
     async proposeSkillDiscovery(attribution, role) {
-      return structuredCompletion(
-        "ceoDeployment",       // gpt-4o — strong (~$0.015)
-        [
-          { role: "system", content: "You are a skill author for an AI agent system. Create new skills to fill identified gaps. Return structured JSON." },
-          { role: "user", content: buildDiscoveryPrompt(attribution, role) },
-        ],
-        skillDiscoveryResponseSchema,
-        "skill_discovery",
-        { temperature: 0.5 },
-      );
+      const prompt = [
+        "Phase 2 — PROPOSE (discovery). Create a new skill. Respond with JSON: { content, trigger, name, description }",
+        "",
+        buildDiscoveryPrompt(attribution, role),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return skillDiscoveryResponseSchema.parse(extractJson(output));
     },
   });
 
-  console.log("[SkillEvolution] LLM deps wired for failure attribution + skill mutation");
+  console.log("[SkillEvolution] Skill Evolution Agent wired for failure attribution + skill mutation");
 
   // ── Phase 3: ATA Pipeline deps ─────────────────────────
 
   setSkillTesterDeps({
     async generateTestScenarios(mutation) {
-      const result = await structuredCompletion(
-        "workerDeployment",    // gpt-4o-mini — cheap (~$0.005)
-        [
-          { role: "system", content: "You are a test engineer for an AI agent skill system. Generate test scenarios to validate proposed skills. Return structured JSON." },
-          { role: "user", content: buildTGAPrompt(mutation) },
-        ],
-        tgaTestScenarioSchema,
-        "ata_tga",
-        { temperature: 0.4 },
-      );
-      return result.scenarios;
+      const prompt = [
+        "Phase 3 — TEST (TGA). Generate test scenarios. Respond with JSON: { scenarios: [...] }",
+        "",
+        buildTGAPrompt(mutation),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return tgaTestScenarioSchema.parse(extractJson(output)).scenarios;
     },
 
     async executeDryRun(skill, scenario) {
-      return structuredCompletion(
-        "ceoDeployment",       // gpt-4o — strong (~$0.02 per scenario)
-        [
-          { role: "system", content: "You are an AI agent executing a task. You have a skill loaded in your context. Describe what you would do step-by-step. Return structured JSON." },
-          { role: "user", content: buildEAAPrompt(skill, scenario) },
-        ],
-        eaaDryRunSchema,
-        "ata_eaa",
-        { temperature: 0.3 },
-      );
+      const prompt = [
+        "Phase 4 — EVALUATE (EAA). Dry-run this scenario. Respond with JSON: { testId, agentPlan, outcomeMatches, edgeCaseMatches, notes }",
+        "",
+        buildEAAPrompt(skill, scenario),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return eaaDryRunSchema.parse(extractJson(output));
     },
 
     async reviewResults(mutation, scenarios, results) {
-      return structuredCompletion(
-        "workerDeployment",    // gpt-4o-mini — cheap (~$0.004)
-        [
-          { role: "system", content: "You are a senior reviewer evaluating whether a proposed skill mutation should go live. Be strict but fair. Return structured JSON." },
-          { role: "user", content: buildROAPrompt(mutation, scenarios, results) },
-        ],
-        roaVerdictSchema,
-        "ata_roa",
-        { temperature: 0.2 },
-      );
+      const prompt = [
+        "Phase 5 — REVIEW (ROA). Evaluate this mutation. Respond with JSON: { verdict, overallScore, fixesOriginalFailure, coreOutcomesPassing, edgeCasesPassing, securityConcerns, revisionGuidance }",
+        "",
+        buildROAPrompt(mutation, scenarios, results),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return roaVerdictSchema.parse(extractJson(output));
     },
 
     async reviseSkill(mutation, feedback) {
-      return structuredCompletion(
-        "ceoDeployment",       // gpt-4o — strong
-        [
-          { role: "system", content: "You are a skill author revising a skill based on reviewer feedback. Return structured JSON." },
-          { role: "user", content: buildRevisionPrompt(mutation, feedback) },
-        ],
-        skillRevisionSchema,
-        "ata_revision",
-        { temperature: 0.5 },
-      );
+      const prompt = [
+        "Phase 6 — REVISE. Apply feedback and rewrite. Respond with JSON: { content, trigger, description }",
+        "",
+        buildRevisionPrompt(mutation, feedback),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return skillRevisionSchema.parse(extractJson(output));
     },
   });
 
-  console.log("[SkillEvolution] ATA pipeline deps wired (TGA + EAA + ROA)");
+  console.log("[SkillEvolution] ATA pipeline wired via Skill Evolution Agent (TGA + EAA + ROA)");
 
   // ── Phase 5: Pattern Learning deps ─────────────────────
 
   setPatternLearnerDeps({
     async embedText(text: string) {
-      // Uses the same local sentence-transformers model (all-MiniLM-L6-v2, 384-dim)
-      // that powers Hippocampus — no Azure calls, no per-task LLM cost.
       return embedWithSentenceTransformers(text);
     },
 
     async synthesizeSkill(candidate) {
-      return structuredCompletion(
-        "ceoDeployment",       // gpt-4o — strong (~$0.015)
-        [
-          { role: "system", content: "You are a skill author for an AI agent system. Distill recurring agent behaviors into reusable skills. Return structured JSON." },
-          { role: "user", content: buildSkillSynthesisPrompt(candidate) },
-        ],
-        skillSynthesisResponseSchema,
-        "pattern_synthesis",
-        { temperature: 0.4 },
-        { companyId: candidate.companyId, agentRole: candidate.role, label: "pattern_synthesis" },
-      );
+      const prompt = [
+        "Synthesize a reusable skill from recurring agent behavior. Respond with JSON: { name, trigger, content, description }",
+        "",
+        buildSkillSynthesisPrompt(candidate),
+      ].join("\n");
+      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
+      return skillSynthesisResponseSchema.parse(extractJson(output));
     },
   });
 
-  console.log("[SkillEvolution] Pattern learner deps wired (embeddings + synthesis)");
+  console.log("[SkillEvolution] Pattern learner wired via Skill Evolution Agent");
 
   // ── Skill Registry: activation hook ────────────────────
   //

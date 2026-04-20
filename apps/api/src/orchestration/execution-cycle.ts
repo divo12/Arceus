@@ -1,3 +1,7 @@
+/**
+ * Execution cycle lifecycle — completion, pause, board review, and stop.
+ */
+
 import type { AgentIdentity } from "@arceus/contracts";
 import { uniqueStrings, nowIso } from "@arceus/task-engine";
 import { getSnapshot, updateTask } from "../persistence/store.js";
@@ -22,6 +26,7 @@ import { setTaskStatus } from "../tasks/mutations.js";
 import { pruneAlreadyCompletedSpecialistTasks, runAutonomousReadyTasks } from "../tasks/specialist-executor.js";
 import { checkSprintCompletion } from "../sprints/lifecycle.js";
 
+/** Finalize the current execution cycle: update status, record meeting, and check sprint completion. */
 export async function completeExecutionCycle(reason: string) {
   const snapshot = getSnapshot();
   const queuedNonCoreTaskCount = getQueuedNonCoreTaskCount(snapshot);
@@ -79,6 +84,7 @@ export async function completeExecutionCycle(reason: string) {
   await checkSprintCompletion();
 }
 
+/** Pause execution and request board-level intervention. */
 export function pauseForBoardReview(reason: string) {
   setExecutionStatus("awaiting_board_review");
   recordMeeting({
@@ -108,6 +114,7 @@ export function pauseForBoardReview(reason: string) {
   });
 }
 
+/** Run post-review reconciliation: prune completed tasks, execute ready tasks, then complete or pause. */
 export async function reconcilePostReviewExecution() {
   const prePruneSnapshot = getSnapshot();
   const prunedCount = await pruneAlreadyCompletedSpecialistTasks(prePruneSnapshot);
@@ -138,6 +145,7 @@ export async function reconcilePostReviewExecution() {
   await completeExecutionCycle("Autonomous execution completed — all phases finished.");
 }
 
+/** Forcibly stop the current execution cycle, blocking in-progress tasks and idling agents. */
 export async function stopExecution(reason = "Board manually stopped company execution.") {
   if (["idle", "done", "error", "paused"].includes(executionStatus) && !activeExecution) {
     throw new Error("No active company execution is running.");
@@ -200,6 +208,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
   return { executionStatus, reason };
 }
 
+/** Approve a pending board review: resolve approvals, mark execution done, and check sprint completion. */
 export async function approveBoardReview() {
   if (executionStatus !== "awaiting_board_review" || !activeExecution) {
     throw new Error("Board review is not awaiting approval.");

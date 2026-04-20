@@ -3,6 +3,7 @@ import { productDir } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "./artifacts.js";
 
+/** Build a role-specific task prompt with workspace context, output requirements, and upstream artifacts. */
 export function buildSpecialistTaskPrompt(task: Task) {
   const preview = getLocalPreviewState();
   const profileHints = [

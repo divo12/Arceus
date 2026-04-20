@@ -1,3 +1,7 @@
+/**
+ * @module governance.routes
+ * Routes for governance — trust scores, policy violations, sprint budgets, and mutation checks.
+ */
 import type { FastifyInstance } from "fastify";
 import { getSnapshot } from "../persistence/store.js";
 import { cpGetAllTrustScores, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpHydrateTrustScores } from "../persistence/control-plane.js";
