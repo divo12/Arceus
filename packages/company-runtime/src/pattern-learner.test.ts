@@ -48,6 +48,7 @@ function makeSkill(overrides?: Partial<SkillArtifact>): SkillArtifact {
     trigger: "When adding auth",
     content: "# Auth Setup\n\nUse Supabase.",
     testCases: [],
+    resources: [],
     successRate: 0.8,
     usageCount: 10,
     lastUsedAt: null,

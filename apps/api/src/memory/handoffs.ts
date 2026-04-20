@@ -58,27 +58,43 @@ export function deliverSkillsLeadMemoryHandoff(task: Task, artifactId: string, s
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Marketing external approval flow
+// Generic approval request
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Create a pending board approval for marketing external/outbound actions. */
-export function createMarketingExternalApproval(task: Task, artifactId: string, meetingId: string | null) {
+/** Input for {@link requestApproval} — generalized board approval request, agnostic to role or task kind. */
+export interface RequestApprovalInput {
+  type: Approval["type"];
+  requestedByRole: AgentIdentity["role"];
+  title: string;
+  description: string;
+  meetingId?: string | null;
+  agendaItemId?: string | null;
+}
+
+/**
+ * Create a pending board approval on behalf of any role.
+ *
+ * Generalizes the former role-specific helpers (e.g. `createMarketingExternalApproval`) so
+ * any agent can request approval via the `approval_request` MCP tool. Returns `null` if the
+ * requesting role has no provisioned agent in the current snapshot.
+ */
+export function requestApproval(input: RequestApprovalInput): Approval | null {
   const snapshot = getSnapshot();
-  const marketingAgent = getAgentByRole(snapshot, "marketing");
-  if (!marketingAgent) {
+  const requestor = getAgentByRole(snapshot, input.requestedByRole);
+  if (!requestor) {
     return null;
   }
 
   const approval: Approval = {
     id: `approval_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
-    type: "external_action",
+    type: input.type,
     status: "pending",
-    title: `Board approval required for ${task.title}`,
-    description: `Marketing prepared outbound launch or distribution recommendations in /api/artifacts/${artifactId}. No external action has been executed. Board approval is required before any distribution proceeds.`,
-    requestedByAgentId: marketingAgent.id,
-    meetingId,
-    agendaItemId: null,
+    title: input.title,
+    description: input.description,
+    requestedByAgentId: requestor.id,
+    meetingId: input.meetingId ?? null,
+    agendaItemId: input.agendaItemId ?? null,
     resolutionSummary: null,
   };
 

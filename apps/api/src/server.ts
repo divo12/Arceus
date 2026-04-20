@@ -59,6 +59,8 @@ import {
   serviceRegistryRoutes,
   hippocampusRoutes,
   skillsRoutes,
+  internalMcpRoutes,
+  internalTelemetryRoutes,
 } from "./routes/index.js";
 
 // ── Fastify instance ───────────────────────────────────────
@@ -367,6 +369,8 @@ await app.register(debugRoutes);
 await app.register(serviceRegistryRoutes);
 await app.register(hippocampusRoutes);
 await app.register(skillsRoutes);
+await app.register(internalMcpRoutes);
+await app.register(internalTelemetryRoutes);
 
 // ── Start audit ledger ──
 startAuditLedger();

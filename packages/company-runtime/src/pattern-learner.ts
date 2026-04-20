@@ -487,6 +487,7 @@ export async function proposeSkillFromCluster(candidate: SkillCandidate): Promis
     trigger: synthesized.description || synthesized.trigger,
     content: synthesized.content,
     testCases: [],
+    resources: [],
     successRate: candidate.combinedSuccessRate,
     usageCount: 0,
     lastUsedAt: null,

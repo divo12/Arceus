@@ -33,6 +33,7 @@ function makeSkill(overrides: Partial<SkillArtifact> = {}): SkillArtifact {
     trigger: "When implementing test features",
     content: "# Test Skill\n\nDo the thing.",
     testCases: [],
+    resources: [],
     successRate: 0.7,
     usageCount: 0,
     lastUsedAt: null,

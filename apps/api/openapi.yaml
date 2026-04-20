@@ -1,0 +1,770 @@
+openapi: 3.1.0
+info:
+  title: Arceus Internal MCP API
+  version: "1.0.0"
+  summary: Fastify-backed internal control plane for agent heartbeats.
+  description: |
+    Headless API consumed by Arceus agents. All routes live under
+    `/api/internal/v1/*`, require bearer auth, and accept an
+    `Idempotency-Key` header for safe replay.
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+  - url: https://arceus.internal
+    description: Internal staging
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: tasks
+  - name: artifacts
+  - name: workspaces
+  - name: meetings
+  - name: approvals
+  - name: sprints
+
+paths:
+  /api/internal/v1/tasks:
+    post:
+      tags: [tasks]
+      summary: Create a task
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/BeatId"
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/AgentRole"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaskBody" }
+      responses:
+        "201":
+          description: Task created
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskCreatedEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/tasks/{taskId}:
+    patch:
+      tags: [tasks]
+      summary: Partially update a task
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchTaskBody" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/tasks/{taskId}/completion:
+    post:
+      tags: [tasks]
+      summary: Mark task completed
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/internal/v1/tasks/{taskId}/block:
+    post:
+      tags: [tasks]
+      summary: Mark task blocked
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 1000 }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/tasks/{taskId}/verification:
+    post:
+      tags: [tasks]
+      summary: Mark task verified (tester role only)
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [verifiedBy]
+              properties:
+                verifiedBy: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/results:
+    post:
+      tags: [tasks]
+      summary: Append a result log entry
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry]
+              properties:
+                entry: { type: string, maxLength: 4000 }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/commands:
+    post:
+      tags: [tasks]
+      summary: Record a shell command run for this task
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command: { type: string, maxLength: 2000 }
+                exitCode: { type: integer }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/plan-steps:
+    post:
+      tags: [tasks]
+      summary: Append a plan step
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [step]
+              properties:
+                step: { type: string, maxLength: 1000 }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/progress:
+    patch:
+      tags: [tasks]
+      summary: Update task progress metrics
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                percent: { type: number, minimum: 0, maximum: 100 }
+                note: { type: string, maxLength: 2000 }
+                completedSteps: { type: integer, minimum: 0 }
+                totalSteps: { type: integer, minimum: 1, nullable: true }
+                filesModified:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/preview-url:
+    put:
+      tags: [tasks]
+      summary: Set local preview URL
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  nullable: true
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/artifacts:
+    post:
+      tags: [tasks]
+      summary: Attach an existing artifact to a task
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [artifactId]
+              properties:
+                artifactId: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/tasks/{taskId}/hydration:
+    post:
+      tags: [tasks]
+      summary: Hydrate a task from a generated spec
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, problem_statement, deliverable, definition_of_done, priority]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                problem_statement: { type: string }
+                deliverable: { type: string }
+                definition_of_done:
+                  type: array
+                  items: { type: string }
+                priority:
+                  type: string
+                  enum: [low, medium, high, critical]
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/internal/v1/artifacts:
+    post:
+      tags: [artifacts]
+      summary: Create an artifact
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateArtifactBody" }
+      responses:
+        "201":
+          description: Artifact created
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactCreatedEnvelope" }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/artifacts/{artifactId}/workspace-writes:
+    post:
+      tags: [artifacts]
+      summary: Write artifact content into the workspace
+      parameters:
+        - $ref: "#/components/parameters/ArtifactId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId, role, slug]
+              properties:
+                taskId: { type: string }
+                role: { type: string }
+                slug:
+                  type: string
+                  pattern: "^[a-z0-9][a-z0-9-_]*$"
+                  maxLength: 120
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Upstream" }
+
+  /api/internal/v1/artifacts/{artifactId}/persistence:
+    post:
+      tags: [artifacts]
+      summary: Persist artifact to durable storage
+      parameters:
+        - $ref: "#/components/parameters/ArtifactId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Upstream" }
+
+  /api/internal/v1/workspaces/checkpoints:
+    post:
+      tags: [workspaces]
+      summary: Commit + sync workspace state for a task
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId, agentRole, message]
+              properties:
+                taskId: { type: string }
+                agentRole: { type: string }
+                message: { type: string, maxLength: 1000 }
+      responses:
+        "201":
+          description: Checkpoint committed
+          headers:
+            Location:
+              schema: { type: string }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Validation" }
+        "503": { $ref: "#/components/responses/Upstream" }
+
+  /api/internal/v1/workspaces/preview-probes:
+    post:
+      tags: [workspaces]
+      summary: Probe the local preview URL
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                timeoutMs:
+                  type: integer
+                  minimum: 100
+                  maximum: 30000
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/meetings:
+    post:
+      tags: [meetings]
+      summary: Record a meeting
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMeetingBody" }
+      responses:
+        "201":
+          description: Meeting recorded
+          headers:
+            Location:
+              schema: { type: string }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/approvals:
+    post:
+      tags: [approvals]
+      summary: Request an approval
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateApprovalBody" }
+      responses:
+        "201":
+          description: Approval requested
+          headers:
+            Location:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Validation" }
+
+  /api/internal/v1/sprints/proposals:
+    post:
+      tags: [sprints]
+      summary: Dispatch a CEO sprint proposal (async)
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "202":
+          description: Accepted; proposal runs async with in-flight + cooldown guards.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcceptedEnvelope" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    BeatId:
+      name: x-beat-id
+      in: header
+      required: true
+      schema: { type: string }
+    CompanyId:
+      name: x-company-id
+      in: header
+      required: true
+      schema: { type: string }
+    AgentRole:
+      name: x-agent-role
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [ceo, cto, pm, developer, tester, ui_designer, marketing, skills_lead]
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: string }
+    ArtifactId:
+      name: artifactId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Ok:
+      description: Successful response
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SuccessEnvelope" }
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Role does not permit this operation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: Idempotency conflict or invalid state
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Validation:
+      description: Request body failed validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ValidationErrorEnvelope" }
+    Upstream:
+      description: Upstream dependency unavailable
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [status, summary]
+      properties:
+        status: { type: string, enum: [success] }
+        summary: { type: string }
+        data: { type: object, additionalProperties: true }
+        nextActions:
+          type: array
+          items: { type: string }
+
+    AcceptedEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [queued]
+              properties:
+                queued: { type: boolean }
+                note: { type: string }
+
+    ErrorEnvelope:
+      type: object
+      required: [status, summary, error]
+      properties:
+        status: { type: string, enum: [error] }
+        summary: { type: string }
+        error:
+          type: object
+          required: [cause, retry, stopWhen]
+          properties:
+            cause:
+              type: string
+              enum: [validation, governance, not_found, conflict, upstream, internal]
+            retry:
+              type: string
+              enum: [safe, unsafe, never]
+            stopWhen: { type: string }
+
+    ValidationErrorEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            error:
+              type: object
+              properties:
+                details:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      field: { type: string }
+                      message: { type: string }
+                      code: { type: string }
+
+    CreateTaskBody:
+      type: object
+      required: [title]
+      properties:
+        id: { type: string }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        problemStatement: { type: string, maxLength: 4000 }
+        deliverable: { type: string, maxLength: 2000 }
+        definitionOfDone:
+          type: array
+          items: { type: string }
+        kind: { type: string }
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        assignedRole: { type: string }
+        sprintId: { type: string, nullable: true }
+        parentTaskId: { type: string, nullable: true }
+        dependsOnTaskIds:
+          type: array
+          items: { type: string }
+
+    PatchTaskBody:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        assignedRole: { type: string }
+        assignedAgentId: { type: string, nullable: true }
+
+    TaskCreatedEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [taskId, status]
+              properties:
+                taskId: { type: string }
+                status: { type: string }
+
+    CreateArtifactBody:
+      type: object
+      required: [agent, kind, title, content]
+      properties:
+        agent: { type: string, maxLength: 100 }
+        kind:
+          type: string
+          enum: [plan, code, output, specification]
+        title: { type: string, maxLength: 300 }
+        content: { type: string, maxLength: 200000 }
+        taskId: { type: string }
+
+    ArtifactCreatedEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [artifactId]
+              properties:
+                artifactId: { type: string }
+
+    CreateMeetingBody:
+      type: object
+      required: [type, facilitatorRole, participantRoles, summary, agenda]
+      properties:
+        type:
+          type: string
+          enum: [daily_sync, eval_triggered, escalation]
+        facilitatorRole: { type: string }
+        participantRoles:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { type: string }
+        summary: { type: string, maxLength: 500 }
+        agenda:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            type: object
+            required: [topic, type, content, raisedByRole]
+            properties:
+              topic: { type: string, maxLength: 200 }
+              type:
+                type: string
+                enum: [update, blocker, question, proposal]
+              content: { type: string, maxLength: 4000 }
+              raisedByRole: { type: string }
+              relatedTaskId: { type: string, nullable: true }
+              needsBoardApproval: { type: boolean }
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [description, decidedByRoles]
+            properties:
+              description: { type: string, maxLength: 2000 }
+              decidedByRoles:
+                type: array
+                minItems: 1
+                items: { type: string }
+              impactIds:
+                type: array
+                items: { type: string }
+        learnings:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string }
+              content: { type: string, maxLength: 2000 }
+              promotedToSummary: { type: boolean }
+        taskModifications:
+          type: array
+          items:
+            type: object
+            required: [taskId, modificationType, details]
+            properties:
+              taskId: { type: string }
+              modificationType:
+                type: string
+                enum: [assign, reprioritize, reassign, cancel, decompose_further, unblock]
+              details: { type: string, maxLength: 2000 }
+              assignedRole: { type: string, nullable: true }
+              priority:
+                type: string
+                enum: [low, medium, high, critical]
+                nullable: true
+              resultingStatus:
+                type: string
+                enum: [created, planned, in_progress, verifying, blocked, completed, failed, cancelled]
+                nullable: true
+        memoryModifications:
+          type: array
+          items:
+            type: object
+            required: [role, modificationType, content]
+            properties:
+              role: { type: string }
+              modificationType:
+                type: string
+                enum: [current_focus, recent_learning, active_pattern, open_blocker, important_decision, clear_blocker]
+              content: { type: string, maxLength: 2000 }
+
+    CreateApprovalBody:
+      type: object
+      required: [type, requestedByRole, title, description]
+      properties:
+        type:
+          type: string
+          enum: [strategy, hire, meeting_blocker, external_action, tool_governance]
+          description: The Approval domain type. Agent chooses based on what it is asking approval for.
+        requestedByRole:
+          type: string
+          enum: [ceo, cto, pm, developer, tester, ui_designer, marketing, skills_lead]
+        title:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          minLength: 1
+        meetingId:
+          type: string
+          nullable: true
+        agendaItemId:
+          type: string
+          nullable: true

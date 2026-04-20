@@ -19,3 +19,5 @@ export { default as debugRoutes } from "./debug.routes.js";
 export { default as serviceRegistryRoutes } from "./service-registry.routes.js";
 export { default as hippocampusRoutes } from "./hippocampus.routes.js";
 export { default as skillsRoutes } from "./skills.routes.js";
+export { default as internalMcpRoutes } from "./internal-mcp/index.js";
+export { default as internalTelemetryRoutes } from "./internal-telemetry.routes.js";

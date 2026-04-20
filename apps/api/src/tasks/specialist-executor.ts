@@ -14,7 +14,7 @@ import { updateRoleMemory } from "../memory/operations.js";
 import {
   deliverUiDesignerMemoryHandoff,
   deliverSkillsLeadMemoryHandoff,
-  createMarketingExternalApproval,
+  requestApproval,
   getSpecialistMeetingContext,
 } from "../memory/handoffs.js";
 import { recordMeeting } from "../meetings/recording.js";
@@ -233,7 +233,13 @@ export async function executeSpecialistTask(taskId: string) {
 
   let approval: Approval | null = null;
   if (role === "marketing" && task.kind === "distribution_campaign") {
-    approval = createMarketingExternalApproval(task, artifact.id, completionMeeting.id);
+    approval = requestApproval({
+      type: "external_action",
+      requestedByRole: "marketing",
+      title: `Board approval required for ${task.title}`,
+      description: `Marketing prepared outbound launch or distribution recommendations in /api/artifacts/${artifact.id}. No external action has been executed. Board approval is required before any distribution proceeds.`,
+      meetingId: completionMeeting.id,
+    });
     if (approval) {
       const createdApproval = approval;
       appendTaskResult(task.id, `approval:${approval.id}`);
