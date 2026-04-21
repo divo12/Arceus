@@ -232,7 +232,10 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           appendTaskCommand(activeExecution.buildTaskId, cmd);
         }
       } else if (isInvocation && toolName) {
-        emitEmployeeActivity(role, "info", `tool: ${toolName}`);
+        emitEmployeeActivity(role, "tool_call", `tool: ${toolName}`, {
+          taskId: activeExecution?.buildTaskId ?? null,
+          detail: { toolName, args: sanitizeToolArgs(args) },
+        });
       }
     }
   }

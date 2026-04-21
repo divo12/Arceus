@@ -1,10 +1,14 @@
 import { resolve, dirname } from "node:path";
 import { readFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, writeFileSync } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
 import { ensureDeployment, runtimeConfig } from "../config/index.js";
+import { serverConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
+import { ROLES, type Role } from "../../../../.opencode/agent/config.js";
+import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
 
 type OpencodeInstance = {
   server: { url: string; close(): void };
@@ -18,7 +22,7 @@ const projectRoot = process.cwd();
 // Product workspace — where agents write code. OpenCode spawns with this as cwd
 // so that all file tools (write, edit, bash) resolve relative to it.
 const repoRoot = resolve(projectRoot, "..", "..");
-const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !projectRoot.startsWith("/app")
+export const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !projectRoot.startsWith("/app")
   ? resolve(repoRoot, "workspace")
   : resolve(projectRoot, "workspace");
 
@@ -44,8 +48,22 @@ function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, 
  * the OpenCode server (which runs with cwd = productWorkspace) can discover
  * the custom agent definitions. OPENCODE_CONFIG_CONTENT is not supported by
  * the CLI, so the config must live at its cwd.
+ *
+ * Always injects the MCP wiring + plugin reference so agents can reach the
+ * Arceus control-plane tools regardless of which call site triggers the sync.
  */
 function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
+  // Ensure MCP wiring is always present
+  const arceusApi = `http://127.0.0.1:${serverConfig.port}`;
+  const arceusToken = process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "";
+  mergedConfig.mcp = {
+    arceus: {
+      command: ["npx", "tsx", "./node_modules/@arceus/mcp/src/transport-stdio.ts"],
+      env: { ARCEUS_API: arceusApi, ARCEUS_TOKEN: arceusToken },
+    },
+  };
+  mergedConfig.plugin = ["./.opencode/plugin/arceus.ts"];
+
   // Write resolved config
   writeFileSync(
     resolve(productWorkspace, "opencode.json"),
@@ -297,12 +315,40 @@ export function resetOpencodeConnection() {
 }
 
 /**
+ * Write all boot-time OpenCode configuration into the product workspace.
+ * Idempotent — safe to call on every startup. Must complete BEFORE the
+ * OpenCode server is spawned so it picks up plugin, agent defs, and MCP wiring.
+ *
+ * Phase 6.5 — Package E.
+ */
+export async function writeSharedOpencodeConfig(): Promise<void> {
+  // 1. Copy plugin into productWorkspace
+  const pluginSrc = resolve(repoRoot, ".opencode", "plugin", "arceus.ts");
+  const pluginDst = resolve(productWorkspace, ".opencode", "plugin", "arceus.ts");
+  await fsPromises.mkdir(dirname(pluginDst), { recursive: true });
+  if (existsSync(pluginSrc)) {
+    await fsPromises.copyFile(pluginSrc, pluginDst);
+  }
+
+  // 2. Write all agent files
+  for (const role of ROLES) {
+    await writeBeatAgent(role, productWorkspace);
+  }
+
+  // 3. Sync merged config (agents + MCP wiring + plugin) into workspace.
+  //    syncOpencodeConfigToWorkspace injects MCP + plugin automatically.
+  syncOpencodeConfigToWorkspace(loadOpencodeConfig({ share: "disabled" }));
+}
+
+/**
  * Pre-warm OpenCode server at startup so agent execution doesn't
  * hit the cold-start SQLite migration + spawn delay. Call once after
  * the Fastify server is listening. Failures are non-fatal.
  */
 export async function warmUpOpencode(): Promise<boolean> {
   try {
+    console.log("[OpenCode] Writing shared config (plugin, agents, opencode.json)…");
+    await writeSharedOpencodeConfig();
     console.log("[OpenCode] Pre-warming server (this may take 30-45s on first run)…");
     const instance = await getOpencode();
     console.log(`[OpenCode] Warm — server ready at ${instance.server.url}`);

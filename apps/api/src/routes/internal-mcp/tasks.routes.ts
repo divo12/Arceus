@@ -112,6 +112,10 @@ const appendCommandBody = z.object({
   exitCode: z.number().int().optional(),
 });
 
+const claimBody = z.object({
+  reason: z.string().min(1).max(1000),
+});
+
 const appendPlanStepBody = z.object({
   step: z.string().min(1).max(1000),
 });
@@ -360,5 +364,38 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
 
     hydrateTaskFromSpec(taskId, body);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} hydrated from spec.`, { taskId }));
+  });
+
+  // POST /tasks/:taskId/claim — agent claims a task (vision Step 7)
+  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/claim`, async (req, reply) => {
+    const body = parseOrFail(claimBody, req.body, reply);
+    if (!body) return;
+    const { taskId } = req.params;
+    const existing = findTask(taskId);
+    if (!existing) { sendNotFound(reply, `Task ${taskId}`); return; }
+
+    const mcp = req.mcp!;
+
+    // Only planned or created tasks can be claimed
+    if (existing.status !== "planned" && existing.status !== "created") {
+      sendConflict(reply, `Task ${taskId} is "${existing.status}" — only planned/created tasks can be claimed.`);
+      return;
+    }
+
+    // Role check: agent can only claim tasks assigned to their role
+    if (mcp.role && existing.assignedRole !== mcp.role) {
+      reply.code(403).send(failure(
+        `Task ${taskId} is assigned to ${existing.assignedRole}, not ${mcp.role}.`,
+        "governance", "never", "claim_own_role_task"
+      ));
+      return;
+    }
+
+    setTaskStatus(taskId, "in_progress");
+    cacheAndSend(req, reply, 200, success(
+      `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,
+      { taskId, status: "in_progress", claimedBy: mcp.role, reason: body.reason },
+      { nextActions: ["task_append_plan_step", "task_update_progress"] }
+    ));
   });
 }

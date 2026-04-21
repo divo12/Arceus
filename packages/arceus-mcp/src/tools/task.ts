@@ -186,4 +186,72 @@ export const registerTaskTools = (
       return toMcpContent(res.data);
     }
   );
+
+  server.registerTool(
+    "task_claim",
+    {
+      description:
+        "Claim a planned/created task for this beat. Transitions the task to in_progress. " +
+        "Call this BEFORE starting work on a task — the orchestrator does not assign tasks.",
+      inputSchema: {
+        taskId: z.string(),
+        reason: z.string().max(1000).describe("Why you are picking this task (e.g. highest priority unblocked)"),
+      },
+    },
+    async ({ taskId, reason }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${TASKS}/${taskId}/claim`,
+        body: { reason },
+        idempotencyKey: randomUUID(),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_update_progress",
+    {
+      description:
+        "Report progress on the current task. Call periodically during long work to keep the system informed.",
+      inputSchema: {
+        taskId: z.string(),
+        percent: z.number().min(0).max(100).optional().describe("Estimated completion percentage"),
+        note: z.string().max(2000).optional().describe("What you just did or are about to do"),
+        completedSteps: z.number().int().nonnegative().optional(),
+        totalSteps: z.number().int().positive().nullable().optional(),
+        filesModified: z.array(z.string()).optional(),
+      },
+    },
+    async ({ taskId, ...progress }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "PATCH",
+        path: `${TASKS}/${taskId}/progress`,
+        body: progress,
+        idempotencyKey: randomUUID(),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_append_plan_step",
+    {
+      description:
+        "Log a plan step for the current task. Call before each major action so the system tracks your approach.",
+      inputSchema: {
+        taskId: z.string(),
+        step: z.string().max(1000).describe("Description of the plan step (e.g. 'write LoginForm.tsx')"),
+      },
+    },
+    async ({ taskId, step }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${TASKS}/${taskId}/plan-steps`,
+        body: { step },
+        idempotencyKey: randomUUID(),
+      });
+      return toMcpContent(res.data);
+    }
+  );
 };

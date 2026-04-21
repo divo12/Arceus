@@ -8,7 +8,7 @@ interface HeaderProps {
   activeTab: number;
 }
 
-const TABS = ["Build", "Beats", "Sessions", "Agents", "Sprint", "Meetings"];
+const TABS = ["Build", "Sprint", "Workspace"];
 
 export function Header({ connected, heartbeatRunning, beatCount, activeTab }: HeaderProps) {
   return (

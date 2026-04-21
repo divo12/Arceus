@@ -296,9 +296,10 @@ export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: strin
     return "welcome";
   }
 
-  // Between sprints: execution is done AND current sprint is completed AND we have agents
+  // Between sprints: execution is done AND current sprint is completed (or no sprint yet) AND we have agents
   const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
-  if (currentSprint?.status === "completed" && snapshot.agents.length > 0 && executionStatus === "done") {
+  const noSprintYet = !snapshot.company.currentSprintId && snapshot.sprints.length === 0;
+  if ((currentSprint?.status === "completed" || noSprintYet) && snapshot.agents.length > 0 && executionStatus === "done") {
     return "between_sprints";
   }
 

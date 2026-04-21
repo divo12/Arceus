@@ -20,6 +20,7 @@ import { z, ZodError, type ZodSchema } from "zod";
 import { getSkillById, recordSkillUsage } from "@arceus/company-runtime";
 import { failure, success, type ErrorCause } from "./internal-mcp/envelope.js";
 import { mcpAuth } from "./internal-mcp/middleware.js";
+import { getSessionContext } from "../orchestration/session-context.js";
 
 const TELEMETRY_BASE = "/api/internal/telemetry";
 
@@ -172,5 +173,35 @@ export default async function internalTelemetryRoutes(app: FastifyInstance): Pro
         usageCount: artifact.usageCount + 1,
       }),
     );
+  });
+
+  /**
+   * GET /api/internal/telemetry/session-context/:sessionId
+   *
+   * Called by the OpenCode plugin and MCP server to resolve beat metadata
+   * (allowedTools, beatId, role, companyId) for a given session. Returns 404
+   * after the beat ends and the context is unregistered.
+   */
+  app.get(`${TELEMETRY_BASE}/session-context/:sessionId`, async (req, reply) => {
+    const params = z.object({ sessionId: z.string().min(1) }).safeParse(req.params);
+    if (!params.success) {
+      sendValidation(reply, params.error);
+      return;
+    }
+
+    const ctx = getSessionContext(params.data.sessionId);
+    if (!ctx) {
+      reply.code(404).send(
+        failure(
+          `No context for session ${params.data.sessionId}.`,
+          "not_found",
+          "never",
+          "session ended",
+        ),
+      );
+      return;
+    }
+
+    reply.code(200).send(ctx);
   });
 }

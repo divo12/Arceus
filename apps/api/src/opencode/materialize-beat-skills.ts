@@ -2,10 +2,13 @@
  * materializeBeatSkills — write SkillArtifact registry contents to disk so
  * OpenCode's native skill loader can read them for this beat.
  *
- * Phase 6 scope: write `<workDir>/.opencode/skills/<slug>/SKILL.md` plus any
- * resources, and `<workDir>/.opencode/arceus-skills.json` manifest. Symlink
- * swap to `/tmp/arceus/beats/<beatId>/skills/` is Phase 6.5 (package C); this
- * function just materializes to the provided workDir directly.
+ * Phase 6.5 (package D): materializer writes to `beatSkillsDir(beatId)` and
+ * swaps the productWorkspace symlink so OpenCode reads the materialized tree.
+ * The manifest (`arceus-skills.json`) goes into `productWorkspace/.opencode/`
+ * so the plugin finds it at its known path.
+ *
+ * Legacy `workDir` parameter is still accepted for backward compatibility
+ * with existing tests; when omitted the new beat-paths are used.
  *
  * Trust-band filter is minimal in v1:
  *   - probation: only skills with successRate ≥ 0.75 AND usageCount ≥ 20
@@ -17,6 +20,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SkillArtifact, SkillResource } from "@arceus/contracts";
 import { getSkillsForRole } from "@arceus/company-runtime";
+import { beatSkillsDir, swapSkillsSymlink } from "../infra/beat-paths.js";
+import { productWorkspace } from "../infra/opencode.js";
 
 export type TrustBand = "probation" | "standard" | "senior";
 
@@ -25,8 +30,12 @@ export interface MaterializeBeatSkillsInput {
   companyId: string;
   role: string;
   trustBand: TrustBand;
-  /** Absolute path to the workspace whose `.opencode/skills/` will receive the tree. */
-  workDir: string;
+  /**
+   * Legacy: absolute path to the workspace whose `.opencode/skills/` will
+   * receive the tree. When omitted, writes to `beatSkillsDir(beatId)` and
+   * swaps the productWorkspace symlink (Phase 6.5 mode).
+   */
+  workDir?: string;
 }
 
 export interface MaterializedSkill {
@@ -101,17 +110,26 @@ async function writeResource(skillDir: string, resource: SkillResource): Promise
 }
 
 /**
- * Materialize the role's active skills into `<workDir>/.opencode/skills/`.
+ * Materialize the role's active skills.
  *
- * Clears the skills directory first so stale skills from a previous beat don't
- * bleed into this one. Writes `arceus-skills.json` alongside as the manifest
- * the plugin uses to resolve `slug → { skillId, version }` for the usage POST.
+ * When `workDir` is provided (legacy / test mode): writes into
+ * `<workDir>/.opencode/skills/` and manifest alongside — no symlink swap.
+ *
+ * When `workDir` is omitted (Phase 6.5 mode): writes skills into
+ * `beatSkillsDir(beatId)`, writes manifest to `productWorkspace/.opencode/`,
+ * and swaps the `productWorkspace/.opencode/skills` symlink to point at the
+ * beat's skill tree.
  */
 export async function materializeBeatSkills(
   input: MaterializeBeatSkillsInput,
 ): Promise<MaterializedSkill[]> {
-  const opencodeDir = join(input.workDir, ".opencode");
-  const skillsDir = join(opencodeDir, "skills");
+  const useLegacy = !!input.workDir;
+  const skillsDir = useLegacy
+    ? join(input.workDir!, ".opencode", "skills")
+    : beatSkillsDir(input.beatId);
+  const manifestDir = useLegacy
+    ? join(input.workDir!, ".opencode")
+    : join(productWorkspace, ".opencode");
 
   // Clear and recreate the skills dir so stale entries don't leak in.
   await rm(skillsDir, { recursive: true, force: true });
@@ -133,11 +151,17 @@ export async function materializeBeatSkills(
     manifest[slug] = { skillId: artifact.id, version: artifact.version };
   }
 
+  await mkdir(manifestDir, { recursive: true });
   await writeFile(
-    join(opencodeDir, "arceus-skills.json"),
+    join(manifestDir, "arceus-skills.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
+
+  // Phase 6.5: swap the symlink so OpenCode reads from this beat's skills dir.
+  if (!useLegacy) {
+    await swapSkillsSymlink(skillsDir);
+  }
 
   return Object.entries(manifest).map(([slug, m]) => ({ slug, ...m }));
 }

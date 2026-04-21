@@ -7,18 +7,31 @@ const requireEnv = (key: string): string => {
   return value;
 };
 
+const optionalEnv = (key: string): string =>
+  process.env[key] ?? "";
+
 export interface McpContext {
+  /** Per-beat — set by env or resolved via session-context at runtime. */
   beatId: string;
   companyId: string;
   role: string;
+  /** Always required — set in opencode.json MCP env block. */
   arceusApiBase: string;
   arceusToken: string;
 }
 
+/**
+ * Load context from environment.
+ *
+ * ARCEUS_API and ARCEUS_TOKEN are always required (set at boot via
+ * writeSharedOpencodeConfig). BEAT_ID, COMPANY_ID, ROLE are optional —
+ * when absent the http-client resolves them per-request via the
+ * session-context API (Phase 6.5).
+ */
 export const loadMcpContext = (): McpContext => ({
-  beatId: requireEnv("BEAT_ID"),
-  companyId: requireEnv("COMPANY_ID"),
-  role: requireEnv("ROLE"),
+  beatId: optionalEnv("BEAT_ID"),
+  companyId: optionalEnv("COMPANY_ID"),
+  role: optionalEnv("ROLE"),
   arceusApiBase: requireEnv("ARCEUS_API"),
-  arceusToken: requireEnv("ARCEUS_TOKEN")
+  arceusToken: requireEnv("ARCEUS_TOKEN"),
 });

@@ -3,12 +3,10 @@ import { Box, useInput, useApp, useStdout } from "ink";
 import { Header } from "./components/header.js";
 import { StatusBar } from "./components/status-bar.js";
 import { useHeartbeat } from "./hooks/use-heartbeat.js";
-import { BeatsView } from "./views/beats.js";
-import { SessionsView } from "./views/sessions.js";
-import { AgentsView } from "./views/agents.js";
-import { SprintView } from "./views/sprint.js";
-import { MeetingsView } from "./views/meetings.js";
-import { TimelineView } from "./views/timeline.js";
+import { apiPost } from "./api/client.js";
+import { BuildView } from "./views/build.js";
+import { SprintView } from "./views/sprint-nav.js";
+import { WorkspaceView } from "./views/workspace.js";
 
 export function App() {
   const [activeTab, setActiveTab] = useState(0);
@@ -16,60 +14,64 @@ export function App() {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
-  // Available height for the content area (terminal height minus header/footer)
   const termHeight = stdout?.rows ?? 24;
   const contentHeight = Math.max(termHeight - 12, 5);
 
-  // Build tab (0) has a chat input — Escape yields focus to app-level keybinds
-  const [chatFocused, setChatFocused] = useState(true);
-  const onBuildTab = activeTab === 0;
+  // Build tab (0) has input — Escape yields focus to app-level keybinds
+  // Sprint tab (1) has cursor navigation — also captures input when focused
+  const [viewFocused, setViewFocused] = useState(true);
 
-  // When Build tab's chat input wants to yield control (Escape pressed)
-  const handleChatEscape = useCallback(() => {
-    setChatFocused(false);
+  const handleViewEscape = useCallback(() => {
+    setViewFocused(false);
+  }, []);
+
+  const quickExecute = useCallback(async (idea: string) => {
+    try {
+      await apiPost("/api/quick-execute", { idea });
+    } catch {
+      // non-critical
+    }
+  }, []);
+
+  const approve = useCallback(async () => {
+    try {
+      await apiPost("/api/sprint-proposal/approve");
+    } catch {
+      // non-critical
+    }
   }, []);
 
   useInput((input, key) => {
-    // When chat is focused on Build tab, swallow all input
-    if (onBuildTab && chatFocused) {
+    // When view is focused on Build/Sprint tab, swallow input
+    if ((activeTab === 0 || activeTab === 1) && viewFocused) {
       return;
     }
 
-    // On Build tab after Escape: any key re-focuses chat, but first handle shortcuts
-    if (onBuildTab && !chatFocused) {
-      // Re-focus chat on Enter or any printable character that isn't a shortcut
-      if (key.return || (input && !["s", "x", "t", "q"].includes(input) && !(input >= "1" && input <= "6"))) {
-        setChatFocused(true);
+    // After Escape on Build/Sprint: re-focus on Enter or non-shortcut key
+    if ((activeTab === 0 || activeTab === 1) && !viewFocused) {
+      if (key.return || (input && !["s", "x", "t", "a", "q"].includes(input) && !(input >= "1" && input <= "3"))) {
+        setViewFocused(true);
         return;
       }
     }
 
-    // Tab switching
-    if (input >= "1" && input <= "6") {
+    // Tab switching (1-3)
+    if (input >= "1" && input <= "3") {
       setActiveTab(Number(input) - 1);
-      if (Number(input) - 1 === 0) setChatFocused(true);
+      setViewFocused(true);
       return;
     }
 
     // Heartbeat controls
-    if (input === "s") {
-      start();
-      return;
-    }
-    if (input === "x") {
-      stop();
-      return;
-    }
-    if (input === "t") {
-      trigger();
-      return;
-    }
+    if (input === "s") { start(); return; }
+    if (input === "x") { stop(); return; }
+    if (input === "t") { trigger(); return; }
+
+    // Approve
+    if (input === "a") { approve(); return; }
 
     // Quit
-    if (input === "q") {
-      exit();
-      return;
-    }
+    if (input === "q") { exit(); return; }
   });
 
   const heartbeatRunning = status?.running ?? false;
@@ -84,14 +86,24 @@ export function App() {
         activeTab={activeTab}
       />
 
-      {/* Content area */}
       <Box flexDirection="column" flexGrow={1} height={contentHeight}>
-        {activeTab === 0 && <TimelineView height={contentHeight} active={chatFocused} onEscape={handleChatEscape} onQuickExecute={start} />}
-        {activeTab === 1 && <BeatsView height={contentHeight} />}
-        {activeTab === 2 && <SessionsView height={contentHeight} />}
-        {activeTab === 3 && <AgentsView />}
-        {activeTab === 4 && <SprintView />}
-        {activeTab === 5 && <MeetingsView />}
+        {activeTab === 0 && (
+          <BuildView
+            height={contentHeight}
+            active={viewFocused}
+            onEscape={handleViewEscape}
+            onQuickExecute={quickExecute}
+            onStop={stop}
+          />
+        )}
+        {activeTab === 1 && (
+          <SprintView
+            height={contentHeight}
+            active={viewFocused}
+            onEscape={handleViewEscape}
+          />
+        )}
+        {activeTab === 2 && <WorkspaceView height={contentHeight} />}
       </Box>
 
       <StatusBar status={status} />

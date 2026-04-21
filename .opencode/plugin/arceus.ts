@@ -2,6 +2,17 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+interface BeatContext {
+  beatId: string;
+  sessionId: string;
+  companyId: string;
+  role: string;
+  trustBand: string;
+  allowedTools: string[];
+  taskId?: string;
+  startedAt: string;
+}
+
 interface GovernanceConfig {
   allowedTools: Set<string>;
   denyReason?: string;
@@ -51,6 +62,28 @@ export const ArceusPlugin: Plugin = async () => {
   const circuitTally = new Map<string, number>();
   const pendingCalls = new Map<string, { tool: string; startedAt: number }>();
 
+  // ── Session-context cache (Phase 6.5 package F) ────────
+  const sessionCtxCache = new Map<string, BeatContext>();
+
+  const ensureCtx = async (sessionId: string): Promise<BeatContext | null> => {
+    if (sessionCtxCache.has(sessionId)) return sessionCtxCache.get(sessionId)!;
+    const api = process.env.ARCEUS_API;
+    const token = process.env.ARCEUS_TOKEN;
+    if (!api || !token) return null;
+    try {
+      const res = await fetch(
+        `${api}/api/internal/telemetry/session-context/${sessionId}`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) return null;
+      const ctx = await res.json() as BeatContext;
+      sessionCtxCache.set(sessionId, ctx);
+      return ctx;
+    } catch {
+      return null;
+    }
+  };
+
   const emitAudit = (payload: Record<string, unknown>): void => {
     process.stderr.write(`[arceus-audit] ${JSON.stringify(payload)}\n`);
   };
@@ -84,11 +117,10 @@ export const ArceusPlugin: Plugin = async () => {
     await refreshManifest();
   };
 
-  const postSkillUsage = (entry: SkillManifestEntry): void => {
+  const postSkillUsage = (entry: SkillManifestEntry, beatId: string): void => {
     const api = process.env.ARCEUS_API;
     const token = process.env.ARCEUS_TOKEN;
-    const beatId = process.env.BEAT_ID;
-    if (!api || !token || !beatId) return;
+    if (!api || !token) return;
 
     void fetch(`${api}/api/internal/telemetry/skills/${entry.skillId}/usage`, {
       method: "POST",
@@ -105,8 +137,12 @@ export const ArceusPlugin: Plugin = async () => {
 
   return {
     "tool.execute.before": async (input, output) => {
-      if (governance.allowedTools.size > 0 && !governance.allowedTools.has(input.tool)) {
-        throw new Error(`[arceus-governance] ${governance.denyReason} tool=${input.tool}`);
+      // Resolve beat context from session; fall back to env-based governance
+      const ctx = await ensureCtx(input.sessionID);
+      const allowed = ctx?.allowedTools
+        ?? (governance.allowedTools.size > 0 ? [...governance.allowedTools] : []);
+      if (allowed.length > 0 && !allowed.includes(input.tool)) {
+        throw new Error(`[arceus-governance] Tool '${input.tool}' not in this beat's allowlist.`);
       }
 
       const causes = Array.from(circuitTally.entries())
@@ -151,12 +187,13 @@ export const ArceusPlugin: Plugin = async () => {
 
       // Skill-usage back-channel: when the agent invokes OpenCode's built-in
       // `skill` tool, record the hit against the SkillArtifact registry via
-      // the internal HTTP route.
+      // the internal HTTP route. Uses ctx.beatId from session context.
       if (input.tool === "skill") {
         await ensureManifest();
         const slug = resolveSkillSlug((output as { args?: unknown }).args);
         const entry = slug ? manifest[slug] : undefined;
-        if (entry) postSkillUsage(entry);
+        const ctx = await ensureCtx(input.sessionID);
+        if (entry && ctx) postSkillUsage(entry, ctx.beatId);
       }
     },
   };
