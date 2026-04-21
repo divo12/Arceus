@@ -402,9 +402,13 @@ export function cpLoadAgentContext(
   if (!agent) return null;
 
   const currentSprint = snap.sprints.find((s) => s.id === snap.company.currentSprintId) ?? null;
-  // CEO/PM get all sprint tasks (for sprint completion detection); others get only their own
+  // CEO/PM get all sprint tasks (for sprint completion detection); others get only their own.
+  // CEO also sees unattached tasks (sprintId=null) like governance "Plan Sprint N" tasks.
   const agentTasks = (agent.role === "ceo" || agent.role === "pm")
-    ? snap.tasks.filter((t) => t.sprintId === currentSprint?.id)
+    ? snap.tasks.filter((t) =>
+        t.sprintId === currentSprint?.id ||
+        (t.assignedRole === agent.role && !t.sprintId)
+      )
     : snap.tasks.filter(
         (t) =>
           t.assignedAgentId === agentId ||

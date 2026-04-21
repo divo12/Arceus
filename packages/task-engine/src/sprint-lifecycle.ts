@@ -55,7 +55,6 @@ export interface FinalizeSprintCallbacks {
     cardData: null;
     createdAt: string;
   }) => void;
-  triggerCeoSprintProposal: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,11 +260,9 @@ export async function finalizeSprintCompletion(
     sprintId,
     agentId: ceoAgent?.id ?? null,
     role: "ceo",
-    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. Preparing next sprint proposal now.`,
+    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. CEO will plan the next sprint.`,
     cardType: "status_update",
     cardData: null,
     createdAt: nowIso(),
   });
-
-  await cb.triggerCeoSprintProposal();
 }

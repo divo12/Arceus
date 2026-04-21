@@ -33,5 +33,5 @@ export const loadMcpContext = (): McpContext => ({
   companyId: optionalEnv("COMPANY_ID"),
   role: optionalEnv("ROLE"),
   arceusApiBase: requireEnv("ARCEUS_API"),
-  arceusToken: requireEnv("ARCEUS_TOKEN"),
+  arceusToken: optionalEnv("ARCEUS_TOKEN") || "arceus-dev-token",
 });

@@ -1,23 +1,23 @@
 // heartbeats/beat-executor.ts — Execute a task within beat context (Spec 12 Phase 3)
-import type { AgentBeatContext, AgentIdentity, PolicyEvalContext } from "@arceus/contracts";
+import type { AgentBeatContext } from "@arceus/contracts";
 import {
-  getRoleSoul, filterToolsForAgent, toOpenCodeToolsParam, summarizeFilterResult,
-  BASE_POLICY_RULES, buildTrustEvent, getTrustTier, TRUST_CONFIG, getAgentSkills,
+  getRoleSoul, buildTrustEvent, TRUST_CONFIG, getAgentSkills,
 } from "@arceus/company-runtime";
 import { getAgentByRole } from "@arceus/task-engine";
+import { ROLE_CONFIGS, ALL_ARCEUS_TOOLS } from "../../../../.opencode/agent/config.js";
+import { buildBeatContext } from "../orchestration/beat-context-builder.js";
+import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
 import { ensureDeployment } from "../config/index.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
-import { auditAgent } from "../observability/audit-ledger.js";
 import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
 } from "../observability/graph-emitter.js";
 import { structuredCompletion, startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
-import { getSnapshot, upsertApproval } from "../persistence/store.js";
-import { cpCommitTaskResult, cpLoadTrustScore, cpUpdateTrustScore } from "../persistence/control-plane.js";
+import { getSnapshot } from "../persistence/store.js";
+import { cpCommitTaskResult, cpUpdateTrustScore } from "../persistence/control-plane.js";
 import { buildSpecialistTaskPrompt } from "../prompts/specialist.js";
 import { buildDeveloperBeatPrompt } from "../prompts/developer.js";
-import { getToolsForPrompt } from "../prompts/tools.js";
 import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
 import { isCeoStreaming } from "../agents/chat.js";
@@ -35,7 +35,7 @@ import {
   setEventBridgeStarted, productDir,
   type Artifact,
 } from "../orchestration/state.js";
-import { triggerCeoSprintProposal } from "../sprints/proposals.js";
+import { buildCeoSprintPlanningPrompt } from "../prompts/ceo-sprint.js";
 import { startEventBridge } from "./event-bridge.js";
 
 /**
@@ -89,55 +89,11 @@ export async function executeBeatTask(
     beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, availableSkillCount, appliedSkillIds: matchedSkillIds },
   });
 
-  // ── CEO beat: sprint lifecycle detection ──────────────────
-  if (role === "ceo") {
-    if (isCeoStreaming()) {
-      return {
-        summary: "CEO beat skipped — live chat streaming in progress",
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
-      };
-    }
-    const sprintId = snapshot.company.currentSprintId;
-    if (sprintId) {
-      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
-      const allTerminal = sprintTasks.length > 0 && sprintTasks.every((t) =>
-        ["completed", "failed", "cancelled", "blocked"].includes(t.status)
-      );
-      if (allTerminal) {
-        try {
-          await triggerCeoSprintProposal();
-          return {
-            summary: `CEO detected all tasks terminal in sprint ${sprintId} — triggered next sprint proposal`,
-            tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1, completed: true,
-          };
-        } catch (err) {
-          return {
-            summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
-            tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
-          };
-        }
-      }
-    }
-
-    // CEO proactive governance
-    const budgetPct = snapshot.company.budgetCents > 0
-      ? (snapshot.company.spentCents / snapshot.company.budgetCents) * 100
-      : 0;
-    if (budgetPct >= 90) {
-      emitEmployeeActivity("ceo", "info", `Budget alert: ${budgetPct.toFixed(0)}% spent (${snapshot.company.spentCents}¢ / ${snapshot.company.budgetCents}¢)`, { beatId });
-    }
-
-    const staleThreshold = Date.now() - 10 * 60 * 1000;
-    const staleTasks = snapshot.tasks.filter((t) =>
-      t.status === "in_progress" && new Date(t.startedAt ?? t.createdAt ?? new Date().toISOString()).getTime() < staleThreshold
-    );
-    if (staleTasks.length > 0) {
-      emitEmployeeActivity("ceo", "info", `Stale task detection: ${staleTasks.length} task(s) in_progress for >10min`, { beatId });
-    }
-
+  // Skip if CEO is actively chatting with the board (thin guard, not reasoning)
+  if (role === "ceo" && isCeoStreaming()) {
     return {
-      summary: `CEO governance beat: budget=${budgetPct.toFixed(0)}%, stale=${staleTasks.length}`,
-      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0, completed: true,
+      summary: "CEO beat skipped — live chat streaming in progress",
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
     };
   }
 
@@ -176,56 +132,23 @@ export async function executeBeatTask(
     preSnapshot = await collectWorkspaceSnapshot();
   }
   const existingFileList = preSnapshot ? Array.from(preSnapshot.keys()).sort() : undefined;
-  const taskPrompt = role === "developer" ? buildDeveloperBeatPrompt(task, existingFileList) : buildSpecialistTaskPrompt(task);
-  const roleTools = getToolsForPrompt(role);
-
-  // ── Governance pre-filter (Spec 13 Step 7) ──────────────────
-  const trustScore = await cpLoadTrustScore(ctx.agentId);
-  const roleToolNames = roleTools ? Object.keys(roleTools).filter(k => (roleTools as any)[k]) : [];
-  const filterResult = filterToolsForAgent(
-    role, trustScore.score, roleToolNames, BASE_POLICY_RULES,
-    snapshot.company.id, ctx.agentId, beatId,
-  );
-  const governedToolsParam = toOpenCodeToolsParam(filterResult);
-  const GOVERNANCE_ENABLED = false;
-  const tools = GOVERNANCE_ENABLED ? governedToolsParam : roleTools;
-  const filterSummary = summarizeFilterResult(filterResult, role);
-  emitEmployeeActivity(role, "decision", `Beat ${beatId}: governance pre-filter — ${filterSummary}`, {
-    beatId, taskId, detail: {
-      trustScore: trustScore.score,
-      trustTier: getTrustTier(trustScore.score),
-      roleToolNames,
-      allowed: filterResult.allowed,
-      denied: filterResult.denied.map((d: any) => d.tool),
-      escalated: filterResult.escalated.map((e: any) => e.tool),
-      governanceBypassed: !GOVERNANCE_ENABLED,
-    },
-  });
-
-  // ── Governance escalation (Spec 13 Step 9) ──────────────
-  if (GOVERNANCE_ENABLED && filterResult.escalated.length > 0) {
-    const escalatedTools = filterResult.escalated.map((e: any) => e.tool);
-    const escalationReasons = filterResult.escalated.map((e: any) => `${e.tool}: ${e.decision.reason}`).join("; ");
-    emitEmployeeActivity(role, "decision", `Beat ${beatId}: escalation required for tools [${escalatedTools.join(", ")}]`, {
-      beatId, taskId, detail: { escalatedTools, reasons: escalationReasons },
-    });
-    upsertApproval({
-      id: `gov-esc-${beatId}-${Date.now()}`,
-      companyId: snapshot.company.id,
-      type: "tool_governance",
-      requestedByAgentId: ctx.agentId,
-      status: "pending",
-      title: `Tool escalation: ${escalatedTools.join(", ")}`,
-      description: `Agent ${role} (trust=${trustScore.score.toFixed(2)}, tier=${filterResult.tier}) requests access to tools: ${escalationReasons}`,
-      meetingId: null,
-      agendaItemId: null,
-      resolutionSummary: null,
-    });
-    auditAgent(snapshot.company.id, role, "tool_escalation", `Governance escalation: ${escalatedTools.join(", ")} (trust=${trustScore.score.toFixed(2)})`, {
-      detail: { escalatedTools, trustScore: trustScore.score, tier: filterResult.tier, beatId },
-      correlationId: taskId,
-      severity: "warn",
-    });
+  const taskPrompt = role === "ceo"
+    ? buildCeoSprintPlanningPrompt(task, snapshot)
+    : role === "developer"
+      ? buildDeveloperBeatPrompt(task, existingFileList)
+      : buildSpecialistTaskPrompt(task);
+  // ── Tools from ROLE_CONFIGS — includes built-ins + Arceus MCP tools ──
+  // ROLE_CONFIGS uses unprefixed Arceus tool names (e.g. "sprint_create"),
+  // but OpenCode names MCP tools as "<server>_<tool>" (e.g. "arceus_sprint_create").
+  // Add the prefixed variants so OpenCode's tool whitelist includes MCP tools.
+  const rawTools = ROLE_CONFIGS[role].tools;
+  const tools: Record<string, boolean> = {};
+  for (const [name, enabled] of Object.entries(rawTools)) {
+    tools[name] = enabled;
+    // Mirror Arceus tool entries with the "arceus_" prefix OpenCode uses
+    if ((ALL_ARCEUS_TOOLS as readonly string[]).includes(name)) {
+      tools[`arceus_${name}`] = enabled;
+    }
   }
 
   let beatViolationCount = 0;
@@ -241,7 +164,10 @@ export async function executeBeatTask(
 
   try {
     beatSession = await createBeatSession(role, beatId);
-    emitEmployeeActivity(role, "context", `Beat ${beatId}: session created ${beatSession.id}`, { beatId, detail: { sessionId: beatSession.id } });
+    // Register session context so the plugin can enforce tool governance
+    const beatCtx = await buildBeatContext(role, snapshot.company.id, beatId, beatSession.id);
+    registerSessionContext(beatCtx);
+    emitEmployeeActivity(role, "context", `Beat ${beatId}: session created ${beatSession.id}, allowedTools=[${beatCtx.allowedTools.join(",")}]`, { beatId, detail: { sessionId: beatSession.id, allowedTools: beatCtx.allowedTools } });
     previousSessionId = beatAgentState?.sessionId;
     if (beatAgentState) beatAgentState.sessionId = beatSession.id;
     touchAgentSession(role, "working");
@@ -388,10 +314,10 @@ export async function executeBeatTask(
       beatAgentState.sessionId = previousSessionId;
     }
     if (beatSession) {
+      unregisterSessionContext(beatSession.id);
       destroyBeatSession(beatSession.id).catch(() => {});
     }
   }
 }
 
-/** Trigger the CEO to propose the next sprint (exposed for beat context). */
-export const triggerCeoSprintProposalFromBeat = () => triggerCeoSprintProposal();
+

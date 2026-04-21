@@ -53,7 +53,7 @@ const TIER_B_COMMON_EXECUTOR = {
   artifact_create: true,
 } as const;
 
-const ALL_ARCEUS_TOOLS = [
+export const ALL_ARCEUS_TOOLS = [
   "task_update_progress",
   "task_append_command",
   "task_append_plan_step",
@@ -73,7 +73,7 @@ const ALL_ARCEUS_TOOLS = [
   "artifact_persist",
   "meeting_record",
   "approval_request",
-  "sprint_propose",
+  "sprint_create",
   "tool_help",
   "arceus_tool_search",
 ] as const;
@@ -99,7 +99,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       task_hydrate_from_spec: true,
       task_attach_artifact: true,
       meeting_record: true,
-      sprint_propose: true,
+      sprint_create: true,
     }),
   },
   cto: {

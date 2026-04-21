@@ -27,7 +27,7 @@ const TOOL_CATALOG: CatalogEntry[] = [
   { id: "workspace_probe_preview", description: "Probe the preview server.", tags: ["workspace", "preview", "probe"] },
   { id: "meeting_record", description: "Record a meeting with agenda, decisions, and learnings.", tags: ["meeting", "record"] },
   { id: "approval_request", description: "Request an external approval.", tags: ["approval", "governance"] },
-  { id: "sprint_propose", description: "Trigger a CEO sprint proposal.", tags: ["sprint", "ceo", "proposal"] },
+  { id: "sprint_create", description: "Create a sprint with goal and tasks.", tags: ["sprint", "ceo", "create"] },
   { id: "task_claim", description: "Claim a planned task for this beat.", tags: ["task", "claim", "lifecycle"] },
   { id: "task_update_progress", description: "Report progress on the current task.", tags: ["task", "progress", "status"] },
   { id: "task_append_plan_step", description: "Log a plan step for the current task.", tags: ["task", "plan", "step"] },

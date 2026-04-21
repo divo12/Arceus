@@ -39,8 +39,14 @@ function formatTime(iso: string): string {
   }
 }
 
-// Which activity events are milestones
-const MILESTONE_ACTIVITY = new Set(["beat_completed", "beat_failed", "error"]);
+// Which activity events are milestones — important events only, no spam
+const MILESTONE_ACTIVITY = new Set([
+  "beat_completed", "beat_failed", "error",
+  "transition",   // sprint/task lifecycle changes
+  "tool_call",    // MCP tool invocations (sprint_create, task_claim, etc.)
+  "shell",        // shell commands executed by agents
+  "file_edit",    // files written/modified by agents
+]);
 
 // Which audit events are milestones
 const MILESTONE_AUDIT = new Set([
@@ -49,10 +55,41 @@ const MILESTONE_AUDIT = new Set([
   "approval_requested", "approval_resolved",
 ]);
 
+function activityGlyph(type: string): string {
+  switch (type) {
+    case "beat_completed": return "✓";
+    case "beat_failed":    return "✗";
+    case "error":          return "!";
+    case "transition":     return "→";
+    case "tool_call":      return "⚙";
+    case "shell":          return "$";
+    case "file_edit":      return "✎";
+    default:               return "·";
+  }
+}
+
+function activityColor(type: string): string {
+  switch (type) {
+    case "beat_completed": return "green";
+    case "beat_failed":
+    case "error":          return "red";
+    case "transition":     return "cyan";
+    case "tool_call":      return "magenta";
+    case "shell":          return "yellow";
+    case "file_edit":      return "blue";
+    default:               return "white";
+  }
+}
+
 function mapActivityMilestone(e: ActivityEvent): MilestoneEntry {
-  const glyph = e.type === "beat_completed" ? "✓" : e.type === "beat_failed" ? "✗" : "!";
-  const color = e.type === "beat_completed" ? "green" : "red";
-  return { id: e.id, time: e.timestamp, glyph, color, role: e.employee, text: e.content };
+  return {
+    id: e.id,
+    time: e.timestamp,
+    glyph: activityGlyph(e.type),
+    color: activityColor(e.type),
+    role: e.employee,
+    text: e.content,
+  };
 }
 
 function auditGlyph(t: string): string {
@@ -86,6 +123,11 @@ function mapAuditMilestone(e: AuditEvent): MilestoneEntry {
     entry.approvalData = { eventId: e.id };
   }
   return entry;
+}
+
+// Strip verbose "Beat cl_XXX: " prefixes from content to save horizontal space
+function trimBeatPrefix(text: string): string {
+  return text.replace(/^Beat (?:cl_)?[a-z0-9_-]+:\s*/i, "");
 }
 
 // Derive "currently working" from most recent activity
@@ -200,7 +242,7 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
           <Text color={roleColor(activeWork.role)} bold>{roleShort(activeWork.role)}</Text>
           <Text dimColor> working on: </Text>
           <Text wrap="truncate-end">
-            {activeWork.text.length > 60 ? activeWork.text.slice(0, 57) + "..." : activeWork.text}
+            {(() => { const t = trimBeatPrefix(activeWork.text); return t.length > 60 ? t.slice(0, 57) + "..." : t; })()}
           </Text>
         </Box>
       )}
@@ -217,20 +259,23 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
           </Box>
         )}
 
-        {visible.map((entry) => (
+        {visible.map((entry) => {
+          const display = trimBeatPrefix(entry.text);
+          return (
           <Box key={entry.id}>
             <Text dimColor>[{formatTime(entry.time)}] </Text>
             <Text color={entry.color}>{entry.glyph} </Text>
             <Text color={roleColor(entry.role)} bold>{roleShort(entry.role)}</Text>
             <Text> </Text>
             <Text color={entry.color} wrap="truncate-end">
-              {entry.text.length > 65 ? entry.text.slice(0, 62) + "..." : entry.text}
+              {display.length > 80 ? display.slice(0, 77) + "..." : display}
             </Text>
             {entry.isApproval && (
               <Text color="yellow" bold> [a:approve]</Text>
             )}
           </Box>
-        ))}
+          );
+        })}
       </Box>
 
       {/* Input prompt */}

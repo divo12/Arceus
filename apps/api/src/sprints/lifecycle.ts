@@ -16,6 +16,7 @@ import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import {
   sprintCompletionTriggered,
   setSprintCompletionTriggered,
+  setExecutionStatus,
   activeExecution,
 } from "../orchestration/state.js";
 
@@ -120,14 +121,11 @@ export async function checkSprintCompletion(): Promise<boolean> {
 /**
  * Complete the sprint after the reviewing phase is done (Spec 21).
  * Called when the final gate passes or CTO decides to skip.
- *
- * Accepts an optional `onSprintCompleted` callback to trigger the CEO sprint
- * proposal. This breaks the circular dependency between lifecycle and proposals:
- * the orchestrator wires the callback at the call-site.
+ * Sets execution status to "done" so the heartbeat checklist picks up
+ * the "no active sprint" condition and creates a governance task for the CEO.
  */
 export async function finalizeSprintCompletion(
   sprintId: string,
-  onSprintCompleted?: () => Promise<void>,
 ): Promise<void> {
   const snapshot = getSnapshot();
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
@@ -174,15 +172,13 @@ export async function finalizeSprintCompletion(
     sprintId,
     agentId: ceoAgent?.id ?? null,
     role: "ceo",
-    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. Preparing next sprint proposal now.`,
+    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. CEO will plan the next sprint.`,
     cardType: "status_update",
     cardData: null,
     createdAt: nowIso(),
   });
 
-  if (onSprintCompleted) {
-    await onSprintCompleted();
-  }
+  setExecutionStatus("done");
 }
 
 async function tagCurrentSprintSnapshot() {

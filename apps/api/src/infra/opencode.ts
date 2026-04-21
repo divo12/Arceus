@@ -7,7 +7,7 @@ import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
 import { ensureDeployment, runtimeConfig } from "../config/index.js";
 import { serverConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
-import { ROLES, type Role } from "../../../../.opencode/agent/config.js";
+import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../../.opencode/agent/config.js";
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
 
 type OpencodeInstance = {
@@ -17,14 +17,12 @@ type OpencodeInstance = {
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
-// Project root — where opencode.json lives (used to load agent definitions)
+// Project / repo root — process.cwd() is always the monorepo root
+// (Q:\projects\arc2.0 locally, /app in Docker).
 const projectRoot = process.cwd();
 // Product workspace — where agents write code. OpenCode spawns with this as cwd
 // so that all file tools (write, edit, bash) resolve relative to it.
-const repoRoot = resolve(projectRoot, "..", "..");
-export const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !projectRoot.startsWith("/app")
-  ? resolve(repoRoot, "workspace")
-  : resolve(projectRoot, "workspace");
+export const productWorkspace = resolve(projectRoot, "workspace");
 
 /**
  * Load the opencode.json agent definitions from project root and merge
@@ -32,7 +30,7 @@ export const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !p
  * OpenCode can run with cwd = productWorkspace while keeping agent defs.
  */
 function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, unknown> {
-  const configPath = resolve(repoRoot, "opencode.json");
+  const configPath = resolve(projectRoot, "opencode.json");
   try {
     const raw = readFileSync(configPath, "utf8");
     const base = JSON.parse(raw);
@@ -55,14 +53,37 @@ function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, 
 function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   // Ensure MCP wiring is always present
   const arceusApi = `http://127.0.0.1:${serverConfig.port}`;
-  const arceusToken = process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "";
+  const arceusToken = process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "arceus-dev-token";
+  // Use absolute path because OpenCode runs with cwd=productWorkspace which
+  // differs from the repo root where node_modules lives.
+  const mcpTransport = resolve(projectRoot, "node_modules", "@arceus", "mcp", "src", "transport-stdio.ts");
   mergedConfig.mcp = {
     arceus: {
-      command: ["npx", "tsx", "./node_modules/@arceus/mcp/src/transport-stdio.ts"],
-      env: { ARCEUS_API: arceusApi, ARCEUS_TOKEN: arceusToken },
+      type: "local",
+      command: ["npx", "tsx", mcpTransport],
+      environment: { ARCEUS_API: arceusApi, ARCEUS_TOKEN: arceusToken },
+      enabled: true,
     },
   };
   mergedConfig.plugin = ["./.opencode/plugin/arceus.ts"];
+
+  // Per-agent MCP tool scoping (OpenCode docs pattern):
+  // Globally deny arceus MCP tools, then re-enable per agent based on ROLE_CONFIGS.
+  // OpenCode names MCP tools as "<server>_<toolname>", so arceus tools become "arceus_*".
+  mergedConfig.tools = { "arceus_*": false };
+
+  // Inject per-agent tools scoping into agent definitions
+  const agentConfig = (mergedConfig.agent ?? {}) as Record<string, Record<string, unknown>>;
+  for (const role of ROLES) {
+    if (agentConfig[role]) {
+      const allowedMcp = getAllowedArceusTools(role);
+      if (allowedMcp.length > 0) {
+        // Enable all arceus MCP tools for this role (plugin governs per-tool)
+        agentConfig[role].tools = { "arceus_*": true };
+      }
+    }
+  }
+  mergedConfig.agent = agentConfig;
 
   // Write resolved config
   writeFileSync(
@@ -72,7 +93,7 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   );
 
   // Copy .opencode/prompts/ so {file:...} references resolve
-  const srcPrompts = resolve(projectRoot, "..", "..", ".opencode", "prompts");
+  const srcPrompts = resolve(projectRoot, ".opencode", "prompts");
   const dstPrompts = resolve(productWorkspace, ".opencode", "prompts");
   if (existsSync(srcPrompts)) {
     mkdirSync(dstPrompts, { recursive: true });
@@ -323,7 +344,7 @@ export function resetOpencodeConnection() {
  */
 export async function writeSharedOpencodeConfig(): Promise<void> {
   // 1. Copy plugin into productWorkspace
-  const pluginSrc = resolve(repoRoot, ".opencode", "plugin", "arceus.ts");
+  const pluginSrc = resolve(projectRoot, ".opencode", "plugin", "arceus.ts");
   const pluginDst = resolve(productWorkspace, ".opencode", "plugin", "arceus.ts");
   await fsPromises.mkdir(dirname(pluginDst), { recursive: true });
   if (existsSync(pluginSrc)) {

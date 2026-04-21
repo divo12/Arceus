@@ -242,10 +242,19 @@ export async function runPromptText(
 
       const completionPromise = registerPromptCompletion(currentSessionId);
 
-      const promptResult = await opencode.client.session.prompt({
+      // Fire-and-forget: session.prompt() may block until LLM completes inside
+      // OpenCode.  We detect completion via SSE session.idle (primary) or the
+      // polling fallback — both feed into completionPromise.
+      opencode.client.session.prompt({
         path: { id: currentSessionId },
         body: promptBody as any,
+      }).catch((err: unknown) => {
+        rejectPromptCompletion(
+          currentSessionId,
+          err instanceof Error ? err : new Error(String(err)),
+        );
       });
+
       await completionPromise;
 
       const messagesResult = await opencode.client.session.messages({

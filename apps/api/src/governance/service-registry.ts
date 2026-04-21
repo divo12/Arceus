@@ -221,6 +221,18 @@ const ARCEUS_TOOLS: ToolSeed[] = [
     ],
     allowedRoles: ["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"],
   },
+  {
+    toolName: "sprint_create",
+    description: "Create a new sprint with goal and tasks — CEO-only",
+    blastRadius: "yellow",
+    requiresApproval: false,
+    source: "arceus",
+    parameters: [
+      { name: "goal", type: "string", required: true, description: "Sprint goal statement" },
+      { name: "tasks", type: "object", required: true, description: "Array of task definitions" },
+    ],
+    allowedRoles: ["ceo"],
+  },
 ];
 
 // ── Seed logic ─────────────────────────────────────────────

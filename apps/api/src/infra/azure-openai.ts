@@ -209,7 +209,7 @@ export async function structuredCompletion<T>(
         body: JSON.stringify({
           messages,
           temperature: options?.temperature ?? 0.7,
-          max_tokens: maxTokens,
+          max_completion_tokens: maxTokens,
           response_format: {
             type: "json_schema",
             json_schema: {

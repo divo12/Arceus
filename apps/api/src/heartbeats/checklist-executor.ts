@@ -23,7 +23,9 @@ import { applyGovernanceToMutation } from "../skills/governance.js";
 import {
   eventBridgeStarted, setEventBridgeStarted,
 } from "../orchestration/state.js";
-import { triggerCeoSprintProposal } from "../sprints/proposals.js";
+import { createWorkflowTask } from "@arceus/task-engine";
+import { upsertTask } from "../persistence/store.js";
+import { checkSprintCompletion } from "../sprints/lifecycle.js";
 import { finalizeSprintCompletion } from "../sprints/lifecycle.js";
 import {
   executeSprintReviewVerification, executeSprintFinalGate,
@@ -64,30 +66,49 @@ export async function executeChecklistAction(
     beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
   });
 
-  // ── CEO: propose sprint when none exists ──
+  // ── CEO: create a governance task so the CEO agent plans the next sprint ──
   if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
     if (isCeoStreaming()) {
       emitEmployeeActivity("ceo", "info", `Beat ${beatId}: CEO skipped — live chat streaming`, { beatId });
       finishClBeat("completed", "CEO skipped — streaming", 0);
       return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
-    try {
-      emitEmployeeActivity("ceo", "working", `Beat ${beatId}: CEO proposing sprint — ${action.suggestedAction}`, { beatId });
-      await triggerCeoSprintProposal();
-      emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: CEO sprint proposal completed`, { beatId });
-      finishClBeat("completed", "CEO sprint proposal completed", 1);
-      return {
-        summary: `CEO triggered sprint proposal: ${action.suggestedAction}`,
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
-      };
-    } catch (err) {
-      emitEmployeeActivity("ceo", "error", `Beat ${beatId}: CEO sprint proposal failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
-      finishClBeat("failed", "CEO sprint proposal failed", 0);
-      return {
-        summary: `CEO sprint proposal failed: ${err instanceof Error ? err.message : String(err)}`,
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
-      };
+
+    // Ensure any finished sprint is properly marked complete first
+    await checkSprintCompletion();
+
+    const snapshot = getSnapshot();
+    const nextNum = (snapshot.company.currentSprintNumber ?? 0) + 1;
+
+    // Guard: don't create duplicate planning tasks
+    const alreadyExists = snapshot.tasks.some(
+      (t) => t.assignedRole === "ceo" && t.title.startsWith("Plan Sprint") &&
+        ["created", "planned", "in_progress"].includes(t.status),
+    );
+    if (alreadyExists) {
+      finishClBeat("completed", "Sprint planning task already exists", 0);
+      return { summary: "Sprint planning task already exists — CEO will pick it up", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
+
+    const task = createWorkflowTask(
+      snapshot, "implementation", "ceo",
+      `Plan Sprint ${nextNum}`,
+      `Analyze company state, previous sprint results, and team capacity. Use the sprint_create tool to create Sprint ${nextNum} with a clear goal and actionable tasks assigned to the right roles.`,
+      "The company needs a new sprint plan.",
+      "A new sprint created via sprint_create with goal, tasks, dependencies, and role assignments.",
+      [`Sprint ${nextNum} created with sprint_create tool`, "All tasks have assigned roles", "Dependencies are specified"],
+      "critical",
+      "planned",
+      null, // no sprint yet
+    );
+    upsertTask(task);
+
+    emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: created governance task "${task.title}" — CEO will plan the sprint on next beat`, { beatId, taskId: task.id });
+    finishClBeat("completed", `Created sprint planning task: ${task.title}`, 0);
+    return {
+      summary: `Created governance task "${task.title}" for CEO — agent will reason and call sprint_create`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+    };
   }
 
   // ── CTO: sprint escalation review (Spec 21) ──

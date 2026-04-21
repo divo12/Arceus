@@ -31,3 +31,25 @@ export function unregisterSessionContext(sessionId: string): void {
 export function sessionContextSize(): number {
   return sessionContextMap.size;
 }
+
+/**
+ * Find the most recently registered session context for a given role.
+ * Used as a fallback when MCP requests arrive without X-Beat-Id / X-Company-Id headers
+ * (the MCP server is a shared long-running process that can't set per-beat headers).
+ */
+export function findActiveSessionContextByRole(role: string): BeatContext | undefined {
+  for (const ctx of sessionContextMap.values()) {
+    if (ctx.role === role) return ctx;
+  }
+  return undefined;
+}
+
+/**
+ * Find any active session context. In v1 beats serialize, so at most one is
+ * in-flight when an MCP tool call arrives. Returns undefined if the map is
+ * empty or has more than one entry (ambiguous — caller must supply headers).
+ */
+export function findSoleActiveSessionContext(): BeatContext | undefined {
+  if (sessionContextMap.size !== 1) return undefined;
+  return sessionContextMap.values().next().value;
+}

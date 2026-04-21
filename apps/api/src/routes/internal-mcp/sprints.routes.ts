@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
-import { triggerCeoSprintProposal } from "../../sprints/proposals.js";
+import { createSprintWithTasks } from "../../sprints/proposals.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -46,17 +46,30 @@ const cacheAndSend = (
 
 // ── Schemas ──────────────────────────────────────────────
 
-const proposalBody = z.object({}).passthrough().optional();
+const sprintTaskSchema = z.object({
+  title: z.string().min(1).max(500),
+  assigned_role: z.string().min(1),
+  priority: z.enum(["critical", "high", "medium", "low"]).default("medium"),
+  depends_on: z.array(z.string()).default([]),
+  description: z.string().max(2000).default(""),
+});
+
+const sprintCreateBody = z.object({
+  goal: z.string().min(3).max(1000),
+  tasks: z.array(sprintTaskSchema).min(1).max(30),
+});
+
+export type SprintCreateInput = z.infer<typeof sprintCreateBody>;
 
 // ── Routes ───────────────────────────────────────────────
 
 export default async function internalMcpSprintsRoutes(app: FastifyInstance): Promise<void> {
-  // POST /sprints/proposals — CEO-only async dispatch
-  app.post(`${SPRINTS_BASE}/proposals`, async (req, reply) => {
+  // POST /sprints/create — CEO creates a sprint with tasks (synchronous, agentic)
+  app.post(`${SPRINTS_BASE}/create`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
       reply.code(403).send(
         failure(
-          "Sprint proposals may only be dispatched by the CEO role.",
+          "Only the CEO role may create sprints.",
           "governance",
           "never",
           "role_is_ceo",
@@ -65,21 +78,15 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       return;
     }
 
-    const parsed = parseOrFail(proposalBody, req.body ?? {}, reply);
+    const parsed = parseOrFail(sprintCreateBody, req.body ?? {}, reply);
     if (parsed === null) return;
 
-    void triggerCeoSprintProposal().catch((err) => {
-      req.log.warn({ err }, "ceo sprint proposal dispatch failed");
-    });
-
-    cacheAndSend(
-      req,
-      reply,
-      202,
-      success("CEO sprint proposal dispatched asynchronously.", {
-        queued: true,
-        note: "Proposal runs async with in-flight and cooldown guards.",
-      }),
-    );
+    try {
+      const result = await createSprintWithTasks(parsed);
+      cacheAndSend(req, reply, 201, success("Sprint created.", result));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Sprint creation failed.";
+      reply.code(400).send(failure(msg, "validation", "never", "payload_fixed"));
+    }
   });
 }

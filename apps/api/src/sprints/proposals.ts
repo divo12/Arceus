@@ -1,9 +1,8 @@
 import type { AgentIdentity, Sprint, Task } from "@arceus/contracts";
-import { createWorkflowTask, getAgentByRole, nowIso } from "@arceus/task-engine";
+import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { createSprintRecord } from "@arceus/task-engine";
 import {
   getSnapshot,
-  appendChatMessage,
   upsertTask,
   updateTask,
   updateSprint,
@@ -13,216 +12,55 @@ import {
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
-import { classifyCeoResponse, type CeoCard } from "../agents/ceo.js";
-import { getRoleSoul } from "@arceus/company-runtime";
-import { orchestratorConfig } from "../config/index.js";
 import { workspaceManager } from "../workspace/manager.js";
-import { checkSprintCompletion } from "./lifecycle.js";
-import { ensureAgentSession, runPromptText } from "../prompts/llm.js";
-import { CEO_SPRINT_PROPOSAL_USER_PROMPT } from "../prompts/ceo-sprint.js";
 import {
-  executionStatus,
   setExecutionStatus,
-  ceoProposalInFlight,
-  setCeoProposalInFlight,
-  ceoProposalFailureCount,
-  setCeoProposalFailureCount,
-  ceoProposalCooldownUntilMs,
-  setCeoProposalCooldownUntilMs,
   eventBridgeStarted,
   setEventBridgeStarted,
-  activeExecution,
   setActiveExecution,
-  CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN,
-  CEO_PROPOSAL_COOLDOWN_MS,
 } from "../orchestration/state.js";
+import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js";
 
 /**
- * Trigger the CEO to generate a sprint proposal via LLM.
+ * Create a sprint with tasks — called by the sprint_create MCP tool.
  *
- * Guarded against concurrent calls, cooldown after repeated failures, and
- * duplicate proposals. Auto-approves unless board review is due.
+ * Pure mechanical work: create records, wire dependencies, activate sprint.
+ * All reasoning about WHAT to build comes from the CEO agent.
  */
-export async function triggerCeoSprintProposal(): Promise<void> {
-  if (ceoProposalInFlight) {
-    emitEmployeeActivity(
-      "ceo",
-      "info",
-      "CEO proposal already in flight — skipping duplicate trigger.",
-    );
-    return;
-  }
-  if (Date.now() < ceoProposalCooldownUntilMs) {
-    const remainingSec = Math.ceil((ceoProposalCooldownUntilMs - Date.now()) / 1000);
-    emitEmployeeActivity(
-      "ceo",
-      "info",
-      `CEO proposal in cooldown after ${ceoProposalFailureCount} failures — retrying in ${remainingSec}s. Board can send a message to request a proposal manually.`,
-    );
-    return;
-  }
-  setCeoProposalInFlight(true);
-  try {
-    // Ensure the current sprint is marked complete before proposing a new one
-    await checkSprintCompletion();
-
-    const snapshot = getSnapshot();
-
-    // Wait gate: don't propose a new sprint while the current one is still in-flight
-    const inFlightSprint = snapshot.company.currentSprintId
-      ? snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId)
-      : null;
-    if (inFlightSprint && inFlightSprint.status !== "completed") {
-      emitEmployeeActivity(
-        "ceo",
-        "info",
-        `CEO waiting — Sprint ${inFlightSprint.number} is "${inFlightSprint.status}". Next proposal will fire once it closes.`,
-      );
-      return;
-    }
-
-    // Duplicate guard: if a sprint_proposal card already exists for the current sprint,
-    // try to auto-approve it instead of generating a new one.
-    const existingProposal = snapshot.chatMessages.find(
-      (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
-    );
-    if (existingProposal) {
-      const card = existingProposal.cardData as CeoCard | null;
-      if (card?.sprint_proposal && orchestratorConfig.sprint.autoApproveProposals) {
-        const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
-        const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
-        const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
-        if (!needsBoardReview) {
-          setExecutionStatus("done");
-          emitEmployeeActivity("ceo", "info", `Re-approving existing Sprint ${nextSprintNumber} proposal.`);
-          await approveSprintProposal(card);
-        }
-      }
-      return;
-    }
-
-    // Set execution status so CEO stage infers as "between_sprints"
-    setExecutionStatus("done");
-
-    try {
-      // Route through the CEO's existing agent session — Spec 24
-      const ceoSession = await ensureAgentSession(snapshot, "ceo");
-      const ceoSoul = getRoleSoul("ceo");
-      const ceoText = await runPromptText(
-        "ceo",
-        ceoSession.sessionId,
-        ceoSoul.systemPrompt,
-        CEO_SPRINT_PROPOSAL_USER_PROMPT,
-      );
-
-      const card = await classifyCeoResponse(ceoText, snapshot, executionStatus);
-
-      appendChatMessage({
-        id: `chat_${crypto.randomUUID()}`,
-        companyId: snapshot.company.id,
-        sprintId: snapshot.company.currentSprintId,
-        agentId: getAgentByRole(snapshot, "ceo")?.id ?? null,
-        role: "ceo",
-        content: ceoText,
-        cardType: card.card_type,
-        cardData: card,
-        createdAt: nowIso(),
-      });
-
-      const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
-      const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
-      const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
-
-      if (orchestratorConfig.sprint.autoApproveProposals && !needsBoardReview && card.sprint_proposal) {
-        emitEmployeeActivity(
-          "ceo",
-          "info",
-          `CEO proposed Sprint ${nextSprintNumber}. Auto-approving (board review scheduled for Sprint ${Math.ceil(nextSprintNumber / cadence) * cadence}).`,
-        );
-        await approveSprintProposal(card);
-      } else {
-        const reason = needsBoardReview
-          ? `CEO proposed Sprint ${nextSprintNumber}. Board review required (every ${cadence} sprints). Awaiting board approval.`
-          : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
-        emitEmployeeActivity("ceo", "info", reason);
-      }
-      setCeoProposalFailureCount(0);
-      setCeoProposalCooldownUntilMs(0);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      console.error("[Sprint] CEO sprint proposal generation failed:", message);
-      const newCount = ceoProposalFailureCount + 1;
-      setCeoProposalFailureCount(newCount);
-      const hitCooldown = newCount >= CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN;
-      if (hitCooldown) {
-        setCeoProposalCooldownUntilMs(Date.now() + CEO_PROPOSAL_COOLDOWN_MS);
-      }
-      emitEmployeeActivity(
-        "system",
-        "error",
-        hitCooldown
-          ? `CEO sprint proposal failed ${newCount}x in a row (last: ${message}). Backing off for ${Math.round(CEO_PROPOSAL_COOLDOWN_MS / 60000)}m. Board can message the CEO directly to request a proposal.`
-          : `Failed to auto-generate sprint proposal (attempt ${newCount}/${CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN}): ${message}. Board can message the CEO directly to request a proposal.`,
-      );
-    }
-  } finally {
-    setCeoProposalInFlight(false);
-  }
-}
-
-/**
- * Approve a CEO sprint proposal: create the sprint record, build the task
- * graph (with dependency wiring and integration task), and kick off execution.
- */
-export async function approveSprintProposal(card: CeoCard) {
-  if (!card.sprint_proposal) {
-    throw new Error("No sprint_proposal data in the provided card.");
-  }
-
-  if (executionStatus !== "done") {
-    throw new Error(`Cannot approve sprint proposal while execution is "${executionStatus}". Must be "done".`);
-  }
-
-  const proposal = card.sprint_proposal;
-
-  if (!proposal.key_tasks || proposal.key_tasks.length === 0) {
-    throw new Error("Sprint proposal has no key_tasks. Ask CEO to repropose with tasks.");
-  }
-
+export async function createSprintWithTasks(input: SprintCreateInput) {
   const snapshot = getSnapshot();
+
+  // Guard: can't start a new sprint while one is active
   const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
-  if (currentSprint && currentSprint.status !== "completed") {
-    throw new Error(`Current sprint (${currentSprint.number}) is still "${currentSprint.status}". Cannot start a new sprint.`);
+  if (currentSprint && !["completed", "cancelled"].includes(currentSprint.status)) {
+    throw new Error(`Sprint ${currentSprint.number} is still "${currentSprint.status}". Complete it first.`);
   }
 
   // Create Sprint N+1
   const sprint = createSprintRecord(
     { upsertSprint, updateCompanySprint, emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void },
     snapshot,
-    `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${proposal.sprint_goal}`,
-    proposal.sprint_goal,
+    `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${input.goal}`,
+    input.goal,
   );
-  let freshSnapshot = getSnapshot();
+  const freshSnapshot = getSnapshot();
 
-  // Create tasks from key_tasks — trust the CEO's dependency graph as-is.
-  // The orchestrator does NOT inject synthetic tasks or override ordering.
-  // If integration wiring or test sequencing is needed, agents handle it
-  // during execution via task_create / task_claim (vision: Step 7-8).
+  // Create tasks from agent-provided list
   const taskTitleToId = new Map<string, string>();
   const createdTasks: Task[] = [];
 
-  for (const kt of proposal.key_tasks) {
+  for (const kt of input.tasks) {
     const role = kt.assigned_role as AgentIdentity["role"];
     const task = createWorkflowTask(
       freshSnapshot,
       "implementation",
       role,
       kt.title,
-      kt.rationale || kt.title,
-      kt.rationale || kt.title,
+      kt.description || kt.title,
+      kt.description || kt.title,
       kt.title,
       [`${kt.title} completed`],
-      kt.priority as Task["priority"] || "medium",
+      kt.priority as Task["priority"],
       "created",
       sprint.id,
     );
@@ -230,8 +68,8 @@ export async function approveSprintProposal(card: CeoCard) {
     createdTasks.push(task);
   }
 
-  // Resolve explicit dependencies by title (CEO already provides depends_on)
-  for (const kt of proposal.key_tasks) {
+  // Resolve dependencies by title
+  for (const kt of input.tasks) {
     const taskId = taskTitleToId.get(kt.title);
     if (!taskId) continue;
     const depIds = (kt.depends_on || [])
@@ -254,10 +92,10 @@ export async function approveSprintProposal(card: CeoCard) {
     upsertTask(task);
   }
 
-  // ── Graph instrumentation (Spec 22) — Sprint N+1 graph ──
+  // Graph instrumentation
   emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");
 
-  // Auto-promote tasks with no dependencies to "planned" so agents can claim them
+  // Auto-promote tasks with no dependencies to "planned"
   for (const task of createdTasks) {
     if (task.dependsOnTaskIds.length === 0 && task.status === "created") {
       updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
@@ -274,7 +112,7 @@ export async function approveSprintProposal(card: CeoCard) {
   emitEmployeeActivity(
     "system",
     "info",
-    `Sprint ${sprint.number} approved with ${createdTasks.length} tasks. Starting execution.`,
+    `Sprint ${sprint.number} created by CEO with ${createdTasks.length} tasks. Execution starting.`,
   );
 
   setActiveExecution({
@@ -290,22 +128,7 @@ export async function approveSprintProposal(card: CeoCard) {
 }
 
 /**
- * Rejects a sprint proposal — resets to "done" so the board can re-chat with CEO.
- */
-export function rejectSprintProposal() {
-  setExecutionStatus("done");
-  emitEmployeeActivity(
-    "system",
-    "info",
-    "Sprint proposal rejected by board. CEO awaits further direction via chat.",
-  );
-  return { executionStatus };
-}
-
-/**
- * Lighter execution entry for Sprint 2+ — uses tasks already created by approveSprintProposal.
- * Accepts an optional `onStartEventBridge` callback to start the event bridge without
- * creating a circular dependency with the heartbeat module.
+ * Sprint execution entry — ensures workspace is ready and sets status.
  */
 export async function beginSprintExecution(
   onStartEventBridge?: () => Promise<void>,
