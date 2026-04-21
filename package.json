@@ -19,7 +19,8 @@
     "docs:typedoc": "typedoc",
     "docs:dev": "vitepress dev docs",
     "docs:build": "typedoc && vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "dev:tui": "npm run dev --workspace @arceus/tui"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

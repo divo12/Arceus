@@ -335,7 +335,10 @@ setMeetingScheduler(meetingScheduler);
 }
 
 // Wire beat event bus → activity stream SSE
+const BEAT_LIFECYCLE_TYPES = new Set(["beat_started", "beat_completed", "beat_failed", "beat_idle"]);
 onBeatEvent((event) => {
+  // Skip non-lifecycle events (board_message, etc.) — they aren't real beats
+  if (!BEAT_LIFECYCLE_TYPES.has(event.type)) return;
   const type = event.type as "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
   emitEmployeeActivity(event.role, type, `${event.type}: ${event.data?.summary || event.beatId}`, {
     beatId: event.beatId,

@@ -16,3 +16,4 @@ export * from "./patterns";
 export * from "./state";
 export * from "./events";
 export * from "./tool-result";
+export * from "./beat-context";
