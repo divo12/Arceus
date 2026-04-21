@@ -17,16 +17,18 @@ Before calling `task_complete`, verify:
 
 ## Evidence shape
 
-```json
-{
-  "evidence": {
-    "artifactIds": ["art_123"],
-    "previewUrl": "https://...",
-    "testsPassed": true,
-    "commandsRun": ["npm test", "npm run build"]
-  }
-}
-```
+`task_complete` does not take a structured `evidence` object. Stage evidence
+in two places before calling it:
 
-See `resources/evidence-templates.md` for full templates per task kind.
+1. **Artifacts** — `artifact_create({ kind: "output", title, content })` with
+   the preview URL, test run summary, and anything the reviewer needs. The
+   artifact ID is how the next role finds your work.
+2. **Command log** — each non-trivial shell command goes through
+   `task_append_command` so the running task log shows what ran.
+
+Then call `task_complete({ taskId })`. The server looks up the task's
+artifacts and command log itself — you don't re-send them.
+
+See `resources/evidence-templates.md` for what to put inside the output
+artifact per task kind.
 See `resources/common-failures.md` for what blocks completion.

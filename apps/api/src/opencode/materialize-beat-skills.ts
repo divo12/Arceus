@@ -14,7 +14,7 @@
  */
 
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SkillArtifact, SkillResource } from "@arceus/contracts";
 import { getSkillsForRole } from "@arceus/company-runtime";
 
@@ -73,8 +73,26 @@ export function renderSkillMd(skill: SkillArtifact): string {
   return lines.join("\n");
 }
 
+/**
+ * Reject resource paths that are absolute or escape `skillDir` via `..`.
+ * Skill resources come from the registry, which ultimately accepts
+ * user-authored skill definitions — we cannot trust them to stay in-bounds.
+ */
+function resolveSafeResourcePath(skillDir: string, resourcePath: string): string {
+  if (isAbsolute(resourcePath)) {
+    throw new Error(`Skill resource path must be relative: ${resourcePath}`);
+  }
+  const skillDirResolved = resolve(skillDir);
+  const abs = resolve(skillDirResolved, resourcePath);
+  const rel = relative(skillDirResolved, abs);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`Skill resource path escapes skill dir: ${resourcePath}`);
+  }
+  return abs;
+}
+
 async function writeResource(skillDir: string, resource: SkillResource): Promise<void> {
-  const abs = join(skillDir, resource.path);
+  const abs = resolveSafeResourcePath(skillDir, resource.path);
   await mkdir(dirname(abs), { recursive: true });
   const data = resource.encoding === "base64"
     ? Buffer.from(resource.content, "base64")

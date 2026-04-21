@@ -1,6 +1,18 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 type Retry = "safe" | "unsafe" | "never";
+
+/**
+ * Derive a stable idempotency key from the logical operation. Same inputs
+ * produce the same key, so retries within a beat deduplicate server-side.
+ */
+export const deriveIdempotencyKey = (beatId: string, op: string, body: unknown): string => {
+  const bodyHash = createHash("sha256")
+    .update(JSON.stringify(body ?? null))
+    .digest("hex")
+    .slice(0, 16);
+  return `${beatId}:${op}:${bodyHash}`;
+};
 
 interface ToolError {
   cause: string;
@@ -69,7 +81,14 @@ export interface ArceusRequestInit {
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   path: string;
   body?: unknown;
-  idempotent?: boolean;
+  /**
+   * Stable key identifying the logical operation. When present, the server
+   * uses it for idempotent replay — same key + same body returns the cached
+   * response. Callers MUST derive it deterministically from the operation
+   * (e.g. `${beatId}:task_claim:${taskId}`); never use a fresh UUID per
+   * request or retries will not deduplicate.
+   */
+  idempotencyKey?: string;
 }
 
 export const arceusRequest = async <T>(
@@ -83,8 +102,8 @@ export const arceusRequest = async <T>(
     "x-company-id": ctx.companyId,
     "x-role": ctx.role,
   };
-  if (init.idempotent) {
-    headers["idempotency-key"] = randomUUID();
+  if (init.idempotencyKey && init.idempotencyKey.length > 0) {
+    headers["idempotency-key"] = init.idempotencyKey;
   }
 
   const response = await fetch(`${ctx.arceusApiBase}${init.path}`, {

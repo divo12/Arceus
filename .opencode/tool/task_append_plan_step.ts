@@ -1,6 +1,14 @@
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
-import { arceusRequest, failure, loadContext, run, success, type ToolResult } from "./_lib/envelope.js";
+import {
+  arceusRequest,
+  deriveIdempotencyKey,
+  failure,
+  loadContext,
+  run,
+  success,
+  type ToolResult,
+} from "./_lib/envelope.js";
 
 export default tool({
   description: "Append a planning step to the current task's plan log. Use to narrate intent before executing commands.",
@@ -10,11 +18,12 @@ export default tool({
   execute: async ({ step }) =>
     run(async () => {
       const ctx = loadContext();
+      const body = { step };
       const res = await arceusRequest<ToolResult<unknown>>(ctx, {
         method: "POST",
         path: `/api/internal/v1/tasks/${ctx.taskId}/plan-steps`,
-        body: { step },
-        idempotent: true,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, `task_append_plan_step:${ctx.taskId}`, body),
       });
       if (res.status >= 400) {
         return failure(`Append plan step failed (HTTP ${res.status}).`, "upstream", "safe", "task_exists", res.data);

@@ -7,9 +7,9 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "allowImportingTsExtensions": false,
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["tool/**/*.ts", "plugin/**/*.ts", "agent/**/*.ts"]
+  "include": ["tool/**/*.ts", "plugin/**/*.ts", "agent/**/*.ts", "test/**/*.ts"]
 }

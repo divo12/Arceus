@@ -6,7 +6,7 @@
   "main": "./src/server.ts",
   "types": "./src/server.ts",
   "bin": {
-    "arceus-mcp": "./src/transport-stdio.ts"
+    "arceus-mcp": "./bin/arceus-mcp.mjs"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

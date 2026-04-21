@@ -93,7 +93,13 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     });
 
     if (!approval) {
-      reply.code(409).send(
+      // Cache the 409 so a retry with the same Idempotency-Key returns the
+      // same response instead of re-executing requestApproval (which would
+      // still fail but would advertise as a fresh call to the agent).
+      cacheAndSend(
+        req,
+        reply,
+        409,
         failure(
           `Agent with role ${body.requestedByRole} is not provisioned; cannot request approval.`,
           "conflict",

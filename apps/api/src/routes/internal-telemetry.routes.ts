@@ -28,24 +28,67 @@ const TELEMETRY_BASE = "/api/internal/telemetry";
 // Tracks which skillIds were invoked during each beat so the orchestrator can
 // call `updateSuccessRate(skillId, outcome)` for every used skill when the
 // beat verdict arrives (Phase 6.5 package K).
+//
+// Bounded to prevent unbounded growth if `clearBeatSkillUsage` is skipped
+// (e.g. crashed orchestrator, forgotten finalizer):
+//   - TTL: entries older than BEAT_SKILL_TTL_MS are dropped on access / insert.
+//   - Hard cap: MAX_BEATS oldest entries evicted when exceeded.
 
-const beatSkillSets = new Map<string, Set<string>>();
+interface BeatSkillEntry {
+  skills: Set<string>;
+  createdAt: number;
+}
+
+const BEAT_SKILL_TTL_MS = 60 * 60 * 1000; // 1 hour — 4x beat hard cap
+const MAX_BEATS = 5_000;
+
+const beatSkillSets = new Map<string, BeatSkillEntry>();
+
+function gcExpired(now: number): void {
+  for (const [key, entry] of beatSkillSets) {
+    if (now - entry.createdAt > BEAT_SKILL_TTL_MS) {
+      beatSkillSets.delete(key);
+    }
+  }
+  if (beatSkillSets.size > MAX_BEATS) {
+    // Map preserves insertion order — evict oldest first.
+    const overflow = beatSkillSets.size - MAX_BEATS;
+    let dropped = 0;
+    for (const key of beatSkillSets.keys()) {
+      beatSkillSets.delete(key);
+      if (++dropped >= overflow) break;
+    }
+  }
+}
 
 export function recordBeatSkillUsage(beatId: string, skillId: string): void {
-  let set = beatSkillSets.get(beatId);
-  if (!set) {
-    set = new Set();
-    beatSkillSets.set(beatId, set);
+  const now = Date.now();
+  let entry = beatSkillSets.get(beatId);
+  if (!entry || now - entry.createdAt > BEAT_SKILL_TTL_MS) {
+    entry = { skills: new Set(), createdAt: now };
+    beatSkillSets.set(beatId, entry);
+    gcExpired(now);
   }
-  set.add(skillId);
+  entry.skills.add(skillId);
 }
 
 export function getBeatSkillUsage(beatId: string): string[] {
-  return [...(beatSkillSets.get(beatId) ?? [])];
+  const entry = beatSkillSets.get(beatId);
+  if (!entry) return [];
+  if (Date.now() - entry.createdAt > BEAT_SKILL_TTL_MS) {
+    beatSkillSets.delete(beatId);
+    return [];
+  }
+  return [...entry.skills];
 }
 
 export function clearBeatSkillUsage(beatId: string): void {
   beatSkillSets.delete(beatId);
+}
+
+/** Test-only: reset the tally map. */
+export function __resetBeatSkillUsageForTest(): void {
+  beatSkillSets.clear();
 }
 
 // ── Validation helpers ───────────────────────────────────

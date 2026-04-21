@@ -38,8 +38,14 @@ export const lookupIdempotency = (
   idempotencyKey: string,
   body: unknown
 ): IdempotencyLookup => {
-  const cached = store.get(compositeKey(companyId, beatId, idempotencyKey));
+  const key = compositeKey(companyId, beatId, idempotencyKey);
+  const cached = store.get(key);
   if (!cached) return { kind: "miss" };
+  // Treat expired entries as misses so old keys can be safely reused.
+  if (Date.now() - cached.createdAt > KEY_TTL_MS) {
+    store.delete(key);
+    return { kind: "miss" };
+  }
   if (cached.bodyHash !== hashBody(body)) return { kind: "conflict" };
   return {
     kind: "hit",
