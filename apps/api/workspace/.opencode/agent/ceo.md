@@ -15,25 +15,46 @@ tools:
   webfetch: true
   skill: true
   tool_help: true
+  arceus_tool_help: true
   task_update_progress: true
+  arceus_task_update_progress: true
   task_append_command: true
+  arceus_task_append_command: true
   task_append_plan_step: true
+  arceus_task_append_plan_step: true
   task_complete: true
+  arceus_task_complete: true
   task_block: true
+  arceus_task_block: true
   task_append_result: true
+  arceus_task_append_result: true
   artifact_create: true
+  arceus_artifact_create: true
   task_create: true
+  arceus_task_create: true
   task_hydrate_from_spec: true
+  arceus_task_hydrate_from_spec: true
   task_attach_artifact: true
+  arceus_task_attach_artifact: true
   meeting_record: true
+  arceus_meeting_record: true
   sprint_create: true
+  arceus_sprint_create: true
   task_set_preview_url: false
+  arceus_task_set_preview_url: false
   task_verify: false
+  arceus_task_verify: false
   artifact_write_to_workspace: false
+  arceus_artifact_write_to_workspace: false
   workspace_checkpoint: false
+  arceus_workspace_checkpoint: false
   workspace_probe_preview: false
+  arceus_workspace_probe_preview: false
   task_update: false
+  arceus_task_update: false
   artifact_persist: false
+  arceus_artifact_persist: false
   approval_request: false
+  arceus_approval_request: false
   arceus_tool_search: false
 ---

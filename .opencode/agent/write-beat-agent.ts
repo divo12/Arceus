@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ROLE_CONFIGS, type Role, type RoleAgentConfig } from "./config.js";
+import { ROLE_CONFIGS, ALL_ARCEUS_TOOLS, type Role, type RoleAgentConfig } from "./config.js";
 
 const yamlScalar = (value: string): string => {
   if (/^[\w./-]+$/.test(value)) return value;
@@ -21,9 +21,15 @@ const renderFrontmatter = (config: RoleAgentConfig): string => {
   lines.push(`    "*": ${config.permission.bash["*"]}`);
   lines.push(`  webfetch: ${config.permission.webfetch}`);
 
+  // OpenCode names MCP tools as "<server>_<tool>" (e.g. "arceus_sprint_create").
+  // The global config has "arceus_*": false, so agent .md files must include
+  // the prefixed names to override the global deny for allowed tools.
   lines.push("tools:");
   for (const [name, enabled] of Object.entries(config.tools)) {
     lines.push(`  ${name}: ${enabled}`);
+    if ((ALL_ARCEUS_TOOLS as readonly string[]).includes(name) && !name.startsWith("arceus_")) {
+      lines.push(`  arceus_${name}: ${enabled}`);
+    }
   }
   lines.push("---");
   lines.push("");
