@@ -61,7 +61,7 @@ const cacheAndSend = (
 const ARTIFACT_KINDS = ["plan", "code", "output", "specification"] as const;
 
 const createArtifactBody = z.object({
-  agent: z.string().min(1).max(100),
+  agent: z.string().max(100).optional(),
   kind: z.enum(ARTIFACT_KINDS),
   title: z.string().min(1).max(300),
   content: z.string().min(1).max(200_000),
@@ -92,7 +92,8 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     const body = parseOrFail(createArtifactBody, req.body, reply);
     if (!body) return;
 
-    const artifact = addArtifact(body.agent, body.kind, body.title, body.content);
+    const agent = body.agent || req.mcp?.role || "unknown";
+    const artifact = addArtifact(agent, body.kind, body.title, body.content);
 
     if (body.taskId) {
       attachArtifactToTask(body.taskId, artifact.id);

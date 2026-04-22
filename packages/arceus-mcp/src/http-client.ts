@@ -35,10 +35,11 @@ export class ArceusHttpClient {
     }
 
     const url = `${this.ctx.arceusApiBase}${init.path}`;
+    const hasBody = init.body !== undefined;
     const headers: Record<string, string> = {
-      "content-type": "application/json",
       authorization: `Bearer ${this.ctx.arceusToken}`,
     };
+    if (hasBody) headers["content-type"] = "application/json";
     if (beatId) headers["x-beat-id"] = beatId;
     if (companyId) headers["x-company-id"] = companyId;
     if (role) headers["x-role"] = role;
@@ -49,7 +50,7 @@ export class ArceusHttpClient {
     const response = await fetch(url, {
       method: init.method,
       headers,
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined
+      body: hasBody ? JSON.stringify(init.body) : undefined
     });
 
     const responseHeaders: Record<string, string> = {};

@@ -4,7 +4,7 @@ type McpHook = (req: FastifyRequest, reply: FastifyReply) => Promise<void | Fast
 import { randomUUID } from "node:crypto";
 import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
 import { hashBody, lookupIdempotency, rememberIdempotency } from "./idempotency.js";
-import { findActiveSessionContextByRole, findSoleActiveSessionContext } from "../../orchestration/session-context.js";
+import { findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
 
 export interface McpRequestContext {
   companyId: string;
@@ -78,7 +78,7 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
     respondError(
       reply,
       "validation",
-      "Missing required headers (X-Beat-Id, X-Company-Id, X-Agent-Role).",
+      `Missing required headers (X-Beat-Id, X-Company-Id, X-Agent-Role). Active sessions: ${sessionContextSize()}`,
       "never",
       "headers_fixed"
     );

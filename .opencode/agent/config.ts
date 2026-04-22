@@ -95,6 +95,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
     permission: { edit: "deny", bash: { "*": "deny" }, webfetch: "allow" },
     tools: denyRest({
       ...BUILTIN_READONLY,
+      ...TIER_A_ALL_EXECUTORS,
+      ...TIER_B_COMMON_EXECUTOR,
       task_create: true,
       task_hydrate_from_spec: true,
       task_attach_artifact: true,
@@ -123,6 +125,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
     permission: { edit: "deny", bash: { "*": "deny" }, webfetch: "allow" },
     tools: denyRest({
       ...BUILTIN_READONLY,
+      ...TIER_A_ALL_EXECUTORS,
+      ...TIER_B_COMMON_EXECUTOR,
       task_create: true,
       task_update: true,
       task_attach_artifact: true,

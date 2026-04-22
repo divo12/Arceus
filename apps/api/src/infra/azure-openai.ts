@@ -121,7 +121,8 @@ export async function chatCompletion(
           "Content-Type": "application/json",
           "api-key": runtimeConfig.azureApiKey
         },
-        body: JSON.stringify({ messages, temperature: 0.7 })
+        body: JSON.stringify({ messages, temperature: 0.7 }),
+        signal: AbortSignal.timeout(90_000),
       });
 
       if (!response.ok) {
@@ -219,6 +220,7 @@ export async function structuredCompletion<T>(
             },
           },
         }),
+        signal: AbortSignal.timeout(90_000),
       });
 
       if (!response.ok) {

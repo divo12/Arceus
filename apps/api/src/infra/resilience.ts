@@ -242,6 +242,8 @@ export function isRetryableError(error: unknown): boolean {
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
     // Timeout, connection reset, DNS
+    // Exclude prompt-level timeouts — retrying a slow LLM call is pointless.
+    if (msg.includes("prompt timed out")) return false;
     if (msg.includes("timeout") || msg.includes("econnreset") || msg.includes("enotfound")) {
       return true;
     }

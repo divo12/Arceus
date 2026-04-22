@@ -54,7 +54,9 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
       const priorAgentIds = snap.agents.map((a) => a.id);
 
       await resetOrchestratorState();
+      heartbeatEngine.stop();
       heartbeatEngine.reset();
+      meetingScheduler.stop();
       const warnings = companyId === "company_pending"
         ? []
         : (await workspaceManager.archive(companyId)).warnings;
