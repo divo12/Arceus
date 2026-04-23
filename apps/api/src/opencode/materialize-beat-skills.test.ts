@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,13 @@ const TEST_COMPANY = "company_phase6_materialize";
 
 function setup(): void {
   resetSkillRegistry();
+}
+
+/** Count the skill directories (each with a SKILL.md) under the seed dir. */
+function countSeedSkillDirs(seedDir: string): number {
+  return readdirSync(seedDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(join(seedDir, e.name, "SKILL.md")))
+    .length;
 }
 
 test("slugify normalizes names to kebab-case filesystem slugs", () => {
@@ -77,16 +84,20 @@ test("renderSkillMd writes Arceus metadata + body", () => {
   assert.match(md, /# Foo/);
 });
 
-test("seedExistingSkills loads all 8 baseline skills + their resources", () => {
+test("seedExistingSkills loads all baseline skills + their resources", () => {
   setup();
   const { seeded, updated, skipped } = seedExistingSkillsDetailed(TEST_COMPANY, SEED_DIR);
 
-  assert.equal(seeded, 8, "8 baseline skills must be seeded from .arceus/skills-seed/");
+  // Count is derived from the filesystem so adding new seed skills doesn't
+  // break this test. The *correctness* assertion is the named-skill check
+  // below — every skill in `expected` must still be present after seeding.
+  const expectedSeedCount = countSeedSkillDirs(SEED_DIR);
+  assert.equal(seeded, expectedSeedCount, `all ${expectedSeedCount} seed skills must be loaded from .arceus/skills-seed/`);
   assert.equal(updated, 0);
   assert.equal(skipped, 0);
 
   const all = getAllSkills(TEST_COMPANY);
-  assert.equal(all.length, 8);
+  assert.equal(all.length, expectedSeedCount);
 
   const byName = new Map(all.map((s) => [s.name, s]));
   const expected = [
@@ -119,16 +130,18 @@ test("seedExistingSkills loads all 8 baseline skills + their resources", () => {
 
 test("seedExistingSkills is idempotent (preserve mode skips existing)", () => {
   setup();
+  const expectedSeedCount = countSeedSkillDirs(SEED_DIR);
   const first = seedExistingSkillsDetailed(TEST_COMPANY, SEED_DIR);
-  assert.equal(first.seeded, 8);
+  assert.equal(first.seeded, expectedSeedCount);
   const second = seedExistingSkillsDetailed(TEST_COMPANY, SEED_DIR);
   assert.equal(second.seeded, 0);
-  assert.equal(second.skipped, 8);
+  assert.equal(second.skipped, expectedSeedCount);
   assert.equal(second.updated, 0);
 });
 
 test("seedExistingSkills overwrite-content updates existing without losing metrics", () => {
   setup();
+  const expectedSeedCount = countSeedSkillDirs(SEED_DIR);
   seedExistingSkillsDetailed(TEST_COMPANY, SEED_DIR);
   const before = getAllSkills(TEST_COMPANY).find((s) => s.name === "artifact-structure")!;
   recordSkillUsage(before.id);  // bump usageCount to prove it's preserved
@@ -140,7 +153,7 @@ test("seedExistingSkills overwrite-content updates existing without losing metri
     mode: "overwrite-content",
   });
   assert.equal(result.seeded, 0);
-  assert.equal(result.updated, 8);
+  assert.equal(result.updated, expectedSeedCount);
 
   const after = getSkillById(before.id)!;
   assert.equal(after.usageCount, 1, "usageCount must survive overwrite-content");
