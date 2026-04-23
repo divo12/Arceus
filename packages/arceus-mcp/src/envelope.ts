@@ -1,4 +1,18 @@
+import { createHash } from "node:crypto";
 import type { ToolResult } from "@arceus/contracts";
+
+/**
+ * Derive a stable idempotency key from (beatId, op, body).
+ * Same inputs → same key, so retries collapse server-side.
+ * Spec 25 §3.4.
+ */
+export function deriveIdempotencyKey(beatId: string, op: string, body: unknown): string {
+  const bodyHash = createHash("sha256")
+    .update(JSON.stringify(body ?? null))
+    .digest("hex")
+    .slice(0, 16);
+  return `${beatId || "shared"}:${op}:${bodyHash}`;
+}
 
 export type McpToolContent = {
   [key: string]: unknown;

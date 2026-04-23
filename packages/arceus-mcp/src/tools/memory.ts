@@ -1,16 +1,15 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "@arceus/contracts";
 import type { McpContext } from "../context.js";
 import type { ArceusHttpClient } from "../http-client.js";
-import { toMcpContent } from "../envelope.js";
+import { deriveIdempotencyKey, toMcpContent } from "../envelope.js";
 
 const MEMORY = "/api/internal/v1/memory";
 
 export const registerMemoryTools = (
   server: McpServer,
-  _ctx: McpContext,
+  ctx: McpContext,
   client: ArceusHttpClient
 ): void => {
   server.registerTool(
@@ -26,11 +25,12 @@ export const registerMemoryTools = (
       },
     },
     async ({ targets, context }) => {
+      const body = { targets, context };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: `${MEMORY}/handoff`,
-        body: { targets, context },
-        idempotencyKey: randomUUID(),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "memory_handoff", body),
       });
       return toMcpContent(res.data);
     }

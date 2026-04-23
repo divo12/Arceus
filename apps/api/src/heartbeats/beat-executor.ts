@@ -15,9 +15,10 @@ import {
 } from "@arceus/company-runtime";
 import { ROLE_CONFIGS, ALL_ARCEUS_TOOLS } from "../../../../.opencode/agent/config.js";
 import { buildBeatContext } from "../orchestration/beat-context-builder.js";
+import { buildUnifiedBeatPrompt } from "../orchestration/beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
 import { ensureDeployment } from "../config/index.js";
-import { emitEmployeeActivity } from "../observability/activity.js";
+import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
 } from "../observability/graph-emitter.js";
@@ -26,10 +27,8 @@ import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { ensureAgentSession } from "../prompts/llm.js";
 import { getSnapshot } from "../persistence/store.js";
 import { cpUpdateTrustScore } from "../persistence/control-plane.js";
-import { buildSpecialistTaskPrompt } from "../prompts/specialist.js";
-import { buildDeveloperBeatPrompt } from "../prompts/developer.js";
 import { runPromptText } from "../prompts/llm.js";
-import { touchAgentSession } from "../agents/sessions.js";
+import { touchAgentSession, updateAgentSessionState } from "../agents/sessions.js";
 import { buildSkillCatalog } from "../skills/catalog.js";
 import { matchAndRecordSkills } from "../skills/classifier.js";
 import { setTaskStatus } from "../tasks/mutations.js";
@@ -39,7 +38,6 @@ import {
   agentSessions, eventBridgeStarted,
   setEventBridgeStarted, productDir,
 } from "../orchestration/state.js";
-import { buildCeoSprintPlanningPrompt } from "../prompts/ceo-sprint.js";
 import { startEventBridge } from "./event-bridge.js";
 
 // ── Beat prompt enrichment ─────────────────────────────────────────────────
@@ -72,23 +70,24 @@ function enrichPromptWithBeatContext(
     if (unmetCount > 0) {
       sections.push(
         `\n⚠️ ${unmetCount} dependency(ies) not yet completed.`,
-        "If you cannot make meaningful progress, call `task_block` and explain why.",
-        "If you CAN make partial progress (e.g. define scope, draft structure), proceed and report via `task_update_progress`.",
+        "If you cannot make meaningful progress, call `arceus_task_block` and explain why.",
+        "If you CAN make partial progress (e.g. define scope, draft structure), proceed and report via `arceus_task_update_progress`.",
       );
     }
   }
 
   // Tool-usage instructions — agent-managed lifecycle
+  // OpenCode names MCP tools as "arceus_<tool>" (MCP server name prefix).
   sections.push(
     "\n# Agent Lifecycle — USE YOUR TOOLS",
     "You have MCP tools for managing your work. You MUST use them:",
-    `- \`task_update_progress\` (taskId="${task.id}") — report what you did`,
-    `- \`artifact_create\` — save your output as a durable artifact (plan, spec, report, code)`,
-    `- \`task_complete\` (taskId="${task.id}") — call this when you are DONE with the task`,
-    `- \`task_block\` (taskId="${task.id}") — call this if you cannot proceed`,
+    `- \`arceus_task_update_progress\` (taskId="${task.id}") — report what you did`,
+    `- \`arceus_artifact_create\` — save your output as a durable artifact (plan, spec, report, code). Artifacts are auto-written to workspace/specs/ (for kind=specification) or workspace/artifacts/ (for other kinds).`,
+    `- \`arceus_task_complete\` (taskId="${task.id}") — call this when you are DONE with the task`,
+    `- \`arceus_task_block\` (taskId="${task.id}") — call this if you cannot proceed`,
     "",
-    "**You MUST call `task_complete` when your work is finished.** The system does NOT auto-complete tasks.",
-    "**You MUST call `artifact_create`** to persist any meaningful output (specs, plans, reports).",
+    "**You MUST call `arceus_task_complete` when your work is finished.** The system does NOT auto-complete tasks.",
+    "**You MUST call `arceus_artifact_create`** to persist any meaningful output (specs, plans, reports). Use kind='specification' for specs/architecture docs.",
   );
 
   return sections.join("\n");
@@ -116,7 +115,7 @@ export async function executeBeatTask(
   const snapshot = getSnapshot();
   const task = snapshot.tasks.find((t) => t.id === taskId);
   if (!task) {
-    emitEmployeeActivity("system", "error", `Beat ${beatId}: task ${taskId} not found in snapshot`, { beatId, detail: { taskId, role: ctx.role } });
+    emitEmployeeActivity("system", "error", `${shortBeat(beatId)}: task not found`, { beatId, detail: { taskId, role: ctx.role } });
     return { summary: `Task ${taskId} not found`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false };
   }
 
@@ -126,7 +125,7 @@ export async function executeBeatTask(
   const availableSkillCount = buildSkillCatalog(role).length;
   const matchedSkillIds = await matchAndRecordSkills(role, `${task.title} ${task.description}`);
 
-  emitEmployeeActivity(role, "context", `Beat ${beatId}: picked task "${task.title}" [${task.status}] priority=${task.priority} availableSkills=${availableSkillCount} appliedSkills=${matchedSkillIds.length}`, {
+  emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: picked "${task.title}" [${task.status}]`, {
     beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, availableSkillCount, appliedSkillIds: matchedSkillIds },
   });
 
@@ -139,20 +138,16 @@ export async function executeBeatTask(
   if (role === "developer") {
     const scaffoldResult = await scaffoldProductWorkspace(productDir, "product-app");
     if (scaffoldResult.scaffolded) {
-      emitEmployeeActivity("developer", "info", `Beat ${beatId}: workspace scaffolded (Vite + React + Tailwind + shadcn/ui)`, { beatId, taskId });
+      emitEmployeeActivity("developer", "info", `${shortBeat(beatId)}: workspace scaffolded`, { beatId, taskId });
     } else if (scaffoldResult.error) {
-      emitEmployeeActivity("developer", "info", `Beat ${beatId}: scaffold skipped/partial: ${scaffoldResult.error}`, { beatId, taskId });
+      emitEmployeeActivity("developer", "info", `${shortBeat(beatId)}: scaffold skipped`, { beatId, taskId });
     }
   }
   const existingFileList = role === "developer"
     ? Array.from((await collectWorkspaceSnapshot()).keys()).sort()
     : undefined;
 
-  const basePrompt = role === "ceo"
-    ? buildCeoSprintPlanningPrompt(task, snapshot)
-    : role === "developer"
-      ? buildDeveloperBeatPrompt(task, existingFileList)
-      : buildSpecialistTaskPrompt(task);
+  const basePrompt = buildUnifiedBeatPrompt(task, role, snapshot.company.id, snapshot, existingFileList);
   const taskPrompt = enrichPromptWithBeatContext(basePrompt, task, snapshot);
   // ── Tools from ROLE_CONFIGS — includes built-ins + Arceus MCP tools ──
   // ROLE_CONFIGS uses unprefixed Arceus tool names (e.g. "sprint_create"),
@@ -180,8 +175,8 @@ export async function executeBeatTask(
   const beatStartTime = Date.now();
   const beatSprintId = task.sprintId ?? resolveActiveSprintId();
 
-  emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt constructed (${taskPrompt.length} chars), tools=${tools ? Object.keys(tools).filter(k => (tools as any)[k]).join(",") : "none"}`, {
-    beatId, taskId, detail: { promptLength: taskPrompt.length, tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [], promptType: role === "developer" ? "developer_build" : "specialist_text" },
+  emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: prompt ready`, {
+    beatId, taskId, detail: { promptLength: taskPrompt.length, tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [], promptType: "unified_beat" },
   });
 
   try {
@@ -189,14 +184,19 @@ export async function executeBeatTask(
     // Register session context so the plugin can enforce tool governance
     const beatCtx = await buildBeatContext(role, snapshot.company.id, beatId, beatSession.id);
     registerSessionContext(beatCtx);
-    emitEmployeeActivity(role, "context", `Beat ${beatId}: session created ${beatSession.id}, allowedTools=[${beatCtx.allowedTools.join(",")}]`, { beatId, detail: { sessionId: beatSession.id, allowedTools: beatCtx.allowedTools } });
+    emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: session created`, { beatId, detail: { sessionId: beatSession.id, allowedTools: beatCtx.allowedTools } });
     previousSessionId = beatAgentState?.sessionId;
     if (beatAgentState) beatAgentState.sessionId = beatSession.id;
     touchAgentSession(role, "working");
+    updateAgentSessionState(role, { activeTaskId: task.id });
     setTaskStatus(task.id, "in_progress");
-    emitEmployeeActivity(role, "working", `Beat ${beatId}: executing "${task.title}"`, { taskId, beatId });
+    // Snapshot session counters so we can compute per-beat deltas after the prompt
+    const preTools = beatAgentState?.toolInvocationCount ?? 0;
+    const preEdits = beatAgentState?.fileEditCount ?? 0;
+    const preShells = beatAgentState?.shellCommandCount ?? 0;
+    emitEmployeeActivity(role, "working", `${shortBeat(beatId)}: executing "${task.title}"`, { taskId, beatId });
 
-    emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending prompt to OpenCode (model=${ensureDeployment("workerDeployment")})`, {
+    emitEmployeeActivity(role, "prompt", `${shortBeat(beatId)}: sending to LLM`, {
       beatId, taskId, detail: { model: ensureDeployment("workerDeployment"), sessionId: beatSession.id },
     });
     if (beatSprintId) {
@@ -208,8 +208,17 @@ export async function executeBeatTask(
     touchAgentSession(role, "idle");
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
-    emitEmployeeActivity(role, "context", `Beat ${beatId}: prompt complete — ${tokensUsed} tokens, output=${(output?.length ?? 0)} chars`, {
-      beatId, taskId, detail: { tokensUsed, outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
+    const postState = agentSessions.get(role);
+    const beatToolCalls = (postState?.toolInvocationCount ?? 0) - preTools;
+    const beatFileEdits = (postState?.fileEditCount ?? 0) - preEdits;
+    const beatShellCmds = (postState?.shellCommandCount ?? 0) - preShells;
+    const statParts: string[] = [];
+    if (beatToolCalls > 0) statParts.push(`${beatToolCalls} tool calls`);
+    if (beatFileEdits > 0) statParts.push(`${beatFileEdits} files edited`);
+    if (beatShellCmds > 0) statParts.push(`${beatShellCmds} shell cmds`);
+    const statSuffix = statParts.length > 0 ? ` (${statParts.join(", ")})` : "";
+    emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: done${statSuffix}`, {
+      beatId, taskId, detail: { tokensUsed, beatToolCalls, beatFileEdits, beatShellCmds, outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
     });
 
     // ── Post-execution: check if agent completed the task via tools ──
@@ -217,7 +226,7 @@ export async function executeBeatTask(
     const completed = updated?.status === "completed";
 
     if (role === "developer") {
-      emitEmployeeActivity("system", "preview", `Beat ${beatId}: developer beat done — checking auto-preview`, { beatId });
+      emitEmployeeActivity("system", "preview", `${shortBeat(beatId)}: checking preview`, { beatId });
       tryAutoPreview().catch(() => {});
     }
 
@@ -230,21 +239,21 @@ export async function executeBeatTask(
       const complianceEvent = buildTrustEvent(ctx.agentId, "manual_adjustment", `Beat ${beatId}: clean beat compliance bonus`, new Date().toISOString(), TRUST_CONFIG.complianceBonus);
       await cpUpdateTrustScore(complianceEvent);
     }
-    emitEmployeeActivity(role, "decision", `Beat ${beatId}: trust lifecycle updated — ${completed ? "task_completed" : "beat_done"}${beatViolationCount === 0 ? " + compliance_bonus" : ""} (violations=${beatViolationCount})`, {
-      beatId, taskId, detail: { beatViolationCount, taskCompleted: completed },
+    emitEmployeeActivity(role, "decision", `${shortBeat(beatId)}: ${completed ? "task completed" : "beat done"}${statSuffix}`, {
+      beatId, taskId, detail: { beatViolationCount, taskCompleted: completed, beatToolCalls, beatFileEdits, beatShellCmds },
     });
 
     if (beatSprintId) {
-      emitGraphBeatCompleted(beatSprintId, taskId, beatId, completed ? "completed" : "in_progress", output?.slice(0, 300), 1, Date.now() - beatStartTime);
+      emitGraphBeatCompleted(beatSprintId, taskId, beatId, completed ? "completed" : "in_progress", output?.slice(0, 300), beatToolCalls, Date.now() - beatStartTime);
     }
 
     return {
       summary: output?.slice(0, 500) || `${role} worked on ${task.title}`,
-      tokensUsed, actionsCount: 1, toolCalls: 1, completed,
+      tokensUsed, actionsCount: 1, toolCalls: beatToolCalls, completed,
     };
   } catch (err) {
     touchAgentSession(role, "idle");
-    emitEmployeeActivity(role, "error", `Beat ${beatId}: execution failed — ${err instanceof Error ? err.message : String(err)}`, {
+    emitEmployeeActivity(role, "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, {
       beatId, taskId, detail: { error: err instanceof Error ? err.message : String(err) },
     });
 
@@ -260,6 +269,7 @@ export async function executeBeatTask(
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0, completed: false,
     };
   } finally {
+    updateAgentSessionState(role, { activeTaskId: null });
     if (previousSessionId && beatAgentState) {
       beatAgentState.sessionId = previousSessionId;
     }

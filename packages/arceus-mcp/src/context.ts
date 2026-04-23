@@ -33,5 +33,9 @@ export const loadMcpContext = (): McpContext => ({
   companyId: optionalEnv("COMPANY_ID"),
   role: optionalEnv("ROLE"),
   arceusApiBase: requireEnv("ARCEUS_API"),
-  arceusToken: optionalEnv("ARCEUS_TOKEN") || "arceus-dev-token",
+  arceusToken: process.env.ARCEUS_TOKEN?.trim() || (
+    process.env.NODE_ENV === "production"
+      ? (() => { throw new Error("ARCEUS_TOKEN must be set in production"); })()
+      : "arceus-dev-token"
+  ),
 });

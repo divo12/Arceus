@@ -7,7 +7,7 @@ import {
   proposeSkillFromCluster, deprecateSkill as registryDeprecateSkill,
 } from "@arceus/company-runtime";
 import { getAgentByRole } from "@arceus/task-engine";
-import { emitEmployeeActivity } from "../observability/activity.js";
+import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { auditAgent } from "../observability/audit-ledger.js";
 import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
@@ -62,14 +62,14 @@ export async function executeChecklistAction(
     setEventBridgeStarted(true);
   }
 
-  emitEmployeeActivity(role, "decision", `Beat ${beatId}: checklist action dispatched — "${action.suggestedAction}"`, {
+  emitEmployeeActivity(role, "decision", `${shortBeat(beatId)}: ${action.suggestedAction}`, {
     beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
   });
 
   // ── CEO: create a governance task so the CEO agent plans the next sprint ──
   if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
     if (isCeoStreaming()) {
-      emitEmployeeActivity("ceo", "info", `Beat ${beatId}: CEO skipped — live chat streaming`, { beatId });
+      emitEmployeeActivity("ceo", "info", `${shortBeat(beatId)}: skipped — live chat active`, { beatId });
       finishClBeat("completed", "CEO skipped — streaming", 0);
       return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
@@ -103,7 +103,7 @@ export async function executeChecklistAction(
     );
     upsertTask(task);
 
-    emitEmployeeActivity("ceo", "transition", `Beat ${beatId}: created governance task "${task.title}" — CEO will plan the sprint on next beat`, { beatId, taskId: task.id });
+    emitEmployeeActivity("ceo", "transition", `${shortBeat(beatId)}: created task "${task.title}"`, { beatId, taskId: task.id });
     finishClBeat("completed", `Created sprint planning task: ${task.title}`, 0);
     return {
       summary: `Created governance task "${task.title}" for CEO — agent will reason and call sprint_create`,
@@ -131,7 +131,7 @@ export async function executeChecklistAction(
       return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
     }
 
-    emitEmployeeActivity("cto", "transition", `Beat ${beatId}: escalation timeout — force-completing Sprint ${sprint.number}`, {
+    emitEmployeeActivity("cto", "transition", `${shortBeat(beatId)}: force-completing Sprint ${sprint.number}`, {
       beatId, detail: { reason: action.detail },
     });
 
@@ -151,14 +151,14 @@ export async function executeChecklistAction(
       const soul = getRoleSoul(role);
       const session = await ensureAgentSession(snapshot, role);
       touchAgentSession(role, "working");
-      emitEmployeeActivity(role, "working", `Beat ${beatId}: ${action.suggestedAction}`, { beatId });
+      emitEmployeeActivity(role, "working", `${shortBeat(beatId)}: ${action.suggestedAction}`, { beatId });
 
       const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
-      emitEmployeeActivity(role, "prompt", `Beat ${beatId}: sending checklist-action prompt (${prompt.length} chars)`, { beatId, detail: { promptLength: prompt.length } });
+      emitEmployeeActivity(role, "prompt", `${shortBeat(beatId)}: sending to LLM`, { beatId, detail: { promptLength: prompt.length } });
       const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt);
       touchAgentSession(role, "idle");
 
-      emitEmployeeActivity(role, "context", `Beat ${beatId}: checklist action completed — output=${(output?.length ?? 0)} chars`, {
+      emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: action completed`, {
         beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
       });
       finishClBeat("completed", `${role} checklist action completed`, 1);
@@ -168,7 +168,7 @@ export async function executeChecklistAction(
       };
     } catch (err) {
       touchAgentSession(role, "idle");
-      emitEmployeeActivity(role, "error", `Beat ${beatId}: ${role} checklist action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+      emitEmployeeActivity(role, "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
       finishClBeat("failed", `${role} checklist action failed`, 0);
       return {
         summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -220,7 +220,7 @@ export async function executeChecklistAction(
   }
 
   // ── Fallback: log the action without executing ──
-  emitEmployeeActivity(role, "info", `Beat ${beatId}: no handler for checklist action — "${action.suggestedAction}"`, { beatId });
+  emitEmployeeActivity(role, "info", `${shortBeat(beatId)}: unhandled action "${action.suggestedAction}"`, { beatId });
   if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, "completed", `No handler: ${action.suggestedAction}`, 0, Date.now() - clBeatStart);
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
@@ -246,11 +246,11 @@ async function executeSkillsLeadAction(
     if (suggestedAction === "skills_lead:mutate_underperformer") {
       const underperformers = getUnderperformingSkills(companyId, 0.6);
       if (underperformers.length === 0) {
-        emitEmployeeActivity("skills_lead", "context", `Beat ${beatId}: no underperformers to mutate`, { beatId });
+        emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: no underperformers`, { beatId });
         return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
       }
       const worst = underperformers[0]!;
-      emitEmployeeActivity("skills_lead", "working", `Beat ${beatId}: proposing mutation for ${worst.name} (rate=${worst.successRate.toFixed(2)})`, { beatId });
+      emitEmployeeActivity("skills_lead", "working", `${shortBeat(beatId)}: mutating ${worst.name}`, { beatId });
 
       const mutation = await processTaskOutcome({
         taskId: `skills_lead_mutation_${worst.id}_${Date.now()}`,
@@ -298,7 +298,7 @@ async function executeSkillsLeadAction(
           severity: "info", detail: { skillId: s.id, lastUsedAt: s.lastUsedAt },
         });
       }
-      emitEmployeeActivity("skills_lead", "context", `Beat ${beatId}: deprecated ${deprecated.length} unused skills`, { beatId });
+      emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: deprecated ${deprecated.length} skills`, { beatId });
       return { summary: `Deprecated ${deprecated.length} unused skills: ${deprecated.join(", ")}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: deprecated.length, toolCalls: 1 };
     }
 
@@ -337,7 +337,7 @@ async function executeSkillsLeadAction(
 
     return { summary: `Unknown Skills Lead action: ${suggestedAction}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   } catch (err) {
-    emitEmployeeActivity("skills_lead", "error", `Beat ${beatId}: Skills Lead action failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    emitEmployeeActivity("skills_lead", "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
     return { summary: `Skills Lead action failed: ${err instanceof Error ? err.message : String(err)}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 }

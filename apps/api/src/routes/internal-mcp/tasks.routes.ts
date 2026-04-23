@@ -247,7 +247,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     cacheAndSend(req, reply, 200, success(
       `Task ${taskId} marked completed.`,
       { taskId, status: "completed", unblockedDependents: unblocked },
-      { nextActions: ["task_append_result", "artifact_create"] }
+      { nextActions: ["arceus_task_append_result", "arceus_artifact_create"] }
     ));
   });
 
@@ -395,7 +395,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     cacheAndSend(req, reply, 200, success(
       `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,
       { taskId, status: "in_progress", claimedBy: mcp.role, reason: body.reason },
-      { nextActions: ["task_append_plan_step", "task_update_progress"] }
+      { nextActions: ["arceus_task_append_plan_step", "arceus_task_update_progress"] }
     ));
   });
 }

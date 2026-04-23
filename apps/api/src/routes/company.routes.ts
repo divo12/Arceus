@@ -7,11 +7,13 @@ import { z } from "zod";
 import { getSnapshot, resetCompany, applyStrategy, clearPersistedStoreState } from "../persistence/store.js";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import { resetOrchestratorState, getExecutionStatus } from "../orchestration/state.js";
+import { clearAllSessionContexts } from "../orchestration/session-context.js";
 import { audit } from "../observability/audit-ledger.js";
 import { seedRegistry, clearRegistry } from "../governance/service-registry.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
+import { resetOpencodeConnection, resetCeoSession } from "../infra/opencode.js";
 import { getDatabaseHealth, getDb, isDatabaseConfigured, trustScoresTable, policyViolationsTable } from "@arceus/db";
 import { inArray, eq } from "drizzle-orm";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
@@ -57,9 +59,11 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
       heartbeatEngine.stop();
       heartbeatEngine.reset();
       meetingScheduler.stop();
-      const warnings = companyId === "company_pending"
-        ? []
-        : (await workspaceManager.archive(companyId)).warnings;
+      // Always clean the workspace — after a server restart the companyId
+      // reverts to "company_pending" but stale files from the previous run
+      // remain on disk.
+      const archiveResult = await workspaceManager.archive(companyId);
+      const warnings = archiveResult.warnings;
       if (companyId !== "company_pending") {
         await clearPersistedStoreState(companyId);
         await deletePersistedArtifacts(companyId);
@@ -82,6 +86,9 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
 
       resetEmployeeActivityLog();
       clearRegistry(companyId);
+      clearAllSessionContexts();
+      resetCeoSession();
+      await resetOpencodeConnection();
       return resetCompany();
     } catch (error) {
       request.log?.error?.(error);

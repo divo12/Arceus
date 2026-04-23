@@ -263,16 +263,18 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
           const display = trimBeatPrefix(entry.text);
           return (
           <Box key={entry.id}>
-            <Text dimColor>[{formatTime(entry.time)}] </Text>
             <Text color={entry.color}>{entry.glyph} </Text>
             <Text color={roleColor(entry.role)} bold>{roleShort(entry.role)}</Text>
             <Text> </Text>
-            <Text color={entry.color} wrap="truncate-end">
-              {display.length > 80 ? display.slice(0, 77) + "..." : display}
-            </Text>
+            <Box flexGrow={1}>
+              <Text color={entry.color} wrap="truncate-end">
+                {display.length > 80 ? display.slice(0, 77) + "..." : display}
+              </Text>
+            </Box>
             {entry.isApproval && (
               <Text color="yellow" bold> [a:approve]</Text>
             )}
+            <Text dimColor> {formatTime(entry.time)}</Text>
           </Box>
           );
         })}

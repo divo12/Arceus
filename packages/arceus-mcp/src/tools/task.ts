@@ -1,16 +1,15 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "@arceus/contracts";
 import type { McpContext } from "../context.js";
 import type { ArceusHttpClient } from "../http-client.js";
-import { success, toMcpContent } from "../envelope.js";
+import { deriveIdempotencyKey, success, toMcpContent } from "../envelope.js";
 
 const TASKS = "/api/internal/v1/tasks";
 
 export const registerTaskTools = (
   server: McpServer,
-  _ctx: McpContext,
+  ctx: McpContext,
   client: ArceusHttpClient
 ): void => {
   server.registerTool(
@@ -23,7 +22,7 @@ export const registerTaskTools = (
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: `${TASKS}/${taskId}/completion`,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_complete", { taskId }),
       });
       return toMcpContent(res.data);
     }
@@ -40,7 +39,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/block`,
         body: { reason },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_block", { taskId, reason }),
       });
       return toMcpContent(res.data);
     }
@@ -57,7 +56,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/verification`,
         body: { verifiedBy },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_verify", { taskId, verifiedBy }),
       });
       return toMcpContent(res.data);
     }
@@ -74,7 +73,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/results`,
         body: { entry },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_append_result", { taskId, entry }),
       });
       return toMcpContent(res.data);
     }
@@ -91,7 +90,7 @@ export const registerTaskTools = (
         method: "PUT",
         path: `${TASKS}/${taskId}/preview-url`,
         body: { url },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_set_preview_url", { taskId, url }),
       });
       return res.status === 204
         ? toMcpContent(success("Preview URL set.", { taskId }))
@@ -116,7 +115,7 @@ export const registerTaskTools = (
         method: "POST",
         path: TASKS,
         body: args,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_create", args),
       });
       return toMcpContent(res.data);
     }
@@ -139,7 +138,7 @@ export const registerTaskTools = (
         method: "PATCH",
         path: `${TASKS}/${taskId}`,
         body: patch,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_update", { taskId, ...patch }),
       });
       return toMcpContent(res.data);
     }
@@ -164,7 +163,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/hydration`,
         body: spec,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_hydrate_from_spec", { taskId, ...spec }),
       });
       return toMcpContent(res.data);
     }
@@ -181,7 +180,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/artifacts`,
         body: { artifactId },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_attach_artifact", { taskId, artifactId }),
       });
       return toMcpContent(res.data);
     }
@@ -203,7 +202,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/claim`,
         body: { reason },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_claim", { taskId, reason }),
       });
       return toMcpContent(res.data);
     }
@@ -228,7 +227,7 @@ export const registerTaskTools = (
         method: "PATCH",
         path: `${TASKS}/${taskId}/progress`,
         body: progress,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_update_progress", { taskId, ...progress }),
       });
       return toMcpContent(res.data);
     }
@@ -249,7 +248,7 @@ export const registerTaskTools = (
         method: "POST",
         path: `${TASKS}/${taskId}/plan-steps`,
         body: { step },
-        idempotencyKey: randomUUID(),
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_append_plan_step", { taskId, step }),
       });
       return toMcpContent(res.data);
     }

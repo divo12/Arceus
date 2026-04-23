@@ -32,6 +32,11 @@ export function sessionContextSize(): number {
   return sessionContextMap.size;
 }
 
+/** Clear all session contexts. Used during company reset. */
+export function clearAllSessionContexts(): void {
+  sessionContextMap.clear();
+}
+
 /**
  * Find the most recently registered session context for a given role.
  * Used as a fallback when MCP requests arrive without X-Beat-Id / X-Company-Id headers

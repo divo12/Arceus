@@ -2203,6 +2203,9 @@ export default function Page() {
                             >
                               {task.status.replace(/_/g, " ")}
                             </Badge>
+                            <span className="shrink-0 text-[0.625rem] text-[var(--swiss-gray-300)]">
+                              {formatRelativeTime(task.completedAt ?? task.startedAt ?? task.createdAt ?? null)}
+                            </span>
                           </Link>
                         ))}
                       </div>

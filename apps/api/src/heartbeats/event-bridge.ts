@@ -213,7 +213,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           awaiting: role === "developer" ? "editing workspace" : "continuing after file edit",
         });
         emitEmployeeActivity(role, "file_edit", filePath, {
-          taskId: role === "developer" && activeExecution ? activeExecution.buildTaskId : null,
+          taskId: (role === "developer" && activeExecution) ? activeExecution.buildTaskId : agentSessions.get(role)?.activeTaskId ?? null,
         });
         if (role === "developer" && activeExecution) {
           appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
@@ -226,14 +226,14 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           awaiting: "waiting for shell result",
         });
         emitEmployeeActivity(role, "shell", `$ ${cmd}`, {
-          taskId: role === "developer" && activeExecution ? activeExecution.buildTaskId : null,
+          taskId: (role === "developer" && activeExecution) ? activeExecution.buildTaskId : agentSessions.get(role)?.activeTaskId ?? null,
         });
         if (role === "developer" && activeExecution) {
           appendTaskCommand(activeExecution.buildTaskId, cmd);
         }
       } else if (isInvocation && toolName) {
         emitEmployeeActivity(role, "tool_call", `tool: ${toolName}`, {
-          taskId: activeExecution?.buildTaskId ?? null,
+          taskId: activeExecution?.buildTaskId ?? agentSessions.get(role)?.activeTaskId ?? null,
           detail: { toolName, args: sanitizeToolArgs(args) },
         });
       }
@@ -293,11 +293,15 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       stallReason: props.error?.message ?? "Session error",
       lastEventSummary: props.error?.message ?? "Session error",
     });
+    const isInternalAgent = role.startsWith("_internal/");
     if (role === "developer") {
       clearDeveloperWatchdog();
       stopDeveloperWorkspaceMonitor();
     }
-    setExecutionStatus("error");
+    // Internal agent errors (memory, facilitator, etc.) should not poison global execution state
+    if (!isInternalAgent) {
+      setExecutionStatus("error");
+    }
     if (role === "developer" && activeExecution) {
       setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? "Developer session error");
       recordMeeting({
@@ -323,8 +327,10 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         ],
       });
     }
-    emitEmployeeActivity(role, "error", props.error?.message ?? "Session error", {
-      taskId: role === "developer" ? activeExecution?.buildTaskId ?? null : null,
-    });
+    if (!isInternalAgent) {
+      emitEmployeeActivity(role, "error", props.error?.message ?? "Session error", {
+        taskId: role === "developer" ? activeExecution?.buildTaskId ?? null : null,
+      });
+    }
   }
 }

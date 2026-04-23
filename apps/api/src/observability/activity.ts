@@ -23,6 +23,12 @@ export type ActivityEvent = EmployeeActivityEntry;
 const log: EmployeeActivityEntry[] = [];
 const subs = new Set<(e: EmployeeActivityEntry) => void>();
 
+/** Shorten a beat ID for display: beat_5_1776878895056 → beat_5 */
+export function shortBeat(beatId: string): string {
+  const m = beatId.match(/^(beat_\d+)/);
+  return m ? m[1] : beatId;
+}
+
 /** Clear all entries from the in-memory activity log. */
 export function resetEmployeeActivityLog() {
   log.splice(0, log.length);

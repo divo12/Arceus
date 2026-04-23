@@ -4,9 +4,12 @@ import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import internalMcpRoutes from "./index.js";
 import { __resetForTest as resetIdempotency } from "./idempotency.js";
+import { __resetBearerToken } from "../../auth/bearer.js";
 import { bootstrapCompany } from "../../persistence/store.js";
 
-process.env.ARCEUS_INTERNAL_TOKEN = "test-token";
+const TEST_TOKEN = "arceus-test-token-for-integration";
+process.env.ARCEUS_INTERNAL_TOKEN = TEST_TOKEN;
+__resetBearerToken();
 
 const buildApp = async () => {
   const app = Fastify();
@@ -15,7 +18,7 @@ const buildApp = async () => {
 };
 
 const baseHeaders = (extra: Record<string, string> = {}) => ({
-  authorization: "Bearer test-token",
+  authorization: `Bearer ${TEST_TOKEN}`,
   "x-beat-id": "beat_test",
   "x-company-id": "c_test",
   "x-agent-role": "developer",
@@ -124,8 +127,9 @@ test("POST /tasks without bearer returns 401 envelope", async () => {
   await app.close();
 });
 
-test("POST /tasks without Idempotency-Key returns 422", async () => {
+test("POST /tasks without Idempotency-Key succeeds (no idempotency protection)", async () => {
   resetIdempotency();
+  bootstrapCompany({ companyName: "Test Co", industry: "tech", goals: "test", founderVision: "v" } as any);
   const app = await buildApp();
   const res = await app.inject({
     method: "POST",
@@ -133,9 +137,10 @@ test("POST /tasks without Idempotency-Key returns 422", async () => {
     headers: baseHeaders(),
     payload: { title: "x" },
   });
-  assert.equal(res.statusCode, 422);
+  // Without an idempotency key the request goes through but has no replay protection
+  assert.equal(res.statusCode, 201);
   const body = res.json();
-  assert.equal(body.error.cause, "validation");
+  assert.equal(body.status, "success");
   await app.close();
 });
 

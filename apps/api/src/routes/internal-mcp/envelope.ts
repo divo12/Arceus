@@ -36,7 +36,10 @@ export const ERROR_CAUSES = [
   "not_found",
   "conflict",
   "upstream",
-  "internal"
+  "internal",
+  "session_required",
+  "session_not_found",
+  "identity_mismatch",
 ] as const;
 
 export type ErrorCause = (typeof ERROR_CAUSES)[number];
@@ -47,5 +50,8 @@ export const causeToStatus: Record<ErrorCause, number> = {
   not_found: 404,
   conflict: 409,
   upstream: 503,
-  internal: 500
+  internal: 500,
+  session_required: 401,
+  session_not_found: 404,
+  identity_mismatch: 403,
 };

@@ -3,8 +3,9 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 type McpHook = (req: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
 import { randomUUID } from "node:crypto";
 import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
+import { resolveBearerToken } from "../../auth/bearer.js";
 import { hashBody, lookupIdempotency, rememberIdempotency } from "./idempotency.js";
-import { findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
+import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
 
 export interface McpRequestContext {
   companyId: string;
@@ -20,7 +21,7 @@ declare module "fastify" {
   }
 }
 
-const UUID_RE = /^[0-9a-fA-F-]{8,}$/;
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9:_.\-]{8,128}$/;
 
 const getHeader = (req: FastifyRequest, name: string): string | null => {
   const raw = req.headers[name.toLowerCase()];
@@ -40,14 +41,10 @@ const respondError = (
 };
 
 export const mcpAuth: McpHook = async (req, reply) => {
-  const expected = process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "arceus-dev-token";
+  const expected = resolveBearerToken();
   const auth = getHeader(req, "authorization");
   const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
 
-  if (!expected) {
-    respondError(reply, "internal", "Server missing ARCEUS_INTERNAL_TOKEN configuration.", "never", "server_configured");
-    return reply;
-  }
   if (!token || token !== expected) {
     reply.code(401).send(failure("Invalid or missing bearer token.", "governance", "never", "rotate_token"));
     return reply;
@@ -55,30 +52,53 @@ export const mcpAuth: McpHook = async (req, reply) => {
 };
 
 export const mcpRequestContext: McpHook = async (req, reply) => {
-  let beatId = getHeader(req, "x-beat-id");
-  let companyId = getHeader(req, "x-company-id");
-  let role = getHeader(req, "x-agent-role") ?? getHeader(req, "x-role");
+  const claimedBeatId = getHeader(req, "x-beat-id");
+  const claimedCompanyId = getHeader(req, "x-company-id");
+  const claimedRole = getHeader(req, "x-agent-role") ?? getHeader(req, "x-role");
+  const sessionId = getHeader(req, "x-session-id");
 
-  // Fallback: the MCP server is a shared long-running stdio process that
-  // cannot set per-beat headers. When headers are missing, resolve from the
-  // active session context. Beats serialize in v1, so findSoleActiveSessionContext
-  // is unambiguous. If a role header IS present, prefer findActiveSessionContextByRole.
-  if (!beatId || !companyId || !role) {
-    const ctx = role
-      ? findActiveSessionContextByRole(role)
+  // Resolve identity from session-context (authoritative) — spec 25 §3.2.
+  // Prefer explicit sessionId, then role-based lookup, then sole-active fallback.
+  let beatId: string | null = null;
+  let companyId: string | null = null;
+  let role: string | null = null;
+
+  const ctx = sessionId
+    ? getSessionContext(sessionId)
+    : claimedRole
+      ? findActiveSessionContextByRole(claimedRole)
       : findSoleActiveSessionContext();
-    if (ctx) {
-      beatId = beatId ?? ctx.beatId;
-      companyId = companyId ?? ctx.companyId;
-      role = role ?? ctx.role;
+
+  if (ctx) {
+    beatId = ctx.beatId;
+    companyId = ctx.companyId;
+    role = ctx.role;
+
+    // Headers are advisory — if present they must agree with resolved context.
+    if (claimedRole && claimedRole !== ctx.role) {
+      respondError(reply, "governance", `Identity mismatch: header role "${claimedRole}" differs from session role "${ctx.role}".`, "never", "identity_correct");
+      return reply;
     }
+    if (claimedBeatId && claimedBeatId !== ctx.beatId) {
+      respondError(reply, "governance", `Identity mismatch: header beatId differs from session beatId.`, "never", "identity_correct");
+      return reply;
+    }
+    if (claimedCompanyId && claimedCompanyId !== ctx.companyId) {
+      respondError(reply, "governance", `Identity mismatch: header companyId differs from session companyId.`, "never", "identity_correct");
+      return reply;
+    }
+  } else {
+    // No session-context found — fall back to headers (migration shim).
+    beatId = claimedBeatId;
+    companyId = claimedCompanyId;
+    role = claimedRole;
   }
 
   if (!beatId || !companyId || !role) {
     respondError(
       reply,
       "validation",
-      `Missing required headers (X-Beat-Id, X-Company-Id, X-Agent-Role). Active sessions: ${sessionContextSize()}`,
+      `Missing agent identity. Supply X-Session-Id or X-Beat-Id/X-Company-Id/X-Agent-Role headers. Active sessions: ${sessionContextSize()}`,
       "never",
       "headers_fixed"
     );
@@ -86,14 +106,14 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
   }
 
   const requestId = getHeader(req, "x-request-id") ?? randomUUID();
-  const idempotencyKey = getHeader(req, "idempotency-key") ?? (req.method !== "GET" ? randomUUID() : undefined);
+  const idempotencyKey = getHeader(req, "idempotency-key") ?? undefined;
 
-  if (idempotencyKey && !UUID_RE.test(idempotencyKey)) {
-    respondError(reply, "validation", "Idempotency-Key must be a UUID or opaque token.", "never", "client_supplies_key");
+  if (idempotencyKey && !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
+    respondError(reply, "validation", "Idempotency-Key must be 8-128 chars matching [A-Za-z0-9:_.\\-].", "never", "client_supplies_key");
     return reply;
   }
 
-  req.mcp = { beatId, companyId, role, requestId, idempotencyKey };
+  req.mcp = { beatId, companyId, role, requestId, idempotencyKey: idempotencyKey ?? null };
   void reply.header("x-request-id", requestId);
 };
 

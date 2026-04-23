@@ -113,9 +113,10 @@ export function buildCeoSprintPlanningPrompt(task: Task, snapshot: CompanySnapsh
   }
 
   // ── Available tool ──
+  // OpenCode names MCP tools as "arceus_<tool>" (MCP server name prefix).
   sections.push([
     "# Tool",
-    "Call `sprint_create` with:",
+    "Call `arceus_sprint_create` with:",
     "- `goal`: what this sprint delivers",
     "- `tasks`: array of { title, assigned_role, priority, depends_on, description }",
     "",

@@ -34,7 +34,7 @@ interface SprintsResponse extends Array<SprintData> {}
 /** A row in the navigable list */
 type ListRow =
   | { kind: "sprint-header"; sprint: SprintData }
-  | { kind: "task"; task: TaskData }
+  | { kind: "task"; task: TaskData; beatCount: number; lastBeatTime?: string }
   | { kind: "beat"; event: ActivityEvent; taskId: string }
   | { kind: "error-detail"; text: string; taskId: string };
 
@@ -47,6 +47,44 @@ function statusGlyph(status: string): string {
     case "failed": return "✗";
     case "blocked": return "⊘";
     default: return "○";
+  }
+}
+
+function isInternalRole(role: string): boolean {
+  return role.startsWith("_internal/") || role.startsWith("_internal\\");
+}
+
+function beatGlyph(type: string): string {
+  switch (type) {
+    case "beat_completed": return "✓";
+    case "beat_failed":    return "✗";
+    case "error":          return "!";
+    case "transition":     return "→";
+    case "tool_call":      return "⚙";
+    case "shell":          return "$";
+    case "file_edit":      return "✎";
+    case "context":        return "·";
+    case "prompt":         return "▸";
+    case "working":        return "⟩";
+    case "decision":       return "◆";
+    default:               return "·";
+  }
+}
+
+function beatColor(type: string): string {
+  switch (type) {
+    case "beat_completed": return "green";
+    case "beat_failed":
+    case "error":          return "red";
+    case "transition":     return "cyan";
+    case "tool_call":      return "magenta";
+    case "shell":          return "yellow";
+    case "file_edit":      return "blue";
+    case "context":        return "gray";
+    case "prompt":         return "white";
+    case "working":        return "cyan";
+    case "decision":       return "green";
+    default:               return "gray";
   }
 }
 
@@ -86,6 +124,8 @@ export function SprintView({ height, active, onEscape }: SprintViewProps) {
     }
     const map = new Map<string, ActivityEvent[]>();
     for (const e of all) {
+      // Skip internal agent events
+      if (isInternalRole(e.employee)) continue;
       const arr = map.get(e.taskId!) ?? [];
       arr.push(e);
       map.set(e.taskId!, arr);
@@ -123,19 +163,19 @@ export function SprintView({ height, active, onEscape }: SprintViewProps) {
 
       const sprintTasks = sprintMap.get(sn) ?? [];
       for (const task of sprintTasks) {
-        result.push({ kind: "task", task });
+        const taskBeats = beatsByTask.get(task.id) ?? [];
+        result.push({ kind: "task", task, beatCount: taskBeats.length, lastBeatTime: taskBeats[taskBeats.length - 1]?.timestamp });
 
         // If expanded, show beats and errors
         if (expandedTasks.has(task.id)) {
-          const beats = beatsByTask.get(task.id) ?? [];
-          const BEAT_TYPES = new Set(["beat_started", "beat_completed", "beat_failed", "working", "tool_call", "file_edit", "error", "decision", "context", "info", "transition", "shell", "memory", "preview"]);
-          const relevant = beats.filter((b) => BEAT_TYPES.has(b.type));
-          // Show last 10 beats max
-          for (const evt of relevant.slice(-10)) {
+          const BEAT_TYPES = new Set(["beat_started", "beat_completed", "beat_failed", "working", "tool_call", "file_edit", "error", "decision", "context", "info", "transition", "shell", "memory", "preview", "prompt"]);
+          const relevant = taskBeats.filter((b) => BEAT_TYPES.has(b.type));
+          // Show last 15 beats max
+          for (const evt of relevant.slice(-15)) {
             result.push({ kind: "beat", event: evt, taskId: task.id });
           }
           // Show errors
-          const errors = beats.filter((b) => b.type === "error");
+          const errors = taskBeats.filter((b) => b.type === "error");
           for (const err of errors.slice(-3)) {
             result.push({ kind: "error-detail", text: err.content, taskId: task.id });
           }
@@ -147,11 +187,11 @@ export function SprintView({ height, active, onEscape }: SprintViewProps) {
     if (unassigned.length > 0) {
       result.push({ kind: "sprint-header", sprint: { title: "Backlog" } });
       for (const task of unassigned) {
-        result.push({ kind: "task", task });
+        const taskBeats = beatsByTask.get(task.id) ?? [];
+        result.push({ kind: "task", task, beatCount: taskBeats.length, lastBeatTime: taskBeats[taskBeats.length - 1]?.timestamp });
         if (expandedTasks.has(task.id)) {
-          const beats = beatsByTask.get(task.id) ?? [];
-          const BACKLOG_TYPES = new Set(["beat_started", "beat_completed", "beat_failed", "working", "tool_call", "file_edit", "error", "decision", "context", "info", "transition", "shell", "memory", "preview"]);
-          for (const evt of beats.filter((b) => BACKLOG_TYPES.has(b.type)).slice(-10)) {
+          const BACKLOG_TYPES = new Set(["beat_started", "beat_completed", "beat_failed", "working", "tool_call", "file_edit", "error", "decision", "context", "info", "transition", "shell", "memory", "preview", "prompt"]);
+          for (const evt of taskBeats.filter((b) => BACKLOG_TYPES.has(b.type)).slice(-15)) {
             result.push({ kind: "beat", event: evt, taskId: task.id });
           }
         }
@@ -243,34 +283,35 @@ export function SprintView({ height, active, onEscape }: SprintViewProps) {
           const t = row.task;
           const expanded = expandedTasks.has(t.id);
           const color = taskStatusColor(t.status);
-          const title = t.title.length > 50 ? t.title.slice(0, 47) + "..." : t.title;
           return (
             <Box key={t.id}>
               <Text color={isCursor ? "cyan" : "gray"}>{pointer}</Text>
               <Text color={color}>{statusGlyph(t.status)} </Text>
-              <Text color={color}>{title}</Text>
               {t.assignedRole && (
-                <Text color={roleColor(t.assignedRole)} dimColor> {roleShort(t.assignedRole)}</Text>
+                <Text color={roleColor(t.assignedRole)} bold>{roleShort(t.assignedRole)} </Text>
               )}
+              <Box flexGrow={1}>
+                <Text color={color} wrap="truncate-end">{t.title}</Text>
+              </Box>
               {expanded && <Text dimColor> ▾</Text>}
+              {row.beatCount > 0 && <Text dimColor> ({row.beatCount})</Text>}
+              {row.lastBeatTime && <Text dimColor> {formatTime(row.lastBeatTime)}</Text>}
             </Box>
           );
         }
 
         if (row.kind === "beat") {
           const e = row.event;
-          const beatGlyph = e.type === "beat_completed" ? "✓" : e.type === "beat_failed" ? "✗" : e.type === "error" ? "!" : e.type === "tool_call" ? "⚙" : e.type === "shell" ? "$" : e.type === "file_edit" ? "✎" : "·";
-          const beatColor = e.type === "beat_completed" ? "green" : e.type === "beat_failed" || e.type === "error" ? "red" : e.type === "tool_call" ? "yellow" : e.type === "shell" ? "magenta" : e.type === "file_edit" ? "cyan" : "gray";
           return (
             <Box key={e.id}>
               <Text>{"     "}</Text>
-              <Text dimColor>{formatTime(e.timestamp)} </Text>
-              <Text color={beatColor}>{beatGlyph} </Text>
+              <Text color={beatColor(e.type)}>{beatGlyph(e.type)} </Text>
               <Text color={roleColor(e.employee)} dimColor>{roleShort(e.employee)}</Text>
               <Text dimColor> </Text>
-              <Text dimColor wrap="truncate-end">
-                {e.content.length > 50 ? e.content.slice(0, 47) + "..." : e.content}
-              </Text>
+              <Box flexGrow={1}>
+                <Text dimColor wrap="truncate-end">{e.content}</Text>
+              </Box>
+              <Text dimColor> {formatTime(e.timestamp)}</Text>
             </Box>
           );
         }
@@ -279,10 +320,10 @@ export function SprintView({ height, active, onEscape }: SprintViewProps) {
           return (
             <Box key={`err-${row.taskId}-${i}`}>
               <Text>{"     "}</Text>
-              <Text color="red">  Error: </Text>
-              <Text color="red" wrap="truncate-end">
-                {row.text.length > 50 ? row.text.slice(0, 47) + "..." : row.text}
-              </Text>
+              <Text color="red">  ! </Text>
+              <Box flexGrow={1}>
+                <Text color="red" wrap="truncate-end">{row.text}</Text>
+              </Box>
             </Box>
           );
         }

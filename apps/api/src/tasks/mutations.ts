@@ -44,7 +44,32 @@ export function addArtifact(agent: string, kind: Artifact["kind"], title: string
   };
   artifacts.push(artifact);
   void persistRuntimeArtifact(getSnapshot().company.id, artifact);
+  // Auto-write artifact to workspace filesystem
+  void writeArtifactToDisk(artifact).catch(() => {});
   return artifact;
+}
+
+/** Slugify a title for use as a filename. */
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "untitled";
+}
+
+/** Write an artifact to the appropriate workspace folder based on its kind. */
+async function writeArtifactToDisk(artifact: Artifact): Promise<void> {
+  const subdir = artifact.kind === "specification" ? "specs" : "artifacts";
+  const dir = join(productDir, subdir);
+  await mkdir(dir, { recursive: true });
+  const slug = slugify(artifact.title);
+  const filePath = join(dir, `${slug}.md`);
+  const header = `<!-- artifact: ${artifact.id} | agent: ${artifact.agent} | kind: ${artifact.kind} -->\n# ${artifact.title}\n\n`;
+  await writeFile(filePath, `${header}${artifact.content}\n`, "utf8");
+  emitEmployeeActivity(artifact.agent, "file_edit", `Artifact written to ${subdir}/${slug}.md`, {
+    detail: { artifactId: artifact.id, path: `${subdir}/${slug}.md` },
+  });
 }
 
 /** Write an artifact's content as a markdown file into the product docs directory. */

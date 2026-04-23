@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "@arceus/contracts";
 import type { McpContext } from "../context.js";
 import type { ArceusHttpClient } from "../http-client.js";
-import { toMcpContent } from "../envelope.js";
+import { deriveIdempotencyKey, toMcpContent } from "../envelope.js";
 
 const ARTIFACTS = "/api/internal/v1/artifacts";
 
@@ -25,11 +24,12 @@ export const registerArtifactTools = (
       },
     },
     async ({ kind, title, content, taskId }) => {
+      const body = { agent: ctx.role, kind, title, content, taskId };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: ARTIFACTS,
-        body: { agent: ctx.role, kind, title, content, taskId },
-        idempotencyKey: randomUUID(),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "artifact_create", body),
       });
       return toMcpContent(res.data);
     }
@@ -46,11 +46,12 @@ export const registerArtifactTools = (
       },
     },
     async ({ artifactId, taskId, slug }) => {
+      const body = { taskId, role: ctx.role, slug };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: `${ARTIFACTS}/${artifactId}/workspace-writes`,
-        body: { taskId, role: ctx.role, slug },
-        idempotencyKey: randomUUID(),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "artifact_write_to_workspace", { artifactId, ...body }),
       });
       return toMcpContent(res.data);
     }
@@ -67,11 +68,12 @@ export const registerArtifactTools = (
       },
     },
     async ({ artifactId, sprintId, taskId }) => {
+      const body = { sprintId, taskId };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: `${ARTIFACTS}/${artifactId}/persistence`,
-        body: { sprintId, taskId },
-        idempotencyKey: randomUUID(),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "artifact_persist", { artifactId, ...body }),
       });
       return toMcpContent(res.data);
     }

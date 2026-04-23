@@ -85,7 +85,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
 
       emitActivity("ceo", "transition", "CEO generating strategy...");
       const strategy = await generateStrategy(snapshot);
-      emitActivity("ceo", "transition", `Strategy ready: ${strategy.title}`);
+      emitActivity("ceo", "transition", `Strategy ready: ${strategy.strategy_title}`);
 
       snapshot = applyStrategy(strategy);
       emitActivity("system", "transition", `Strategy applied — ${snapshot.agents.length} agents, ${snapshot.tasks.length} tasks`);

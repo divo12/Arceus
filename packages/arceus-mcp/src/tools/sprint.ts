@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "@arceus/contracts";
 import type { McpContext } from "../context.js";
 import type { ArceusHttpClient } from "../http-client.js";
-import { toMcpContent } from "../envelope.js";
+import { deriveIdempotencyKey, toMcpContent } from "../envelope.js";
 
 const SPRINTS = "/api/internal/v1/sprints";
 
@@ -18,7 +17,7 @@ const sprintTaskSchema = z.object({
 
 export const registerSprintTools = (
   server: McpServer,
-  _ctx: McpContext,
+  ctx: McpContext,
   client: ArceusHttpClient
 ): void => {
   server.registerTool(
@@ -41,11 +40,12 @@ export const registerSprintTools = (
       console.error(`[MCP-DEBUG sprint_create] extra.authInfo=${JSON.stringify((extra as any).authInfo)}`);
       console.error(`[MCP-DEBUG sprint_create] extra.requestId=${(extra as any).requestId}`);
       console.error(`[MCP-DEBUG sprint_create] full extra=${JSON.stringify(extra, (k, v) => typeof v === "function" ? "[function]" : v)}`);
+      const body = { goal, tasks };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: `${SPRINTS}/create`,
-        body: { goal, tasks },
-        idempotencyKey: randomUUID(),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_create", body),
       });
       return toMcpContent(res.data);
     }

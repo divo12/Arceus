@@ -25,7 +25,7 @@ export async function bootstrapCompanyWithWorkspace(input: BootstrapInput) {
 /** Derive a company name from a free-text idea and bootstrap it with default settings. */
 export async function bootstrapIdeaWithWorkspace(idea: string) {
   return bootstrapCompanyWithWorkspace({
-    companyName: deriveCompanyNameFromIdea(idea),
+    companyName: await deriveCompanyNameFromIdea(idea),
     boardOwner: "Board",
     idea,
     budgetCents: 999_999_999,

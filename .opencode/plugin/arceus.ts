@@ -141,13 +141,14 @@ export const ArceusPlugin: Plugin = async () => {
       const ctx = await ensureCtx(input.sessionID);
       const allowed = ctx?.allowedTools
         ?? (governance.allowedTools.size > 0 ? [...governance.allowedTools] : []);
-      // OpenCode MCP tools are named "<server>_<tool>" (e.g. "arceus_sprint_create").
-      // The allowlist uses unprefixed names. Strip the "arceus_" prefix for the check.
-      const toolName = input.tool.startsWith("arceus_")
-        ? input.tool.slice("arceus_".length)
-        : input.tool;
-      if (allowed.length > 0 && !allowed.includes(toolName) && !allowed.includes(input.tool)) {
-        throw new Error(`[arceus-governance] Tool '${input.tool}' not in this beat's allowlist.`);
+      // Only gate Arceus MCP tools (prefixed "arceus_"). Built-in OpenCode tools
+      // (read, grep, bash, edit, etc.) are governed by OpenCode's own permission
+      // system via ROLE_CONFIGS.permission — the plugin must not double-gate them.
+      if (input.tool.startsWith("arceus_") && allowed.length > 0) {
+        const toolName = input.tool.slice("arceus_".length);
+        if (!allowed.includes(toolName) && !allowed.includes(input.tool)) {
+          throw new Error(`[arceus-governance] Tool '${input.tool}' not in this beat's allowlist.`);
+        }
       }
 
       const causes = Array.from(circuitTally.entries())

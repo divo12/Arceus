@@ -64,16 +64,41 @@ function titleCase(value: string) {
     .join(" ");
 }
 
-/** Derive a company name from a free-text idea string. */
-export function deriveCompanyNameFromIdea(idea: string) {
+/** Derive a fun, abstract 1-2 word company name from a free-text idea using the LLM. */
+export async function deriveCompanyNameFromIdea(idea: string): Promise<string> {
+  try {
+    const { structuredCompletion } = await import("../infra/azure-openai.js");
+    const { z } = await import("zod");
+    const schema = z.object({ name: z.string() });
+    const result = await structuredCompletion(
+      "ceoDeployment",
+      [
+        {
+          role: "system",
+          content:
+            "Generate a creative, fun, abstract company name (1-2 words). " +
+            "It should feel like a startup name — evocative, memorable, slightly playful. " +
+            "Do NOT include generic suffixes like Labs, Inc, Co, Corp, etc. " +
+            "Return ONLY the name. Examples of good names: Nebula, Helix, Prism, Opal, Zigzag.",
+        },
+        { role: "user", content: `Business idea: ${idea.slice(0, 200)}` },
+      ],
+      schema,
+      "company_name",
+      { temperature: 1.0, maxTokens: 30 },
+    );
+    const name = result.name?.trim();
+    if (name && name.length >= 2 && name.length <= 30) return name;
+  } catch {
+    // fall through to deterministic fallback
+  }
   const core = idea
     .replace(/[^a-zA-Z0-9\s]/g, " ")
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, 3)
+    .slice(0, 2)
     .join(" ");
-
-  return core ? `${titleCase(core)} Labs` : "New Company";
+  return core ? titleCase(core) : "New Company";
 }
 
 function buildAgentName(role: string) {

@@ -17,9 +17,36 @@ type OpencodeInstance = {
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
-// Project / repo root — process.cwd() is always the monorepo root
-// (Q:\projects\arc2.0 locally, /app in Docker).
-const projectRoot = process.cwd();
+
+/**
+ * Resolve the monorepo root.  process.cwd() varies by runner:
+ *   • `npm run dev` inside apps/api → cwd = apps/api
+ *   • Docker                        → cwd = /app (monorepo root)
+ *   • repo-level scripts            → cwd = monorepo root
+ *
+ * We walk up from __dirname (apps/api/src/infra) until we find the root
+ * opencode.json, which only exists at the monorepo root.
+ */
+function findMonorepoRoot(): string {
+  // __dirname equivalent for ESM: resolve from the import.meta-derived path,
+  // or fall back to a known relative path from this file's location.
+  let dir = resolve(import.meta.dirname ?? dirname(new URL(import.meta.url).pathname));
+  // On Windows, URL pathname may start with /C:/… — strip leading slash
+  if (process.platform === "win32" && dir.startsWith("/")) dir = dir.slice(1);
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(resolve(dir, "opencode.json")) && existsSync(resolve(dir, "packages"))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Fallback: assume process.cwd() is the monorepo root (Docker case)
+  return process.cwd();
+}
+
+const projectRoot = findMonorepoRoot();
+console.log(`[OpenCode] Monorepo root resolved: ${projectRoot} (cwd=${process.cwd()})`);
 // Product workspace — where agents write code. OpenCode spawns with this as cwd
 // so that all file tools (write, edit, bash) resolve relative to it.
 export const productWorkspace = resolve(projectRoot, "workspace");
@@ -57,10 +84,13 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   // Use absolute path because OpenCode runs with cwd=productWorkspace which
   // differs from the repo root where node_modules lives.
   const mcpTransport = resolve(projectRoot, "node_modules", "@arceus", "mcp", "src", "transport-stdio.ts");
+  // Use "node --import tsx" instead of "npx tsx" because OpenCode spawns MCP
+  // servers via child_process.spawn() without shell:true — on Windows, npx is
+  // a .cmd shim that spawn() cannot resolve without a shell.
   mergedConfig.mcp = {
     arceus: {
       type: "local",
-      command: ["npx", "tsx", mcpTransport],
+      command: ["node", "--import", "tsx", mcpTransport],
       environment: { ARCEUS_API: arceusApi, ARCEUS_TOKEN: arceusToken },
       enabled: true,
     },
@@ -246,6 +276,9 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
     cwd: productWorkspace,
     env: {
       ...process.env,
+      // Custom tools + plugin read these from the OpenCode process env
+      ARCEUS_API: `http://127.0.0.1:${serverConfig.port}`,
+      ARCEUS_TOKEN: process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "arceus-dev-token",
     }
   });
 
@@ -292,10 +325,11 @@ export async function getOpencode() {
   ensureAzureRuntimeEnvironment();
 
   if (!opencodePromise) {
-    // Always sync config so OpenCode's cwd has agent defs
-    syncOpencodeConfigToWorkspace(loadOpencodeConfig({ share: "disabled" }));
-
     const attempt = (async () => {
+      // Always write full config (plugin, agent defs, opencode.json) so
+      // a freshly-spawned server picks up the latest plugin and agent files.
+      await writeSharedOpencodeConfig();
+
       const existingUrl = `http://${runtimeConfig.opencodeHost}:${runtimeConfig.opencodePort}`;
 
       if (await detectExistingOpencodeServer(existingUrl)) {
@@ -328,11 +362,24 @@ export async function getOpencode() {
 
 /**
  * Invalidate the cached OpenCode instance so the next `getOpencode()` call
- * will reconnect to an existing server or launch a new one.  Call this when
- * a "fetch failed" or similar network error indicates the server died.
+ * will reconnect to an existing server or launch a new one.  Also kills
+ * the spawned server process so it picks up fresh plugin + agent files.
  */
-export function resetOpencodeConnection() {
+export async function resetOpencodeConnection() {
+  if (opencodePromise) {
+    try {
+      const instance = await opencodePromise;
+      instance.server.close();
+    } catch {
+      // Instance never resolved — nothing to kill
+    }
+  }
   opencodePromise = null;
+}
+
+/** Clear the cached CEO session so the next bootstrap creates a fresh one. */
+export function resetCeoSession() {
+  ceoSessionPromise = null;
 }
 
 /**

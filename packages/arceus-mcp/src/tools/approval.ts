@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "@arceus/contracts";
 import type { McpContext } from "../context.js";
 import type { ArceusHttpClient } from "../http-client.js";
-import { toMcpContent } from "../envelope.js";
+import { deriveIdempotencyKey, toMcpContent } from "../envelope.js";
 
 const APPROVALS = "/api/internal/v1/approvals";
 
@@ -26,11 +25,12 @@ export const registerApprovalTools = (
       },
     },
     async ({ type, title, description, meetingId, agendaItemId }) => {
+      const body = { type, requestedByRole: ctx.role, title, description, meetingId, agendaItemId };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: APPROVALS,
-        body: { type, requestedByRole: ctx.role, title, description, meetingId, agendaItemId },
-        idempotencyKey: randomUUID(),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "approval_request", body),
       });
       return toMcpContent(res.data);
     }

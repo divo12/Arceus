@@ -24,7 +24,7 @@ import {
 } from "./persistence/store.js";
 import { cpLoadAgentContext, cpApplyMutations, cpCommitBeatRecord, cpGetSnapshotVersion, cpSetBuildCheckDir, cpHydrateTrustScores } from "./persistence/control-plane.js";
 import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./infra/azure-openai.js";
-import { emitEmployeeActivity } from "./observability/activity.js";
+import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";
 import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit-ledger.js";
 import { seedRegistry } from "./governance/service-registry.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
@@ -350,7 +350,7 @@ onBeatEvent((event) => {
   // Skip non-lifecycle events (board_message, etc.) — they aren't real beats
   if (!BEAT_LIFECYCLE_TYPES.has(event.type)) return;
   const type = event.type as "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
-  emitEmployeeActivity(event.role, type, `${event.type}: ${event.data?.summary || event.beatId}`, {
+  emitEmployeeActivity(event.role, type, `${shortBeat(event.beatId)}: ${event.data?.summary || event.type}`, {
     beatId: event.beatId,
     detail: event.data ?? null,
   });
