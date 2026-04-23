@@ -8,12 +8,16 @@
 
 ## 0. TL;DR
 
+**Scope:** §1 Task, §2 Artifact, §3 Sprint, §4 Approval, §5 Meeting, §8 Workspace, §9 Context, §10 Board, §11 Execution. **Excluded** (tracked separately): §6 Memory (hippocampus engine + `memory_handoff` already live; rest deferred), §7 Skills admin (scheduler-driven pipeline, see `24-defer.md §SE`).
+
 | Layer | Spec target | Implemented | Gap |
 |---|---|---|---|
-| **MCP-registered tools** (LLM-visible) | ~66 across §1–§11 | **24** | **−42** |
-| **HTTP routes** (API callable) | ~66 with routes | **47** | **−19** |
-| **Tools missing entirely** (no route, no MCP) | — | — | **19** |
+| **MCP-registered tools** (LLM-visible, in scope) | ~56 across §1–§5 + §8–§11 | **23** | **−33** |
+| **HTTP routes** (API callable, in scope) | ~56 with routes | **46** | **−10** |
+| **Tools missing entirely** (no route, no MCP) | — | — | **21** |
 | **Orphan routes** (route exists, no MCP wrapper) | — | — | **12** |
+
+> Plus **1 bonus live MCP tool** (`memory_handoff`) in parked §6 — live and working; just not counted against the in-scope roadmap target.
 
 **Headline:** spec-26 §1 (task lifecycle) is mostly shipped; §2 (artifacts), §3 (sprints), §4 (approvals), §5 (meetings) shipped partially — routes landed, most MCP wrappers didn't. Spec-27 §8 (workspace), §9 (context), §10 (board), §11 (execution) largely unimplemented at the MCP layer.
 
@@ -102,29 +106,13 @@ Legend:
 
 **§5 score:** 1/4 live MCP, 3 route-only.
 
-### §6 — Memory (spec target: 3 post-walk)
-
-| # | Tool | MCP | Route | Status |
-|---|---|:-:|:-:|---|
-| 1 | `memory_search` | ❌ | ❌ | ❌ **MISSING** (needs `hippocampus.search()` public method) |
-| 2 | `memory_add_learning` | ❌ | ❌ | ❌ **MISSING** |
-| 3 | `memory_handoff` | ✅ | ✅ | ✅ **Live** |
-
-**§6 score:** 1/3 live, 2 missing. Matches our [07 philosophy doc](../agent-redesign/07-memory-and-skills-philosophy.md) §1 design.
-
-### §7 — Skills admin (spec target: 7 post-walk)
-
-| # | Tool | MCP | Route | Status |
-|---|---|:-:|:-:|---|
-| 1 | `skill_health_report` | ❌ | ❌ | ❌ **MISSING** |
-| 2 | `skill_audit_unused` | ❌ | ❌ | ❌ **MISSING** |
-| 3 | `skill_inspect_history` | ❌ | ❌ | ❌ **MISSING** |
-| 4 | `skill_register` | ❌ | ❌ | ❌ **MISSING** |
-| 5 | `skill_update` | ❌ | ❌ | ❌ **MISSING** |
-| 6 | `skill_deprecate` | ❌ | ❌ | ❌ **MISSING** |
-| 7 | `skill_validate_definition` | ❌ | ❌ | ❌ **MISSING** |
-
-**§7 score:** 0/7. Entire category unimplemented. See `24-defer.md §SE` for why (scheduler-driven pipeline = future spec 28).
+> **§6 Memory and §7 Skills admin are out of scope for this gap analysis.**
+> §6 is covered by the hippocampus engine + the `memory_handoff` MCP tool
+> that already shipped (live); the remaining `memory_search` +
+> `memory_add_learning` are deferred pending the hippocampus public
+> `search()` method. §7 is scheduler-driven pipeline territory (spec 28 +
+> [`24-defer.md §SE`](./24-defer.md)). Both tracked separately; not part of
+> first-ship roadmap.
 
 ### §8 — Workspace (spec target: 11, mixed MCP + role-custom)
 
@@ -212,7 +200,7 @@ Each needs a short tool file in `packages/arceus-mcp/src/tools/`. Estimated 1-2 
 11. `execution_reconcile_post_review` → `POST /execution/reconcile`
 12. `execution_stop` → `POST /execution/stop`
 
-### Missing — needs both route + MCP wrapper (~19 tools)
+### Missing — needs both route + MCP wrapper (21 tools)
 
 By category:
 
@@ -220,7 +208,6 @@ By category:
 - **Artifact (2):** `artifact_get`, `artifact_list_sprint`
 - **Sprint (4):** `sprint_check_completion`, `sprint_run_qa_gate`, `sprint_run_final_gate`, `sprint_finalize`
 - **Approval (3):** `approval_get`, `approval_update`, `approval_decide`
-- **Memory (2):** `memory_search`, `memory_add_learning`
 - **Workspace MCP (4):** `workspace_get_preview_url`, `workspace_get_build_health`, `workspace_check_exports`, `workspace_verify_baseline`
 - **Board (2):** `board_post_message`, `board_list_messages`
 
@@ -233,10 +220,6 @@ Need new `.opencode/tool/<role>/*.ts` files (developer bundle + qa bundle):
 - `workspace_collect_evidence` (qa)
 - `workspace_run_acceptance_suite` (qa)
 - `workspace_diff_against_criteria` (qa)
-
-### Missing — skill admin (7 tools, §7)
-
-All 7 SL tools are spec 28 territory (background signal pipelines). Not blocking first-ship.
 
 ### Contract verification needed (5 tools)
 
@@ -258,8 +241,6 @@ Live but may not match the post-spec-26 contract:
 **Delete per spec 27 §14 / philosophy §2.5:**
 - `generateWorkflowTaskPlan` at `apps/api/src/tasks/planner.ts:91`
 - `classifyTaskSkills` at `apps/api/src/skills/classifier.ts:34`
-- `skill_evolution_agent` entry in `INTERNAL_AGENTS`
-- `memory_agent` entry in `INTERNAL_AGENTS` (this session's uncommitted edit)
 
 ### Not-yet-added hooks
 
@@ -282,7 +263,6 @@ Diff the 5 live-but-uncertain tools against their spec contracts. Either confirm
 - Drop `artifact_persist` + `task_attach_artifact` MCP registrations
 - Return 410 Gone on corresponding routes for 2 weeks
 - Delete anti-pattern standalone calls (`generateWorkflowTaskPlan`, `classifyTaskSkills`)
-- Delete `memory_agent` + `skill_evolution_agent` from `INTERNAL_AGENTS`
 
 ### Phase D — Fill §1/§2/§4 gaps (2–3 days)
 
@@ -295,31 +275,28 @@ High-value reads + writes:
 
 The §3 gate trio (`sprint_check_completion`, `sprint_run_qa_gate`, `sprint_run_final_gate`, `sprint_finalize`) — needed for sprint close.
 
-### Phase F — Memory search + add (1 day)
-
-`memory_search` requires new `hippocampus.search()` public method. `memory_add_learning` wraps existing `hippocampus.storeMemories([unit])`.
-
-### Phase G — Board surface (1–2 days)
+### Phase F — Board surface (1–2 days)
 
 `board_post_message` + `board_list_messages` — CEO-only; straightforward.
 
-### Phase H — Workspace MCP tools (2–3 days)
+### Phase G — Workspace MCP tools (2–3 days)
 
 4 remaining MCP tools in §8: preview URL read, build health, exports check, baseline verify.
 
-### Phase I — Workspace role-custom bundle (3–4 days)
+### Phase H — Workspace role-custom bundle (3–4 days)
 
 5 QA + dev role-custom tools. Need Playwright (qa bundle) + TypeScript Program cache (dev bundle).
 
-### Phase J — Hooks + plugin polish (0.5 day)
+### Phase I — Hooks + plugin polish (0.5 day)
 
 Add `beat_watchdog_reset` PostToolUse hook. Review allowlist per-role configs match catalog.
 
-**Total effort estimate: ~13–18 engineering days (single-threaded).** Parallelizable across 2-3 streams.
+**Total effort estimate: ~12–17 engineering days (single-threaded).** Parallelizable across 2-3 streams.
 
-### Out of scope (spec 28 territory)
+### Out of scope (tracked separately)
 
-- §7 SL skill-admin tools (7) — wait for skill-evolution pipeline spec
+- §6 Memory tools (`memory_search`, `memory_add_learning`) — deferred; `memory_handoff` already live
+- §7 Skills admin (7 SL tools) — spec 28 (background signal pipelines); [`24-defer.md §SE`](./24-defer.md)
 - §12 Governance reads — closed per spec 27 (no implementation needed)
 - §13 Trust/audit — dropped (admin dashboard follow-on, not tool work)
 
@@ -335,7 +312,6 @@ Add `beat_watchdog_reset` PostToolUse hook. Review allowlist per-role configs ma
 | `artifact_persist` retirement breaks live agents calling it | Low | Medium | 410 Gone window; `tool_retired` error cause with `replacement` pointer |
 | Live `task_attach_artifact` callers have no migration | Medium | Medium | Check agent `.md` files for calls; migrate to `task_create.referenceArtifactIds` |
 | Some "live" tools may have drifted behavior across the rebase | Low | Medium | Re-run integration tests after each batch of MCP wrappings |
-| Skill admin (§7) untouched may block SL role maturity | High | Medium | Fold into spec 28 (background signal pipelines); not first-ship blocker |
 
 ### Notes for implementers
 
