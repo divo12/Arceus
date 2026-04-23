@@ -40,6 +40,22 @@ export const ERROR_CAUSES = [
   "session_required",
   "session_not_found",
   "identity_mismatch",
+  // Spec 26 — task/sprint/approval/meeting state causes
+  "deps_unmet",
+  "task_not_claimable",
+  "task_not_claimed",
+  "approval_not_pending",
+  "sprint_not_executing",
+  "meeting_not_open",
+  "persistence_failed",
+  // Spec 27 — workspace/execution causes
+  "preview_unavailable",
+  "baseline_failed",
+  "execution_locked",
+  "invalid_next_action",
+  "tool_retired",
+  // Approval type-gating
+  "type_not_allowed",
 ] as const;
 
 export type ErrorCause = (typeof ERROR_CAUSES)[number];
@@ -54,4 +70,17 @@ export const causeToStatus: Record<ErrorCause, number> = {
   session_required: 401,
   session_not_found: 404,
   identity_mismatch: 403,
+  deps_unmet: 409,
+  task_not_claimable: 409,
+  task_not_claimed: 409,
+  approval_not_pending: 409,
+  sprint_not_executing: 409,
+  meeting_not_open: 409,
+  persistence_failed: 500,
+  preview_unavailable: 503,
+  baseline_failed: 200,
+  execution_locked: 409,
+  invalid_next_action: 400,
+  tool_retired: 410,
+  type_not_allowed: 403,
 };

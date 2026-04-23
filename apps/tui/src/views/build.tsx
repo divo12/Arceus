@@ -48,6 +48,12 @@ const MILESTONE_ACTIVITY = new Set([
   "file_edit",    // files written/modified by agents
 ]);
 
+// Decision events worth surfacing (skip noisy governance/trust updates)
+function isNotableDecision(e: ActivityEvent): boolean {
+  if (e.type !== "decision") return false;
+  return e.content.startsWith("shadow beat");
+}
+
 // Which audit events are milestones
 const MILESTONE_AUDIT = new Set([
   "task_created", "task_completed", "task_failed",
@@ -64,6 +70,7 @@ function activityGlyph(type: string): string {
     case "tool_call":      return "⚙";
     case "shell":          return "$";
     case "file_edit":      return "✎";
+    case "decision":       return "⚖";
     default:               return "·";
   }
 }
@@ -77,6 +84,7 @@ function activityColor(type: string): string {
     case "tool_call":      return "magenta";
     case "shell":          return "yellow";
     case "file_edit":      return "blue";
+    case "decision":       return "cyan";
     default:               return "white";
   }
 }
@@ -218,7 +226,7 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
   // Build milestones
   const milestones = useMemo<MilestoneEntry[]>(() => {
     const entries: MilestoneEntry[] = [
-      ...activityEvents.filter((e) => MILESTONE_ACTIVITY.has(e.type)).map(mapActivityMilestone),
+      ...activityEvents.filter((e) => MILESTONE_ACTIVITY.has(e.type) || isNotableDecision(e)).map(mapActivityMilestone),
       ...auditEvents.filter((e) => MILESTONE_AUDIT.has(e.eventType)).map(mapAuditMilestone),
     ];
     return entries.sort((a, b) => a.time.localeCompare(b.time));

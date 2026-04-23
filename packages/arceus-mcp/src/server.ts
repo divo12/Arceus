@@ -9,6 +9,7 @@ import { registerApprovalTools } from "./tools/approval.js";
 import { registerSprintTools } from "./tools/sprint.js";
 import { registerMetaTools } from "./tools/meta.js";
 import { registerMemoryTools } from "./tools/memory.js";
+import { registerBeatTools } from "./tools/beat.js";
 
 export const createArceusMcpServer = (ctx: McpContext): McpServer => {
   const server = new McpServer({ name: "arceus-mcp", version: "0.1.0" });
@@ -21,6 +22,7 @@ export const createArceusMcpServer = (ctx: McpContext): McpServer => {
   registerApprovalTools(server, ctx, client);
   registerSprintTools(server, ctx, client);
   registerMemoryTools(server, ctx, client);
+  registerBeatTools(server, ctx, client);
   registerMetaTools(server, ctx, client);
 
   return server;

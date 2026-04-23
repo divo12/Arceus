@@ -10,8 +10,15 @@ export interface TaskInfo {
   priority?: string;
 }
 
+export interface TaskStats {
+  toolCalls: number;
+  fileEdits: number;
+  shellCmds: number;
+}
+
 interface TaskRowProps {
   task: TaskInfo;
+  stats?: TaskStats;
 }
 
 function statusGlyph(status: string): string {
@@ -30,11 +37,19 @@ function statusGlyph(status: string): string {
   }
 }
 
-export function TaskRow({ task }: TaskRowProps) {
-  const title = task.title.length > 45
-    ? task.title.slice(0, 42) + "..."
+export function TaskRow({ task, stats }: TaskRowProps) {
+  const title = task.title.length > 40
+    ? task.title.slice(0, 37) + "..."
     : task.title;
   const color = taskStatusColor(task.status);
+
+  const statParts: string[] = [];
+  if (stats) {
+    if (stats.toolCalls > 0) statParts.push(`⚙${stats.toolCalls}`);
+    if (stats.fileEdits > 0) statParts.push(`✎${stats.fileEdits}`);
+    if (stats.shellCmds > 0) statParts.push(`$${stats.shellCmds}`);
+  }
+  const statBadge = statParts.length > 0 ? ` ${statParts.join(" ")}` : "";
 
   return (
     <Box>
@@ -46,6 +61,7 @@ export function TaskRow({ task }: TaskRowProps) {
           <Text dimColor>{task.assignedRole}</Text>
         </>
       )}
+      {statBadge && <Text color="gray">{statBadge}</Text>}
     </Box>
   );
 }

@@ -66,6 +66,7 @@ const createArtifactBody = z.object({
   title: z.string().min(1).max(300),
   content: z.string().min(1).max(200_000),
   taskId: z.string().min(1).optional(),
+  attachToTaskIds: z.array(z.string()).max(10).optional(),
 });
 
 const workspaceWriteBody = z.object({
@@ -95,8 +96,10 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     const agent = body.agent || req.mcp?.role || "unknown";
     const artifact = addArtifact(agent, body.kind, body.title, body.content);
 
-    if (body.taskId) {
-      attachArtifactToTask(body.taskId, artifact.id);
+    // Attach to tasks — support both single taskId and array
+    const taskIds = body.attachToTaskIds ?? (body.taskId ? [body.taskId] : []);
+    for (const tid of taskIds) {
+      attachArtifactToTask(tid, artifact.id);
     }
 
     const location = `${ARTIFACT_BASE}/${artifact.id}`;
@@ -107,7 +110,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
       success(`Artifact ${artifact.id} created.`, {
         artifactId: artifact.id,
         kind: artifact.kind,
-        taskId: body.taskId ?? null,
+        attachedToTaskIds: taskIds,
       }),
       location,
     );
@@ -206,6 +209,55 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
           taskId: body.taskId ?? null,
         }),
       );
+    },
+  );
+
+  // GET /artifacts/:artifactId — read a single artifact
+  app.get<{ Params: { artifactId: string } }>(
+    `${ARTIFACT_BASE}/:artifactId`,
+    async (req, reply) => {
+      const { artifactId } = req.params;
+      const artifact = findArtifact(artifactId);
+      if (!artifact) {
+        sendNotFound(reply, `Artifact ${artifactId}`);
+        return;
+      }
+      cacheAndSend(req, reply, 200, success(`Artifact ${artifactId}.`, { artifact }));
+    },
+  );
+
+  // GET /artifacts?sprintId=X — list artifacts for a sprint
+  app.get<{ Querystring: { sprintId?: string; kind?: string; limit?: string } }>(
+    ARTIFACT_BASE,
+    async (req, reply) => {
+      const { sprintId, kind, limit: limitStr } = req.query;
+      const snapshot = getSnapshot();
+      const limit = Math.min(parseInt(limitStr || "50", 10), 100);
+
+      let filtered = artifacts;
+
+      if (sprintId) {
+        // Find tasks in this sprint, then find artifacts attached to those tasks
+        const sprintTaskIds = new Set(
+          snapshot.tasks.filter((t) => t.sprintId === sprintId).map((t) => t.id),
+        );
+        filtered = filtered.filter(
+          (a) => snapshot.tasks.some(
+            (t) => sprintTaskIds.has(t.id) && t.artifactIds.includes(a.id),
+          ),
+        );
+      }
+
+      if (kind) {
+        filtered = filtered.filter((a) => a.kind === kind);
+      }
+
+      const results = filtered.slice(-limit);
+
+      cacheAndSend(req, reply, 200, success(
+        `${results.length} artifact(s) found.`,
+        { artifacts: results, total: results.length },
+      ));
     },
   );
 }

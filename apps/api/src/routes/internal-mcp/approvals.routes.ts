@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { requestApproval } from "../../memory/handoffs.js";
+import { getSnapshot } from "../../persistence/store.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -54,6 +55,8 @@ const approvalTypeSchema = z.enum([
   "meeting_blocker",
   "external_action",
   "tool_governance",
+  "architecture_change",
+  "scope_change",
 ]);
 
 const roleSchema = z.enum([
@@ -84,7 +87,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     if (!body) return;
 
     const approval = requestApproval({
-      type: body.type,
+      type: body.type as "strategy" | "hire" | "meeting_blocker" | "external_action" | "tool_governance",
       requestedByRole: body.requestedByRole,
       title: body.title,
       description: body.description,
@@ -123,4 +126,92 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       location,
     );
   });
+
+  // GET /approvals/:approvalId — read a single approval, or GET /approvals?status=&pendingMyDecision=
+  app.get<{ Params: { approvalId?: string }; Querystring: { status?: string; limit?: string } }>(
+    `${APPROVALS_BASE}/:approvalId`,
+    async (req, reply) => {
+      const { approvalId } = req.params;
+      const snapshot = getSnapshot();
+      const approval = snapshot.approvals?.find((a) => a.id === approvalId);
+      if (!approval) {
+        reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
+        return;
+      }
+      cacheAndSend(req, reply, 200, success(`Approval ${approvalId}.`, { approval }));
+    },
+  );
+
+  // GET /approvals — list approvals with filters
+  app.get<{ Querystring: { status?: string; limit?: string } }>(
+    APPROVALS_BASE,
+    async (req, reply) => {
+      const { status, limit: limitStr } = req.query;
+      const snapshot = getSnapshot();
+      const limit = Math.min(parseInt(limitStr || "50", 10), 100);
+      let approvals = snapshot.approvals ?? [];
+
+      if (status) {
+        approvals = approvals.filter((a) => a.status === status);
+      }
+
+      const results = approvals.slice(-limit);
+      cacheAndSend(req, reply, 200, success(`${results.length} approval(s).`, {
+        approvals: results,
+        total: results.length,
+      }));
+    },
+  );
+
+  // POST /approvals/:approvalId/decide — CEO decides on an approval
+  app.post<{ Params: { approvalId: string } }>(
+    `${APPROVALS_BASE}/:approvalId/decide`,
+    async (req, reply) => {
+      if (req.mcp?.role !== "ceo") {
+        reply.code(403).send(failure("Only CEO can decide approvals.", "governance", "never", "role_is_ceo"));
+        return;
+      }
+
+      const decideBody = z.object({
+        decision: z.enum(["approved", "rejected"]),
+        reason: z.string().max(2000).optional(),
+      });
+      const body = parseOrFail(decideBody, req.body, reply);
+      if (!body) return;
+
+      const { approvalId } = req.params;
+      const snapshot = getSnapshot();
+      const approval = snapshot.approvals?.find((a) => a.id === approvalId);
+      if (!approval) {
+        reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
+        return;
+      }
+
+      if (approval.status !== "pending") {
+        reply.code(409).send(failure(
+          `Approval ${approvalId} is "${approval.status}" — not pending.`,
+          "approval_not_pending", "never", "approval_pending",
+        ));
+        return;
+      }
+
+      // Type-gated: CEO cannot decide board-only types
+      const boardOnlyTypes = ["strategy", "hire", "external_action"];
+      if (boardOnlyTypes.includes(approval.type)) {
+        reply.code(403).send(failure(
+          `Approval type "${approval.type}" requires board decision, not CEO.`,
+          "type_not_allowed", "never", "board_decides",
+        ));
+        return;
+      }
+
+      approval.status = body.decision;
+      approval.resolutionSummary = body.reason ?? `${body.decision} by CEO`;
+
+      cacheAndSend(req, reply, 200, success(`Approval ${approvalId} ${body.decision}.`, {
+        approvalId,
+        decision: body.decision,
+      }));
+    },
+  );
 }

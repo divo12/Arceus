@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
 import { z, ZodError, type ZodSchema } from "zod";
 import type { AgentIdentity, Meeting, Task } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
+import { getSnapshot } from "../../persistence/store.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -186,4 +188,114 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       location,
     );
   });
+
+  // GET /meetings/:meetingId — read a single meeting
+  app.get<{ Params: { meetingId: string } }>(
+    `${MEETINGS_BASE}/:meetingId`,
+    async (req, reply) => {
+      const { meetingId } = req.params;
+      const snapshot = getSnapshot();
+      const meeting = snapshot.meetings?.find((m) => m.id === meetingId);
+      if (!meeting) {
+        reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
+        return;
+      }
+      cacheAndSend(req, reply, 200, success(`Meeting ${meetingId}.`, { meeting }));
+    },
+  );
+
+  // POST /meetings/request-decision — open an async decision meeting
+  app.post(
+    `${MEETINGS_BASE}/request-decision`,
+    async (req, reply) => {
+      const requestDecisionBody = z.object({
+        topic: z.string().min(1).max(200),
+        description: z.string().min(1).max(4000),
+        participantRoles: z.array(z.string()).min(1).max(8),
+        deadline: z.string().optional(),
+      });
+      const body = parseOrFail(requestDecisionBody, req.body, reply);
+      if (!body) return;
+
+      const mcp = req.mcp!;
+      const meetingId = `mtg_${randomUUID().slice(0, 12)}`;
+      const now = new Date().toISOString();
+
+      // Record the meeting shell with status "open"
+      const meeting: Meeting = recordMeeting({
+        type: "escalation",
+        facilitatorRole: mcp.role as AgentIdentity["role"],
+        participantRoles: body.participantRoles as AgentIdentity["role"][],
+        summary: `Decision requested: ${body.topic}`,
+        agenda: [{
+          topic: body.topic,
+          type: "proposal",
+          content: body.description,
+          raisedByRole: mcp.role as AgentIdentity["role"],
+          relatedTaskId: null,
+        }],
+        decisions: [],
+        learnings: [],
+        taskModifications: [],
+        memoryModifications: [],
+      });
+
+      cacheAndSend(
+        req,
+        reply,
+        201,
+        success(`Decision meeting ${meeting.id} created.`, {
+          meetingId: meeting.id,
+          topic: body.topic,
+          participantRoles: body.participantRoles,
+          status: "open",
+        }),
+        `${MEETINGS_BASE}/${meeting.id}`,
+      );
+    },
+  );
+
+  // POST /meetings/:meetingId/contribute — attach a position/artifact to an open meeting
+  app.post<{ Params: { meetingId: string } }>(
+    `${MEETINGS_BASE}/:meetingId/contribute`,
+    async (req, reply) => {
+      const contributeBody = z.object({
+        artifactId: z.string().min(1),
+        position: z.string().max(2000).optional(),
+      });
+      const body = parseOrFail(contributeBody, req.body, reply);
+      if (!body) return;
+
+      const { meetingId } = req.params;
+      const snapshot = getSnapshot();
+      const meeting = snapshot.meetings?.find((m) => m.id === meetingId);
+      if (!meeting) {
+        reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
+        return;
+      }
+
+      const mcp = req.mcp!;
+
+      // Add contribution to meeting
+      meeting.contributions.push({
+        agentId: `agent_${mcp.role}`,
+        agentName: mcp.role,
+        agentRole: mcp.role,
+        contribution: {
+          whatIDid: body.position ?? `Contributed artifact ${body.artifactId}`,
+          whatImDoing: "",
+          blockers: "",
+          learnings: "",
+          questionsForTeam: "",
+        },
+        submittedAt: new Date().toISOString(),
+      });
+
+      cacheAndSend(req, reply, 200, success(`Contribution added to meeting ${meetingId}.`, {
+        meetingId,
+        artifactId: body.artifactId,
+        contributedBy: mcp.role,
+      }));
+    },
+  );
 }

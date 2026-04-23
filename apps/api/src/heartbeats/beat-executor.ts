@@ -30,7 +30,6 @@ import { cpUpdateTrustScore } from "../persistence/control-plane.js";
 import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession, updateAgentSessionState } from "../agents/sessions.js";
 import { buildSkillCatalog } from "../skills/catalog.js";
-import { matchAndRecordSkills } from "../skills/classifier.js";
 import { setTaskStatus } from "../tasks/mutations.js";
 import { collectWorkspaceSnapshot, tryAutoPreview } from "../workspace/monitor.js";
 import { scaffoldProductWorkspace } from "../workspace/scaffold.js";
@@ -39,6 +38,10 @@ import {
   setEventBridgeStarted, productDir,
 } from "../orchestration/state.js";
 import { startEventBridge } from "./event-bridge.js";
+import { scoreBeatVerdict, clearBeatTaskTransitions } from "../orchestration/beat-scoring.js";
+import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
+import { updateSuccessRate } from "@arceus/company-runtime";
+import { cleanupBeatScratch } from "../infra/beat-paths.js";
 
 // ── Beat prompt enrichment ─────────────────────────────────────────────────
 // Appends task identity, dependency state, and tool-usage instructions
@@ -121,9 +124,10 @@ export async function executeBeatTask(
 
   const role = ctx.role;
 
-  // Spec 14 (progressive disclosure): pick relevant skills via an LLM classifier
+  // Spec 23: progressive-disclosure catalog injected into beat prompt.
+  // Pre-classify LLM call retired — agents pick skills on demand.
   const availableSkillCount = buildSkillCatalog(role).length;
-  const matchedSkillIds = await matchAndRecordSkills(role, `${task.title} ${task.description}`);
+  const matchedSkillIds: string[] = []; // no pre-classify; catalog is in beat prompt
 
   emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: picked "${task.title}" [${task.status}]`, {
     beatId, taskId, detail: { taskStatus: task.status, taskPriority: task.priority, assignedRole: task.assignedRole, definitionOfDone: task.definitionOfDone, availableSkillCount, appliedSkillIds: matchedSkillIds },
@@ -277,6 +281,16 @@ export async function executeBeatTask(
       unregisterSessionContext(beatSession.id);
       destroyBeatSession(beatSession.id).catch(() => {});
     }
+
+    // ── Beat scoring + skill tracking (Phase B — parity with runBeat) ──
+    const verdict = await scoreBeatVerdict(beatId).catch(() => "fail" as const);
+    const usedSkills = getBeatSkillUsage(beatId);
+    for (const skillId of usedSkills) {
+      updateSuccessRate(skillId, verdict === "pass" ? 1 : 0);
+    }
+    clearBeatSkillUsage(beatId);
+    clearBeatTaskTransitions(beatId);
+    cleanupBeatScratch(beatId).catch(() => {});
   }
 }
 

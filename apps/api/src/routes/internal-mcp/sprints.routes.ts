@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { createSprintWithTasks } from "../../sprints/proposals.js";
+import { getSnapshot } from "../../persistence/store.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -89,4 +90,176 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       reply.code(400).send(failure(msg, "validation", "never", "payload_fixed"));
     }
   });
+
+  // GET /sprints/active — get the currently active sprint
+  app.get(`${SPRINTS_BASE}/active`, async (req, reply) => {
+    const snapshot = getSnapshot();
+    const company = snapshot.company;
+    const activeSprint = snapshot.sprints.find((s) => s.id === company.currentSprintId);
+
+    if (!activeSprint) {
+      reply.code(404).send(failure("No active sprint.", "not_found", "never", "sprint_created"));
+      return;
+    }
+
+    const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === activeSprint.id);
+    const taskCounts = {
+      total: sprintTasks.length,
+      created: sprintTasks.filter((t) => t.status === "created").length,
+      planned: sprintTasks.filter((t) => t.status === "planned").length,
+      in_progress: sprintTasks.filter((t) => t.status === "in_progress").length,
+      completed: sprintTasks.filter((t) => t.status === "completed" && !t.verifierState.isVerified).length,
+      verified: sprintTasks.filter((t) => t.status === "completed" && t.verifierState.isVerified).length,
+      blocked: sprintTasks.filter((t) => t.status === "blocked").length,
+      failed: sprintTasks.filter((t) => t.status === "failed").length,
+    };
+
+    cacheAndSend(req, reply, 200, success(`Sprint ${activeSprint.number} active.`, {
+      sprint: activeSprint,
+      taskCounts,
+    }));
+  });
+
+  // GET /sprints/:sprintId/completion — check sprint completion readiness
+  app.get<{ Params: { sprintId: string } }>(
+    `${SPRINTS_BASE}/:sprintId/completion`,
+    async (req, reply) => {
+      const { sprintId } = req.params;
+      const snapshot = getSnapshot();
+      const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+      if (!sprint) {
+        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return;
+      }
+
+      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      const total = sprintTasks.length;
+      const completed = sprintTasks.filter((t) => t.status === "completed").length;
+      const verified = sprintTasks.filter((t) => t.status === "completed" && t.verifierState.isVerified).length;
+      const blocked = sprintTasks.filter((t) => t.status === "blocked").length;
+      const failed = sprintTasks.filter((t) => t.status === "failed").length;
+      const remaining = total - completed - failed;
+      const readyToFinalize = remaining === 0 && blocked === 0;
+
+      cacheAndSend(req, reply, 200, success(`Sprint ${sprintId} completion check.`, {
+        sprintId,
+        total,
+        completed,
+        verified,
+        blocked,
+        failed,
+        remainingRequired: remaining,
+        readyToFinalize,
+      }));
+    },
+  );
+
+  // POST /sprints/:sprintId/qa-gate — QA agent checks sprint health (read-only)
+  app.post<{ Params: { sprintId: string } }>(
+    `${SPRINTS_BASE}/:sprintId/qa-gate`,
+    async (req, reply) => {
+      const role = req.mcp?.role;
+      if (role !== "tester" && role !== "cto") {
+        reply.code(403).send(failure("QA gate requires tester or cto role.", "governance", "never", "role_is_qa_or_cto"));
+        return;
+      }
+      const { sprintId } = req.params;
+      const snapshot = getSnapshot();
+      const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+      if (!sprint) {
+        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return;
+      }
+
+      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      const completedNotVerified = sprintTasks.filter(
+        (t) => t.status === "completed" && !t.verifierState?.isVerified,
+      );
+      const failedTasks = sprintTasks.filter((t) => t.status === "failed");
+      const passed = completedNotVerified.length === 0 && failedTasks.length === 0;
+
+      cacheAndSend(req, reply, 200, success(`QA gate ${passed ? "passed" : "failed"}.`, {
+        sprintId,
+        passed,
+        unverifiedTasks: completedNotVerified.map((t) => ({ id: t.id, title: t.title })),
+        failedTasks: failedTasks.map((t) => ({ id: t.id, title: t.title })),
+      }));
+    },
+  );
+
+  // POST /sprints/:sprintId/final-gate — CTO checks build/integration readiness (read-only)
+  app.post<{ Params: { sprintId: string } }>(
+    `${SPRINTS_BASE}/:sprintId/final-gate`,
+    async (req, reply) => {
+      if (req.mcp?.role !== "cto") {
+        reply.code(403).send(failure("Final gate requires CTO role.", "governance", "never", "role_is_cto"));
+        return;
+      }
+      const { sprintId } = req.params;
+      const snapshot = getSnapshot();
+      const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+      if (!sprint) {
+        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return;
+      }
+
+      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      const allVerified = sprintTasks.every(
+        (t) => t.status === "completed" || t.status === "failed" || t.status === "cancelled",
+      );
+      const blockedCount = sprintTasks.filter((t) => t.status === "blocked").length;
+
+      cacheAndSend(req, reply, 200, success(`Final gate check.`, {
+        sprintId,
+        allVerified,
+        blockedCount,
+        taskSummary: {
+          total: sprintTasks.length,
+          verified: sprintTasks.filter((t) => t.status === "completed" && t.verifierState.isVerified).length,
+          completed: sprintTasks.filter((t) => t.status === "completed" && !t.verifierState.isVerified).length,
+          failed: sprintTasks.filter((t) => t.status === "failed").length,
+          blocked: blockedCount,
+        },
+      }));
+    },
+  );
+
+  // POST /sprints/:sprintId/finalize — CEO finalizes the sprint
+  app.post<{ Params: { sprintId: string } }>(
+    `${SPRINTS_BASE}/:sprintId/finalize`,
+    async (req, reply) => {
+      if (req.mcp?.role !== "ceo") {
+        reply.code(403).send(failure("Only CEO can finalize sprints.", "governance", "never", "role_is_ceo"));
+        return;
+      }
+      const { sprintId } = req.params;
+      const snapshot = getSnapshot();
+      const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+      if (!sprint) {
+        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return;
+      }
+      if (sprint.status === "completed") {
+        reply.code(409).send(failure(`Sprint ${sprintId} already finalized.`, "conflict", "never", "state_reset"));
+        return;
+      }
+
+      // Mark sprint as completed
+      sprint.status = "completed";
+      sprint.completedAt = new Date().toISOString();
+
+      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      const completedCount = sprintTasks.filter((t) =>
+        ["completed", "verified"].includes(t.status),
+      ).length;
+
+      cacheAndSend(req, reply, 200, success(`Sprint ${sprint.number} finalized.`, {
+        sprintId,
+        sprintNumber: sprint.number,
+        completedTasks: completedCount,
+        totalTasks: sprintTasks.length,
+        finalizedAt: sprint.completedAt,
+      }));
+    },
+  );
 }

@@ -1,11 +1,6 @@
 import { z } from "zod";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
-import { getRoleSoul } from "@arceus/company-runtime";
-import { structuredCompletion } from "../infra/azure-openai.js";
 import { plannerConfig } from "../config/index.js";
-import { ensureAgentSession, runPromptText } from "../prompts/llm.js";
-import { buildCtoPlanPrompt } from "../prompts/cto-plan.js";
-import { agentSessions } from "../orchestration/state.js";
 
 // Static "broad" enum — the full role vocabulary. Used for the exported type
 // (type inference is static). At runtime we narrow this to the actual roster so
@@ -87,65 +82,14 @@ export const workflowTaskPlanSchema = createWorkflowTaskPlanSchema(broadAssigned
 
 export type WorkflowTaskPlan = z.infer<typeof workflowTaskPlanSchema>;
 
-/** Generate a structured workflow task plan via LLM, using the CTO session when available. */
-export async function generateWorkflowTaskPlan(snapshot: CompanySnapshot): Promise<WorkflowTaskPlan> {
-  const roster = snapshot.agents.map((agent) => agent.role);
-  const assignedRoleSchema = buildAssignedRoleSchema(roster);
-  const rosterSchema = createWorkflowTaskPlanSchema(assignedRoleSchema);
-
-  // Route through the CTO's existing session if available — Spec 24
-  const ctoSession = agentSessions.get("cto");
-  if (ctoSession) {
-    const ctoSoul = getRoleSoul("cto");
-    const prompt = buildCtoPlanPrompt(snapshot);
-    const output = await runPromptText(
-      "cto",
-      ctoSession.sessionId,
-      ctoSoul.systemPrompt,
-      prompt,
-    );
-
-    // Parse structured JSON from the CTO's text response
-    const jsonMatch = output.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = rosterSchema.safeParse(JSON.parse(jsonMatch[0]));
-      if (parsed.success) return parsed.data as WorkflowTaskPlan;
-    }
-    // If CTO session output failed to parse, fall through to structuredCompletion
-  }
-
-  // Fallback: structuredCompletion when CTO session isn't available (e.g. startup)
-  const availableRolesLine = roster.length > 0
-    ? roster.join(", ")
-    : (plannerConfig.followUpAssignedRoles as readonly string[]).join(", ");
-
-  return structuredCompletion(
-    "workerDeployment",
-    [
-      {
-        role: "system",
-        content: plannerConfig.prompts.system.join("\n"),
-      },
-      {
-        role: "user",
-        content: [
-          `Company: ${snapshot.company.name}`,
-          `Goal: ${snapshot.company.goal}`,
-          `First release: ${snapshot.strategy.firstRelease}`,
-          `Strategy summary: ${snapshot.strategy.summary}`,
-          `Scope boundaries: ${snapshot.strategy.scopeBoundary.join("; ")}`,
-          `Current workspace: ${snapshot.company.name ? "Available at repo-root /workspace" : "Not yet created"}`,
-          `Available roles: ${availableRolesLine}`,
-          `Hard constraint: every task's assigned_role MUST be one of the Available roles above. Tasks for roles not listed will be rejected by validation.`,
-          "",
-          ...plannerConfig.prompts.userInstructions,
-        ].join("\n"),
-      },
-    ],
-    rosterSchema as unknown as typeof workflowTaskPlanSchema,
-    "workflow_task_plan",
-    { temperature: 0.2 }
-  );
+/** Generate a structured workflow task plan via LLM, using the CTO session when available.
+ * @deprecated Dead code — replaced by plan-task-graph SKILL.md (Spec 23/27).
+ * CTO now builds the task DAG in-beat using task_create×N.
+ * Delete this function once confidence is high the skill path covers all cases.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function generateWorkflowTaskPlan(_snapshot: CompanySnapshot): Promise<WorkflowTaskPlan> {
+  throw new Error("generateWorkflowTaskPlan is retired — use plan-task-graph skill instead");
 }
 
 /** Identity mapping from plan priority to task priority. */

@@ -23,7 +23,6 @@ import { approvePendingBoardApprovals } from "../memory/handoffs.js";
 import { clearDeveloperWatchdog } from "../workspace/watchdog.js";
 import { stopDeveloperWorkspaceMonitor } from "../workspace/monitor.js";
 import { setTaskStatus } from "../tasks/mutations.js";
-import { pruneAlreadyCompletedSpecialistTasks, runAutonomousReadyTasks } from "../tasks/specialist-executor.js";
 import { checkSprintCompletion } from "../sprints/lifecycle.js";
 
 /** Finalize the current execution cycle: update status, record meeting, and check sprint completion. */
@@ -114,16 +113,8 @@ export function pauseForBoardReview(reason: string) {
   });
 }
 
-/** Run post-review reconciliation: prune completed tasks, execute ready tasks, then complete or pause. */
+/** Run post-review reconciliation: then complete or pause. */
 export async function reconcilePostReviewExecution() {
-  const prePruneSnapshot = getSnapshot();
-  const prunedCount = await pruneAlreadyCompletedSpecialistTasks(prePruneSnapshot);
-  if (prunedCount > 0) {
-    emitEmployeeActivity("system", "info", `Auto-resolved ${prunedCount} specialist task${prunedCount === 1 ? "" : "s"} already covered by the developer implementation.`);
-  }
-
-  await runAutonomousReadyTasks("post-review");
-
   const snapshot = getSnapshot();
   const boardDecision = shouldPauseForBoardReview(snapshot);
 

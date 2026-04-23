@@ -206,6 +206,11 @@ async function processEvent(event: { type: string; properties?: Record<string, a
 
       if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {
         const filePath = args.filePath || args.file_path || "unknown file";
+        // Estimate lines changed from tool args
+        const newContent = args.newString || args.new_str || args.content || args.patch || "";
+        const linesChanged = typeof newContent === "string" && newContent.length > 0
+          ? newContent.split("\n").length
+          : undefined;
         updateAgentSessionState(role, {
           fileEditCount: (agentSessions.get(role)?.fileEditCount ?? 0) + 1,
           lastEventSummary: `Edited ${filePath}`,
@@ -214,6 +219,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         });
         emitEmployeeActivity(role, "file_edit", filePath, {
           taskId: (role === "developer" && activeExecution) ? activeExecution.buildTaskId : agentSessions.get(role)?.activeTaskId ?? null,
+          detail: linesChanged ? { linesChanged } : null,
         });
         if (role === "developer" && activeExecution) {
           appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);

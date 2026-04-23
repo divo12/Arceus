@@ -1,5 +1,5 @@
 import type { Task } from "@arceus/contracts";
-import { artifacts, productDir } from "../orchestration/state.js";
+import { artifacts } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 
 /**
@@ -29,70 +29,4 @@ export function resolveIncomingArtifacts(task: Task): string[] {
 export function getPreviewEvidenceUrl() {
   const preview = getLocalPreviewState();
   return preview.validationUrl ?? preview.entryUrl ?? preview.url;
-}
-
-/** Build a tester verification summary artifact from task context and tester output. */
-export function buildTesterArtifact(task: Task, output: string) {
-  const preview = getLocalPreviewState();
-  const evidenceUrl = getPreviewEvidenceUrl();
-
-  return [
-    "# Verification Summary",
-    `Task: ${task.title}`,
-    `Kind: ${task.kind}`,
-    `Target kind: ${preview.targetKind ?? "unknown"}`,
-    `Validation URL: ${evidenceUrl ?? "not available"}`,
-    `Validation strategy: ${preview.validationStrategy ?? "not available"}`,
-    `Runtime: ${preview.runtime ?? "unknown"}`,
-    `Framework: ${preview.framework ?? "unknown"}`,
-    `Preview status: ${preview.status}`,
-    "",
-    "# Definition Of Done Checklist",
-    ...task.definitionOfDone.map((item) => `- ${item}`),
-    "",
-    "# Tester Report",
-    output || "Tester completed the verification task without additional notes.",
-  ].join("\n");
-}
-
-/** Build a design direction artifact from task context and UI designer output. */
-export function buildDesignDirectionArtifact(task: Task, output: string) {
-  const preview = getLocalPreviewState();
-
-  return [
-    "# Design Direction Summary",
-    `Task: ${task.title}`,
-    `Target kind: ${preview.targetKind ?? "unknown"}`,
-    `Preview entry URL: ${preview.entryUrl ?? preview.url ?? "not available"}`,
-    `Validation URL: ${preview.validationUrl ?? "not available"}`,
-    "",
-    "# Downstream Expectations",
-    "Developer should use this to sharpen implementation details and interaction choices.",
-    "Tester should use this to focus verification on UX clarity, interaction consistency, and visible quality risks.",
-    "",
-    "# UI Designer Report",
-    output || "UI Designer completed the design-direction task without additional notes.",
-  ].join("\n");
-}
-
-/** Build a launch readiness artifact from task context and marketing output. */
-export function buildMarketingArtifact(task: Task, output: string) {
-  const preview = getLocalPreviewState();
-
-  return [
-    "# Launch Readiness Report",
-    `Task: ${task.title}`,
-    `Kind: ${task.kind}`,
-    `Target kind: ${preview.targetKind ?? "unknown"}`,
-    `Preview evidence URL: ${getPreviewEvidenceUrl() ?? "not available"}`,
-    `Preview status: ${preview.status}`,
-    "",
-    "# Governance Boundary",
-    task.kind === "distribution_campaign"
-      ? "This report may recommend outbound actions, but no email, post, ad, or other external distribution was executed automatically. Board approval is required before any external action is taken."
-      : "This report is internal launch preparation content. No external action was executed automatically.",
-    "",
-    "# Marketing Report",
-    output || "Marketing completed the launch-readiness task without additional notes.",
-  ].join("\n");
 }

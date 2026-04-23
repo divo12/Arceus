@@ -18,6 +18,7 @@ import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getSnapshot } from "../persistence/store.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
+import { buildSkillCatalog } from "../skills/catalog.js";
 import { productDir } from "./state.js";
 
 // ── BeatContext builder ──────────────────────────────────
@@ -236,6 +237,25 @@ function renderBudget(snapshot: CompanySnapshot): string {
   return `## Budget\n\n${pct}% used (${c.spentCents}¢ of ${c.budgetCents}¢)`;
 }
 
+/**
+ * Progressive-disclosure skill catalog (Spec 23).
+ * Inject a compact `{id, trigger}` for every skill available to this role.
+ * Agents pick skills on demand — no pre-classify LLM call needed.
+ */
+function renderSkillCatalog(role: Role): string {
+  const catalog = buildSkillCatalog(role);
+  if (catalog.length === 0) return "";
+  const lines = [
+    "## Available Skills",
+    "Pick any skill by ID when its trigger matches your current task.",
+    "",
+  ];
+  for (const s of catalog) {
+    lines.push(`- **${s.id}** — ${s.trigger} (v${s.version}, ${Math.round(s.successRate * 100)}% success)`);
+  }
+  return lines.join("\n");
+}
+
 // ── Unified beat prompt ──────────────────────────────────
 
 /**
@@ -255,6 +275,7 @@ export function buildUnifiedBeatPrompt(
     renderWorkspaceContext(existingFiles),
     renderCompanyState(companyId),
     renderBudget(snapshot),
+    renderSkillCatalog(role),
     renderSprintHistory(snapshot),
     renderOpenTasksForRole(companyId, role),
     renderRecentArtifacts(companyId, 10),

@@ -85,6 +85,7 @@ const createTaskBody = z.object({
   sprintId: z.string().nullable().optional(),
   parentTaskId: z.string().nullable().optional(),
   dependsOnTaskIds: z.array(z.string()).optional(),
+  referenceArtifactIds: z.array(z.string()).max(10).optional(),
 });
 
 const patchTaskBody = z.object({
@@ -93,6 +94,7 @@ const patchTaskBody = z.object({
   priority: z.enum(["low", "medium", "high", "critical"]).optional(),
   assignedRole: z.string().optional(),
   assignedAgentId: z.string().nullable().optional(),
+  referenceArtifactIds: z.array(z.string()).max(10).optional(),
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field required." });
 
 const blockBody = z.object({
@@ -193,12 +195,24 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     };
 
     upsertTask(task);
+
+    // Attach reference artifacts if provided
+    if (body.referenceArtifactIds?.length) {
+      for (const artId of body.referenceArtifactIds) {
+        attachArtifactToTask(taskId, artId);
+      }
+    }
+
     const location = `${TASK_BASE}/${taskId}`;
     cacheAndSend(
       req,
       reply,
       201,
-      success(`Task ${taskId} created.`, { taskId, status: task.status }),
+      success(`Task ${taskId} created.`, {
+        taskId,
+        status: task.status,
+        attachedArtifactCount: body.referenceArtifactIds?.length ?? 0,
+      }),
       location
     );
   });
@@ -221,6 +235,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       ...(body.priority !== undefined && { priority: body.priority }),
       ...(body.assignedRole !== undefined && { assignedRole: body.assignedRole as Task["assignedRole"] }),
       ...(body.assignedAgentId !== undefined && { assignedAgentId: body.assignedAgentId }),
+      ...(body.referenceArtifactIds !== undefined && { artifactIds: body.referenceArtifactIds }),
     }));
 
     cacheAndSend(req, reply, 200, success(`Task ${taskId} updated.`, { taskId, updated: Boolean(updated) }));
@@ -378,7 +393,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
 
     // Only planned or created tasks can be claimed
     if (existing.status !== "planned" && existing.status !== "created") {
-      sendConflict(reply, `Task ${taskId} is "${existing.status}" — only planned/created tasks can be claimed.`);
+      reply.code(409).send(failure(
+        `Task ${taskId} is "${existing.status}" — only planned/created tasks can be claimed.`,
+        "task_not_claimable", "never", "wait_for_status_change"
+      ));
       return;
     }
 
@@ -391,11 +409,144 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return;
     }
 
+    // Dependency check: all dependsOnTaskIds must be completed or verified
+    if (existing.dependsOnTaskIds.length > 0) {
+      const snapshot = getSnapshot();
+      const missing = existing.dependsOnTaskIds.filter((depId) => {
+        const dep = snapshot.tasks.find((t) => t.id === depId);
+        return !dep || !["completed", "verified"].includes(dep.status);
+      });
+      if (missing.length > 0) {
+        reply.code(409).send({
+          ...failure(
+            `Cannot claim ${taskId}: ${missing.length} dependency task(s) not yet completed.`,
+            "deps_unmet", "never", "deps_completed"
+          ),
+          error: {
+            cause: "deps_unmet" as ErrorCause,
+            retry: "never" as const,
+            stopWhen: "deps_completed",
+            details: { missing },
+          },
+        });
+        return;
+      }
+    }
+
     setTaskStatus(taskId, "in_progress");
     cacheAndSend(req, reply, 200, success(
       `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,
       { taskId, status: "in_progress", claimedBy: mcp.role, reason: body.reason },
       { nextActions: ["arceus_task_append_plan_step", "arceus_task_update_progress"] }
     ));
+  });
+
+  // GET /tasks/:taskId — read a task (optionally with progress)
+  app.get<{ Params: { taskId: string }; Querystring: { includeProgress?: string } }>(
+    `${TASK_BASE}/:taskId`,
+    async (req, reply) => {
+      const { taskId } = req.params;
+      const task = findTask(taskId);
+      if (!task) { sendNotFound(reply, `Task ${taskId}`); return; }
+
+      const includeProgress = req.query.includeProgress === "true";
+      if (!includeProgress) {
+        cacheAndSend(req, reply, 200, success(`Task ${taskId}.`, { task }));
+        return;
+      }
+
+      // Build progress data from task's planner/executor state
+      const planSteps = task.plannerState?.planSteps?.map((s, i) => ({
+        ts: task.createdAt,
+        step: typeof s === "string" ? s : String(s),
+        index: i,
+      })) ?? [];
+
+      const commands = task.executorState?.commandsExecuted?.map((c) => ({
+        ts: task.createdAt,
+        cmd: typeof c === "string" ? c : String(c),
+      })) ?? [];
+
+      const snapshot = getSnapshot();
+      const totalSteps = planSteps.length || 1;
+      const completedSteps = commands.length;
+      const percentComplete = Math.min(Math.round((completedSteps / totalSteps) * 100), 100);
+
+      cacheAndSend(req, reply, 200, success(`Task ${taskId} with progress.`, {
+        task,
+        progress: {
+          planSteps,
+          commands,
+          percentComplete,
+          lastAppendedAt: task.executorState?.commandsExecuted?.length ? new Date().toISOString() : null,
+        },
+      }));
+    },
+  );
+
+  // POST /tasks/:taskId/report-bug — any role can report a bug found during work
+  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/report-bug`, async (req, reply) => {
+    const reportBugBody = z.object({
+      bugTitle: z.string().min(1).max(200),
+      bugDescription: z.string().min(1).max(4000),
+      severity: z.enum(["low", "medium", "high", "critical"]).default("medium"),
+      reproducible: z.boolean().default(true),
+      stepsToReproduce: z.string().max(4000).optional(),
+    });
+    const body = parseOrFail(reportBugBody, req.body, reply);
+    if (!body) return;
+    const { taskId } = req.params;
+    const sourceTask = findTask(taskId);
+    if (!sourceTask) { sendNotFound(reply, `Task ${taskId}`); return; }
+
+    const mcp = req.mcp!;
+    const bugId = `tsk_bug_${randomUUID().slice(0, 12)}`;
+    const now = new Date().toISOString();
+
+    const bugTask: Task = {
+      id: bugId,
+      companyId: mcp.companyId,
+      sprintId: sourceTask.sprintId,
+      kind: "bug_fix",
+      title: body.bugTitle,
+      description: body.bugDescription + (body.stepsToReproduce
+        ? `\n\n**Steps to reproduce:**\n${body.stepsToReproduce}`
+        : ""),
+      problemStatement: `Bug found during task ${taskId}: ${body.bugTitle}`,
+      deliverable: `Fix: ${body.bugTitle}`,
+      definitionOfDone: ["Bug no longer reproducible", "Regression test added"],
+      status: "created",
+      priority: body.severity ?? "medium",
+      assignedRole: "developer",
+      assignedAgentId: null,
+      parentTaskId: taskId,
+      dependsOnTaskIds: [],
+      childTaskIds: [],
+      artifactIds: [],
+      localPreviewUrl: null,
+      plannerState: { objective: body.bugDescription, planSteps: [], selectedTools: [], currentStepIndex: 0 },
+      executorState: { currentCommand: null, commandsExecuted: [], results: [] },
+      verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
+      costCents: 0,
+      iterationCount: 0,
+      maxIterations: 3,
+      incomingArtifactIds: [],
+      createdAt: now,
+    };
+
+    upsertTask(bugTask);
+
+    cacheAndSend(
+      req,
+      reply,
+      201,
+      success(`Bug ${bugId} reported from task ${taskId}.`, {
+        bugTaskId: bugId,
+        sourceTaskId: taskId,
+        severity: body.severity,
+        status: "created",
+      }),
+      `${TASK_BASE}/${bugId}`,
+    );
   });
 }
