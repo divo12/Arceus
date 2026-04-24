@@ -44,15 +44,15 @@ let dbClient: DbClient | null = null;
 let sqlClient: postgres.Sql | null = null;
 let supabaseClient: SupabaseClient | null = null;
 
-/** Builds a DatabaseConnectionConfig from env vars, or null if unconfigured. */
+/** Builds a DatabaseConnectionConfig from env vars, or null if DATABASE_URL is missing.
+ *  Supabase-specific fields are optional and only consulted by `getSupabaseClient`. */
 export function getDatabaseConnectionConfig(): DatabaseConnectionConfig | null {
-  const supabaseUrl = readAliasedEnv(["SUPABASE_URL", "PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL"]);
-  const supabaseServiceRoleKey = readAliasedEnv(["SUPABASE_SERVICE_ROLE_KEY", "PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY"]);
   const databaseUrl = readAliasedEnv(["SUPABASE_DB_URL", "ARCEUS_HIPPOCAMPUS_POSTGRES_URL", "DATABASE_URL"]);
-
-  if (!supabaseUrl || !supabaseServiceRoleKey || !databaseUrl) {
+  if (!databaseUrl) {
     return null;
   }
+  const supabaseUrl = readAliasedEnv(["SUPABASE_URL", "PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL"]);
+  const supabaseServiceRoleKey = readAliasedEnv(["SUPABASE_SERVICE_ROLE_KEY", "PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY"]);
 
   return {
     supabaseUrl,
