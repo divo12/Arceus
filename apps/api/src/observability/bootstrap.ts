@@ -19,6 +19,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { Resource } from "@opentelemetry/resources";
+import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
   SEMRESATTRS_SERVICE_NAME,
   SEMRESATTRS_SERVICE_VERSION,
@@ -78,7 +79,11 @@ export function startObservability(options: ObservabilityBootstrapOptions = {}):
       [SEMRESATTRS_SERVICE_NAME]: options.serviceName ?? "arceus-api",
       [SEMRESATTRS_SERVICE_VERSION]: options.serviceVersion ?? "0.1.0",
     }),
-    traceExporter: exporter,
+    // SimpleSpanProcessor: every span exports immediately on .end().
+    // Higher per-span latency than BatchSpanProcessor but spans never wait
+    // for a batch window — important for short-lived processes (smoke tests,
+    // CLI tools) and for our beat cadence (~1 beat/sec, low volume).
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
 
   sdk.start();
