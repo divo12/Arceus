@@ -17,6 +17,7 @@ import internalMcpMemoryRoutes from "./memory.routes.js";
 import internalMcpBeatsRoutes from "./beats.routes.js";
 import internalMcpCompanyRoutes from "./company.routes.js";
 import internalMcpExecutionRoutes from "./execution.routes.js";
+import internalMcpSkillsRoutes from "./skills.routes.js";
 
 export default async function internalMcpRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", async (req, reply) => {
@@ -48,4 +49,5 @@ export default async function internalMcpRoutes(app: FastifyInstance): Promise<v
   await app.register(internalMcpBeatsRoutes);
   await app.register(internalMcpCompanyRoutes);
   await app.register(internalMcpExecutionRoutes);
+  await app.register(internalMcpSkillsRoutes);
 }

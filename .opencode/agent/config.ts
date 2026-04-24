@@ -130,6 +130,14 @@ export const ALL_ARCEUS_TOOLS = [
   // Meta
   "tool_help",
   "arceus_tool_search",
+  // Spec 29 — Skills-Lead tools
+  "skill_health_report",
+  "skill_audit_unused",
+  "skill_inspect_history",
+  "skill_validate_definition",
+  "skill_register",
+  "skill_update",
+  "skill_deprecate",
 ] as const;
 
 const MEMORY_ALL = {
@@ -184,6 +192,10 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       execution_pause: true,
       execution_reconcile: true,
       execution_stop: true,
+      // Spec 29 — read-only skill insights for CEO
+      skill_health_report: true,
+      skill_audit_unused: true,
+      skill_inspect_history: true,
     }),
   },
   cto: {
@@ -393,6 +405,14 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       task_attach_artifact: true,
       sprint_get_active: true,
       company_get_summary: true,
+      // Spec 29 — full skills toolkit
+      skill_health_report: true,
+      skill_audit_unused: true,
+      skill_inspect_history: true,
+      skill_validate_definition: true,
+      skill_register: true,
+      skill_update: true,
+      skill_deprecate: true,
     }),
   },
 };
