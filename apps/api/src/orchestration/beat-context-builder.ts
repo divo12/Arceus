@@ -41,6 +41,10 @@ export async function buildBeatContext(
     trustBand: await computeTrustBand(role, companyId),
     allowedTools: getAllowedArceusTools(role),
     startedAt: new Date().toISOString(),
+    // Populated by a future beat-dispatcher step that drains the role's
+    // incoming-handoff queue (spec 27 §6). Defaults empty until the queue
+    // table + drainer are wired in Phase 2.
+    incomingHandoffs: [],
   };
 }
 

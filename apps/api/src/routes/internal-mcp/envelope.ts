@@ -56,6 +56,13 @@ export const ERROR_CAUSES = [
   "tool_retired",
   // Approval type-gating
   "type_not_allowed",
+  // Spec 27 §6 — Memory tools
+  "query_too_short",
+  "embed_failed",
+  "store_unavailable",
+  "self_target_not_allowed",
+  "target_role_unknown",
+  "handoff_too_large",
 ] as const;
 
 export type ErrorCause = (typeof ERROR_CAUSES)[number];
@@ -83,4 +90,11 @@ export const causeToStatus: Record<ErrorCause, number> = {
   invalid_next_action: 400,
   tool_retired: 410,
   type_not_allowed: 403,
+  // Memory causes
+  query_too_short: 422,
+  embed_failed: 503,
+  store_unavailable: 503,
+  self_target_not_allowed: 422,
+  target_role_unknown: 422,
+  handoff_too_large: 413,
 };

@@ -12,6 +12,7 @@
 import { z } from "zod";
 
 import { roleTypeSchema } from "./agents.js";
+import { incomingHandoffSchema } from "./memory.js";
 
 export const trustBandSchema = z.enum(["probation", "standard", "senior"]);
 
@@ -24,6 +25,13 @@ export const beatContextSchema = z.object({
   allowedTools: z.array(z.string()),
   taskId: z.string().optional(),
   startedAt: z.string().datetime(),
+  /**
+   * Handoffs from other roles waiting for this agent; populated by
+   * `buildBeatContext` from the role's incoming queue. Rendered in the
+   * system prompt under `## Incoming handoffs`; `urgency: "high"` items
+   * additionally surface as a banner at the top of the prompt.
+   */
+  incomingHandoffs: z.array(incomingHandoffSchema).default([]),
 });
 
 export type TrustBand = z.infer<typeof trustBandSchema>;

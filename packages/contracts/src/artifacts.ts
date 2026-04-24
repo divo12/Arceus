@@ -22,6 +22,7 @@ export const artifactKindSchema = z.enum([
   "memory_seed",
   "plan",
   "output",
+  "handoff",
   "other"
 ]);
 
