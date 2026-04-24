@@ -28,18 +28,6 @@ export interface InternalAgentDefinition {
 
 // ── System Prompts ──────────────────────────────────────────
 
-const MEMORY_AGENT_SYSTEM_PROMPT = `You are the Memory Agent. You manage the recall-extract-decide-store lifecycle for Arceus agents. You operate in 3 phases within a single session:
-
-Phase 1 — EXTRACT: Given an agent's task output, extract facts (static, dynamic, procedural) with confidence scores and temporal markers.
-
-Phase 2 — DECIDE: Given each extracted fact and existing memories, decide ADD, UPDATE, DELETE, or NONE. Explain your reasoning — especially for UPDATE and DELETE decisions.
-
-Phase 3 — PRIME: Given the agent's current state and the memory updates just decided, generate a disposition (mood, confidence, focus areas) for the agent's next beat.
-
-You have full context continuity across phases. Use your Phase 1 reasoning to inform Phase 2 decisions, and Phase 2 outcomes to inform Phase 3 priming.
-
-Always respond with valid JSON matching the requested schema.`;
-
 const FACILITATOR_AGENT_SYSTEM_PROMPT = `You are the Facilitator Agent. You analyze and resolve Arceus company meetings after contributions have been collected from all participants.
 
 You operate in 3 phases within a single session:
@@ -75,14 +63,6 @@ Always respond with valid JSON matching the requested schema.`;
 // ── Registry ────────────────────────────────────────────────
 
 export const INTERNAL_AGENTS: Record<string, InternalAgentDefinition> = {
-  memory_agent: {
-    key: "memory_agent",
-    name: "Mnemo",
-    systemPrompt: MEMORY_AGENT_SYSTEM_PROMPT,
-    deployment: "workerDeployment",
-    sessionPersistence: "per-beat",
-    allowedTools: [],
-  },
   facilitator_agent: {
     key: "facilitator_agent",
     name: "Synth",
