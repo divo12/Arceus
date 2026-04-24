@@ -52,4 +52,79 @@ export const registerWorkspaceTools = (
       return toMcpContent(res.data);
     }
   );
+
+  // ── Phase G: workspace MCP §8 ─────────────────────────
+
+  server.registerTool(
+    "workspace_get_preview_url",
+    {
+      description: "Read the preview URL for a task (or the global preview URL when no task is supplied).",
+      inputSchema: { taskId: z.string().optional() },
+    },
+    async ({ taskId }) => {
+      const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${WORKSPACES}/preview-url${query}`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "workspace_get_build_health",
+    {
+      description: "Read cached typecheck/build/test/preview health (status, since, first errors).",
+      inputSchema: {},
+    },
+    async () => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${WORKSPACES}/build-health`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "workspace_check_exports",
+    {
+      description: "Verify a module file exports the expected names. Returns {found, missing, ok}.",
+      inputSchema: {
+        modulePath: z.string(),
+        expectedExports: z.array(z.string()).min(1).max(50),
+      },
+    },
+    async ({ modulePath, expectedExports }) => {
+      const body = { modulePath, expectedExports };
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${WORKSPACES}/check-exports`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "workspace_check_exports", body),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "workspace_verify_baseline",
+    {
+      description: "Composite baseline: typecheck + preview probe. Returns {ok, failures:[{category,errors}]}.",
+      inputSchema: {
+        skipPreview: z.boolean().optional(),
+        timeoutMs: z.number().int().min(1000).max(120_000).optional(),
+      },
+    },
+    async ({ skipPreview, timeoutMs }) => {
+      const body = { skipPreview, timeoutMs };
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${WORKSPACES}/verify-baseline`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "workspace_verify_baseline", body),
+      });
+      return toMcpContent(res.data);
+    }
+  );
 };
