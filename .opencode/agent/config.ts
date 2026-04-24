@@ -109,10 +109,20 @@ export const ALL_ARCEUS_TOOLS = [
   "execution_pause",
   "execution_reconcile",
   "execution_stop",
+  // Memory — spec 27 §6
+  "memory_search",
+  "memory_add_learning",
+  "memory_handoff",
   // Meta
   "tool_help",
   "arceus_tool_search",
 ] as const;
+
+const MEMORY_ALL = {
+  memory_search: true,
+  memory_add_learning: true,
+  memory_handoff: true,
+} as const;
 
 const denyRest = (allowed: ToolVisibility): ToolVisibility => {
   const result: ToolVisibility = { ...allowed };
@@ -133,6 +143,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       ...BUILTIN_READONLY,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_create: true,
       task_get: true,
       task_hydrate_from_spec: true,
@@ -168,6 +179,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       ...BUILTIN_EDITOR,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_get: true,
       task_claim: true,
       task_report_bug: true,
@@ -197,6 +209,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       ...BUILTIN_READONLY,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_create: true,
       task_update: true,
       task_get: true,
@@ -228,6 +241,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       ...BUILTIN_EDITOR,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_set_preview_url: true,
       task_get: true,
       task_claim: true,
@@ -253,6 +267,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       ...BUILTIN_EDITOR,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_verify: true,
       task_get: true,
       task_claim: true,
@@ -278,6 +293,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       write: true,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_set_preview_url: true,
       task_get: true,
       task_claim: true,
@@ -301,6 +317,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       write: true,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_get: true,
       artifact_write_to_workspace: true,
       artifact_get: true,
@@ -321,6 +338,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       ...BUILTIN_EDITOR,
       ...TIER_A_ALL_EXECUTORS,
       ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
       task_get: true,
       workspace_checkpoint: true,
       artifact_persist: true,

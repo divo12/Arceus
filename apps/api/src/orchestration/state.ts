@@ -39,7 +39,7 @@ export type AgentSessionState = {
 export type Artifact = {
   id: string;
   agent: string;
-  kind: "plan" | "code" | "output" | "specification";
+  kind: "plan" | "code" | "output" | "specification" | "handoff";
   title: string;
   content: string;
   createdAt: string;

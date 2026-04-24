@@ -6,7 +6,7 @@ import { describePgError } from "../infra/pg-errors.js";
 export type PersistedRuntimeArtifact = {
   id: string;
   agent: string;
-  kind: "plan" | "code" | "output" | "specification" | "qa_report";
+  kind: "plan" | "code" | "output" | "specification" | "qa_report" | "handoff";
   title: string;
   content: string;
   createdAt: string;

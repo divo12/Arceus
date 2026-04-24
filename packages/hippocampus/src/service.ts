@@ -1,4 +1,4 @@
-import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, StaticMemoryStore } from "./types";
+import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, ScoredMemory, StaticMemoryStore } from "./types";
 import { InMemoryDynamicStore } from "./tiers/dynamic";
 import { InMemoryPrimingStore, createDefaultPrimingState, renderPrimingDisposition, updatePrimingStateFromOutcome } from "./tiers/priming";
 import { InMemoryProceduralStore } from "./tiers/procedural";
@@ -368,6 +368,168 @@ export class HippocampusService implements HippocampusGateway {
         break;
       }
     }
+  }
+
+  /**
+   * Semantic search over a single agent's memory store (spec 27 §6).
+   *
+   * `scope` controls whether delegation-typed memories (received handoffs)
+   * are included: 'self' excludes them; 'company' includes them.
+   *
+   * `kind` filters on the memory tier: 'static' hits only staticStore,
+   * 'dynamic' hits only dynamicStore, 'any' searches both.
+   *
+   * Zero LLM in the hot path: embed → searchByEmbedding → MMR rank → filter.
+   * If the underlying stores don't expose vector search (in-memory fallback),
+   * returns list()-sourced candidates with similarity=1.0 and no MMR.
+   */
+  async search(
+    agentId: string,
+    query: string,
+    opts: {
+      scope?: "self" | "company";
+      kind?: "static" | "dynamic" | "any";
+      limit?: number;
+      since?: string;
+    } = {},
+  ): Promise<{ memories: ScoredMemory[]; totalSearched: number; queryEmbeddingMs: number }> {
+    const scope = opts.scope ?? "self";
+    const kind = opts.kind ?? "any";
+    const limit = opts.limit ?? 5;
+    const sinceTs = opts.since ? Date.parse(opts.since) : null;
+
+    const hasVectorSearch =
+      Boolean(this.staticStore.searchByEmbedding) &&
+      Boolean(this.dynamicStore.searchByEmbedding);
+
+    const embedStart = Date.now();
+    const queryEmbedding = hasVectorSearch ? await embed(query) : null;
+    const queryEmbeddingMs = Date.now() - embedStart;
+
+    const overFetch = DEFAULT_RETRIEVAL_OPTIONS.overFetch;
+    const candidateLimit = limit * overFetch;
+
+    const [staticCandidates, dynamicCandidates] = await Promise.all([
+      kind === "dynamic"
+        ? Promise.resolve<RawCandidate[]>([])
+        : this.fetchStaticCandidates(agentId, queryEmbedding, candidateLimit),
+      kind === "static"
+        ? Promise.resolve<RawCandidate[]>([])
+        : this.fetchDynamicCandidates(agentId, queryEmbedding, candidateLimit),
+    ]);
+
+    const rawCandidates: RawCandidate[] = [...staticCandidates, ...dynamicCandidates];
+    const totalSearched = rawCandidates.length;
+
+    // Scope filter: 'self' excludes delegation-typed memories (received handoffs).
+    const scopeFiltered = rawCandidates.filter((candidate) => {
+      if (scope === "self" && candidate.type === "delegation") return false;
+      if (sinceTs !== null && Date.parse(candidate.createdAt) < sinceTs) return false;
+      return true;
+    });
+
+    const scored = rankAndSelect(scopeFiltered, `agent:${agentId}`, {
+      ...DEFAULT_RETRIEVAL_OPTIONS,
+      topK: limit,
+    });
+
+    return {
+      memories: scored,
+      totalSearched,
+      queryEmbeddingMs,
+    };
+  }
+
+  /**
+   * Add a single memory unit, running the action decider for dedup.
+   * Returns the final unit (if stored or updated) along with the decider's
+   * verdict. Used by `memory_add_learning` (spec 27 §6) to surface
+   * ADD/UPDATE/NONE action back to the caller.
+   */
+  async addMemory(
+    unit: MemoryUnit,
+    opts: { skipDedup?: boolean } = {},
+  ): Promise<{
+    memoryId: string;
+    action: "ADD" | "UPDATE" | "NONE";
+    reason: string;
+    targetId: string | null;
+  }> {
+    const store = unit.type === "static" ? this.staticStore : this.dynamicStore;
+
+    if (opts.skipDedup) {
+      await store.add(unit);
+      return { memoryId: unit.id, action: "ADD", reason: "skip-dedup", targetId: null };
+    }
+
+    if (this.decideAction) {
+      try {
+        let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+        try {
+          const factEmbedding = await embed(unit.content);
+          if (store.searchByEmbedding) {
+            const results = await store.searchByEmbedding(unit.agentId, factEmbedding, 5);
+            similar = results.map((r) => ({ id: r.id, content: r.content, type: r.type, confidence: r.confidence }));
+          }
+        } catch {
+          const all = await store.list(unit.agentId);
+          similar = all.slice(0, 5).map((m) => ({ id: m.id, content: m.content, type: m.type, confidence: m.confidence }));
+        }
+
+        const decision = await this.decideAction(unit.content, similar);
+
+        if (decision.action === "NONE") {
+          return { memoryId: decision.target_id ?? unit.id, action: "NONE", reason: decision.reason, targetId: decision.target_id };
+        }
+        if (decision.action === "UPDATE" && decision.target_id) {
+          await store.update(decision.target_id, unit.content, unit.confidence);
+          return { memoryId: decision.target_id, action: "UPDATE", reason: decision.reason, targetId: decision.target_id };
+        }
+        if (decision.action === "DELETE" && decision.target_id) {
+          await store.softDelete(decision.target_id, `Contradicted by: ${unit.content.slice(0, 100)}`);
+          await store.add(unit);
+          return { memoryId: unit.id, action: "ADD", reason: `Replaced ${decision.target_id}: ${decision.reason}`, targetId: decision.target_id };
+        }
+        // ADD falls through
+      } catch (err) {
+        console.warn(`[Hippocampus] Action decision failed in addMemory, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    await store.add(unit);
+    return { memoryId: unit.id, action: "ADD", reason: "default", targetId: null };
+  }
+
+  /** Best-effort fetch of static candidates (vector search or list fallback). */
+  private async fetchStaticCandidates(
+    agentId: string,
+    queryEmbedding: number[] | null,
+    candidateLimit: number,
+  ): Promise<RawCandidate[]> {
+    if (queryEmbedding && this.staticStore.searchByEmbedding) {
+      const results = await this.staticStore.searchByEmbedding(agentId, queryEmbedding, candidateLimit);
+      return results.map((r) => ({ ...r, tier: "static" as const }));
+    }
+    const memories = await this.staticStore.list(agentId);
+    return memories.map((m) => ({ ...m, similarity: 1.0, tier: "static" as const }));
+  }
+
+  /** Best-effort fetch of dynamic candidates (vector search or list fallback). */
+  private async fetchDynamicCandidates(
+    agentId: string,
+    queryEmbedding: number[] | null,
+    candidateLimit: number,
+  ): Promise<RawCandidate[]> {
+    if (queryEmbedding && this.dynamicStore.searchByEmbedding) {
+      const results = await this.dynamicStore.searchByEmbedding(agentId, queryEmbedding, candidateLimit);
+      return results.map((r) => ({
+        ...r,
+        tier: "dynamic" as const,
+        decayedScore: (r as MemoryUnit & { similarity: number; decayedScore: number }).decayedScore,
+      }));
+    }
+    const memories = await this.dynamicStore.list(agentId);
+    return memories.map((m) => ({ ...m, similarity: 1.0, tier: "dynamic" as const }));
   }
 
   /**
