@@ -599,6 +599,63 @@ Not enabled in v1 — we're single-tenant per deploy. When we multi-tenant in on
 
 ---
 
+## Deployment — Database Provider Options
+
+The schema is **100% vanilla Postgres 14+**. No Supabase-specific features in any table: no `auth.uid()` references, no RLS policies (yet), no integration with `supabase.storage.*`, no Realtime subscriptions, no Edge Functions. The only Supabase-specific code in the repo today is `packages/db/src/client.ts` which imports the Storage SDK for blob upload/download — purely for git bundles and asset files, not for Postgres.
+
+**This means we can run on any Postgres provider.** Supabase is optional.
+
+### Options for Postgres hosting
+
+| Option | Pros | Cons | Cost | When to pick |
+|---|---|---|---|---|
+| **Supabase** | Zero-config extensions (pgvector, pg_trgm), dashboard, backups, storage bundled | Vendor lock-in for storage, quotas on free tier | Free / $25 Pro | Fastest to stand up; using their Storage anyway |
+| **Neon** | Serverless Postgres, branching, generous free tier, pgvector supported | Cold starts on free tier | Free / $19+ | Dev branches per feature; low traffic |
+| **Railway / Render / Fly.io Postgres** | Managed, automatic backups, CLI-friendly | Each platform's quirks | $5–20/mo | One-click deploy, small scale |
+| **Docker Postgres (self-host)** | Full control, cheap, no rate limits | You run ops (backups, monitoring, upgrades) | VPS ~$5/mo | Cost-optimised or need extensions Supabase lacks |
+| **Hetzner / OVH + Docker** | Cheapest for scale, full superuser | Max DIY | $4–40/mo | Growth stage, cost-sensitive |
+
+### What changes if we leave Supabase
+
+**Schema:** nothing. Every migration runs on plain Postgres 14+.
+
+**Extensions:** `pgcrypto`, `pg_trgm`, `vector` are the only requirements. All three are in the standard pgx ecosystem. Self-host needs `CREATE EXTENSION` as superuser (done once in the initial migration). Neon pre-installs `vector`. Railway needs `CREATE EXTENSION vector` manually.
+
+**Env vars:** `DATABASE_URL` is already abstract. Flip the value, nothing else.
+
+**Storage (git bundles, assets):** this is the real decoupling work. Three options:
+
+1. **Keep Supabase Storage** — use Supabase for Storage only, self-host Postgres elsewhere. Hybrid works, two API surfaces.
+2. **S3-compatible (R2, B2, MinIO, AWS S3)** — our `workspaces.provider` and `assets.provider` columns already exist for this. Swap `client.ts` Storage SDK for `@aws-sdk/client-s3`. Cloudflare R2 is the obvious pick: S3 API, zero egress fees, ~$0.015/GB/month.
+3. **Filesystem + served by the API process** — simplest, no external calls. Works for dev and small deploys. Doesn't scale past one API node.
+
+The `workspaces`, `assets`, and `sprint_snapshots` tables all have `object_key text` plus `provider text` columns — migration is: change provider value, reroute upload/download calls. The schema is already provider-agnostic.
+
+### Recommended path
+
+1. **Phase 1 (now):** stay on Supabase. Cheapest dev environment, zero ops.
+2. **Before production traffic:** migrate Postgres to **Neon** (branching + serverless fits dev/staging/prod split) OR **Railway Postgres** (simpler). Same `DATABASE_URL` swap; no schema change.
+3. **When storage gets meaningful (>5 GB or want zero egress):** migrate Storage to **Cloudflare R2**. Update `client.ts` to use the S3 SDK. Backfill is a one-time rsync from Supabase Storage → R2.
+4. **If we ever need to go fully self-hosted:** Hetzner CX21 + docker-compose running Postgres 16 + pgvector + daily `pg_dumpall` to R2. ~$5/mo, total control.
+
+### What does NOT carry over from Supabase
+
+- **Supabase Auth** — we don't use it yet (`users` table is a stub). When we add user auth, either wire in Supabase Auth, or use Auth.js / Clerk / Lucia / roll our own JWT. Pick at the time, not now.
+- **Supabase Realtime** — not used. SSE over our own API is the plan.
+- **Supabase Edge Functions** — not used. Our API runs Fastify in a Node process.
+- **Dashboard UI** — lose it when self-hosting. Drizzle Studio (`bun run db:studio`) replaces the table browser. pgAdmin / DBeaver for ad-hoc SQL.
+
+### Bottom line
+
+**Yes, we can run our own DB server.** The schema, migrations, and query patterns in this spec are provider-agnostic. The only real coupling is Supabase Storage for blobs, and even that's pluggable via the existing `provider` columns. Migration cost when we decide to move is:
+
+- **Postgres swap:** 1 hour (change `DATABASE_URL`, run migrations on new DB, redeploy).
+- **Storage swap:** 1 day (rewrite `client.ts` Storage helpers + rsync existing objects).
+
+Don't migrate until there's a reason (cost, extension limits, vendor lock-in concern). Until then, Supabase is the right call because it minimises ops.
+
+---
+
 ## Out of Scope
 
 - Event log (`beat_events`) — spec 32.
