@@ -12,7 +12,7 @@
  *
  * Phase 6.5 — Package I.
  */
-import type { BeatContext, CompanySnapshot, Task, TrustBand } from "@arceus/contracts";
+import type { BeatContext, CompanySnapshot, IncomingHandoff, HandoffKind, HandoffUrgency, Task, TrustBand } from "@arceus/contracts";
 import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getSnapshot } from "../persistence/store.js";
@@ -25,6 +25,66 @@ import { productDir } from "./state.js";
 
 async function computeTrustBand(_role: Role, _companyId: string): Promise<TrustBand> {
   return "standard"; // v1 stub — full policy matrix Phase 7+
+}
+
+// ── Incoming handoffs drainer (spec 27 §6) ───────────────
+
+const URGENCY_RANK: Record<HandoffUrgency, number> = { high: 0, normal: 1, low: 2 };
+const MAX_INCOMING_HANDOFFS = 5;
+const HANDOFF_RECENCY_MS = 24 * 60 * 60 * 1000; // last 24h
+
+/**
+ * Read the agent's delegation-typed memory units and project them into the
+ * IncomingHandoff shape for beat-context surfacing. Handoffs are stored as
+ * MemoryUnit entries with type="delegation" and tag-encoded metadata
+ * (from:<role>, kind:<kind>, urgency:<urgency>, handoffId:<id>).
+ *
+ * Sorted by urgency desc then receivedAt desc; capped at MAX_INCOMING_HANDOFFS.
+ * Only surfaces handoffs received in the last 24h to avoid replaying stale ones.
+ */
+function drainIncomingHandoffs(role: Role): IncomingHandoff[] {
+  const snapshot = getSnapshot();
+  const agent = snapshot.agents.find((a) => a.role === role);
+  if (!agent) return [];
+
+  const cutoff = Date.now() - HANDOFF_RECENCY_MS;
+  const delegations = snapshot.memoryUnits.filter(
+    (u) => u.agentId === agent.id && u.type === "delegation" && Date.parse(u.createdAt) >= cutoff,
+  );
+
+  const projected: IncomingHandoff[] = delegations.map((u) => {
+    const tags = u.tags ?? [];
+    const getTagValue = (prefix: string): string | null => {
+      const found = tags.find((t) => t.startsWith(`${prefix}:`));
+      return found ? found.slice(prefix.length + 1) : null;
+    };
+    const fromRole = (getTagValue("from") ?? "unknown") as IncomingHandoff["fromRole"];
+    const kind = (getTagValue("kind") ?? "context_transfer") as HandoffKind;
+    const urgency = (getTagValue("urgency") ?? "normal") as HandoffUrgency;
+    const handoffId = getTagValue("handoffId") ?? u.id;
+    const relatedArtifactIds = tags
+      .filter((t) => t.startsWith("artifact:"))
+      .map((t) => t.slice("artifact:".length));
+
+    return {
+      handoffId,
+      fromRole,
+      kind,
+      urgency,
+      excerpt: (u.content ?? u.summary ?? "").slice(0, 200),
+      memoryId: u.id,
+      relatedArtifactIds,
+      receivedAt: u.createdAt,
+    };
+  });
+
+  projected.sort((a, b) => {
+    const byUrgency = URGENCY_RANK[a.urgency] - URGENCY_RANK[b.urgency];
+    if (byUrgency !== 0) return byUrgency;
+    return b.receivedAt.localeCompare(a.receivedAt);
+  });
+
+  return projected.slice(0, MAX_INCOMING_HANDOFFS);
 }
 
 export async function buildBeatContext(
@@ -41,10 +101,7 @@ export async function buildBeatContext(
     trustBand: await computeTrustBand(role, companyId),
     allowedTools: getAllowedArceusTools(role),
     startedAt: new Date().toISOString(),
-    // Populated by a future beat-dispatcher step that drains the role's
-    // incoming-handoff queue (spec 27 §6). Defaults empty until the queue
-    // table + drainer are wired in Phase 2.
-    incomingHandoffs: [],
+    incomingHandoffs: drainIncomingHandoffs(role),
   };
 }
 
@@ -234,6 +291,45 @@ function renderUpstreamArtifacts(task: Task): string {
   return upstreamLines.join("\n");
 }
 
+/**
+ * Banner for any urgency=high handoffs. Renders at the top of the beat prompt
+ * so the agent sees urgent cross-role context before task details. Empty if
+ * no high-urgency handoffs are waiting.
+ */
+function renderIncomingHandoffsBanner(handoffs: IncomingHandoff[]): string {
+  const high = handoffs.filter((h) => h.urgency === "high");
+  if (high.length === 0) return "";
+  const lines = [`## ⚠ High-Priority Handoffs (${high.length})`, ""];
+  for (const h of high) {
+    const snippet = h.excerpt.length > 120 ? `${h.excerpt.slice(0, 120)}…` : h.excerpt;
+    lines.push(`- **[${h.kind}] From ${h.fromRole}:** ${snippet}`);
+    lines.push(`  - handoff id: \`${h.handoffId}\` · memory id: \`${h.memoryId}\``);
+  }
+  lines.push("");
+  lines.push("_Retrieve full content with `memory_search({ scope: \"company\", query: \"<keywords>\" })` or by memory id._");
+  return lines.join("\n");
+}
+
+/**
+ * Full incoming-handoffs section. Shows all handoffs (high, normal, low)
+ * sorted by urgency desc then receivedAt desc. Rendered after role memory.
+ */
+function renderIncomingHandoffsSection(handoffs: IncomingHandoff[]): string {
+  if (handoffs.length === 0) return "";
+  const lines = [`## Incoming Handoffs (${handoffs.length})`, ""];
+  for (const h of handoffs) {
+    lines.push(`### From ${h.fromRole} — ${h.kind} (${h.urgency})`);
+    lines.push(h.excerpt);
+    lines.push(`- Memory id: \`${h.memoryId}\``);
+    if (h.relatedArtifactIds.length > 0) {
+      lines.push(`- Related artifacts: ${h.relatedArtifactIds.map((id) => `\`${id}\``).join(", ")}`);
+    }
+    lines.push(`- Received: ${h.receivedAt}`);
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
 function renderBudget(snapshot: CompanySnapshot): string {
   const c = snapshot.company;
   if (c.budgetCents <= 0) return "";
@@ -274,7 +370,9 @@ export function buildUnifiedBeatPrompt(
   snapshot: CompanySnapshot,
   existingFiles?: string[],
 ): string {
+  const incomingHandoffs = drainIncomingHandoffs(role);
   const sections = [
+    renderIncomingHandoffsBanner(incomingHandoffs),
     renderTaskContext(task),
     renderWorkspaceContext(existingFiles),
     renderCompanyState(companyId),
@@ -284,6 +382,7 @@ export function buildUnifiedBeatPrompt(
     renderOpenTasksForRole(companyId, role),
     renderRecentArtifacts(companyId, 10),
     renderRoleMemory(role, companyId),
+    renderIncomingHandoffsSection(incomingHandoffs),
     renderLastProgressNotes(role, companyId, 5),
     renderUpstreamArtifacts(task),
   ].filter(Boolean);
