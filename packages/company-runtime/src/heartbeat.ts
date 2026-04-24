@@ -79,8 +79,12 @@ export interface BeatDependencies {
     auditError: (companyId: string, eventType: string, summary: string, error?: unknown, opts?: Record<string, unknown>) => void;
   };
 
-  /** Execute specialist task work. Stub in Phase 2 — real execution in Phase 3. */
-  executeTask?: (ctx: AgentBeatContext, taskId: string, beatId: string) => Promise<{
+  /**
+   * Wake the agent for this beat. The agent reads the rendered state, claims a
+   * task via `task_claim` (if any are open), and acts via tools. The orchestrator
+   * does NOT pre-select a task — see plans/agent-redesign/00-vision.md.
+   */
+  executeTask?: (ctx: AgentBeatContext, beatId: string) => Promise<{
     summary: string; tokensUsed: number; actionsCount: number; toolCalls: number; completed: boolean;
   }>;
 
@@ -565,28 +569,18 @@ export class HeartbeatEngine {
       let execToolCalls = 0;
 
       if (deps.executeTask) {
-        const actionableTask = this.selectTask(ctx);
-        if (actionableTask) {
-          deps.audit.auditAgent(
-            request.companyId, request.role,
-            "beat_executing", `Executing task: ${actionableTask.title}`,
-            { beatId, detail: { taskId: actionableTask.id } }
-          );
+        // Vision: orchestrator does NOT pick the task. We wake the agent and
+        // let it claim a task (or run a checklist action) via its own tools.
+        // The legacy `executeChecklistAction` path is preserved for non-task
+        // work (e.g. CEO sprint creation) when the agent has no claimable
+        // tasks AND the checklist surfaced a primary action.
+        const hasClaimableTask = ctx.tasks.some(
+          (t) =>
+            (t.status === "in_progress" || t.status === "planned" || t.status === "created") &&
+            (t.assignedRole === ctx.role || !t.assignedRole)
+        );
 
-          const result = await deps.executeTask(ctx, actionableTask.id, beatId);
-          execTokens = result.tokensUsed;
-          execActions = result.actionsCount;
-          execToolCalls = result.toolCalls;
-          totalTokens += execTokens;
-          outcome = "WORK_DONE";
-          summary = result.summary;
-
-          // P4.4: budget enforcement — mark if token budget exceeded
-          if (totalTokens > this.config.beatTokenBudget) {
-            outcome = "BUDGET_EXCEEDED";
-            summary = `${summary} [token budget exceeded: ${totalTokens}/${this.config.beatTokenBudget}]`;
-          }
-        } else if (deps.executeChecklistAction && checklist.primaryAction) {
+        if (!hasClaimableTask && deps.executeChecklistAction && checklist.primaryAction) {
           // No task but checklist says action_needed — dispatch to role-specific handler
           deps.audit.auditAgent(
             request.companyId, request.role,
@@ -606,8 +600,25 @@ export class HeartbeatEngine {
           outcome = "WORK_DONE";
           summary = actionResult.summary;
         } else {
+          deps.audit.auditAgent(
+            request.companyId, request.role,
+            "beat_executing", `Waking ${request.role} for beat`,
+            { beatId, detail: { hasClaimableTask } }
+          );
+
+          const result = await deps.executeTask(ctx, beatId);
+          execTokens = result.tokensUsed;
+          execActions = result.actionsCount;
+          execToolCalls = result.toolCalls;
+          totalTokens += execTokens;
           outcome = "WORK_DONE";
-          summary = checklist.primaryAction?.suggestedAction ?? "Action needed but no specific task";
+          summary = result.summary;
+
+          // P4.4: budget enforcement — mark if token budget exceeded
+          if (totalTokens > this.config.beatTokenBudget) {
+            outcome = "BUDGET_EXCEEDED";
+            summary = `${summary} [token budget exceeded: ${totalTokens}/${this.config.beatTokenBudget}]`;
+          }
         }
       } else {
         outcome = "WORK_DONE";
@@ -672,26 +683,9 @@ export class HeartbeatEngine {
   }
 
   // ── Task selection ───────────────────────────────────────
-
-  private selectTask(ctx: AgentBeatContext) {
-    const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-    const statusOrder = { in_progress: 0, planned: 1, created: 2 };
-    type ActionableStatus = keyof typeof statusOrder;
-
-    const actionable = ctx.tasks.filter(
-      (t): t is typeof t & { status: ActionableStatus } =>
-        (t.status === "in_progress" || t.status === "planned" || t.status === "created") &&
-        (t.assignedRole === ctx.role || !t.assignedRole)
-    );
-    if (actionable.length === 0) return null;
-
-    actionable.sort((a, b) => {
-      const sDiff = statusOrder[a.status] - statusOrder[b.status];
-      if (sDiff !== 0) return sDiff;
-      return priorityOrder[a.priority] - priorityOrder[b.priority];
-    });
-    return actionable[0];
-  }
+  // Removed: orchestrator no longer pre-selects tasks for the agent.
+  // Agents see their open tasks in the rendered state and call `task_claim`
+  // themselves. See plans/agent-redesign/00-vision.md.
 
   // ── Build BeatRecord ─────────────────────────────────────
 

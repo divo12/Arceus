@@ -29,7 +29,7 @@ import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit
 import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
 import { seedRegistry } from "./governance/service-registry.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
-import { executeBeatTask } from "./heartbeats/beat-executor.js";
+import { runBeat } from "./orchestration/run-beat.js";
 import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
 import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
@@ -107,7 +107,25 @@ const beatDeps: BeatDependencies = {
     auditError: (companyId, eventType, summary, error, opts) =>
       audit({ companyId, category: "error", severity: "error", eventType, summary, detail: { error: error instanceof Error ? error.message : error }, ...opts }),
   },
-  executeTask: (ctx, taskId, beatId) => executeBeatTask(ctx, taskId, beatId),
+  executeTask: async (ctx, beatId) => {
+    // Vision: orchestrator hands the beat to runBeat. The agent reads its open
+    // tasks from rendered state and claims one via `task_claim`. No taskId
+    // pre-selection. See plans/agent-redesign/00-vision.md.
+    const result = await runBeat({
+      role: ctx.role,
+      companyId: ctx.company.id,
+      beatId,
+    });
+    return {
+      summary: result.cause
+        ? `Beat ${result.verdict} (${result.cause})`
+        : `Beat ${result.verdict}`,
+      tokensUsed: result.tokensUsed,
+      actionsCount: 1,
+      toolCalls: 0,
+      completed: result.verdict === "pass",
+    };
+  },
   executeChecklistAction: (ctx, action, beatId) => executeChecklistAction(ctx, action, beatId),
   getAgentRoster: () => {
     const snap = getSnapshot();

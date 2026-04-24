@@ -20,6 +20,7 @@ import { cleanupBeatScratch } from "../infra/beat-paths.js";
 import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
 import { registerPromptCompletion } from "../prompts/llm.js";
+import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
 
 const HARD_CAP_MS = 15 * 60 * 1000;
 
@@ -28,13 +29,17 @@ export interface BeatResult {
   sessionId: string;
   verdict: "pass" | "fail";
   cause?: string;
+  tokensUsed: number;
 }
 
 export async function runBeat(input: {
   role: RoleType;
   companyId: string;
+  /** Optional external beat id (e.g. from HeartbeatEngine). When omitted runBeat generates one. */
+  beatId?: string;
 }): Promise<BeatResult> {
-  const beatId = `beat_${crypto.randomBytes(6).toString("hex")}`;
+  const beatId = input.beatId ?? `beat_${crypto.randomBytes(6).toString("hex")}`;
+  startBeatTokenAccumulator(beatId);
 
   // Step 3: create session
   const session = await createBeatSession(input.role, beatId);
@@ -93,7 +98,9 @@ export async function runBeat(input: {
     await destroyBeatSession(sessionId);
     await cleanupBeatScratch(beatId);
 
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+
     // eslint-disable-next-line no-unsafe-finally
-    return { beatId, sessionId, verdict, cause };
+    return { beatId, sessionId, verdict, cause, tokensUsed };
   }
 }
