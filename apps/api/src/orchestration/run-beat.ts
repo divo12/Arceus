@@ -10,7 +10,7 @@
 import crypto from "node:crypto";
 import type { RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
-import { updateSuccessRate, ROLE_SOULS } from "@arceus/company-runtime";
+import { updateSuccessRate, ROLE_SOULS, getSkillById } from "@arceus/company-runtime";
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { getOpencode } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
@@ -113,6 +113,38 @@ export async function runBeat(input: {
     for (const skillId of usedSkills) {
       updateSuccessRate(skillId, verdict === "pass" ? 1 : 0);
     }
+
+    // Spec 29 Phase G.3 — EMA-drop trigger. After Pass-1 EMA update, check
+    // each used skill against its prior baseline; enqueue an evolve job if
+    // success rate has dropped > 0.15 below the baseline AND the skill has
+    // ≥10 invocations.
+    if (process.env.ARCEUS_SKILL_EVOLVE_TRIGGER_EMA === "1") {
+      try {
+        const { getRevisionBaselineEma, maybeEnqueueEvolveJob, EMA_BASELINE_DEFAULT } = await import("../skills/triggers.js");
+        for (const skillId of usedSkills) {
+          const skill = getSkillById(skillId);
+          if (!skill) continue;
+          const baseline = (await getRevisionBaselineEma(skillId)) ?? EMA_BASELINE_DEFAULT;
+          if (skill.successRate < baseline - 0.15 && skill.usageCount >= 10) {
+            await maybeEnqueueEvolveJob({
+              companyId: input.companyId,
+              trigger: "ema_drop",
+              targetSkillId: skillId,
+              payload: { baselineEma: baseline, currentEma: skill.successRate, usageCount: skill.usageCount },
+            });
+          }
+        }
+      } catch (err) {
+        observability.logEvent({
+          event: "error",
+          where: "run_beat.ema_drop_trigger",
+          message: err instanceof Error ? err.message : String(err),
+          beatId,
+          ts: Date.now(),
+        });
+      }
+    }
+
     clearBeatSkillUsage(beatId);
     clearBeatTaskTransitions(beatId);
 

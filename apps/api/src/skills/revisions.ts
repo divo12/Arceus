@@ -41,6 +41,9 @@ export interface WriteRevisionArgs {
   rollbackFromTag?: string;
   /** Commit message + revisions.summary (≤ 280 chars). */
   summary: string;
+  /** Spec 29 Phase G.3 — record EMA at apply-time for the rollback monitor's
+   *  baseline. Embedded as `[ema=N.NN]` at the end of `summary`. */
+  emaAtApply?: number;
   /** Override repo root (tests). */
   cwd?: string;
 }
@@ -63,6 +66,15 @@ function gitTagFor(intent: RevisionIntent, slug: string, revisionNumber: number)
   return `skill-evolve/${slug}/${revisionNumber}`;
 }
 
+/** Phase G.3 — append `[ema=N.NN]` to a summary, capped at 280 chars total. */
+function embedEmaInSummaryLocal(summary: string, ema: number): string {
+  const tag = ` [ema=${ema.toFixed(2)}]`;
+  const max = 280;
+  if (summary.length + tag.length <= max) return summary + tag;
+  const room = max - tag.length;
+  return summary.slice(0, Math.max(0, room - 1)).trimEnd() + tag;
+}
+
 /**
  * Writes a revision atomically. On success returns the persisted row info.
  * On failure throws and guarantees no orphan side-effects.
@@ -73,6 +85,11 @@ export async function writeRevisionAtomic(
   if (args.summary.length > 280) {
     throw new RangeError("summary must be ≤ 280 chars");
   }
+  // Phase G.3 — embed `[ema=N.NN]` for the rollback monitor.
+  const summary = typeof args.emaAtApply === "number" && Number.isFinite(args.emaAtApply)
+    ? embedEmaInSummaryLocal(args.summary, args.emaAtApply)
+    : args.summary;
+  args = { ...args, summary };
 
   const cwd = args.cwd ?? getRepoRoot();
   const db = getDb();

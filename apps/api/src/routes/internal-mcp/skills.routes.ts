@@ -35,6 +35,7 @@ import { cacheSuccessfulResponse } from "./middleware.js";
 import { writeRevisionAtomic } from "../../skills/revisions.js";
 import { validateSkillDefinition } from "../../skills/validate.js";
 import { gitListTagsMatching } from "../../skills/git.js";
+import { enqueueJob } from "@arceus/db/src/repos/skill_evolve_jobs.js";
 
 const SKILLS_BASE = "/api/internal/v1/skills";
 
@@ -116,6 +117,11 @@ const deprecateSchema = z.object({
   skillId: z.string().uuid(),
   reason: z.string().min(1).max(500),
   summary: z.string().min(1).max(280),
+});
+
+const candidateSubmitSchema = z.object({
+  description: z.string().min(8).max(500),
+  motivation: z.string().min(8).max(500),
 });
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -406,6 +412,8 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
         intent: "register",
         appliedBy: `${mcp.role}:${mcp.beatId}`,
         summary: parsed.data.summary,
+        // Phase G.3 — record EMA at register time as the rollback baseline.
+        emaAtApply: 0.5,
       });
     } catch (err) {
       // roll back the artifact insert too — registration is atomic at the user level
@@ -487,6 +495,8 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
         appliedBy: `${mcp.role}:${mcp.beatId}`,
         rollbackFromTag: parsed.data.rollbackFromTag,
         summary: parsed.data.summary,
+        // Phase G.3 — record current EMA so the rollback monitor has a baseline.
+        emaAtApply: Number(artifact.successRate),
       });
     } catch (err) {
       reply
@@ -583,5 +593,41 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
     reply.code(200).send(body);
+  });
+
+  // ── G.1 candidate-submit ───────────────────────────────────
+  // Allowlisted to ALL roles (per spec §Tool surface). Submits a candidate
+  // skill idea for the orchestrator to evaluate. Behind
+  // ARCEUS_SKILL_EVOLVE_TRIGGER_CANDIDATE=1.
+  app.post(`${SKILLS_BASE}/candidate-submit`, async (req, reply) => {
+    if (process.env.ARCEUS_SKILL_EVOLVE_TRIGGER_CANDIDATE !== "1") {
+      reply
+        .code(503)
+        .send(failure("skill_candidate_submit is disabled (set ARCEUS_SKILL_EVOLVE_TRIGGER_CANDIDATE=1).", "upstream", "never", "trigger_enabled"));
+      return;
+    }
+    if (!requireDb(reply)) return;
+    const parsed = candidateSubmitSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return sendValidation(reply, parsed.error);
+
+    const mcp = req.mcp!;
+    const db = getDb();
+    const job = await enqueueJob(db, {
+      companyId: mcp.companyId,
+      trigger: "candidate",
+      targetSkillId: null,
+      payload: {
+        description: parsed.data.description,
+        motivation: parsed.data.motivation,
+        submittedBy: `${mcp.role}:${mcp.beatId}`,
+      },
+    });
+
+    const body = success(`Queued candidate skill for evaluation (job ${job.id}).`, {
+      jobId: job.id,
+      trigger: job.trigger,
+      status: job.status,
+    });
+    reply.code(202).send(body);
   });
 }

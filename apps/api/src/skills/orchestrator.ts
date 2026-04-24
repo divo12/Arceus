@@ -35,12 +35,13 @@ import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { addArtifactSync, attachArtifactToTask } from "../tasks/mutations.js";
 import { upsertTask } from "../persistence/store.js";
+import { gitShowFileAtTag } from "./git.js";
 import type { Task } from "@arceus/contracts";
 import type { SkillEvolveJob } from "@arceus/db/src/repos/skill_evolve_jobs.js";
 
 const MAX_REVISION_CYCLES = 2;
 
-export type PipelineStatus = "accepted" | "rejected" | "skipped" | "stubbed";
+export type PipelineStatus = "accepted" | "rejected" | "skipped" | "stubbed" | "rollback_proposed";
 
 export interface PipelineResult {
   status: PipelineStatus;
@@ -284,8 +285,7 @@ async function createApplyProposalTask(args: {
  */
 export async function runATAPipeline(job: SkillEvolveJob): Promise<PipelineResult> {
   if (job.trigger === "rollback") {
-    // Phase H stub. Ignore here; rollback short-circuit is a separate path.
-    return { status: "skipped", reason: "rollback handled out-of-band" };
+    return runRollbackShortCircuit(job);
   }
 
   const payload = (job.payload ?? {}) as JobPayload;
@@ -424,5 +424,121 @@ export async function runATAPipeline(job: SkillEvolveJob): Promise<PipelineResul
     artifactId: artifact.id,
     taskId,
     audit: { revisionCycles, overallScore: verdict.overallScore },
+  };
+}
+
+/**
+ * Spec 29 Phase H.2 — Rollback short-circuit.
+ *
+ * Zero LLM calls. Reads the prior revision content from git at `fromTag`,
+ * writes one handoff artifact, and creates a `skill_apply_rollback` task
+ * for the SL to gate. The SL beat calls `skill_update` with the prior
+ * content and `rollbackFromTag`.
+ */
+async function runRollbackShortCircuit(job: SkillEvolveJob): Promise<PipelineResult> {
+  const payload = (job.payload ?? {}) as { fromTag?: string; applied_at?: string };
+  const fromTag = payload.fromTag;
+  const skillId = job.targetSkillId;
+  if (!fromTag || !skillId) {
+    return { status: "skipped", reason: "rollback job missing fromTag or targetSkillId" };
+  }
+
+  const skill = await loadSkillArtifact(skillId);
+  if (!skill) {
+    return { status: "skipped", reason: `skill ${skillId} not found` };
+  }
+  // Slug needed for the seed-tree path. We pull it directly from the
+  // skill_artifacts row (loadSkillArtifact does not surface slug yet).
+  const db = getDb();
+  const slugRow = await db
+    .select({ slug: skillArtifactsTable.slug })
+    .from(skillArtifactsTable)
+    .where(eq(skillArtifactsTable.id, skillId))
+    .limit(1);
+  const slug = slugRow[0]?.slug;
+  if (!slug) {
+    return { status: "skipped", reason: `slug for skill ${skillId} not found` };
+  }
+
+  let priorContent: string;
+  try {
+    priorContent = await gitShowFileAtTag({
+      tag: fromTag,
+      path: `.arceus/skills-seed/${slug}/SKILL.md`,
+    });
+  } catch (err) {
+    return {
+      status: "skipped",
+      reason: `git show failed for ${fromTag}: ${err instanceof Error ? err.message : err}`,
+    };
+  }
+
+  const summary = `Rollback ${slug} → ${fromTag} after EMA regression.`;
+  const md = [
+    `# Rollback proposal: ${skill.name}`,
+    "",
+    `- Job: ${job.id} (rollback)`,
+    `- Skill: ${skillId} (${slug})`,
+    `- Revert to tag: ${fromTag}`,
+    payload.applied_at ? `- Bad revision applied at: ${payload.applied_at}` : "",
+    "",
+    "## Prior SKILL.md (target)",
+    "",
+    "```markdown",
+    priorContent,
+    "```",
+  ]
+    .filter((s) => s.length > 0)
+    .join("\n");
+
+  const artifact = await addArtifactSync(
+    `skill-orchestrator:${job.id}`,
+    "plan",
+    `Skill rollback proposal — ${slug}`,
+    md,
+  );
+
+  const taskId = `tsk_${randomUUID().slice(0, 12)}`;
+  const now = new Date().toISOString();
+  const task: Task = {
+    id: taskId,
+    companyId: job.companyId,
+    sprintId: null,
+    kind: "skill_apply_rollback" as Task["kind"],
+    title: `Rollback skill ${slug} to ${fromTag}`,
+    description: summary,
+    problemStatement: summary,
+    deliverable: `Apply rollback via skill_update with rollbackFromTag="${fromTag}".`,
+    definitionOfDone: [
+      "Reviewed the prior SKILL.md content.",
+      `Applied via skill_update with content from ${fromTag} OR rejected with reasoning.`,
+    ],
+    status: "created",
+    priority: "high",
+    assignedRole: "skills_lead" as Task["assignedRole"],
+    assignedAgentId: null,
+    parentTaskId: null,
+    dependsOnTaskIds: [],
+    childTaskIds: [],
+    artifactIds: [],
+    localPreviewUrl: null,
+    plannerState: { objective: summary, planSteps: [], selectedTools: [], currentStepIndex: 0 },
+    executorState: { currentCommand: null, commandsExecuted: [], results: [] },
+    verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
+    costCents: 0,
+    iterationCount: 0,
+    maxIterations: 3,
+    incomingArtifactIds: [artifact.id],
+    createdAt: now,
+  };
+  upsertTask(task);
+  attachArtifactToTask(taskId, artifact.id);
+
+  return {
+    status: "rollback_proposed",
+    proposalId: job.id,
+    artifactId: artifact.id,
+    taskId,
+    audit: { fromTag, slug },
   };
 }
