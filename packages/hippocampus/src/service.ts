@@ -1,4 +1,4 @@
-import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingGenerator, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, StaticMemoryStore } from "./types";
+import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, StaticMemoryStore } from "./types";
 import { InMemoryDynamicStore } from "./tiers/dynamic";
 import { InMemoryPrimingStore, createDefaultPrimingState, renderPrimingDisposition, updatePrimingStateFromOutcome } from "./tiers/priming";
 import { InMemoryProceduralStore } from "./tiers/procedural";
@@ -45,8 +45,6 @@ export type HippocampusDependencies = {
   decideAction?: ActionDecider;
   /** LLM-powered habit matcher. If not provided, falls back to naive token matching. */
   matchHabits?: HabitMatcher;
-  /** LLM-powered priming disposition generator. If not provided, falls back to hardcoded thresholds. */
-  generatePriming?: PrimingGenerator;
 };
 
 /**
@@ -70,7 +68,6 @@ export class HippocampusService implements HippocampusGateway {
   private readonly extractFacts: FactExtractor | null;
   private readonly decideAction: ActionDecider | null;
   private readonly matchHabits: HabitMatcher | null;
-  private readonly generatePriming: PrimingGenerator | null;
 
   constructor(dependencies: HippocampusDependencies = {}) {
     this.staticStore = dependencies.staticStore ?? new InMemoryStaticStore();
@@ -80,7 +77,6 @@ export class HippocampusService implements HippocampusGateway {
     this.extractFacts = dependencies.extractFacts ?? null;
     this.decideAction = dependencies.decideAction ?? null;
     this.matchHabits = dependencies.matchHabits ?? null;
-    this.generatePriming = dependencies.generatePriming ?? null;
   }
 
   /**
@@ -164,19 +160,12 @@ export class HippocampusService implements HippocampusGateway {
     // Replace stored confidence with MMR retrieval score so consumers see task-relevance
     const memories = scored.map((m) => ({ ...m, confidence: m.finalScore }));
 
-    // Generate priming disposition — LLM if available, hardcoded fallback otherwise
-    let priming: string;
-    if (primingState && this.generatePriming) {
-      try {
-        priming = await this.generatePriming(primingState);
-        console.log(`[Hippocampus] LLM priming: "${priming}"`);
-      } catch (err) {
-        console.warn(`[Hippocampus] LLM priming failed, using fallback: ${err instanceof Error ? err.message : err}`);
-        priming = renderPrimingDisposition(primingState);
-      }
-    } else {
-      priming = primingState ? renderPrimingDisposition(primingState) : "Neutral. Start with a direct first pass.";
-    }
+    // Priming disposition — deterministic render from numeric state scores.
+    // The former LLM-backed priming (memoryAgentGeneratePriming) was deleted
+    // per spec 27 §6: numeric inputs, LLM couldn't improve on hardcoded thresholds.
+    const priming: string = primingState
+      ? renderPrimingDisposition(primingState)
+      : "Neutral. Start with a direct first pass.";
 
     return { memories, habits, priming };
   }

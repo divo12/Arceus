@@ -1,4 +1,5 @@
 import type { Habit, MemoryUnit, PrimingState } from "@arceus/contracts";
+export type { PrimingState } from "@arceus/contracts";
 
 export type PreparedAgentContext = {
   memories: MemoryUnit[];
@@ -36,9 +37,6 @@ export type ActionDecider = (newFact: string, existingMemories: Array<{ id: stri
 
 /** LLM-powered habit matcher — returns IDs of habits relevant to a task */
 export type HabitMatcher = (taskDescription: string, habits: Habit[]) => Promise<string[]>;
-
-/** LLM-powered priming disposition generator — returns a one-line behavioral instruction */
-export type PrimingGenerator = (state: PrimingState) => Promise<string>;
 
 export type ProcessTaskCompletionInput = {
   agentId: string;
