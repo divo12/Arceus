@@ -8,6 +8,13 @@
       "when": 1777052961934,
       "tag": "0000_initial_normalized_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777054298288,
+      "tag": "0001_fk_covering_indexes",
+      "breakpoints": true
     }
   ]
 }

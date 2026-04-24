@@ -18,5 +18,6 @@ export const sessionBindings = pgTable(
   (table) => ({
     sessionIdUniqueIdx: uniqueIndex("session_bindings_session_id_idx").on(table.sessionId),
     beatIdx: index("session_bindings_beat_idx").on(table.beatId),
+    companyIdx: index("session_bindings_company_idx").on(table.companyId),
   }),
 );

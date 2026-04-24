@@ -24,6 +24,7 @@ export const sprintSnapshots = pgTable(
       table.companyId,
       table.sprintNumber,
     ),
+    sprintIdx: index("sprint_snapshots_sprint_idx").on(table.sprintId),
     statusCheck: check(
       "sprint_snapshots_status_check",
       sql`${table.status} IN ('active','rolled_back')`,

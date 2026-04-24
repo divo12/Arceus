@@ -25,6 +25,7 @@ export const meetings = pgTable(
       table.scheduledAt,
     ),
     companyKindIdx: index("meetings_company_kind_idx").on(table.companyId, table.kind),
+    sprintIdx: index("meetings_sprint_idx").on(table.sprintId),
     kindCheck: check(
       "meetings_kind_check",
       sql`${table.kind} IN ('daily_sync','sprint_planning','retro','decision','ad_hoc')`,

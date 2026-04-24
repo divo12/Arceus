@@ -1,4 +1,4 @@
-import { pgTable, uuid, jsonb, timestamp, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, uuid, jsonb, timestamp, primaryKey, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
@@ -13,5 +13,6 @@ export const primingStates = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.agentId] }),
+    companyIdx: index("priming_states_company_idx").on(table.companyId),
   }),
 );

@@ -26,6 +26,7 @@ export const artifacts = pgTable(
     companySprintIdx: index("artifacts_company_sprint_idx").on(table.companyId, table.sprintId),
     companyKindIdx: index("artifacts_company_kind_idx").on(table.companyId, table.kind),
     companyCreatedIdx: index("artifacts_company_created_idx").on(table.companyId, table.createdAt),
+    agentIdx: index("artifacts_agent_idx").on(table.agentId),
     titleSearchIdx: index("artifacts_title_search_idx").using("gin", sql`${table.title} gin_trgm_ops`),
     kindCheck: check(
       "artifacts_kind_check",
