@@ -17,3 +17,5 @@ export * from "./state";
 export * from "./events";
 export * from "./tool-result";
 export * from "./beat-context";
+// Spec 32 — observability. Namespaced to avoid colliding with legacy `./events.ts`.
+export * as observability from "./observability/index.js";

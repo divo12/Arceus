@@ -70,6 +70,7 @@ export const sessionBindingSchema = z.object({
 });
 
 export type RoleSoul = z.infer<typeof roleSoulSchema>;
+export type RoleType = z.infer<typeof roleTypeSchema>;
 export type HierarchyNode = z.infer<typeof hierarchyNodeSchema>;
 export type AgentIdentity = z.infer<typeof agentIdentitySchema>;
 export type SessionBinding = z.infer<typeof sessionBindingSchema>;
