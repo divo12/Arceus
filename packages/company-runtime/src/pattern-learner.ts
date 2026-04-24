@@ -51,6 +51,12 @@ export function hasPatternLearnerDeps(): boolean {
   return deps !== null;
 }
 
+/** Spec 29 Phase F — orchestrator-only direct access to wired LLM primitives. */
+export function getPatternLearnerDeps(): PatternLearnerDeps {
+  if (!deps) throw new Error("[PatternLearner] deps not configured");
+  return deps;
+}
+
 // ── Constants ────────────────────────────────────────────
 
 /** Cosine similarity threshold for clustering (spec §1063). */

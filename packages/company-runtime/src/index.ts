@@ -72,6 +72,7 @@ export {
   processTaskOutcome,
   setSkillMutatorDeps,
   hasSkillMutatorDeps,
+  getSkillMutatorDeps,
 } from "./skill-mutator";
 export type { SkillMutatorDeps, TaskOutcomeContext } from "./skill-mutator";
 export type { SkillRegistryDeps } from "./skill-registry";
@@ -81,6 +82,7 @@ export {
   runATAPipeline,
   setSkillTesterDeps,
   hasSkillTesterDeps,
+  getSkillTesterDeps,
 } from "./skill-tester";
 export type { SkillTesterDeps } from "./skill-tester";
 
@@ -94,6 +96,7 @@ export {
   applyEma,
   setPatternLearnerDeps,
   hasPatternLearnerDeps,
+  getPatternLearnerDeps,
   getPatternById,
   getPatternsForCompany,
   getPatternCount,

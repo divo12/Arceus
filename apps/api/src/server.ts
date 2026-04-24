@@ -44,6 +44,7 @@ import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
 import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
 import { initSkillEvolution } from "./skills/evolution.js";
+import { startSkillScheduler, stopSkillScheduler } from "./skills/scheduler.js";
 import { workspaceManager } from "./workspace/manager.js";
 import { warmUpOpencode } from "./infra/opencode.js";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent, MeetingScheduler, MeetingPipeline } from "@arceus/company-runtime";
@@ -425,6 +426,9 @@ await cpHydrateTrustScores();
 // ── Wire skill evolution (pattern learner, mutator, ATA pipeline) ──
 initSkillEvolution();
 
+// ── Spec 29: skill evolution scheduler (no-op unless ARCEUS_SKILL_EVOLVE_ORCHESTRATOR=1) ──
+startSkillScheduler();
+
 const { port, host } = serverConfig;
 
 await flush();
@@ -438,6 +442,7 @@ async function shutdown(signal: string) {
   try {
     heartbeatEngine.stop();
     meetingScheduler.stop();
+    await stopSkillScheduler();
     await drainAuditLedger();
     await teardown();
     await app.close();
