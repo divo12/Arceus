@@ -4,6 +4,8 @@ import {
   mcpRequestContext,
   mcpRateLimitHeaders,
   mcpIdempotencyReplay,
+  mcpEmitToolInvoked,
+  mcpEmitToolResult,
 } from "./middleware.js";
 import internalMcpTasksRoutes from "./tasks.routes.js";
 import internalMcpArtifactsRoutes from "./artifacts.routes.js";
@@ -26,6 +28,14 @@ export default async function internalMcpRoutes(app: FastifyInstance): Promise<v
     await mcpRateLimitHeaders(req, reply);
     if (reply.sent) return;
     await mcpIdempotencyReplay(req, reply);
+    if (reply.sent) return;
+    // Spec 32 — emit tool.invoked once we know the tool + ctx are valid.
+    await mcpEmitToolInvoked(req, reply);
+  });
+
+  app.addHook("onResponse", async (req, reply) => {
+    if (!req.url.startsWith("/api/internal/v1/")) return;
+    await mcpEmitToolResult(req, reply);
   });
 
   await app.register(internalMcpTasksRoutes);

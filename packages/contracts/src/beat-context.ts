@@ -20,6 +20,13 @@ export const beatContextSchema = z.object({
   beatId: z.string(),
   sessionId: z.string(),
   companyId: z.string(),
+  /**
+   * Active sprint id at the time the beat was built, or null if the company
+   * has no active sprint. Sourced from `snapshot.company.currentSprintId`.
+   * Used by spec 32 emit sites (e.g. `beat.started`) so traces can be
+   * filtered/grouped by sprint in Langfuse without a separate join.
+   */
+  sprintId: z.string().nullable(),
   role: roleTypeSchema,
   trustBand: trustBandSchema,
   allowedTools: z.array(z.string()),

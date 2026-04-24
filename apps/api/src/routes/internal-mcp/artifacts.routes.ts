@@ -3,6 +3,7 @@ import { z, ZodError, type ZodSchema } from "zod";
 import { addArtifactSync, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/index.js";
 import { getSnapshot } from "../../persistence/store.js";
 import { artifacts, type Artifact } from "../../orchestration/state.js";
+import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -94,7 +95,23 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     const taskIds = body.attachToTaskIds ?? (body.taskId ? [body.taskId] : []);
     for (const tid of taskIds) {
       attachArtifactToTask(tid, artifact.id);
+      observability.logEvent({
+        event: "task.artifact_attached",
+        taskId: tid,
+        artifactId: artifact.id,
+        companyId: req.mcp!.companyId,
+        ts: Date.now(),
+      });
     }
+
+    observability.logEvent({
+      event: "artifact.created",
+      artifactId: artifact.id,
+      companyId: req.mcp!.companyId,
+      kind: body.kind,
+      attachedTaskIds: taskIds,
+      ts: Date.now(),
+    });
 
     const location = `${ARTIFACT_BASE}/${artifact.id}`;
     cacheAndSend(

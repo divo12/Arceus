@@ -3,6 +3,7 @@ import { z, ZodError, type ZodSchema } from "zod";
 import { requestApproval } from "../../memory/handoffs.js";
 import { getSnapshot, updateApproval } from "../../persistence/store.js";
 import { getAgentByRole } from "@arceus/task-engine";
+import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -115,6 +116,14 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       );
       return;
     }
+
+    observability.logEvent({
+      event: "approval.requested",
+      approvalId: approval.id,
+      companyId: req.mcp!.companyId,
+      kind: approval.type,
+      ts: Date.now(),
+    });
 
     const location = `${APPROVALS_BASE}/${approval.id}`;
     cacheAndSend(
@@ -286,6 +295,14 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
 
       approval.status = body.decision;
       approval.resolutionSummary = body.reason ?? `${body.decision} by CEO`;
+
+      observability.logEvent({
+        event: "approval.resolved",
+        approvalId,
+        companyId: req.mcp!.companyId,
+        outcome: body.decision,
+        ts: Date.now(),
+      });
 
       cacheAndSend(req, reply, 200, success(`Approval ${approvalId} ${body.decision}.`, {
         approvalId,

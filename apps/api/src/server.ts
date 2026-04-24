@@ -6,6 +6,16 @@ process.on("uncaughtException", (err) => {
   console.error("[ARCEUS] Uncaught exception (process kept alive):", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
 });
 
+// Spec 32 — Observability bootstrap MUST run before any module that calls
+// `trace.getTracer(...)`. The OTEL SDK installs a global tracer provider on
+// startObservability(); without it, spans are silently dropped.
+import { startObservability } from "./observability/bootstrap.js";
+import { observability } from "@arceus/contracts";
+startObservability();
+observability.setSink(
+  observability.multiSink([observability.pinoSink(), observability.otelSink]),
+);
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {

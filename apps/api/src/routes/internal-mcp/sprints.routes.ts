@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { createSprintWithTasks } from "../../sprints/proposals.js";
 import { getSnapshot } from "../../persistence/store.js";
+import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -84,6 +85,16 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
 
     try {
       const result = await createSprintWithTasks(parsed);
+      const sprintId = (result as { sprintId?: string; id?: string }).sprintId
+        ?? (result as { sprintId?: string; id?: string }).id
+        ?? "unknown";
+      observability.logEvent({
+        event: "sprint.created",
+        sprintId,
+        companyId: req.mcp!.companyId,
+        goal: parsed.goal,
+        ts: Date.now(),
+      });
       cacheAndSend(req, reply, 201, success("Sprint created.", result));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Sprint creation failed.";

@@ -92,10 +92,16 @@ export async function buildBeatContext(
   beatId: string,
   sessionId: string,
 ): Promise<BeatContext> {
+  // Active sprint at beat start (or null if the company has no active sprint).
+  // Captured here rather than re-derived per consumer so spec-32 emit sites
+  // can read `ctx.sprintId` without touching the snapshot directly.
+  const currentSprintId = getSnapshot().company.currentSprintId ?? null;
+
   return {
     beatId,
     sessionId,
     companyId,
+    sprintId: currentSprintId,
     role,
     trustBand: await computeTrustBand(role, companyId),
     allowedTools: getAllowedArceusTools(role),

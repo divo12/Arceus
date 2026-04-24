@@ -9,6 +9,7 @@
  */
 import crypto from "node:crypto";
 import type { RoleType } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
 import { updateSuccessRate, ROLE_SOULS } from "@arceus/company-runtime";
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { getOpencode } from "../infra/opencode.js";
@@ -39,6 +40,7 @@ export async function runBeat(input: {
   beatId?: string;
 }): Promise<BeatResult> {
   const beatId = input.beatId ?? `beat_${crypto.randomBytes(6).toString("hex")}`;
+  const beatStartedAt = Date.now();
   startBeatTokenAccumulator(beatId);
 
   // Step 3: create session
@@ -48,6 +50,17 @@ export async function runBeat(input: {
   // Step 2+4: build context, register
   const ctx = await buildBeatContext(input.role, input.companyId, beatId, sessionId);
   registerSessionContext(ctx);
+
+  // Spec 32 — narrate beat start; OTEL sink opens the parent span here.
+  observability.logEvent({
+    event: "beat.started",
+    beatId,
+    companyId: input.companyId,
+    role: input.role,
+    sprintId: ctx.sprintId,
+    trustBand: ctx.trustBand,
+    ts: beatStartedAt,
+  });
 
   // Step 5: materialize skills + swap symlink
   await materializeBeatSkills({
@@ -81,6 +94,15 @@ export async function runBeat(input: {
   } catch (e) {
     const msg = (e as Error).message ?? "";
     cause = msg.includes("timed out") ? "beat_hard_cap" : "prompt_failed";
+    // Spec 32 — narrate the failure cause as an error event before cleanup.
+    observability.logEvent({
+      event: "error",
+      where: "run_beat",
+      message: msg || "unknown beat failure",
+      stack: (e as Error).stack,
+      beatId,
+      ts: Date.now(),
+    });
   } finally {
     // Steps 16–22: scoring + cleanup, always runs
     const verdict = cause === "beat_hard_cap"
@@ -99,6 +121,19 @@ export async function runBeat(input: {
     await cleanupBeatScratch(beatId);
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
+    const beatEndedAt = Date.now();
+
+    // Spec 32 — narrate beat end. OTEL sink closes the parent span and
+    // attaches the verdict; pino sink writes one JSON line.
+    observability.logEvent({
+      event: "beat.completed",
+      beatId,
+      role: input.role,
+      durationMs: beatEndedAt - beatStartedAt,
+      verdictOutcome: verdict,
+      verdictScore: verdict === "pass" ? 1 : 0,
+      ts: beatEndedAt,
+    });
 
     // eslint-disable-next-line no-unsafe-finally
     return { beatId, sessionId, verdict, cause, tokensUsed };

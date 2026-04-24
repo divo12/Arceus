@@ -6,6 +6,8 @@ import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
 import { resolveBearerToken } from "../../auth/bearer.js";
 import { hashBody, lookupIdempotency, rememberIdempotency } from "./idempotency.js";
 import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
+import { observability, type RoleType } from "@arceus/contracts";
+import { routeToTool } from "./route-to-tool.js";
 
 export interface McpRequestContext {
   companyId: string;
@@ -13,6 +15,9 @@ export interface McpRequestContext {
   role: string;
   requestId: string;
   idempotencyKey: string | null;
+  /** Spec 32 — derived tool name + monotonic invoke timestamp for tool.result correlation. */
+  tool?: string;
+  invokedAt?: number;
 }
 
 declare module "fastify" {
@@ -156,5 +161,82 @@ export const cacheSuccessfulResponse = (
   if (response.status >= 400) return;
   rememberIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey, req.body, response);
 };
+
+// ── Spec 32 — emit tool.invoked / tool.result / tool.denied ──────────────
+
+/**
+ * preHandler hook — runs after mcpRequestContext, after Fastify has resolved
+ * the route template (so req.routeOptions.url is available). Emits tool.invoked
+ * once per MCP request, derives a stable tool name, and stamps both onto
+ * `req.mcp` so the onResponse hook can compute duration and emit tool.result.
+ *
+ * GETs and idempotency replays still emit so the trace shows the cache hit
+ * — see mcpEmitIdempotencyReplay below for the replay-specific event.
+ */
+export const mcpEmitToolInvoked: McpHook = async (req) => {
+  const mcp = req.mcp;
+  if (!mcp) return;
+  const routeUrl = (req.routeOptions as { url?: string } | undefined)?.url ?? req.url;
+  const tool = routeToTool(req.method, routeUrl);
+  mcp.tool = tool;
+  mcp.invokedAt = Date.now();
+  observability.logEvent({
+    event: "tool.invoked",
+    beatId: mcp.beatId,
+    role: mcp.role as RoleType,
+    tool,
+    args: req.body ?? null,
+    idempotencyKey: mcp.idempotencyKey ?? undefined,
+    ts: mcp.invokedAt,
+  });
+};
+
+/**
+ * onResponse hook — emits tool.result for every MCP response, success or
+ * envelope-failure. The pair (tool.invoked, tool.result) bookends a span
+ * in the OTEL sink.
+ */
+export const mcpEmitToolResult = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const mcp = req.mcp;
+  if (!mcp?.tool || mcp.invokedAt == null) return;
+  const status = reply.statusCode;
+  const ok = status < 400;
+  const ts = Date.now();
+  observability.logEvent({
+    event: "tool.result",
+    beatId: mcp.beatId,
+    tool: mcp.tool,
+    ok,
+    cause: ok ? undefined : causeFromStatus(status),
+    durationMs: ts - mcp.invokedAt,
+    ts,
+  });
+};
+
+/** Best-effort mapping from HTTP status back to envelope cause for tool.result. */
+function causeFromStatus(status: number): string | undefined {
+  if (status === 401) return "auth_invalid";
+  if (status === 403) return "governance";
+  if (status === 404) return "not_found";
+  if (status === 409) return "conflict";
+  if (status === 422) return "validation";
+  if (status >= 500) return "internal";
+  if (status >= 400) return "request_error";
+  return undefined;
+}
+
+/**
+ * Emit `idempotency.replay` when mcpIdempotencyReplay short-circuits a request.
+ * This is exported so route hooks can call it before the early-return; the
+ * mcpIdempotencyReplay hook below is updated to use it.
+ */
+export function emitIdempotencyReplay(tool: string, key: string): void {
+  observability.logEvent({
+    event: "idempotency.replay",
+    tool,
+    key,
+    ts: Date.now(),
+  });
+}
 
 export { hashBody };

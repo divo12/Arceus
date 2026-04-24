@@ -7,6 +7,7 @@ import { embed } from "./backends/embedding.js";
 import { rankAndSelect, DEFAULT_RETRIEVAL_OPTIONS } from "./engines/retrieval.js";
 import type { RawCandidate } from "./engines/retrieval.js";
 import type { Habit, MemoryUnit } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
 
 /**
  * Build a MemoryUnit from a completed task's output.
@@ -497,6 +498,14 @@ export class HippocampusService implements HippocampusGateway {
     }
 
     await store.add(unit);
+    // Spec 32 — narrate memory writes for observability.
+    observability.logEvent({
+      event: "memory.written",
+      companyId: unit.companyId,
+      scope: `${unit.agentId}/${unit.type}`,
+      sizeBytes: Buffer.byteLength(unit.content ?? "", "utf8"),
+      ts: Date.now(),
+    });
     return { memoryId: unit.id, action: "ADD", reason: "default", targetId: null };
   }
 

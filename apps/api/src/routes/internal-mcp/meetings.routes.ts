@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z, ZodError, type ZodSchema } from "zod";
-import type { AgentIdentity, Meeting, Task } from "@arceus/contracts";
+import type { AgentIdentity, Meeting, RoleType, Task } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
 import { getSnapshot, writeMeetingSync } from "../../persistence/store.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -177,6 +178,14 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
 
     // Spec 28 Phase B.1 — flush snapshot to DB before returning.
     const meeting = await writeMeetingSync(recorded);
+
+    observability.logEvent({
+      event: "meeting.recorded",
+      meetingId: meeting.id,
+      companyId: req.mcp!.companyId,
+      participants: body.participantRoles as RoleType[],
+      ts: Date.now(),
+    });
 
     const location = `${MEETINGS_BASE}/${meeting.id}`;
     cacheAndSend(

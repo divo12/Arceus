@@ -16,7 +16,7 @@
  *     A warning logs once at startup; the process keeps running. The OTEL sink
  *     can still be installed; spans just go to the no-op global provider.
  */
-import { NodeSDK } from "@opentelemetry/sdk-node";
+import { NodeSDK, type tracing } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { Resource } from "@opentelemetry/resources";
 import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -83,7 +83,10 @@ export function startObservability(options: ObservabilityBootstrapOptions = {}):
     // Higher per-span latency than BatchSpanProcessor but spans never wait
     // for a batch window — important for short-lived processes (smoke tests,
     // CLI tools) and for our beat cadence (~1 beat/sec, low volume).
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
+    // Cast: sdk-node's SpanProcessor type is structurally identical to the
+    // one from sdk-trace-base; the mismatch is a duplicate-types issue from
+    // peer dep resolution, not a real shape difference.
+    spanProcessors: [new SimpleSpanProcessor(exporter) as unknown as tracing.SpanProcessor],
   });
 
   sdk.start();

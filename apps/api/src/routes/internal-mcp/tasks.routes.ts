@@ -13,7 +13,9 @@ import {
   hydrateTaskFromSpec,
 } from "../../tasks/index.js";
 import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/store.js";
-import type { Task } from "@arceus/contracts";import { failure, success, type ErrorCause } from "./envelope.js";
+import type { Task, RoleType } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
+import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
 const TASK_BASE = "/api/internal/v1/tasks";
@@ -190,11 +192,26 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     };
 
     upsertTask(task);
+    observability.logEvent({
+      event: "task.created",
+      taskId,
+      companyId: req.mcp!.companyId,
+      sprintId: task.sprintId ?? null,
+      assignedRole: (task.assignedRole ?? req.mcp!.role) as RoleType,
+      ts: Date.now(),
+    });
 
     // Attach reference artifacts if provided
     if (body.referenceArtifactIds?.length) {
       for (const artId of body.referenceArtifactIds) {
         attachArtifactToTask(taskId, artId);
+        observability.logEvent({
+          event: "task.artifact_attached",
+          taskId,
+          artifactId: artId,
+          companyId: req.mcp!.companyId,
+          ts: Date.now(),
+        });
       }
     }
 
@@ -232,6 +249,17 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       ...(body.assignedAgentId !== undefined && { assignedAgentId: body.assignedAgentId }),
       ...(body.referenceArtifactIds !== undefined && { artifactIds: body.referenceArtifactIds }),
     }));
+
+    if (updated) {
+      const patchedFields = Object.keys(body).filter((k) => (body as Record<string, unknown>)[k] !== undefined);
+      observability.logEvent({
+        event: "task.updated",
+        taskId,
+        companyId: req.mcp!.companyId,
+        patch: patchedFields,
+        ts: Date.now(),
+      });
+    }
 
     cacheAndSend(req, reply, 200, success(`Task ${taskId} updated.`, { taskId, updated: Boolean(updated) }));
   });
