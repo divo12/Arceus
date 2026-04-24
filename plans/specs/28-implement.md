@@ -1,6 +1,6 @@
 # Spec 28 — Gap-Closure Implementation Plan
 
-**Status:** Plan · **Owner:** Platform · **Last Updated:** 2026-04-25
+**Status:** Shipped · **Owner:** Platform · **Last Updated:** 2026-04-25
 **Closes:** [`28-spec-26-27-gap-analysis.md`](./28-spec-26-27-gap-analysis.md) §2 + §7
 **Touches specs:** 24 (P1/P3/P4 — partial), 26 (§1–§5 wrappers + sync-DB foundation), 27 (§8–§11 wrappers + watchdog hook)
 
@@ -292,16 +292,16 @@ Day 1     Day 2     Day 3     Day 4     Day 5     Day 6     Day 7     Day 8
 
 Used by the implementer; one tickbox per phase before merging.
 
-- [ ] **A.1** — `meeting_get` + `meeting_request_decision` + `meeting_contribute` + `execution_get` + `company_get_summary` + 7 others callable from a developer agent session
-- [ ] **A.2** — `task_create({referenceArtifactIds})` works end-to-end; `approval_request({type:"architecture_change"})` accepted
-- [ ] **B** — Process kill after `meeting_record` returns → restart shows row in DB
-- [ ] **C** — `tsc` clean after deletes; `artifact_persist` + `task_attach_artifact` return 410
-- [ ] **D** — `task_get` returns `{...task, progress}` when `includeProgress:true`
-- [ ] **E** — End-of-sprint flow: gates run → finalize → workspace tagged
-- [ ] **F** — CEO can decide non-board approval types; receives `not_authorized` on board types
-- [ ] **G** — `workspace_verify_baseline` returns typed pass/fail
-- [ ] **H** — QA loop fully role-custom (no MCP for typecheck/probe/etc.)
-- [ ] **I** — Beat watchdog stops false-firing during long tool sequences; eval-triggered meetings cite eval
+- [x] **A.1** — `meeting_get` + `meeting_request_decision` + `meeting_contribute` + `execution_get` + `company_get_summary` + 7 others callable from a developer agent session
+- [x] **A.2** — `task_create({referenceArtifactIds})` works end-to-end; `approval_request({type:"architecture_change"})` accepted
+- [x] **B** — Process kill after `meeting_record` returns → restart shows row in DB
+- [x] **C** — `tsc` clean after deletes; `artifact_persist` + `task_attach_artifact` return 410
+- [x] **D** — `task_get` returns `{...task, progress}` when `includeProgress:true`
+- [x] **E** — End-of-sprint flow: gates run → finalize → workspace tagged
+- [x] **F** — CEO can decide non-board approval types; receives `not_authorized` on board types
+- [x] **G** — `workspace_verify_baseline` returns typed pass/fail
+- [x] **H** — QA loop fully role-custom (no MCP for typecheck/probe/etc.)
+- [x] **I** — Beat watchdog stops false-firing during long tool sequences; eval-triggered meetings cite eval
 
 ---
 
