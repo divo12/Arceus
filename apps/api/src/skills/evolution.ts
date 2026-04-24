@@ -16,6 +16,7 @@ import {
   setPatternLearnerDeps,
   setSkillRegistryDeps,
 } from "@arceus/company-runtime";
+import { dbPersistSkill, isSkillsDbWritethroughEnabled } from "./db-writethrough.js";
 import type { TaskOutcomeContext } from "@arceus/company-runtime";
 import type {
   SkillArtifact,
@@ -577,13 +578,26 @@ export function initSkillEvolution(): void {
   //
   // `onSkillActivated` is kept as a fire-and-forget hook for downstream
   // audit/telemetry when new skills are activated at runtime.
+  //
+  // Pass 3 (Spec 23): when ARCEUS_SKILLS_DB_WRITETHROUGH=1, also wire
+  // upsert/usage/EMA callbacks so skills survive restart.
+  const writethrough = isSkillsDbWritethroughEnabled();
   setSkillRegistryDeps({
     onSkillActivated(skill) {
       console.log(
         `[SkillRegistry] Skill activated: ${skill.id} (${skill.name} v${skill.version}) for ${skill.companyId}/${skill.role}`,
       );
     },
+    ...(writethrough
+      ? {
+          onSkillUpserted: dbPersistSkill,
+          onSkillUsageRecorded: dbPersistSkill,
+          onSkillSuccessRateChanged: dbPersistSkill,
+        }
+      : {}),
   });
 
-  console.log("[SkillEvolution] Skill registry activation hook wired (no embedding matcher — LLM classifier in orchestrator)");
+  console.log(
+    `[SkillEvolution] Skill registry activation hook wired (no embedding matcher \u2014 LLM classifier in orchestrator)${writethrough ? "; DB write-through ENABLED" : ""}`,
+  );
 }

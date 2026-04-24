@@ -33,6 +33,7 @@ export type { DeniedTool, FilterResult } from "./governance-gateway";
 // Spec 14: Skill Registry
 export {
   registerSkill,
+  hydrateSkill,
   updateSkill,
   deprecateSkill,
   getSkillById,

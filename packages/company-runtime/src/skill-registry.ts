@@ -45,6 +45,15 @@ function rebuildActiveIndex(): void {
 
 /** Register or overwrite a skill in the in-memory store and rebuild the active index. */
 export function registerSkill(skill: SkillArtifact): void {
+  const next = { ...skill };
+  skillsById.set(skill.id, next);
+  rebuildActiveIndex();
+  registryDeps?.onSkillUpserted?.(next);
+}
+
+/** Hydrate a skill into the in-memory store WITHOUT firing write-through callbacks.
+ *  Used at boot when loading from DB so we don't write back to DB. */
+export function hydrateSkill(skill: SkillArtifact): void {
   skillsById.set(skill.id, { ...skill });
   rebuildActiveIndex();
 }
@@ -56,6 +65,7 @@ export function updateSkill(skillId: string, updates: Partial<SkillArtifact>): S
   const updated: SkillArtifact = { ...existing, ...updates };
   skillsById.set(skillId, updated);
   rebuildActiveIndex();
+  registryDeps?.onSkillUpserted?.(updated);
   return updated;
 }
 
@@ -63,12 +73,14 @@ export function updateSkill(skillId: string, updates: Partial<SkillArtifact>): S
 export function deprecateSkill(skillId: string, reason: string): boolean {
   const existing = skillsById.get(skillId);
   if (!existing) return false;
-  skillsById.set(skillId, {
+  const updated: SkillArtifact = {
     ...existing,
     status: "deprecated",
     mutationReason: reason,
-  });
+  };
+  skillsById.set(skillId, updated);
   rebuildActiveIndex();
+  registryDeps?.onSkillUpserted?.(updated);
   return true;
 }
 
@@ -155,11 +167,13 @@ export function matchSkills(
 export function recordSkillUsage(skillId: string): void {
   const skill = skillsById.get(skillId);
   if (!skill) return;
-  skillsById.set(skillId, {
+  const updated: SkillArtifact = {
     ...skill,
     usageCount: skill.usageCount + 1,
     lastUsedAt: new Date().toISOString(),
-  });
+  };
+  skillsById.set(skillId, updated);
+  registryDeps?.onSkillUsageRecorded?.(updated);
 }
 
 /**
@@ -172,10 +186,12 @@ export function updateSuccessRate(skillId: string, outcome: number): void {
   if (!skill) return;
   const lr = 0.15;
   const newRate = skill.successRate * (1 - lr) + outcome * lr;
-  skillsById.set(skillId, {
+  const updated: SkillArtifact = {
     ...skill,
     successRate: Math.max(0, Math.min(1, newRate)),
-  });
+  };
+  skillsById.set(skillId, updated);
+  registryDeps?.onSkillSuccessRateChanged?.(updated);
 }
 
 // ── Health metrics ────────────────────────────────────────
@@ -588,6 +604,13 @@ export interface SkillRegistryDeps {
   /** Called synchronously after a skill is activated (approved by ATA).
    *  Intended for fire-and-forget async work — indexing, telemetry, etc. */
   onSkillActivated?: (skill: SkillArtifact) => void;
+  /** Called after registerSkill / updateSkill / deprecateSkill. Fire-and-forget
+   *  hook for DB write-through (Spec 23 Pass 3). NOT called by hydrateSkill. */
+  onSkillUpserted?: (skill: SkillArtifact) => void;
+  /** Called after recordSkillUsage. Fire-and-forget hook for DB write-through. */
+  onSkillUsageRecorded?: (skill: SkillArtifact) => void;
+  /** Called after updateSuccessRate. Fire-and-forget hook for DB write-through. */
+  onSkillSuccessRateChanged?: (skill: SkillArtifact) => void;
 }
 
 let registryDeps: SkillRegistryDeps | null = null;
