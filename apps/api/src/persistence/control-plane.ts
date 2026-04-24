@@ -36,6 +36,7 @@ import {
   summarizeFilterResult,
   BASE_POLICY_RULES,
   TRUST_CONFIG,
+  ROLE_CAPABILITIES,
 } from "@arceus/company-runtime";
 import type { TrustScore, TrustEvent, PolicyViolation } from "@arceus/contracts";
 import {
@@ -402,9 +403,11 @@ export function cpLoadAgentContext(
   if (!agent) return null;
 
   const currentSprint = snap.sprints.find((s) => s.id === snap.company.currentSprintId) ?? null;
-  // CEO/PM get all sprint tasks (for sprint completion detection); others get only their own.
-  // CEO also sees unattached tasks (sprintId=null) like governance "Plan Sprint N" tasks.
-  const agentTasks = (agent.role === "ceo" || agent.role === "pm")
+  const caps = ROLE_CAPABILITIES[agent.role];
+  // Sprint overseers (CEO/PM) get all sprint tasks for completion detection;
+  // others get only their own. CEO also sees unattached tasks (sprintId=null)
+  // like governance "Plan Sprint N" tasks.
+  const agentTasks = caps.seesAllSprintTasks
     ? snap.tasks.filter((t) =>
         t.sprintId === currentSprint?.id ||
         (t.assignedRole === agent.role && !t.sprintId)
@@ -415,10 +418,10 @@ export function cpLoadAgentContext(
           (t.assignedRole === agent.role && !t.assignedAgentId)
       );
 
-  // During sprint review, tester needs visibility into bug_fix tasks tracked in
+  // During sprint review, verifying roles need visibility into bug_fix tasks tracked in
   // reviewState.bugTaskIds (typically assigned to developer) so checkBugFixesReady
   // can see their actual status instead of treating missing tasks as resolved.
-  if (agent.role === "tester" && currentSprint?.status === "reviewing") {
+  if (caps.verifiesSprintReviews && currentSprint?.status === "reviewing") {
     const reviewState = (currentSprint as any).reviewState;
     if (reviewState?.bugTaskIds?.length > 0) {
       const existingIds = new Set(agentTasks.map((t) => t.id));
@@ -481,8 +484,8 @@ export function cpLoadAgentContext(
   // Pending approvals
   const pendingApprovals = snap.approvals.filter((a) => a.status === "pending");
 
-  // Refresh build check for CTO/developer roles if stale (>2 min)
-  if ((agent.role === "cto" || agent.role === "developer") && buildCheckProductDir) {
+  // Refresh build check for roles that consume build context (e.g. CTO/developer) if stale (>2 min)
+  if (caps.receivesBuildContext && buildCheckProductDir) {
     const staleMs = Date.now() - new Date(lastBuildCheck.checkedAt).getTime();
     if (staleMs > 120_000 || lastBuildCheck.status === "unknown") {
       cpRunBuildCheck(buildCheckProductDir);
@@ -556,7 +559,7 @@ export function cpLoadAgentContext(
     lastBuildCheck: lastBuildCheck.status !== "unknown" ? lastBuildCheck : undefined,
 
     // Spec 14 Phase 6 — Skills Lead proactive heartbeat context
-    ...(agent.role === "skills_lead" ? buildSkillsLeadContext(snap.company.id, currentSprint?.id ?? null) : {}),
+    ...(caps.receivesSkillsLeadContext ? buildSkillsLeadContext(snap.company.id, currentSprint?.id ?? null) : {}),
   };
 }
 

@@ -8,6 +8,7 @@ import { getAgentSessions } from "../orchestration/state.js";
 import { getArtifacts } from "../orchestration/state.js";
 import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "../observability/activity.js";
+import { ROLE_DEPLOYMENT_MODEL } from "@arceus/company-runtime";
 
 export default async function agentsRoutes(app: FastifyInstance) {
   app.get("/api/employees", async () => {
@@ -84,7 +85,7 @@ function getEmployeeDirectory() {
         : {
             id: persistedSession?.id ?? agent.sessionBindingId,
             runtimeStatus: liveSession?.status ?? persistedSession?.runtimeStatus ?? "idle",
-            model: persistedSession?.model ?? (agent.role === "ceo" ? "azure/ceo-deployment" : "azure/worker-deployment"),
+            model: persistedSession?.model ?? ROLE_DEPLOYMENT_MODEL[agent.role] ?? "azure/worker-deployment",
             lastSeenAt: liveSession?.lastEventAt ?? persistedSession?.lastSeenAt ?? new Date().toISOString(),
             sessionId: liveSession?.sessionId ?? persistedSession?.sessionId ?? null,
             lastEventAt: liveSession?.lastEventAt ?? null,

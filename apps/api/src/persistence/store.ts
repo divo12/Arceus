@@ -15,7 +15,7 @@ import type {
   TaskProgress,
   Transition
 } from "@arceus/contracts";
-import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul, ROLE_DISPLAY_NAMES } from "@arceus/company-runtime";
+import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul, ROLE_DISPLAY_NAMES, ROLE_DEPLOYMENT_MODEL, ROLE_INITIAL_AGENT_STATUS } from "@arceus/company-runtime";
 import type { StrategyOutput } from "../agents/ceo.js";
 import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from "../orchestration/state.js";
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
@@ -603,7 +603,7 @@ export function applyStrategy(output: StrategyOutput) {
       capabilities: role.capabilities,
       profile: `${role.title} for ${snapshot.company.name}`,
       soul: getRoleSoul(role.role as AgentIdentity["role"]),
-      status: role.role === "ceo" ? "running" : "active",
+      status: ROLE_INITIAL_AGENT_STATUS[role.role as AgentIdentity["role"]] ?? "active",
       sessionBindingId: `session_${crypto.randomUUID()}`,
       memorySummaryId: `memory_${crypto.randomUUID()}`,
       lastHeartbeatAt: null
@@ -616,7 +616,7 @@ export function applyStrategy(output: StrategyOutput) {
     runtime: "opencode",
     sessionId: "pending-runtime-binding",
     runtimeStatus: "idle",
-    model: agent.role === "ceo" ? "azure/ceo-deployment" : "azure/worker-deployment",
+    model: ROLE_DEPLOYMENT_MODEL[agent.role] ?? "azure/worker-deployment",
     lastSeenAt: new Date().toISOString()
   }));
 

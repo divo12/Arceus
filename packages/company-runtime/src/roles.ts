@@ -148,17 +148,49 @@ export interface RoleRuntimeCapabilities {
   ownsProductWorkspace: boolean;
   /** Session errors trigger an escalation meeting to leadership. */
   escalatesOnSessionError: boolean;
+  /** Receives ALL sprint tasks in beat context (not just self-assigned) — used by sprint-completion overseers. */
+  seesAllSprintTasks: boolean;
+  /** Gets visibility into in-flight bug-fix tasks during sprint review. */
+  verifiesSprintReviews: boolean;
+  /** Beat context refreshes the workspace build status before assembly. */
+  receivesBuildContext: boolean;
+  /** Beat context is augmented with skills-health / unused-skill / gap-analysis data. */
+  receivesSkillsLeadContext: boolean;
 }
 
 export const ROLE_CAPABILITIES: Record<Role, RoleRuntimeCapabilities> = {
-  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false },
-  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false },
-  pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false },
-  developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true  },
-  tester:      { ownsProductWorkspace: false, escalatesOnSessionError: false },
-  ui_designer: { ownsProductWorkspace: false, escalatesOnSessionError: false },
-  marketing:   { ownsProductWorkspace: false, escalatesOnSessionError: false },
-  skills_lead: { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
+  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false },
+  pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
+  developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true,  seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false },
+  tester:      { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: true,  receivesBuildContext: false, receivesSkillsLeadContext: false },
+  ui_designer: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
+  marketing:   { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
+  skills_lead: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: true  },
+};
+
+/** Azure OpenAI deployment per role. CEO uses a higher-capability model; everyone else shares the worker pool. */
+export const ROLE_DEPLOYMENT_MODEL: Record<Role, string> = {
+  ceo:         "azure/ceo-deployment",
+  cto:         "azure/worker-deployment",
+  pm:          "azure/worker-deployment",
+  developer:   "azure/worker-deployment",
+  tester:      "azure/worker-deployment",
+  ui_designer: "azure/worker-deployment",
+  marketing:   "azure/worker-deployment",
+  skills_lead: "azure/worker-deployment",
+};
+
+/** Initial agent status assigned at hire time. CEO boots as "running" because the company is led from the top. */
+export const ROLE_INITIAL_AGENT_STATUS: Record<Role, "running" | "active"> = {
+  ceo:         "running",
+  cto:         "active",
+  pm:          "active",
+  developer:   "active",
+  tester:      "active",
+  ui_designer: "active",
+  marketing:   "active",
+  skills_lead: "active",
 };
 
 /**
