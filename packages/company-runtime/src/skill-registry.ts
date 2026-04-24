@@ -13,7 +13,8 @@
 
 import type { SkillArtifact, SkillHealthReport, SkillMutation, FailureAttribution, SkillResource } from "@arceus/contracts";
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { extname, join, relative, resolve } from "node:path";
+import { extname, join, relative, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ── In-memory store ───────────────────────────────────────
 
@@ -493,7 +494,7 @@ export function seedExistingSkillsDetailed(
 
   // Default source: `.arceus/skills-seed/` at the repo root (four parents up from
   // `packages/company-runtime/src/`). Callers can override for tests.
-  const thisDir = new URL(".", import.meta.url).pathname;
+  const thisDir = dirname(fileURLToPath(import.meta.url));
   const fallbackNew = resolve(thisDir, "..", "..", "..", ".arceus", "skills-seed");
   const fallbackLegacy = resolve(thisDir, "..", "skills");
   const dir = opts.skillsDir

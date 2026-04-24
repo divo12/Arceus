@@ -58,7 +58,6 @@ export async function runInternalAgentPrompt(
       const opencode = await getOpencode();
       const promptBody: Record<string, unknown> = {
         model: { providerID: "azure", modelID: deployment },
-        agent: role,
         system: effectiveSystemPrompt,
         parts: [{ type: "text", text: userMessage }],
       };

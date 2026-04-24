@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getSnapshot } from "../persistence/store.js";
 import { cpGetBeatHistory } from "../persistence/control-plane.js";
 import type { HeartbeatEngine, MeetingScheduler, HeartbeatConfig } from "@arceus/company-runtime";
+import { heartbeatConfig } from "../config/heartbeat.js";
 
 export interface HeartbeatRouteDeps {
   heartbeatEngine: HeartbeatEngine;
@@ -18,11 +19,11 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
 
   app.post("/api/heartbeat/start", async () => {
     heartbeatEngine.start();
-    meetingScheduler.start();
-    return { status: "started", ...heartbeatEngine.getStatus() };
+    if (heartbeatConfig.meetingsEnabled) meetingScheduler.start();
+    return { status: "started", meetingsEnabled: heartbeatConfig.meetingsEnabled, ...heartbeatEngine.getStatus() };
   });
 
-  app.post("/api/heartbeat/stop", async () => {
+  app.post("/api/heartbeat/stop", { logLevel: "warn" }, async () => {
     heartbeatEngine.stop();
     meetingScheduler.stop();
     return { status: "stopped", ...heartbeatEngine.getStatus() };
@@ -59,7 +60,7 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     return record ?? { status: "skipped", reason: "Beat was skipped (locked, paused, or at capacity)" };
   });
 
-  app.get("/api/heartbeat/status", async () => {
+  app.get("/api/heartbeat/status", { logLevel: "warn" }, async () => {
     const { heartbeatConfig } = await import("../config/heartbeat.js");
     return {
       ...heartbeatEngine.getStatus(),

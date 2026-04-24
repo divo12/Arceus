@@ -28,7 +28,7 @@ export default async function agentsRoutes(app: FastifyInstance) {
     return getEmployeeActivityLog();
   });
 
-  app.get("/api/employee-activity/stream", async (request, reply) => {
+  app.get("/api/employee-activity/stream", { logLevel: "warn" }, async (request, reply) => {
     streamEmployeeActivity(reply);
     return reply;
   });
@@ -37,7 +37,7 @@ export default async function agentsRoutes(app: FastifyInstance) {
     return getEmployeeActivityLog();
   });
 
-  app.get("/api/activity/stream", async (request, reply) => {
+  app.get("/api/activity/stream", { logLevel: "warn" }, async (request, reply) => {
     streamEmployeeActivity(reply);
     return reply;
   });

@@ -1,8 +1,8 @@
 # Spec 26 + 27 — Implementation Gap Analysis
 
-**Status:** Audit · **Owner:** Platform · **Last Updated:** 2026-04-24
-**Inputs:** [`26-tool-catalog-integration.md`](./26-tool-catalog-integration.md), [`26-implement.md`](./26-implement.md), [`27-tool-catalog-integration-continued.md`](./27-tool-catalog-integration-continued.md), [`27-implement.md`](./27-implement.md), [`26-27-23-implementation-plan.md`](./26-27-23-implementation-plan.md)
-**Scope:** Identify the gap between what specs 26 + 27 describe and what commit `18eb21a` (feat(mcp): implement specs 23/26/27) actually shipped.
+**Status:** Audit · **Owner:** Platform · **Last Updated:** 2026-04-25
+**Inputs:** [`24-agent-philosophy-refactor.md`](./24-agent-philosophy-refactor.md), [`26-tool-catalog-integration.md`](./26-tool-catalog-integration.md), [`26-implement.md`](./26-implement.md), [`27-tool-catalog-integration-continued.md`](./27-tool-catalog-integration-continued.md), [`27-implement.md`](./27-implement.md), [`26-27-23-implementation-plan.md`](./26-27-23-implementation-plan.md)
+**Scope:** Identify the gap between what specs 24 + 26 + 27 describe and what currently lives on `opencode-skills/mcp-integration` (post commit `18eb21a` baseline + subsequent landing).
 
 ---
 
@@ -337,3 +337,94 @@ Add `beat_watchdog_reset` PostToolUse hook. Review allowlist per-role configs ma
 ## 6. Updates
 
 This doc is a point-in-time snapshot (2026-04-24, post `18eb21a`). Re-audit after each major commit batch. Could be auto-generated in future — the `registerTool(...)` calls and route definitions are both grep-able for a simple diff tool.
+
+---
+
+## 7. Follow-up audit — 2026-04-25 (Spec 24 + contract re-verification)
+
+Second-pair-of-eyes pass. Adds spec-24 coverage (the cofounder's audit focused on §1–§16 of `05-tool-catalog`; spec 24's facilitator architecture wasn't scored). Also re-verifies the five "contract verification needed" items in §2 by reading the live code.
+
+### 7.1 Spec 24 — Facilitator SVC status
+
+Spec 24's *outcome* (kill the 3 cold `structuredCompletion` calls + the 5-min polling loop) shipped — but via a different architecture than the spec called for. The skill+SVC pattern is **not implemented**.
+
+| Spec 24 deliverable | Status | Evidence |
+|---|---|---|
+| Multi-turn Facilitator session replacing `synthesizeMeeting` + `resolveMeeting` + `buildDailySyncBrief` | ✅ **Done** | [`apps/api/src/meetings/facilitator.ts`](../../apps/api/src/meetings/facilitator.ts) — `runFacilitatorSession()` runs 3 phases (synthesize → resolve → brief) over a single `facilitator_agent` session via `runInternalAgentPrompt` |
+| Direct `runPromptText` per participant (replaces 5-min polling) | ✅ **Done** | [`apps/api/src/server.ts:138`](../../apps/api/src/server.ts#L138) — `collectContributions` calls `runPromptText(role, sessionId, soul.systemPrompt, prompt)` per agent |
+| Meeting-type-aware contribution prompts (standup / escalation / eval_triggered) | ❌ **Missing** | The prompt in `server.ts:155–162` is a single generic template with `meeting.type.replace(/_/g, " ")` interpolated — no `switch (meeting.type)` per spec §4 |
+| `facilitator-chair-service` subagent (`.opencode/agent/facilitator-chair-service.md`) | ❌ **Missing** | No `facilitator-*-service.md` exists under `.opencode/agent/` |
+| `facilitator-contributor-service` subagent | ❌ **Missing** | Same |
+| Per-employee `permission.task: { facilitator-*-service: allow/deny }` | ❌ **Missing** | No subagent → no gating to wire |
+| `meeting-chair-playbook` skill | 🟨 **Seeded** | [`.arceus/skills-seed/meeting-chair-playbook/`](../../.arceus/skills-seed/meeting-chair-playbook/) exists but has no subagent to invoke via `Task()` |
+| `meeting-contribution-drafter` skill | 🟨 **Seeded** | [`.arceus/skills-seed/meeting-contribution-drafter/`](../../.arceus/skills-seed/meeting-contribution-drafter/) — same condition |
+| `ARCEUS_SVC_ENABLED` feature flag | ❌ **Missing** | `grep ARCEUS_SVC_ENABLED` → 0 hits in code |
+| `meeting_record` synchronous DB write (kills fire-and-forget; spec 24 §20.7) | ❌ **Not done** | [`apps/api/src/persistence/store.ts:325`](../../apps/api/src/persistence/store.ts#L325) `upsertMeeting` → `replaceState` → `void schedulePersistedCompanyState(...)` (line 43) — fire-and-forget for everything including meetings |
+| Phase-4 cleanup: delete `synthesizeMeeting`/`resolveMeeting`/`generateContribution` | ❌ **Not done** | [`apps/api/src/meetings/synthesis.ts`](../../apps/api/src/meetings/synthesis.ts) and [`resolution.ts`](../../apps/api/src/meetings/resolution.ts) still present and exported |
+| Remove `meeting_contribution:` checklist action | ❌ **Not done** | Still referenced at [`apps/api/src/heartbeats/checklist-executor.ts:214`](../../apps/api/src/heartbeats/checklist-executor.ts#L214) |
+| `meeting_request_decision` MCP tool (P3 orchestrated decision meetings) | ❌ **Missing** | Route exists ([`meetings.routes.ts:208`](../../apps/api/src/routes/internal-mcp/meetings.routes.ts#L208)); MCP wrapper not in [`packages/arceus-mcp/src/tools/meeting.ts`](../../packages/arceus-mcp/src/tools/meeting.ts) |
+| `meeting_contribute` MCP tool | ❌ **Missing** | Route exists ([`meetings.routes.ts:259`](../../apps/api/src/routes/internal-mcp/meetings.routes.ts#L259)); no MCP wrapper |
+| `meeting_get` MCP tool | ❌ **Missing** | Route exists ([`meetings.routes.ts:193`](../../apps/api/src/routes/internal-mcp/meetings.routes.ts#L193)); no MCP wrapper |
+
+**Bottom line:** Spec 24 P0–P2 *value* delivered (no more polling, single facilitator session). P1 (subagents + skills + permission gating), P3 (orchestrated decisions), and P4 (cutover/cleanup) **not done**. The system is currently in a hybrid state — new in-process facilitator + legacy modules co-resident.
+
+### 7.2 Re-verification of "contract verification needed" items (§2)
+
+The cofounder's table flagged 5 items as needing verification. Checked each by reading the live code today:
+
+| Tool | Spec contract | Live state | Verdict |
+|---|---|---|---|
+| `task_claim` | Returns `{status:"error", error:{cause:"deps_unmet", missing:[ids]}}` | Route returns `cause: "deps_unmet"` ([`tasks.routes.ts:426`](../../apps/api/src/routes/internal-mcp/tasks.routes.ts#L426)); `deps_unmet` is in `errorCause` enum + status map ([`envelope.ts:44,80`](../../apps/api/src/routes/internal-mcp/envelope.ts#L44)). MCP wrapper at [`task.ts:190`](../../packages/arceus-mcp/src/tools/task.ts#L190) just forwards. | ✅ **Matches** |
+| `task_create` | Adds `referenceArtifactIds?: string[]` | Route accepts it ([`tasks.routes.ts:88`](../../apps/api/src/routes/internal-mcp/tasks.routes.ts#L88)); **MCP wrapper does not declare it in `inputSchema`** ([`task.ts:101–124`](../../packages/arceus-mcp/src/tools/task.ts#L101)) — agents calling via MCP can't pass it | 🔄 **Partial — MCP schema lags** |
+| `task_update` | Adds `referenceArtifactIds?: string[]` | Route accepts it ([`tasks.routes.ts:97`](../../apps/api/src/routes/internal-mcp/tasks.routes.ts#L97)); **MCP wrapper schema does not include it** ([`task.ts:124`](../../packages/arceus-mcp/src/tools/task.ts#L124)) | 🔄 **Partial — MCP schema lags** |
+| `artifact_create` | `attachToTaskIds: string[]` (replaces `taskId`); **synchronous DB write** | Route schema has `attachToTaskIds` and falls back to legacy `taskId` ([`artifacts.routes.ts:69,100`](../../apps/api/src/routes/internal-mcp/artifacts.routes.ts#L69)). **MCP wrapper still uses single `taskId`** ([`artifact.ts:23`](../../packages/arceus-mcp/src/tools/artifact.ts#L23)). **Persistence still fire-and-forget** via `replaceState`. | 🔄 **MCP schema lags + sync-write NOT done** |
+| `meeting_record` | Synchronous DB write | Same fire-and-forget path as artifacts (`upsertMeeting` → `replaceState` → `schedulePersistedCompanyState`). | ❌ **Sync-write NOT done** |
+| `approval_request` | Types **5 → 7** (add `architecture_change`, `scope_change`); allowlist adds `ceo` + `cto` | MCP tool still declares **5 types** at [`approval.ts:20`](../../packages/arceus-mcp/src/tools/approval.ts#L20): `["strategy","hire","meeting_blocker","external_action","tool_governance"]` — no `architecture_change`/`scope_change`. Allowlist broadening not verified here. | ❌ **MCP schema NOT updated** |
+
+**Pattern:** Routes were updated to the new contracts; **MCP tool wrappers were left on the old schemas**. Agents calling via MCP cannot exercise the new params — they have to hit the HTTP route directly, which they don't normally do. This is a single common cause for several gap-analysis flags.
+
+### 7.3 Additional concrete findings beyond §2
+
+1. **Sync-DB-write flip is architecturally absent, not just per-tool**
+   The store's `replaceState` ([`store.ts:48`](../../apps/api/src/persistence/store.ts#L48)) unconditionally calls `persistState()` which is fire-and-forget. Per-tool fixes (`writeArtifactSync`, `writeMeetingSync`) from spec 26 §3.3 were never added. Any spec calling for "sync DB write" needs a new write path, not a flip on an existing call. **This is a foundation gap, not a per-tool gap.**
+
+2. **`task_get` route exists but is not registered as MCP tool**
+   Route at [`tasks.routes.ts:445`](../../apps/api/src/routes/internal-mcp/tasks.routes.ts#L445), accepts `?includeProgress=`. Adding the MCP wrapper would knock out the §1 "task_get + task_get_progress merger" item with one short tool file.
+
+3. **`task_report_bug` route exists but is not registered as MCP tool**
+   Route at [`tasks.routes.ts:488`](../../apps/api/src/routes/internal-mcp/tasks.routes.ts#L488). Same one-tool-file fix.
+
+4. **Spec 27 §14 anti-pattern deletions — status not yet checked**
+   `generateWorkflowTaskPlan` (`apps/api/src/tasks/planner.ts:91`) and `classifyTaskSkills` (`apps/api/src/skills/classifier.ts:34`) — confirm at next audit pass.
+
+5. **Spec 27 §16 `beat_watchdog_reset` PostToolUse hook — confirmed missing**
+   `grep PostToolUse|watchdog` in [`.opencode/plugin/arceus.ts`](../../.opencode/plugin/arceus.ts) → 0 hits. The doc already calls this out in §2; flagging here that nothing has changed.
+
+### 7.4 Updated phase recommendation
+
+The cofounder's Phase A (orphan-route MCP wrapping) is **the right starting point**, but it should explicitly include:
+
+- **A.1** — Wrap the 12 orphan routes from §2 (unchanged from existing recommendation)
+- **A.2** — Update existing MCP wrapper schemas in `task.ts`, `artifact.ts`, `approval.ts` to expose the new params/enum values that already work at the route layer:
+  - `task_create` + `task_update`: add `referenceArtifactIds: z.array(z.string()).max(10).optional()`
+  - `artifact_create`: replace `taskId` with `attachToTaskIds: z.array(z.string()).max(10).optional()` (keep `taskId` as deprecated fallback for one release)
+  - `approval_request`: extend type enum to 7 values
+- **A.3** — Spec 24 P3 (`meeting_request_decision` + `meeting_contribute` MCP wrappers) lands as a direct byproduct of A.1; adding a thin "meeting-type-aware prompt switch" in `server.ts:collectContributions` is a 30-line edit with high ROI.
+
+**Cost:** Roughly identical to the existing Phase A estimate (1–2 days) — A.2 is just additive Zod fields in already-touched files.
+
+### 7.5 New deferred bucket — Spec 24 architectural rework
+
+The skill+SVC architecture (subagents + `Task()` invocation + per-tier `permission.task`) deserves an explicit "park or pursue" decision:
+
+- **Park option:** The current in-process facilitator works. Two sprints of stable meetings means the architectural rework is unnecessary — book the LoC savings, mark spec 24 P1/P3/P4 as "superseded by in-process facilitator", and move on.
+- **Pursue option:** The token-savings argument from spec 24 §2 (~1,080 tokens/role × 8 roles vs ~30 tokens/role for skill manifests) is real and recurring. If meeting volume scales, the savings compound.
+
+Recommend **park** until either (a) per-beat token budgets become a measurable bottleneck, or (b) the broader skill+SVC pattern (Memory SVC, Planner SVC) gets revived from `24-defer.md`. Promote facilitator subagents *after* one of those, not before.
+
+### 7.6 Single-line summary
+
+- Spec 24: outcome shipped, architecture not. Park P1/P3/P4 unless skill+SVC revives.
+- Spec 26: routes ~85% / MCP wrappers ~42% / **sync-DB-write 0%** (foundation gap, not per-tool).
+- Spec 27: routes for §9/§10/§11 ✅, **MCP wrappers 0%** for them, §8 mostly empty, watchdog hook missing.
+- Common cause for many flags: **routes updated, MCP tool schemas left behind**. Cheap to close.

@@ -79,7 +79,7 @@ let promptCompletionPollerHandle: NodeJS.Timeout | null = null;
 const PROMPT_COMPLETION_POLL_INTERVAL_MS = 8_000;
 
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
-export function registerPromptCompletion(sessionId: string, timeoutMs = 20 * 60 * 1000): Promise<void> {
+export function registerPromptCompletion(sessionId: string, timeoutMs = 5 * 60 * 1000): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
   if (existing) {
     clearTimeout(existing.timer);

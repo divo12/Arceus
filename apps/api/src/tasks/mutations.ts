@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { getAgentByRole, uniqueStrings } from "@arceus/task-engine";
-import { getSnapshot, updateTask } from "../persistence/store.js";
+import { getSnapshot, updateTask, writeArtifactSync } from "../persistence/store.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import {
@@ -45,6 +45,31 @@ export function addArtifact(agent: string, kind: Artifact["kind"], title: string
   artifacts.push(artifact);
   void persistRuntimeArtifact(getSnapshot().company.id, artifact);
   // Auto-write artifact to workspace filesystem
+  void writeArtifactToDisk(artifact).catch(() => {});
+  return artifact;
+}
+
+/**
+ * Spec 28 Phase B.1 — synchronous durable variant of {@link addArtifact}.
+ * Awaits the DB insert before returning so callers can rely on the artifact
+ * surviving a process kill. Filesystem write stays best-effort (disk is not
+ * the source of truth). Use this from MCP route handlers that create artifacts.
+ */
+export async function addArtifactSync(
+  agent: string,
+  kind: Artifact["kind"],
+  title: string,
+  content: string,
+): Promise<Artifact> {
+  const artifact: Artifact = {
+    id: `artifact_${crypto.randomUUID()}`,
+    agent,
+    kind,
+    title,
+    content,
+    createdAt: new Date().toISOString(),
+  };
+  await writeArtifactSync(artifact);
   void writeArtifactToDisk(artifact).catch(() => {});
   return artifact;
 }

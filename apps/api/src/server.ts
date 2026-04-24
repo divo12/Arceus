@@ -32,6 +32,7 @@ import { executeBeatTask } from "./heartbeats/beat-executor.js";
 import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
 import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
+import { initSkillEvolution } from "./skills/evolution.js";
 import { workspaceManager } from "./workspace/manager.js";
 import { warmUpOpencode } from "./infra/opencode.js";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent, MeetingScheduler, MeetingPipeline } from "@arceus/company-runtime";
@@ -66,7 +67,10 @@ import {
 // ── Fastify instance ───────────────────────────────────────
 
 /** Arceus API server — bootstraps Fastify, hydrates state, wires heartbeat/meeting engines, and registers all route plugins. */
-const app = Fastify({ logger: true });
+const app = Fastify({
+  logger: { level: "warn" },
+  disableRequestLogging: true,
+});
 
 // Allow requests with Content-Type: application/json but empty body (e.g. DELETE from TUI)
 app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
@@ -336,7 +340,11 @@ setMeetingScheduler(meetingScheduler);
     );
     if (activeSprint) {
       heartbeatEngine.start();
-      meetingScheduler.start();
+      if (heartbeatConfig.meetingsEnabled) {
+        meetingScheduler.start();
+      } else {
+        console.log("[STARTUP] Meetings disabled via ARCEUS_MEETINGS_ENABLED=false");
+      }
       console.log(`[STARTUP] Auto-resumed heartbeat + meeting scheduler — Sprint ${activeSprint.number} is ${activeSprint.status}`);
     }
   } else {
@@ -391,6 +399,9 @@ startAuditLedger();
 // ── Hydrate governance trust scores ──
 await cpHydrateTrustScores();
 
+// ── Wire skill evolution (pattern learner, mutator, ATA pipeline) ──
+initSkillEvolution();
+
 const { port, host } = serverConfig;
 
 await flush();
@@ -419,6 +430,7 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 await app.listen({ port, host });
+console.log(`[STARTUP] Server listening at http://${host}:${port}`);
 
 // ── Pre-warm OpenCode after server is listening ──
 void warmUpOpencode();

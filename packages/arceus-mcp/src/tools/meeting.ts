@@ -74,4 +74,72 @@ export const registerMeetingTools = (
       return toMcpContent(res.data);
     }
   );
+
+  server.registerTool(
+    "meeting_get",
+    {
+      description:
+        "Read a single meeting by ID, including agenda items, decisions, learnings, and contributions. " +
+        "Use to inspect the outcome of a meeting you participated in or to review prior decisions.",
+      inputSchema: {
+        meetingId: z.string().min(1).describe("Meeting ID (e.g. 'mtg_abc123...')"),
+      },
+    },
+    async ({ meetingId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${MEETINGS}/${encodeURIComponent(meetingId)}`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "meeting_request_decision",
+    {
+      description:
+        "Open an asynchronous decision meeting on a topic. Other participants can contribute positions " +
+        "via meeting_contribute before a decision is recorded. Use for cross-role escalations that don't " +
+        "require synchronous discussion.",
+      inputSchema: {
+        topic: z.string().min(1).max(200).describe("Short title for the decision needed"),
+        description: z.string().min(1).max(4000).describe("Context, options under consideration, and what input is needed"),
+        participantRoles: z.array(z.string()).min(1).max(8).describe("Roles whose input is requested"),
+        deadline: z.string().optional().describe("ISO timestamp by which a decision is needed"),
+      },
+    },
+    async (args) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${MEETINGS}/request-decision`,
+        body: args,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "meeting_request_decision", args),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "meeting_contribute",
+    {
+      description:
+        "Attach a position or supporting artifact to an open decision meeting. Use when invited as a " +
+        "participant to a meeting opened by meeting_request_decision.",
+      inputSchema: {
+        meetingId: z.string().min(1),
+        artifactId: z.string().min(1).describe("Artifact backing this contribution (e.g. an analysis or proposal)"),
+        position: z.string().max(2000).optional().describe("Brief stance or recommendation"),
+      },
+    },
+    async ({ meetingId, artifactId, position }) => {
+      const body = { artifactId, position };
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${MEETINGS}/${encodeURIComponent(meetingId)}/contribute`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "meeting_contribute", { meetingId, ...body }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
 };

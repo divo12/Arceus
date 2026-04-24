@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
+import type { AgentIdentity, Task } from "@arceus/contracts";
 import { plannerConfig } from "../config/index.js";
 
 // Static "broad" enum — the full role vocabulary. Used for the exported type
@@ -82,15 +82,8 @@ export const workflowTaskPlanSchema = createWorkflowTaskPlanSchema(broadAssigned
 
 export type WorkflowTaskPlan = z.infer<typeof workflowTaskPlanSchema>;
 
-/** Generate a structured workflow task plan via LLM, using the CTO session when available.
- * @deprecated Dead code — replaced by plan-task-graph SKILL.md (Spec 23/27).
- * CTO now builds the task DAG in-beat using task_create×N.
- * Delete this function once confidence is high the skill path covers all cases.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export async function generateWorkflowTaskPlan(_snapshot: CompanySnapshot): Promise<WorkflowTaskPlan> {
-  throw new Error("generateWorkflowTaskPlan is retired — use plan-task-graph skill instead");
-}
+// `generateWorkflowTaskPlan` deleted (Spec 28 Phase C.2). Task DAG is now
+// built in-beat by the CTO via the `plan-task-graph` skill + task_create×N.
 
 /** Identity mapping from plan priority to task priority. */
 export function mapTaskPriority(priority: WorkflowTaskPlan["technical_plan"]["priority"]): Task["priority"] {

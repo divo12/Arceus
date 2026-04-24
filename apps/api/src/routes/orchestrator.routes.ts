@@ -8,6 +8,7 @@ import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orches
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { approveBoardReview } from "../orchestration/execution-cycle.js";
 import { updateApproval } from "../persistence/store.js";
+import { heartbeatConfig } from "../config/heartbeat.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
 export interface OrchestratorRouteDeps {
@@ -43,8 +44,8 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     }
 
     heartbeatEngine.start();
-    meetingScheduler.start();
-    return { status: "heartbeat_started", mode: "heartbeat" };
+    if (heartbeatConfig.meetingsEnabled) meetingScheduler.start();
+    return { status: "heartbeat_started", mode: "heartbeat", meetingsEnabled: heartbeatConfig.meetingsEnabled };
   });
 
   app.post("/api/orchestrator/stop", async (request, reply) => {

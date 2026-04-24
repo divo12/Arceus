@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z, ZodError, type ZodSchema } from "zod";
 import type { AgentIdentity, Meeting, Task } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
-import { getSnapshot } from "../../persistence/store.js";
+import { getSnapshot, writeMeetingSync } from "../../persistence/store.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -137,7 +137,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
     const body = parseOrFail(createMeetingBody, req.body, reply);
     if (!body) return;
 
-    const meeting: Meeting = recordMeeting({
+    const recorded: Meeting = recordMeeting({
       type: body.type,
       facilitatorRole: body.facilitatorRole as AgentIdentity["role"],
       participantRoles: body.participantRoles as AgentIdentity["role"][],
@@ -174,6 +174,9 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
         content: m.content,
       })),
     });
+
+    // Spec 28 Phase B.1 — flush snapshot to DB before returning.
+    const meeting = await writeMeetingSync(recorded);
 
     const location = `${MEETINGS_BASE}/${meeting.id}`;
     cacheAndSend(
@@ -222,7 +225,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       const now = new Date().toISOString();
 
       // Record the meeting shell with status "open"
-      const meeting: Meeting = recordMeeting({
+      const recordedDecision: Meeting = recordMeeting({
         type: "escalation",
         facilitatorRole: mcp.role as AgentIdentity["role"],
         participantRoles: body.participantRoles as AgentIdentity["role"][],
@@ -239,6 +242,9 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
         taskModifications: [],
         memoryModifications: [],
       });
+
+      // Spec 28 Phase B.1 — flush snapshot to DB before returning.
+      const meeting = await writeMeetingSync(recordedDecision);
 
       cacheAndSend(
         req,
@@ -276,20 +282,29 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
 
       const mcp = req.mcp!;
 
-      // Add contribution to meeting
-      meeting.contributions.push({
-        agentId: `agent_${mcp.role}`,
-        agentName: mcp.role,
-        agentRole: mcp.role,
-        contribution: {
-          whatIDid: body.position ?? `Contributed artifact ${body.artifactId}`,
-          whatImDoing: "",
-          blockers: "",
-          learnings: "",
-          questionsForTeam: "",
-        },
-        submittedAt: new Date().toISOString(),
-      });
+      // Build the updated meeting (immutable update so writeMeetingSync sees a fresh ref)
+      const updated: Meeting = {
+        ...meeting,
+        contributions: [
+          ...meeting.contributions,
+          {
+            agentId: `agent_${mcp.role}`,
+            agentName: mcp.role,
+            agentRole: mcp.role,
+            contribution: {
+              whatIDid: body.position ?? `Contributed artifact ${body.artifactId}`,
+              whatImDoing: "",
+              blockers: "",
+              learnings: "",
+              questionsForTeam: "",
+            },
+            submittedAt: new Date().toISOString(),
+          },
+        ],
+      };
+
+      // Spec 28 Phase B.1 — durable upsert + flush.
+      await writeMeetingSync(updated);
 
       cacheAndSend(req, reply, 200, success(`Contribution added to meeting ${meetingId}.`, {
         meetingId,

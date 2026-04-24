@@ -37,7 +37,7 @@ export default async function auditRoutes(app: FastifyInstance) {
     return getAuditStats();
   });
 
-  app.get("/api/audit/stream", async (request, reply) => {
+  app.get("/api/audit/stream", { logLevel: "warn" }, async (request, reply) => {
     reply.raw.setHeader("Content-Type", "text/event-stream");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
     reply.raw.setHeader("Connection", "keep-alive");

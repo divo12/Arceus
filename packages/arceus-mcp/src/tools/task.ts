@@ -108,6 +108,8 @@ export const registerTaskTools = (
         assignedRole: z.string(),
         sprintId: z.string().nullable().optional(),
         priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+        referenceArtifactIds: z.array(z.string()).max(10).optional()
+          .describe("Artifact IDs to link at creation (replaces task_attach_artifact)"),
       },
     },
     async (args) => {
@@ -131,6 +133,8 @@ export const registerTaskTools = (
         description: z.string().max(4000).optional(),
         priority: z.enum(["low", "medium", "high", "critical"]).optional(),
         assignedRole: z.string().optional(),
+        referenceArtifactIds: z.array(z.string()).max(10).optional()
+          .describe("Artifact IDs to link (replaces task_attach_artifact)"),
       },
     },
     async ({ taskId, ...patch }) => {
@@ -169,22 +173,10 @@ export const registerTaskTools = (
     }
   );
 
-  server.registerTool(
-    "task_attach_artifact",
-    {
-      description: "Link an existing artifact to a task. Safe to call repeatedly.",
-      inputSchema: { taskId: z.string(), artifactId: z.string() },
-    },
-    async ({ taskId, artifactId }) => {
-      const res = await client.request<ToolResult<unknown>>({
-        method: "POST",
-        path: `${TASKS}/${taskId}/artifacts`,
-        body: { artifactId },
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_attach_artifact", { taskId, artifactId }),
-      });
-      return toMcpContent(res.data);
-    }
-  );
+  // `task_attach_artifact` retired (Spec 28 Phase C.1) — use
+  // `task_create({ referenceArtifactIds })` or `task_update({ referenceArtifactIds })`
+  // (added in Phase A.2). The route still returns 410 Gone with `tool_retired`
+  // for ~2 weeks, then will be removed.
 
   server.registerTool(
     "task_claim",
@@ -249,6 +241,122 @@ export const registerTaskTools = (
         path: `${TASKS}/${taskId}/plan-steps`,
         body: { step },
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_append_plan_step", { taskId, step }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_append_command",
+    {
+      description:
+        "Append a shell command (and optional exit code) to the task's running log. Content-hash idempotent.",
+      inputSchema: {
+        taskId: z.string(),
+        command: z.string().min(1).max(2000),
+        exitCode: z.number().int().optional(),
+      },
+    },
+    async ({ taskId, command, exitCode }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${TASKS}/${taskId}/commands`,
+        body: { command, exitCode },
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_append_command", { taskId, command, exitCode }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_get",
+    {
+      description:
+        "Read a task by id. Pass includeProgress:true to also receive plan-step + command history with percentComplete.",
+      inputSchema: {
+        taskId: z.string(),
+        includeProgress: z.boolean().optional(),
+      },
+    },
+    async ({ taskId, includeProgress }) => {
+      const query = includeProgress ? "?includeProgress=true" : "";
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${TASKS}/${taskId}${query}`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_report_bug",
+    {
+      description:
+        "File a bug spawned from the current task. Creates a child bug-fix task assigned to developer.",
+      inputSchema: {
+        taskId: z.string().describe("The source task during which the bug was found"),
+        bugTitle: z.string().min(1).max(200),
+        bugDescription: z.string().min(1).max(4000),
+        severity: z.enum(["low", "medium", "high", "critical"]).optional(),
+        reproducible: z.boolean().optional(),
+        stepsToReproduce: z.string().max(4000).optional(),
+      },
+    },
+    async ({ taskId, ...body }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${TASKS}/${taskId}/report-bug`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_report_bug", { taskId, ...body }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_get_preview_path",
+    {
+      description:
+        "Get the preview-slot info for a task: {previewUrl, previewPath, lastProbedAt}.",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${TASKS}/${taskId}/preview-path`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_list_progress",
+    {
+      description:
+        "List a task's plan steps + executed commands with percentComplete. Read-only.",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${TASKS}/${taskId}/progress`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "task_clear_progress",
+    {
+      description:
+        "Clear a task's plan-step + command history. CTO or PM role only.",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "DELETE",
+        path: `${TASKS}/${taskId}/progress`,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_clear_progress", { taskId }),
       });
       return toMcpContent(res.data);
     }

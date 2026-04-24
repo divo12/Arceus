@@ -1,9 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
-import { addArtifact, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/index.js";
+import { addArtifactSync, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/index.js";
 import { getSnapshot } from "../../persistence/store.js";
 import { artifacts, type Artifact } from "../../orchestration/state.js";
-import { persistRuntimeArtifact } from "../../persistence/artifact-persistence.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -79,12 +78,6 @@ const workspaceWriteBody = z.object({
     .regex(/^[a-z0-9][a-z0-9-_]*$/, "slug must be lowercase kebab/underscore"),
 });
 
-const persistenceBody = z.object({
-  sprintId: z.string().nullable().optional(),
-  taskId: z.string().nullable().optional(),
-  fileReferences: z.array(z.unknown()).optional(),
-});
-
 // ── Routes ───────────────────────────────────────────────
 
 export default async function internalMcpArtifactsRoutes(app: FastifyInstance): Promise<void> {
@@ -94,7 +87,8 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     if (!body) return;
 
     const agent = body.agent || req.mcp?.role || "unknown";
-    const artifact = addArtifact(agent, body.kind, body.title, body.content);
+    // Spec 28 Phase B.1 — durable write before returning success.
+    const artifact = await addArtifactSync(agent, body.kind, body.title, body.content);
 
     // Attach to tasks — support both single taskId and array
     const taskIds = body.attachToTaskIds ?? (body.taskId ? [body.taskId] : []);
@@ -157,58 +151,21 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     },
   );
 
-  // POST /artifacts/:artifactId/persistence — force DB/Supabase persistence
+  // POST /artifacts/:artifactId/persistence — RETIRED (Spec 28 Phase C.1).
+  // `artifact_create` now writes through `addArtifactSync` so explicit
+  // persistence is unnecessary. Returns 410 Gone for ~2 weeks, then removed.
   app.post<{ Params: { artifactId: string } }>(
     `${ARTIFACT_BASE}/:artifactId/persistence`,
-    async (req, reply) => {
-      const body = parseOrFail(persistenceBody, req.body, reply);
-      if (!body) return;
-      const { artifactId } = req.params;
-
-      const artifact = findArtifact(artifactId);
-      if (!artifact) {
-        sendNotFound(reply, `Artifact ${artifactId}`);
-        return;
-      }
-
-      const mcp = req.mcp!;
-      const companyId = mcp.companyId || getSnapshot().company.id;
-
-      try {
-        await persistRuntimeArtifact(companyId, {
-          id: artifact.id,
-          agent: artifact.agent,
-          kind: artifact.kind === "specification" ? "specification" : artifact.kind,
-          title: artifact.title,
-          content: artifact.content,
-          createdAt: artifact.createdAt,
-          sprintId: body.sprintId ?? null,
-          taskId: body.taskId ?? null,
-          fileReferences: body.fileReferences ?? [],
-        });
-      } catch (error) {
-        reply.code(503).send(
-          failure(
-            `Persistence failed: ${error instanceof Error ? error.message : "unknown error"}`,
-            "upstream",
-            "safe",
-            "db_available",
-          ),
-        );
-        return;
-      }
-
-      cacheAndSend(
-        req,
-        reply,
-        200,
-        success(`Artifact ${artifactId} persisted.`, {
-          artifactId,
-          companyId,
-          sprintId: body.sprintId ?? null,
-          taskId: body.taskId ?? null,
-        }),
-      );
+    async (_req, reply) => {
+      reply.code(410).send({
+        ...failure(
+          "artifact_persist is retired. Artifacts are persisted automatically on creation.",
+          "tool_retired",
+          "never",
+          "caller_updated",
+        ),
+        replacement: "artifact_create",
+      });
     },
   );
 

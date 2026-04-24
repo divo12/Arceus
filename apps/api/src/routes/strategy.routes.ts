@@ -11,6 +11,7 @@ import { strategyOutputSchema, generateStrategy } from "../agents/ceo.js";
 import { seedRegistry } from "../governance/service-registry.js";
 import { bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
+import { heartbeatConfig } from "../config/heartbeat.js";
 
 export interface StrategyRouteDeps {
   heartbeatEngine: HeartbeatEngine;
@@ -53,7 +54,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       const snapshot = applyStrategy(body);
 
       heartbeatEngine.start();
-      meetingScheduler.start();
+      if (heartbeatConfig.meetingsEnabled) meetingScheduler.start();
 
       return { snapshot, status: "heartbeat_started", mode: "heartbeat" };
     } catch (error) {
@@ -91,7 +92,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       emitActivity("system", "transition", `Strategy applied — ${snapshot.agents.length} agents, ${snapshot.tasks.length} tasks`);
 
       heartbeatEngine.start();
-      meetingScheduler.start();
+      if (heartbeatConfig.meetingsEnabled) meetingScheduler.start();
       emitActivity("system", "transition", "Heartbeat started — agents are now autonomous");
 
       return { snapshot, strategy, status: "heartbeat_started", mode: "heartbeat" };

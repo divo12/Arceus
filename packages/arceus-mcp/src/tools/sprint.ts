@@ -50,4 +50,88 @@ export const registerSprintTools = (
       return toMcpContent(res.data);
     }
   );
+
+  server.registerTool(
+    "sprint_get_active",
+    {
+      description:
+        "Read the currently active sprint with task counts (total, completed, verified, blocked, failed). " +
+        "Use at beat start to see what sprint you're operating in and overall progress.",
+      inputSchema: {},
+    },
+    async () => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${SPRINTS}/active`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "sprint_check_completion",
+    {
+      description:
+        "Check whether a sprint is ready to finalize. Returns counts of completed/verified/blocked/failed tasks plus readyToFinalize flag. Read-only.",
+      inputSchema: { sprintId: z.string() },
+    },
+    async ({ sprintId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "GET",
+        path: `${SPRINTS}/${sprintId}/completion`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "sprint_run_qa_gate",
+    {
+      description:
+        "Run the QA suite gate for a sprint. Reports unverified completed tasks and failed tasks. Read-only — does not mutate task statuses. Tester or CTO role.",
+      inputSchema: { sprintId: z.string() },
+    },
+    async ({ sprintId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${SPRINTS}/${sprintId}/qa-gate`,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_run_qa_gate", { sprintId }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "sprint_run_final_gate",
+    {
+      description:
+        "Run the final build/integration/preview gate for a sprint. Read-only summary of verification readiness. CTO role only.",
+      inputSchema: { sprintId: z.string() },
+    },
+    async ({ sprintId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${SPRINTS}/${sprintId}/final-gate`,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_run_final_gate", { sprintId }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "sprint_finalize",
+    {
+      description:
+        "Finalize a sprint: marks it completed and records timestamps. CEO role only. Call only after sprint_check_completion reports readyToFinalize.",
+      inputSchema: { sprintId: z.string() },
+    },
+    async ({ sprintId }) => {
+      const res = await client.request<ToolResult<unknown>>({
+        method: "POST",
+        path: `${SPRINTS}/${sprintId}/finalize`,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_finalize", { sprintId }),
+      });
+      return toMcpContent(res.data);
+    }
+  );
 };

@@ -13,8 +13,7 @@ import {
   hydrateTaskFromSpec,
 } from "../../tasks/index.js";
 import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/store.js";
-import type { Task } from "@arceus/contracts";
-import { failure, success, type ErrorCause } from "./envelope.js";
+import type { Task } from "@arceus/contracts";import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
 const TASK_BASE = "/api/internal/v1/tasks";
@@ -132,10 +131,6 @@ const progressBody = z.object({
 
 const previewUrlBody = z.object({
   url: z.string().url().nullable(),
-});
-
-const attachArtifactBody = z.object({
-  artifactId: z.string().min(1),
 });
 
 const hydrateBody = z.object({
@@ -359,15 +354,19 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     reply.code(status).send();
   });
 
-  // POST /tasks/:taskId/artifacts — link existing artifact
-  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/artifacts`, async (req, reply) => {
-    const body = parseOrFail(attachArtifactBody, req.body, reply);
-    if (!body) return;
-    const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
-
-    attachArtifactToTask(taskId, body.artifactId);
-    cacheAndSend(req, reply, 200, success(`Artifact ${body.artifactId} linked to ${taskId}.`, { taskId, artifactId: body.artifactId }));
+  // POST /tasks/:taskId/artifacts — RETIRED (Spec 28 Phase C.1).
+  // Use `task_create({ referenceArtifactIds })` or `task_update({ referenceArtifactIds })`.
+  // Returns 410 Gone for ~2 weeks, then removed.
+  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/artifacts`, async (_req, reply) => {
+    reply.code(410).send({
+      ...failure(
+        "task_attach_artifact is retired. Use task_create({referenceArtifactIds}) or task_update({referenceArtifactIds}).",
+        "tool_retired",
+        "never",
+        "caller_updated",
+      ),
+      replacement: "task_update",
+    });
   });
 
   // POST /tasks/:taskId/hydration — rehydrate from spec
@@ -485,8 +484,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
   );
 
   // POST /tasks/:taskId/report-bug — any role can report a bug found during work
-  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/report-bug`, async (req, reply) => {
-    const reportBugBody = z.object({
+  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/report-bug`, async (req, reply) => {    const reportBugBody = z.object({
       bugTitle: z.string().min(1).max(200),
       bugDescription: z.string().min(1).max(4000),
       severity: z.enum(["low", "medium", "high", "critical"]).default("medium"),
@@ -548,5 +546,74 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       }),
       `${TASK_BASE}/${bugId}`,
     );
+  });
+
+  // GET /tasks/:taskId/preview-path — return preview slot info for a task
+  app.get<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/preview-path`, async (req, reply) => {
+    const { taskId } = req.params;
+    const task = findTask(taskId);
+    if (!task) { sendNotFound(reply, `Task ${taskId}`); return; }
+
+    cacheAndSend(req, reply, 200, success(`Preview info for ${taskId}.`, {
+      taskId,
+      previewUrl: task.localPreviewUrl,
+      previewPath: null,
+      lastProbedAt: null,
+    }));
+  });
+
+  // GET /tasks/:taskId/progress — list plan steps + commands without full task body
+  app.get<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/progress`, async (req, reply) => {
+    const { taskId } = req.params;
+    const task = findTask(taskId);
+    if (!task) { sendNotFound(reply, `Task ${taskId}`); return; }
+
+    const planSteps = task.plannerState?.planSteps?.map((s, i) => ({
+      ts: task.createdAt,
+      step: typeof s === "string" ? s : String(s),
+      index: i,
+    })) ?? [];
+
+    const commands = task.executorState?.commandsExecuted?.map((c) => ({
+      ts: task.createdAt,
+      cmd: typeof c === "string" ? c : String(c),
+    })) ?? [];
+
+    const totalSteps = planSteps.length || 1;
+    const completedSteps = commands.length;
+    const percentComplete = Math.min(Math.round((completedSteps / totalSteps) * 100), 100);
+
+    cacheAndSend(req, reply, 200, success(`Progress for ${taskId}.`, {
+      taskId,
+      planSteps,
+      commands,
+      percentComplete,
+    }));
+  });
+
+  // DELETE /tasks/:taskId/progress — clear plan-step + command history. CTO/PM only.
+  app.delete<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/progress`, async (req, reply) => {
+    const role = req.mcp?.role;
+    if (role !== "cto" && role !== "pm") {
+      reply.code(403).send(failure(
+        "Clearing task progress requires cto or pm role.",
+        "governance", "never", "reassign_to_cto_or_pm",
+      ));
+      return;
+    }
+    const { taskId } = req.params;
+    const existing = findTask(taskId);
+    if (!existing) { sendNotFound(reply, `Task ${taskId}`); return; }
+
+    const cleared = updateTask(taskId, (t) => ({
+      ...t,
+      plannerState: { ...t.plannerState, planSteps: [], currentStepIndex: 0 },
+      executorState: { ...t.executorState, commandsExecuted: [], results: [] },
+    }));
+
+    cacheAndSend(req, reply, 200, success(`Progress cleared for ${taskId}.`, {
+      taskId,
+      cleared: Boolean(cleared),
+    }));
   });
 }

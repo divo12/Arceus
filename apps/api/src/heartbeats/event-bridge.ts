@@ -204,6 +204,11 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         }
       }
 
+      // Resolve the active task ID for this role — works for all roles, not just developer
+      const resolvedTaskId = (role === "developer" && activeExecution?.buildTaskId)
+        ? activeExecution.buildTaskId
+        : agentSessions.get(role)?.activeTaskId ?? null;
+
       if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {
         const filePath = args.filePath || args.file_path || "unknown file";
         // Estimate lines changed from tool args
@@ -218,11 +223,11 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           awaiting: role === "developer" ? "editing workspace" : "continuing after file edit",
         });
         emitEmployeeActivity(role, "file_edit", filePath, {
-          taskId: (role === "developer" && activeExecution) ? activeExecution.buildTaskId : agentSessions.get(role)?.activeTaskId ?? null,
+          taskId: resolvedTaskId,
           detail: linesChanged ? { linesChanged } : null,
         });
-        if (role === "developer" && activeExecution) {
-          appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
+        if (resolvedTaskId) {
+          appendTaskResult(resolvedTaskId, `edited:${filePath}`);
         }
       } else if (isInvocation && toolName === "bash") {
         const cmd = String(args.command || "").slice(0, 180);
@@ -232,16 +237,19 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           awaiting: "waiting for shell result",
         });
         emitEmployeeActivity(role, "shell", `$ ${cmd}`, {
-          taskId: (role === "developer" && activeExecution) ? activeExecution.buildTaskId : agentSessions.get(role)?.activeTaskId ?? null,
+          taskId: resolvedTaskId,
         });
-        if (role === "developer" && activeExecution) {
-          appendTaskCommand(activeExecution.buildTaskId, cmd);
+        if (resolvedTaskId) {
+          appendTaskCommand(resolvedTaskId, cmd);
         }
       } else if (isInvocation && toolName) {
         emitEmployeeActivity(role, "tool_call", `tool: ${toolName}`, {
-          taskId: activeExecution?.buildTaskId ?? agentSessions.get(role)?.activeTaskId ?? null,
+          taskId: resolvedTaskId,
           detail: { toolName, args: sanitizeToolArgs(args) },
         });
+        if (resolvedTaskId) {
+          appendTaskResult(resolvedTaskId, `tool:${toolName}`);
+        }
       }
     }
   }

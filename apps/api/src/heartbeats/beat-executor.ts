@@ -42,6 +42,7 @@ import { scoreBeatVerdict, clearBeatTaskTransitions } from "../orchestration/bea
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
 import { updateSuccessRate } from "@arceus/company-runtime";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
+import { materializeBeatSkills } from "../opencode/materialize-beat-skills.js";
 
 // ── Beat prompt enrichment ─────────────────────────────────────────────────
 // Appends task identity, dependency state, and tool-usage instructions
@@ -110,8 +111,12 @@ export async function executeBeatTask(
   // Ensure the SSE event bridge is running so runPromptText() completion
   // promises resolve (session.idle / session.error events).
   if (!eventBridgeStarted) {
-    startEventBridge().catch(() => {});
-    setEventBridgeStarted(true);
+    try {
+      startEventBridge().catch(() => { setEventBridgeStarted(false); });
+      setEventBridgeStarted(true);
+    } catch {
+      emitEmployeeActivity("system", "error", "Failed to start event bridge — tool events will not be recorded");
+    }
   }
 
   startBeatTokenAccumulator(beatId);
@@ -188,6 +193,13 @@ export async function executeBeatTask(
     // Register session context so the plugin can enforce tool governance
     const beatCtx = await buildBeatContext(role, snapshot.company.id, beatId, beatSession.id);
     registerSessionContext(beatCtx);
+    // Materialize skills to disk so OpenCode's built-in `skill` tool can discover them
+    await materializeBeatSkills({
+      beatId,
+      companyId: snapshot.company.id,
+      role,
+      trustBand: beatCtx.trustBand,
+    });
     emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: session created`, { beatId, detail: { sessionId: beatSession.id, allowedTools: beatCtx.allowedTools } });
     previousSessionId = beatAgentState?.sessionId;
     if (beatAgentState) beatAgentState.sessionId = beatSession.id;

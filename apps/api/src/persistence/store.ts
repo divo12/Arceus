@@ -17,6 +17,8 @@ import type {
 } from "@arceus/contracts";
 import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
 import type { StrategyOutput } from "../agents/ceo.js";
+import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from "../orchestration/state.js";
+import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { storeEvents } from "./store-events.js";
 
@@ -338,6 +340,41 @@ export function upsertMeeting(meeting: Meeting) {
   });
 
   return meeting;
+}
+
+/**
+ * Spec 26 §3.3 / Spec 28 Phase B.1 — synchronous durable write for meetings.
+ * Upserts the meeting in the in-memory snapshot then awaits the persistence
+ * queue drain so the snapshot row is in the DB before we return. Use this
+ * from any route handler that records or mutates a meeting; on process kill
+ * immediately after the call, the meeting must survive restart.
+ */
+export async function writeMeetingSync(meeting: Meeting): Promise<Meeting> {
+  upsertMeeting(meeting);
+  await flushPersistedCompanyState();
+  return meeting;
+}
+
+/**
+ * Spec 26 §3.3 / Spec 28 Phase B.1 — synchronous durable write for artifacts.
+ * Awaits the per-artifact DB insert FIRST, then updates the in-memory
+ * `artifacts` array. Caller is responsible for filesystem materialization
+ * (fire-and-forget is fine there — disk is best-effort, DB is the source of truth).
+ */
+export async function writeArtifactSync(artifact: RuntimeArtifact): Promise<RuntimeArtifact> {
+  const companyId = snapshot.company.id;
+  await persistRuntimeArtifact(companyId, {
+    id: artifact.id,
+    agent: artifact.agent,
+    kind: artifact.kind,
+    title: artifact.title,
+    content: artifact.content,
+    createdAt: artifact.createdAt,
+  });
+  if (!runtimeArtifacts.find((a) => a.id === artifact.id)) {
+    runtimeArtifacts.push(artifact);
+  }
+  return artifact;
 }
 
 /** Insert or update an approval in the snapshot by ID. */

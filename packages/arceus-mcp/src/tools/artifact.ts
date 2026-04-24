@@ -20,11 +20,14 @@ export const registerArtifactTools = (
         kind: z.enum(["plan", "code", "output", "specification"]),
         title: z.string().max(200),
         content: z.string(),
-        taskId: z.string().optional(),
+        taskId: z.string().optional()
+          .describe("DEPRECATED — use attachToTaskIds instead. Single task to link."),
+        attachToTaskIds: z.array(z.string()).max(10).optional()
+          .describe("Task IDs to attach this artifact to at creation"),
       },
     },
-    async ({ kind, title, content, taskId }) => {
-      const body = { agent: ctx.role, kind, title, content, taskId };
+    async ({ kind, title, content, taskId, attachToTaskIds }) => {
+      const body = { agent: ctx.role, kind, title, content, taskId, attachToTaskIds };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",
         path: ARTIFACTS,
@@ -57,25 +60,7 @@ export const registerArtifactTools = (
     }
   );
 
-  server.registerTool(
-    "artifact_persist",
-    {
-      description: "Promote a runtime artifact to durable storage. Bandwidth cost. PM/skills_lead only.",
-      inputSchema: {
-        artifactId: z.string(),
-        sprintId: z.string().nullable().optional(),
-        taskId: z.string().nullable().optional(),
-      },
-    },
-    async ({ artifactId, sprintId, taskId }) => {
-      const body = { sprintId, taskId };
-      const res = await client.request<ToolResult<unknown>>({
-        method: "POST",
-        path: `${ARTIFACTS}/${artifactId}/persistence`,
-        body,
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "artifact_persist", { artifactId, ...body }),
-      });
-      return toMcpContent(res.data);
-    }
-  );
+  // `artifact_persist` retired (Spec 28 Phase C.1) — `artifact_create` now writes
+  // through `addArtifactSync` so persistence is automatic. The route still
+  // returns 410 Gone with `tool_retired` for ~2 weeks, then will be removed.
 };

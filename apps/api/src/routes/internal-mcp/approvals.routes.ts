@@ -1,9 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { requestApproval } from "../../memory/handoffs.js";
-import { getSnapshot } from "../../persistence/store.js";
+import { getSnapshot, updateApproval } from "../../persistence/store.js";
+import { getAgentByRole } from "@arceus/task-engine";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
+
+const BOARD_ONLY_TYPES = ["strategy", "hire", "external_action"] as const;
 
 const APPROVALS_BASE = "/api/internal/v1/approvals";
 
@@ -143,10 +146,10 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
   );
 
   // GET /approvals — list approvals with filters
-  app.get<{ Querystring: { status?: string; limit?: string } }>(
+  app.get<{ Querystring: { status?: string; limit?: string; filedByMe?: string; pendingMyDecision?: string; since?: string } }>(
     APPROVALS_BASE,
     async (req, reply) => {
-      const { status, limit: limitStr } = req.query;
+      const { status, limit: limitStr, filedByMe, pendingMyDecision, since } = req.query;
       const snapshot = getSnapshot();
       const limit = Math.min(parseInt(limitStr || "50", 10), 100);
       let approvals = snapshot.approvals ?? [];
@@ -155,11 +158,87 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
         approvals = approvals.filter((a) => a.status === status);
       }
 
+      const role = req.mcp?.role;
+      if (filedByMe === "true" && role) {
+        const me = getAgentByRole(snapshot, role as Parameters<typeof getAgentByRole>[1]);
+        approvals = me ? approvals.filter((a) => a.requestedByAgentId === me.id) : [];
+      }
+
+      if (pendingMyDecision === "true") {
+        if (role !== "ceo") {
+          approvals = [];
+        } else {
+          approvals = approvals.filter(
+            (a) => a.status === "pending" && !BOARD_ONLY_TYPES.includes(a.type as typeof BOARD_ONLY_TYPES[number]),
+          );
+        }
+      }
+
+      if (since) {
+        const cutoff = Date.parse(since);
+        if (!Number.isNaN(cutoff)) {
+          approvals = approvals.filter((a) => {
+            const ts = (a as { createdAt?: string }).createdAt;
+            return !ts || Date.parse(ts) >= cutoff;
+          });
+        }
+      }
+
       const results = approvals.slice(-limit);
       cacheAndSend(req, reply, 200, success(`${results.length} approval(s).`, {
         approvals: results,
         total: results.length,
       }));
+    },
+  );
+
+  // PATCH /approvals/:approvalId — filer amends pending approval
+  const updateApprovalBody = z.object({
+    title: z.string().min(1).optional(),
+    description: z.string().min(1).optional(),
+    meetingId: z.string().nullable().optional(),
+    agendaItemId: z.string().nullable().optional(),
+  });
+
+  app.patch<{ Params: { approvalId: string } }>(
+    `${APPROVALS_BASE}/:approvalId`,
+    async (req, reply) => {
+      const { approvalId } = req.params;
+      const role = req.mcp?.role;
+      const snapshot = getSnapshot();
+      const approval = snapshot.approvals?.find((a) => a.id === approvalId);
+      if (!approval) {
+        reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
+        return;
+      }
+      if (approval.status !== "pending") {
+        reply.code(409).send(failure(
+          `Approval ${approvalId} is "${approval.status}" — cannot amend after decision.`,
+          "approval_not_pending", "never", "approval_pending",
+        ));
+        return;
+      }
+      const filer = role ? getAgentByRole(snapshot, role as Parameters<typeof getAgentByRole>[1]) : null;
+      if (!filer || filer.id !== approval.requestedByAgentId) {
+        reply.code(403).send(failure(
+          `Only the filer may amend approval ${approvalId}.`,
+          "governance", "never", "role_is_filer",
+        ));
+        return;
+      }
+
+      const body = parseOrFail(updateApprovalBody, req.body, reply);
+      if (!body) return;
+
+      const updated = updateApproval(approvalId, (current) => ({
+        ...current,
+        ...(body.title !== undefined ? { title: body.title } : {}),
+        ...(body.description !== undefined ? { description: body.description } : {}),
+        ...(body.meetingId !== undefined ? { meetingId: body.meetingId } : {}),
+        ...(body.agendaItemId !== undefined ? { agendaItemId: body.agendaItemId } : {}),
+      }));
+
+      cacheAndSend(req, reply, 200, success(`Approval ${approvalId} updated.`, { approval: updated }));
     },
   );
 

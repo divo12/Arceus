@@ -51,4 +51,7 @@ export const heartbeatConfig = {
 
   /** Manually paused roles. */
   pauseRoles: readListEnv("ARCEUS_HEARTBEAT_PAUSE_ROLES", defaults.pauseRoles) as AgentIdentity["role"][],
+
+  /** Feature flag: enable/disable the meeting scheduler entirely. */
+  meetingsEnabled: readOptionalEnv("ARCEUS_MEETINGS_ENABLED", "true") === "true",
 };

@@ -1,6 +1,8 @@
 import progressTool from "../tool/task_update_progress.ts";
-import commandTool from "../tool/task_append_command.ts";
 import planStepTool from "../tool/task_append_plan_step.ts";
+import diffTool, { diff as diffFn } from "../tool/workspace_diff_against_criteria.ts";
+import collectTool from "../tool/workspace_collect_evidence.ts";
+import { parseTscOutput } from "../tool/workspace_run_typecheck.ts";
 import { ArceusPlugin } from "../plugin/arceus.ts";
 
 const failures: string[] = [];
@@ -67,14 +69,7 @@ const main = async () => {
     record(calls[0]?.headers["x-role"] === "developer", "role header set");
   }
 
-  // 2) task_append_command — idempotency key present
-  {
-    const calls = installFetchStub(200, { status: "success", summary: "ok" });
-    await commandTool.execute({ command: "pnpm test", exitCode: 0 }, ctx);
-    const hasKey = typeof calls[0]?.headers["idempotency-key"] === "string" && calls[0].headers["idempotency-key"].length > 0;
-    record(hasKey, "append_command sends idempotency-key");
-    record(calls[0]?.url.endsWith("/tasks/tsk_smoke/commands"), "append_command path correct");
-  }
+  // 2) task_append_command — moved to MCP (Spec 28 Phase D); role-custom test removed.
 
   // 3) task_append_plan_step — body passthrough
   {
@@ -96,7 +91,7 @@ const main = async () => {
   {
     const saved = process.env.TASK_ID;
     delete process.env.TASK_ID;
-    const out = await commandTool.execute({ command: "x" }, ctx);
+    const out = await collectTool.execute({ bundleDir: "/nonexistent" }, ctx);
     const parsed = JSON.parse(out);
     record(parsed.status === "error", "missing TASK_ID surfaces structured error", parsed.error?.cause);
     if (saved) process.env.TASK_ID = saved;
@@ -130,7 +125,45 @@ const main = async () => {
     delete process.env.ARCEUS_ALLOWED_TOOLS;
   }
 
-  // 7) Plugin circuit breaker — 3 strikes trips
+  // 7) Phase H — workspace_run_typecheck parses tsc output deterministically
+  {
+    const sample = [
+      "src/foo.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.",
+      "src/bar.ts(99,1): error TS2304: Cannot find name 'baz'.",
+      "noise line",
+    ].join("\n");
+    const errors = parseTscOutput(sample);
+    record(errors.length === 2, "tsc parser extracts 2 errors", String(errors.length));
+    record(errors[0].code === "TS2322" && errors[0].file === "src/foo.ts", "tsc parser captures file + code");
+  }
+
+  // 8) Phase H — workspace_diff_against_criteria matches and reports gaps
+  {
+    const result = diffFn(
+      ["renders welcome banner", "submits form to /api/save"],
+      "Page renders welcome banner correctly. Console output is clean.",
+    );
+    record(result.matches.length === 1 && result.gaps.length === 1, "diff distinguishes matches vs gaps");
+    record(result.unexpected.length === 0, "diff finds no unexpected error tokens");
+
+    const failing = diffFn(["renders welcome banner"], "TypeError: undefined is not a function");
+    record(failing.unexpected.length > 0, "diff flags unexpected error tokens", failing.unexpected.join(","));
+  }
+
+  // 9) Phase H — workspace_diff_against_criteria fetches DoD when criteria omitted
+  {
+    const calls = installFetchStub(200, {
+      status: "success",
+      summary: "ok",
+      data: { task: { id: "tsk_smoke", definitionOfDone: ["renders banner"] } },
+    });
+    const out = await diffTool.execute({ observed: "Page renders banner ok." }, ctx);
+    const parsed = JSON.parse(out);
+    record(parsed.status === "success", "diff falls back to fetched DoD", parsed.summary);
+    record(calls[0]?.url.endsWith("/api/internal/v1/tasks/tsk_smoke"), "diff GETs task by id");
+  }
+
+  // 10) Plugin circuit breaker — 3 strikes trips
   {
     const hooks = await ArceusPlugin({} as never);
     const errorOutput = JSON.stringify({ status: "error", error: { cause: "upstream" } });
