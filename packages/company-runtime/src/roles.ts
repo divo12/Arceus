@@ -156,17 +156,19 @@ export interface RoleRuntimeCapabilities {
   receivesBuildContext: boolean;
   /** Beat context is augmented with skills-health / unused-skill / gap-analysis data. */
   receivesSkillsLeadContext: boolean;
+  /** Strategic role that may receive freeform/unstructured checklist actions and respond via LLM. */
+  respondsToFreeformChecklistActions: boolean;
 }
 
 export const ROLE_CAPABILITIES: Record<Role, RoleRuntimeCapabilities> = {
-  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
-  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false },
-  pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
-  developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true,  seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false },
-  tester:      { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: true,  receivesBuildContext: false, receivesSkillsLeadContext: false },
-  ui_designer: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
-  marketing:   { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false },
-  skills_lead: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: true  },
+  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
+  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
+  pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
+  developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true,  seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
+  tester:      { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: true,  receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
+  ui_designer: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
+  marketing:   { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
+  skills_lead: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: true,  respondsToFreeformChecklistActions: false },
 };
 
 /** Azure OpenAI deployment per role. CEO uses a higher-capability model; everyone else shares the worker pool. */

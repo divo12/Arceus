@@ -5,6 +5,7 @@ import {
   processTaskOutcome, runATAPipeline,
   getUnderperformingSkills, getUnusedSkills, analyzeSprintPatterns,
   proposeSkillFromCluster, deprecateSkill as registryDeprecateSkill,
+  ROLE_CAPABILITIES,
 } from "@arceus/company-runtime";
 import { getAgentByRole } from "@arceus/task-engine";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
@@ -33,16 +34,39 @@ import {
 } from "../sprints/review.js";
 import { startEventBridge } from "./event-bridge.js";
 
+type HandlerResult = { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number };
+type FinishFn = (status: "completed" | "failed", summary: string, toolCalls: number) => void;
+type ChecklistHandler = (
+  ctx: AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+  finish: FinishFn,
+) => Promise<HandlerResult>;
+
+/**
+ * Action-prefix dispatch table. Replaces the old `if (role === "X")` chain.
+ * Order matters — first match wins. Specific actions before broader prefixes.
+ * The orchestrator is now role-neutral: it routes by what the checklist asked for,
+ * not by who the agent is. See plans/agent-redesign/00-vision.md blocker #3.
+ */
+const CHECKLIST_HANDLERS: Array<{ matches: (action: { suggestedAction: string }) => boolean; handle: ChecklistHandler }> = [
+  { matches: (a) => a.suggestedAction === "sprint_review:cto_escalation_review", handle: handleCtoEscalationReview },
+  { matches: (a) => a.suggestedAction === "sprint_review:cto_escalation_force_complete", handle: handleCtoEscalationForceComplete },
+  { matches: (a) => a.suggestedAction.startsWith("sprint_review:"), handle: handleTesterSprintReview },
+  { matches: (a) => a.suggestedAction.startsWith("skills_lead:"), handle: handleSkillsLeadDispatch },
+  { matches: (a) => a.suggestedAction.startsWith("meeting_contribution:"), handle: handleMeetingContribution },
+  { matches: (a) => /\bpropose (next|new) sprint\b/i.test(a.suggestedAction) || /^plan sprint\b/i.test(a.suggestedAction), handle: handleCreateSprintPlanningTask },
+];
+
 /**
  * Execute a checklist-driven action when no task is assigned.
- * Handles sprint proposals, escalation reviews, skill governance,
- * and meeting contributions based on the suggested action type.
+ * Dispatches by action prefix (not by role) — the orchestrator stays neutral.
  */
 export async function executeChecklistAction(
   ctx: AgentBeatContext,
   action: { detail: string; suggestedAction: string },
   beatId: string,
-): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+): Promise<HandlerResult> {
   const role = ctx.role;
 
   // ── Graph instrumentation (Spec 22) — beat wrapping checklist action ──
@@ -52,7 +76,7 @@ export async function executeChecklistAction(
   if (clSprintId) {
     emitGraphBeatStarted(clSprintId, clSprintId, clBeatId, role, `checklist:${action.suggestedAction}`, action.detail?.slice(0, 200));
   }
-  const finishClBeat = (status: "completed" | "failed", summary: string, toolCalls: number) => {
+  const finish: FinishFn = (status, summary, toolCalls) => {
     if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, status, summary, toolCalls, Date.now() - clBeatStart);
   };
 
@@ -66,166 +90,216 @@ export async function executeChecklistAction(
     beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
   });
 
-  // ── CEO: create a governance task so the CEO agent plans the next sprint ──
-  if (role === "ceo" && action.suggestedAction.toLowerCase().includes("sprint")) {
-    if (isCeoStreaming()) {
-      emitEmployeeActivity("ceo", "info", `${shortBeat(beatId)}: skipped — live chat active`, { beatId });
-      finishClBeat("completed", "CEO skipped — streaming", 0);
-      return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-
-    // Ensure any finished sprint is properly marked complete first
-    await checkSprintCompletion();
-
-    const snapshot = getSnapshot();
-    const nextNum = (snapshot.company.currentSprintNumber ?? 0) + 1;
-
-    // Guard: don't create duplicate planning tasks
-    const alreadyExists = snapshot.tasks.some(
-      (t) => t.assignedRole === "ceo" && t.title.startsWith("Plan Sprint") &&
-        ["created", "planned", "in_progress"].includes(t.status),
-    );
-    if (alreadyExists) {
-      finishClBeat("completed", "Sprint planning task already exists", 0);
-      return { summary: "Sprint planning task already exists — CEO will pick it up", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-
-    const task = createWorkflowTask(
-      snapshot, "implementation", "ceo",
-      `Plan Sprint ${nextNum}`,
-      `Analyze company state, previous sprint results, and team capacity. Use the sprint_create tool to create Sprint ${nextNum} with a clear goal and actionable tasks assigned to the right roles.`,
-      "The company needs a new sprint plan.",
-      "A new sprint created via sprint_create with goal, tasks, dependencies, and role assignments.",
-      [`Sprint ${nextNum} created with sprint_create tool`, "All tasks have assigned roles", "Dependencies are specified"],
-      "critical",
-      "planned",
-      null, // no sprint yet
-    );
-    upsertTask(task);
-
-    emitEmployeeActivity("ceo", "transition", `${shortBeat(beatId)}: created task "${task.title}"`, { beatId, taskId: task.id });
-    finishClBeat("completed", `Created sprint planning task: ${task.title}`, 0);
-    return {
-      summary: `Created governance task "${task.title}" for CEO — agent will reason and call sprint_create`,
-      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
-    };
-  }
-
-  // ── CTO: sprint escalation review (Spec 21) ──
-  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_review") {
-    return executeCtoBeatEscalationReview(ctx, beatId);
-  }
-
-  // ── CTO: escalation timeout safety valve ──
-  if (role === "cto" && action.suggestedAction === "sprint_review:cto_escalation_force_complete") {
-    startBeatTokenAccumulator(beatId);
-    const snapshot = getSnapshot();
-    const sprintId = snapshot.company.currentSprintId;
-    if (!sprintId) {
-      finishClBeat("completed", "No active sprint", 0);
-      return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-    const sprint = snapshot.sprints.find((s) => s.id === sprintId);
-    if (!sprint || sprint.status !== "reviewing") {
-      finishClBeat("completed", "Sprint not in reviewing state", 0);
-      return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-    }
-
-    emitEmployeeActivity("cto", "transition", `${shortBeat(beatId)}: force-completing Sprint ${sprint.number}`, {
-      beatId, detail: { reason: action.detail },
-    });
-
-    await finalizeSprintCompletion(sprintId);
-
-    finishClBeat("completed", `CTO force-completed Sprint ${sprint.number} (escalation timeout)`, 1);
-    return {
-      summary: `CTO escalation timeout: force-completed Sprint ${sprint.number}`,
-      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
-    };
-  }
-
-  // ── PM: scope triage, board response ──
-  if (role === "pm" || role === "cto") {
-    try {
-      const snapshot = getSnapshot();
-      const soul = getRoleSoul(role);
-      const session = await ensureAgentSession(snapshot, role);
-      touchAgentSession(role, "working");
-      emitEmployeeActivity(role, "working", `${shortBeat(beatId)}: ${action.suggestedAction}`, { beatId });
-
-      const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
-      emitEmployeeActivity(role, "prompt", `${shortBeat(beatId)}: sending to LLM`, { beatId, detail: { promptLength: prompt.length } });
-      const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt);
-      touchAgentSession(role, "idle");
-
-      emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: action completed`, {
-        beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
-      });
-      finishClBeat("completed", `${role} checklist action completed`, 1);
-      return {
-        summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
-      };
-    } catch (err) {
-      touchAgentSession(role, "idle");
-      emitEmployeeActivity(role, "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
-      finishClBeat("failed", `${role} checklist action failed`, 0);
-      return {
-        summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
-        tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
-      };
+  // ── Dispatch by action prefix (no role gates) ──
+  for (const { matches, handle } of CHECKLIST_HANDLERS) {
+    if (matches(action)) {
+      return handle(ctx, action, beatId, finish);
     }
   }
 
-  // ── Tester: sprint review actions (Spec 21) ──
-  if (role === "tester" && action.suggestedAction.startsWith("sprint_review:")) {
-    startBeatTokenAccumulator(beatId);
-    const reviewAction = action.suggestedAction;
-
-    if (reviewAction === "sprint_review:run_tester_verification") {
-      const res = await executeSprintReviewVerification(ctx, beatId);
-      finishClBeat("completed", "tester verification", res.toolCalls);
-      return res;
-    }
-    if (reviewAction === "sprint_review:run_final_gate") {
-      const res = await executeSprintFinalGate(ctx, beatId);
-      finishClBeat("completed", "final gate", res.toolCalls);
-      return res;
-    }
-    if (reviewAction === "sprint_review:retest_after_rework") {
-      const res = await executeRetestAfterRework(ctx, beatId);
-      finishClBeat("completed", "retest after rework", res.toolCalls);
-      return res;
-    }
-
-    finishClBeat("completed", `Unknown review action: ${reviewAction}`, 0);
-    return {
-      summary: `Unknown sprint review action: ${reviewAction}`,
-      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
-    };
+  // ── Fallback: strategic roles reason about freeform actions via LLM ──
+  if (ROLE_CAPABILITIES[role].respondsToFreeformChecklistActions) {
+    return handleFreeformLlmAction(ctx, action, beatId, finish);
   }
 
-  // ── Skills Lead: skill governance actions (Spec 14 Phase 6) ──
-  if (role === "skills_lead" && action.suggestedAction.startsWith("skills_lead:")) {
-    return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
-  }
-
-  // ── Meeting contribution — now handled directly by pipeline (Spec 24 Phase 4a) ──
-  if (action.suggestedAction.startsWith("meeting_contribution:")) {
-    finishClBeat("completed", "meeting contributions now collected by pipeline", 0);
-    return {
-      summary: `Meeting contribution skipped — collected directly by pipeline`,
-      tokensUsed: 0, actionsCount: 0, toolCalls: 0,
-    };
-  }
-
-  // ── Fallback: log the action without executing ──
+  // ── No handler matched ──
   emitEmployeeActivity(role, "info", `${shortBeat(beatId)}: unhandled action "${action.suggestedAction}"`, { beatId });
-  if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, "completed", `No handler: ${action.suggestedAction}`, 0, Date.now() - clBeatStart);
+  finish("completed", `No handler: ${action.suggestedAction}`, 0);
   return {
     summary: `${role}: ${action.suggestedAction} (no handler)`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
   };
+}
+
+// ── Action handlers ───────────────────────────────────────────────────────
+
+/** Create a governance task so the responsible agent plans the next sprint. */
+async function handleCreateSprintPlanningTask(
+  _ctx: AgentBeatContext,
+  _action: { detail: string; suggestedAction: string },
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  if (isCeoStreaming()) {
+    emitEmployeeActivity("ceo", "info", `${shortBeat(beatId)}: skipped — live chat active`, { beatId });
+    finish("completed", "CEO skipped — streaming", 0);
+    return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  // Ensure any finished sprint is properly marked complete first
+  await checkSprintCompletion();
+
+  const snapshot = getSnapshot();
+  const nextNum = (snapshot.company.currentSprintNumber ?? 0) + 1;
+
+  // Guard: don't create duplicate planning tasks
+  const alreadyExists = snapshot.tasks.some(
+    (t) => t.assignedRole === "ceo" && t.title.startsWith("Plan Sprint") &&
+      ["created", "planned", "in_progress"].includes(t.status),
+  );
+  if (alreadyExists) {
+    finish("completed", "Sprint planning task already exists", 0);
+    return { summary: "Sprint planning task already exists — CEO will pick it up", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const task = createWorkflowTask(
+    snapshot, "implementation", "ceo",
+    `Plan Sprint ${nextNum}`,
+    `Analyze company state, previous sprint results, and team capacity. Use the sprint_create tool to create Sprint ${nextNum} with a clear goal and actionable tasks assigned to the right roles.`,
+    "The company needs a new sprint plan.",
+    "A new sprint created via sprint_create with goal, tasks, dependencies, and role assignments.",
+    [`Sprint ${nextNum} created with sprint_create tool`, "All tasks have assigned roles", "Dependencies are specified"],
+    "critical",
+    "planned",
+    null, // no sprint yet
+  );
+  upsertTask(task);
+
+  emitEmployeeActivity("ceo", "transition", `${shortBeat(beatId)}: created task "${task.title}"`, { beatId, taskId: task.id });
+  finish("completed", `Created sprint planning task: ${task.title}`, 0);
+  return {
+    summary: `Created governance task "${task.title}" for CEO — agent will reason and call sprint_create`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+  };
+}
+
+/** CTO sprint escalation review (Spec 21). */
+async function handleCtoEscalationReview(
+  ctx: AgentBeatContext,
+  _action: { detail: string; suggestedAction: string },
+  beatId: string,
+  _finish: FinishFn,
+): Promise<HandlerResult> {
+  return executeCtoBeatEscalationReview(ctx, beatId);
+}
+
+/** CTO escalation timeout safety valve. */
+async function handleCtoEscalationForceComplete(
+  _ctx: AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  startBeatTokenAccumulator(beatId);
+  const snapshot = getSnapshot();
+  const sprintId = snapshot.company.currentSprintId;
+  if (!sprintId) {
+    finish("completed", "No active sprint", 0);
+    return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+  const sprint = snapshot.sprints.find((s) => s.id === sprintId);
+  if (!sprint || sprint.status !== "reviewing") {
+    finish("completed", "Sprint not in reviewing state", 0);
+    return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  emitEmployeeActivity("cto", "transition", `${shortBeat(beatId)}: force-completing Sprint ${sprint.number}`, {
+    beatId, detail: { reason: action.detail },
+  });
+
+  await finalizeSprintCompletion(sprintId);
+
+  finish("completed", `CTO force-completed Sprint ${sprint.number} (escalation timeout)`, 1);
+  return {
+    summary: `CTO escalation timeout: force-completed Sprint ${sprint.number}`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+  };
+}
+
+/** Tester sprint review actions (Spec 21). */
+async function handleTesterSprintReview(
+  ctx: AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  startBeatTokenAccumulator(beatId);
+  const reviewAction = action.suggestedAction;
+
+  if (reviewAction === "sprint_review:run_tester_verification") {
+    const res = await executeSprintReviewVerification(ctx, beatId);
+    finish("completed", "tester verification", res.toolCalls);
+    return res;
+  }
+  if (reviewAction === "sprint_review:run_final_gate") {
+    const res = await executeSprintFinalGate(ctx, beatId);
+    finish("completed", "final gate", res.toolCalls);
+    return res;
+  }
+  if (reviewAction === "sprint_review:retest_after_rework") {
+    const res = await executeRetestAfterRework(ctx, beatId);
+    finish("completed", "retest after rework", res.toolCalls);
+    return res;
+  }
+
+  finish("completed", `Unknown review action: ${reviewAction}`, 0);
+  return {
+    summary: `Unknown sprint review action: ${reviewAction}`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+  };
+}
+
+/** Skills Lead governance dispatcher (Spec 14 Phase 6). */
+async function handleSkillsLeadDispatch(
+  ctx: AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+  _finish: FinishFn,
+): Promise<HandlerResult> {
+  return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
+}
+
+/** Meeting contribution — now collected directly by pipeline (Spec 24 Phase 4a). */
+async function handleMeetingContribution(
+  _ctx: AgentBeatContext,
+  _action: { detail: string; suggestedAction: string },
+  _beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  finish("completed", "meeting contributions now collected by pipeline", 0);
+  return {
+    summary: `Meeting contribution skipped — collected directly by pipeline`,
+    tokensUsed: 0, actionsCount: 0, toolCalls: 0,
+  };
+}
+
+/** Generic LLM call — strategic roles reason about freeform action detail. */
+async function handleFreeformLlmAction(
+  _ctx: AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  const role = _ctx.role;
+  try {
+    const snapshot = getSnapshot();
+    const soul = getRoleSoul(role);
+    const session = await ensureAgentSession(snapshot, role);
+    touchAgentSession(role, "working");
+    emitEmployeeActivity(role, "working", `${shortBeat(beatId)}: ${action.suggestedAction}`, { beatId });
+
+    const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
+    emitEmployeeActivity(role, "prompt", `${shortBeat(beatId)}: sending to LLM`, { beatId, detail: { promptLength: prompt.length } });
+    const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt);
+    touchAgentSession(role, "idle");
+
+    emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: action completed`, {
+      beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
+    });
+    finish("completed", `${role} checklist action completed`, 1);
+    return {
+      summary: output?.slice(0, 500) || `${role} completed: ${action.suggestedAction}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
+    };
+  } catch (err) {
+    touchAgentSession(role, "idle");
+    emitEmployeeActivity(role, "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    finish("failed", `${role} checklist action failed`, 0);
+    return {
+      summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
 }
 
 // ── Skills Lead action handlers (Spec 14 Phase 6) ──────────
