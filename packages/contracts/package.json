@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "langfuse": "^3.38.0",
     "pino": "^9.5.0",
     "zod": "^3.24.2"
   },

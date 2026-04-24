@@ -6,15 +6,37 @@ process.on("uncaughtException", (err) => {
   console.error("[ARCEUS] Uncaught exception (process kept alive):", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
 });
 
-// Spec 32 — Observability bootstrap MUST run before any module that calls
-// `trace.getTracer(...)`. The OTEL SDK installs a global tracer provider on
-// startObservability(); without it, spans are silently dropped.
-import { startObservability } from "./observability/bootstrap.js";
+// Spec 32 — Observability sinks.
+//
+// Two sinks fan out from the same emit:
+//   pinoSink     → JSON lines on stdout (greppable in dev / shippable to any log aggregator)
+//   langfuseSink → Langfuse native SDK so traces show up in their v3 preview UI
+//
+// otelSink + startObservability() are intentionally dormant. Both pointed
+// at Langfuse Cloud, which would duplicate every trace alongside langfuseSink.
+// Re-enable when adding a non-Langfuse backend (Datadog / SigNoz / Honeycomb /
+// local Jaeger). The sink, bootstrap, and 37 unit tests stay in place — flip
+// them on with one line:
+//
+//   import { startObservability } from "./observability/bootstrap.js";
+//   startObservability();              // installs OTEL global tracer provider
+//   observability.setSink(observability.multiSink([
+//     observability.pinoSink(),
+//     observability.otelSink,          // ← restore here
+//     observability.langfuseSink(),
+//   ]));
 import { observability } from "@arceus/contracts";
-startObservability();
 observability.setSink(
-  observability.multiSink([observability.pinoSink(), observability.otelSink]),
+  observability.multiSink([
+    observability.pinoSink(),
+    observability.langfuseSink(),
+  ]),
 );
+
+// Best-effort flush of Langfuse-batched events on shutdown so we don't lose
+// the final beat.
+process.once("SIGTERM", () => { void observability.flushLangfuseSink(); });
+process.once("SIGINT", () => { void observability.flushLangfuseSink(); });
 
 import Fastify from "fastify";
 import cors from "@fastify/cors";
