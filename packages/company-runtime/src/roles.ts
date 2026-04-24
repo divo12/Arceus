@@ -120,6 +120,47 @@ export function canManageRole(managerRole: RoleSoul["role"], childRole: RoleSoul
 /** Roles that must always be present in every company org chart. */
 export const MANDATORY_ROLES: ReadonlyArray<string> = ["tester", "skills_lead"];
 
+// ── Typed role tables ─────────────────────────────────────────────────────
+// Replace scattered `if (role === "...")` chains with typed Record lookups.
+// See plans/code-audit/anti-patterns.md #9.
+
+type Role = RoleSoul["role"];
+
+/** Display names per role. Keyed lookup replaces the if/else chain in store.ts. */
+export const ROLE_DISPLAY_NAMES: Record<Role, string> = {
+  ceo: "Avery",
+  cto: "Lin",
+  pm: "Mina",
+  developer: "Jules",
+  tester: "Quinn",
+  ui_designer: "Sage",
+  marketing: "Parker",
+  skills_lead: "Rowan",
+};
+
+/**
+ * Runtime capabilities surfaced to the orchestrator/event-bridge.
+ * Used instead of `if (role === "developer")` checks. Add new flags here as
+ * cross-cutting role behaviour is identified.
+ */
+export interface RoleRuntimeCapabilities {
+  /** Owns the product workspace lifecycle: scaffolding, watchdog, preview detection. */
+  ownsProductWorkspace: boolean;
+  /** Session errors trigger an escalation meeting to leadership. */
+  escalatesOnSessionError: boolean;
+}
+
+export const ROLE_CAPABILITIES: Record<Role, RoleRuntimeCapabilities> = {
+  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true  },
+  tester:      { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  ui_designer: { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  marketing:   { ownsProductWorkspace: false, escalatesOnSessionError: false },
+  skills_lead: { ownsProductWorkspace: false, escalatesOnSessionError: false },
+};
+
 /**
  * Validate a proposed org-chart hierarchy against role policies.
  * Throws on unsupported roles, duplicates, illegal reporting lines,

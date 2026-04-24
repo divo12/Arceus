@@ -15,7 +15,7 @@ import type {
   TaskProgress,
   Transition
 } from "@arceus/contracts";
-import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul } from "@arceus/company-runtime";
+import { assertRoleHierarchy, createBootstrapEvent, createEmptyCompanySnapshot, getRoleSoul, ROLE_DISPLAY_NAMES } from "@arceus/company-runtime";
 import type { StrategyOutput } from "../agents/ceo.js";
 import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from "../orchestration/state.js";
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
@@ -104,15 +104,8 @@ export async function deriveCompanyNameFromIdea(idea: string): Promise<string> {
 }
 
 function buildAgentName(role: string) {
-  if (role === "ceo") return "Avery";
-  if (role === "cto") return "Lin";
-  if (role === "pm") return "Mina";
-  if (role === "developer") return "Jules";
-  if (role === "tester") return "Quinn";
-  if (role === "ui_designer") return "Sage";
-  if (role === "marketing") return "Parker";
-  if (role === "skills_lead") return "Rowan";
-  return titleCase(role.replace(/_/g, " "));
+  return (ROLE_DISPLAY_NAMES as Record<string, string | undefined>)[role]
+    ?? titleCase(role.replace(/_/g, " "));
 }
 
 /** Return the current in-memory company snapshot. */

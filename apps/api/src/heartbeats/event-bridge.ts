@@ -1,6 +1,6 @@
 // heartbeats/event-bridge.ts — SSE event bridge from OpenCode → agent state
 import type { AgentIdentity, PolicyEvalContext } from "@arceus/contracts";
-import { buildTrustEvent, evaluatePolicy, BASE_POLICY_RULES } from "@arceus/company-runtime";
+import { buildTrustEvent, evaluatePolicy, BASE_POLICY_RULES, ROLE_CAPABILITIES } from "@arceus/company-runtime";
 import { getAgentByRole, nowIso } from "@arceus/task-engine";
 import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
@@ -95,6 +95,12 @@ async function processEvent(event: { type: string; properties?: Record<string, a
   const role = resolveRoleBySessionId(sessionId);
   if (!role) return;
 
+  // Capability flags replace `role === "developer"` checks across this bridge.
+  // Add new behaviours by extending ROLE_CAPABILITIES, never by adding role string
+  // comparisons here. See plans/code-audit/anti-patterns.md #9.
+  const caps = (ROLE_CAPABILITIES as Record<string, { ownsProductWorkspace: boolean; escalatesOnSessionError: boolean }>)[role]
+    ?? { ownsProductWorkspace: false, escalatesOnSessionError: false };
+
   const agentState = agentSessions.get(role);
   if (agentState) {
     updateAgentSessionState(role, {
@@ -104,7 +110,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       stallReason: null,
     });
     touchAgentSession(role);
-    if (role === "developer" && agentState.status === "working") {
+    if (caps.ownsProductWorkspace && agentState.status === "working") {
       scheduleDeveloperWatchdog(failDeveloperStall);
     }
   }
@@ -118,16 +124,16 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         updateAgentSessionState(role, {
           lastProgressAt: nowIso(),
           lastEventSummary: truncateTelemetry(textContent),
-          awaiting: role === "developer" ? "executing requested work" : "streaming response",
+          awaiting: "streaming response",
         });
       }
-      if (role === "developer" && textContent) {
+      if (caps.ownsProductWorkspace && textContent) {
         for (const previewUrl of extractPreviewUrls(textContent)) {
           const registered = await registerReportedPreviewUrl(previewUrl);
           if (registered && activeExecution) {
             setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
             appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
-            emitEmployeeActivity("developer", "info", `Developer reported preview URL → ${previewUrl}`, {
+            emitEmployeeActivity(role, "info", `${role} reported preview URL → ${previewUrl}`, {
               taskId: activeExecution.buildTaskId,
             });
           }
@@ -204,8 +210,8 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         }
       }
 
-      // Resolve the active task ID for this role — works for all roles, not just developer
-      const resolvedTaskId = (role === "developer" && activeExecution?.buildTaskId)
+      // Resolve the active task ID for this role — capability-gated, not role-gated.
+      const resolvedTaskId = (caps.ownsProductWorkspace && activeExecution?.buildTaskId)
         ? activeExecution.buildTaskId
         : agentSessions.get(role)?.activeTaskId ?? null;
 
@@ -220,7 +226,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           fileEditCount: (agentSessions.get(role)?.fileEditCount ?? 0) + 1,
           lastEventSummary: `Edited ${filePath}`,
           lastWorkspaceChangeAt: nowIso(),
-          awaiting: role === "developer" ? "editing workspace" : "continuing after file edit",
+          awaiting: "continuing after file edit",
         });
         emitEmployeeActivity(role, "file_edit", filePath, {
           taskId: resolvedTaskId,
@@ -263,8 +269,8 @@ async function processEvent(event: { type: string; properties?: Record<string, a
     }
 
     // When the step loop is active, each prompt() returns on session.idle.
-    // The loop itself handles progression — don't trigger post-developer routing here.
-    if (role === "developer" && developerStepLoopActive) {
+    // The loop itself handles progression — don't trigger post-completion routing here.
+    if (caps.ownsProductWorkspace && developerStepLoopActive) {
       touchAgentSession(role, "working");
       updateAgentSessionState(role, {
         lastProgressAt: nowIso(),
@@ -278,10 +284,12 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       awaiting: "idle",
       promptCompletedAt: nowIso(),
       lastProgressAt: nowIso(),
-      activeTaskId: role === "developer" ? activeExecution?.previewTaskId ?? null : null,
-      lastEventSummary: role === "developer" ? "Implementation finished. Handing off to preview validation." : "Work complete.",
+      activeTaskId: caps.ownsProductWorkspace ? activeExecution?.previewTaskId ?? null : null,
+      lastEventSummary: caps.ownsProductWorkspace
+        ? "Implementation finished. Handing off to preview validation."
+        : "Work complete.",
     });
-    if (role === "developer") {
+    if (caps.ownsProductWorkspace) {
       clearDeveloperWatchdog();
       stopDeveloperWorkspaceMonitor();
     }
@@ -308,7 +316,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       lastEventSummary: props.error?.message ?? "Session error",
     });
     const isInternalAgent = role.startsWith("_internal/");
-    if (role === "developer") {
+    if (caps.ownsProductWorkspace) {
       clearDeveloperWatchdog();
       stopDeveloperWorkspaceMonitor();
     }
@@ -316,26 +324,27 @@ async function processEvent(event: { type: string; properties?: Record<string, a
     if (!isInternalAgent) {
       setExecutionStatus("error");
     }
-    if (role === "developer" && activeExecution) {
-      setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? "Developer session error");
+    if (caps.escalatesOnSessionError && activeExecution) {
+      setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? `${role} session error`);
+      const typedRole = role as AgentIdentity["role"];
       recordMeeting({
         type: "escalation",
-        facilitatorRole: "developer",
-        participantRoles: ["developer", "cto", "ceo"],
-        summary: "Developer session failed and was escalated to leadership.",
+        facilitatorRole: typedRole,
+        participantRoles: [typedRole, "cto", "ceo"],
+        summary: `${role} session failed and was escalated to leadership.`,
         agenda: [
           {
-            topic: "Developer runtime failure",
+            topic: `${role} runtime failure`,
             type: "blocker",
-            content: props.error?.message ?? "Developer session error",
-            raisedByRole: "developer",
+            content: props.error?.message ?? `${role} session error`,
+            raisedByRole: typedRole,
             relatedTaskId: activeExecution.buildTaskId,
           },
         ],
         decisions: [
           {
-            description: "Leadership will review the developer runtime failure before resuming execution.",
-            decidedByRoles: ["developer", "cto", "ceo"],
+            description: `Leadership will review the ${role} runtime failure before resuming execution.`,
+            decidedByRoles: [typedRole, "cto", "ceo"],
             impactIds: [activeExecution.buildTaskId],
           },
         ],
@@ -343,7 +352,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
     }
     if (!isInternalAgent) {
       emitEmployeeActivity(role, "error", props.error?.message ?? "Session error", {
-        taskId: role === "developer" ? activeExecution?.buildTaskId ?? null : null,
+        taskId: caps.ownsProductWorkspace ? activeExecution?.buildTaskId ?? null : null,
       });
     }
   }
