@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getSnapshot } from "../../persistence/store.js";
 import { cpGetBeatHistory } from "../../persistence/control-plane.js";
+import { recordBeatActivity } from "../../heartbeats/watchdog.js";
 import { getAgentByRole } from "@arceus/task-engine";
 import { success, failure } from "./envelope.js";
 
@@ -48,4 +49,29 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
 
     reply.code(200).send(success(`Last ${progressNotes.length} beat(s) for ${role}.`, { notes: progressNotes }));
   });
+
+  /**
+   * POST /api/internal/v1/beats/:beatId/watchdog-reset
+   *
+   * Bumps the in-memory `lastActivityAt` timestamp for a beat. Called by the
+   * OpenCode plugin's PostToolUse hook so multi-tool beats don't trip the
+   * watchdog while making genuine forward progress. Fire-and-forget from the
+   * caller's perspective — returns a tiny envelope and never errors on a
+   * missing beat.
+   */
+  app.post<{ Params: { beatId: string } }>(
+    `${BEATS_BASE}/:beatId/watchdog-reset`,
+    async (req, reply) => {
+      const { beatId } = req.params;
+      if (!beatId) {
+        reply.code(400).send(failure("beatId is required.", "validation", "never", "payload_fixed"));
+        return;
+      }
+      const ts = recordBeatActivity(beatId);
+      reply.code(200).send(success("Watchdog reset.", {
+        beatId,
+        lastActivityAt: new Date(ts).toISOString(),
+      }));
+    },
+  );
 }

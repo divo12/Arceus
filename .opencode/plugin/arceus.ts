@@ -117,6 +117,30 @@ export const ArceusPlugin: Plugin = async () => {
     await refreshManifest();
   };
 
+  const lastWatchdogResetByBeat = new Map<string, number>();
+  const WATCHDOG_DEBOUNCE_MS = 1000;
+
+  const postWatchdogReset = (beatId: string): void => {
+    const api = process.env.ARCEUS_API;
+    const token = process.env.ARCEUS_TOKEN;
+    if (!api || !token || !beatId) return;
+
+    const last = lastWatchdogResetByBeat.get(beatId) ?? 0;
+    const now = Date.now();
+    if (now - last < WATCHDOG_DEBOUNCE_MS) return;
+    lastWatchdogResetByBeat.set(beatId, now);
+
+    void fetch(`${api}/api/internal/v1/beats/${beatId}/watchdog-reset`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+    }).catch(() => {
+      // Fire-and-forget — watchdog reset failure must not affect the beat.
+    });
+  };
+
   const postSkillUsage = (entry: SkillManifestEntry, beatId: string): void => {
     const api = process.env.ARCEUS_API;
     const token = process.env.ARCEUS_TOKEN;
@@ -190,6 +214,11 @@ export const ArceusPlugin: Plugin = async () => {
         const key = keyOf({ tool: input.tool, cause: envelope.cause });
         circuitTally.set(key, (circuitTally.get(key) ?? 0) + 1);
       }
+
+      // Beat watchdog reset — bump lastActivityAt so multi-tool beats don't
+      // false-fire the watchdog. Debounced to 1×/sec per beat in the plugin.
+      const wctx = await ensureCtx(input.sessionID);
+      if (wctx?.beatId) postWatchdogReset(wctx.beatId);
 
       // Skill-usage back-channel: when the agent invokes OpenCode's built-in
       // `skill` tool, record the hit against the SkillArtifact registry via

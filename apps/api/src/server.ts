@@ -26,6 +26,7 @@ import { cpLoadAgentContext, cpApplyMutations, cpCommitBeatRecord, cpGetSnapshot
 import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./infra/azure-openai.js";
 import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";
 import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit-ledger.js";
+import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
 import { seedRegistry } from "./governance/service-registry.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
 import { executeBeatTask } from "./heartbeats/beat-executor.js";
@@ -153,13 +154,7 @@ const meetingPipeline = new MeetingPipeline({
           ? agentTasks.map((t) => `- [${t.status}] ${t.title}`).join("\n")
           : "No tasks assigned.";
 
-        const prompt = [
-          `You are contributing to a ${meeting.type.replace(/_/g, " ")} meeting: "${meeting.title}".`,
-          "Provide a concise status update. Respond with JSON: { whatIDid, whatImDoing, blockers, learnings, questionsForTeam }",
-          "",
-          "Your current tasks:",
-          taskSummary,
-        ].join("\n");
+        const prompt = buildContributionPrompt(meeting, taskSummary);
 
         const output = await runPromptText(agent.role, session.sessionId, soul.systemPrompt, prompt);
         const jsonMatch = output.match(/\{[\s\S]*\}/);
