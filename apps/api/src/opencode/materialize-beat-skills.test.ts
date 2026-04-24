@@ -31,6 +31,12 @@ import {
   renderSkillMd,
   slugify,
 } from "./materialize-beat-skills.js";
+import {
+  recordBeatSkillUsage,
+  getBeatSkillUsage,
+  clearBeatSkillUsage,
+  __resetBeatSkillUsageForTest,
+} from "../routes/internal-telemetry.routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -286,4 +292,83 @@ test("recordSkillUsage + updateSuccessRate wire into registry correctly", () => 
   updateSuccessRate(skill.id, 0);  // outcome=fail
   const afterFail = getSkillById(skill.id)!;
   assert.ok(afterFail.successRate < afterPass.successRate, "success rate must fall on fail");
+});
+
+// ── Per-beat tally + round-trip (Spec 23 Pass 1) ─────────
+
+test("recordBeatSkillUsage tallies skills per beat and dedupes", () => {
+  __resetBeatSkillUsageForTest();
+  const beatId = "beat_pass1_a";
+  recordBeatSkillUsage(beatId, "skill_x");
+  recordBeatSkillUsage(beatId, "skill_y");
+  recordBeatSkillUsage(beatId, "skill_x"); // duplicate
+
+  const used = getBeatSkillUsage(beatId);
+  assert.deepEqual(used.sort(), ["skill_x", "skill_y"]);
+});
+
+test("getBeatSkillUsage isolates beats from each other", () => {
+  __resetBeatSkillUsageForTest();
+  recordBeatSkillUsage("beat_a", "skill_1");
+  recordBeatSkillUsage("beat_b", "skill_2");
+
+  assert.deepEqual(getBeatSkillUsage("beat_a"), ["skill_1"]);
+  assert.deepEqual(getBeatSkillUsage("beat_b"), ["skill_2"]);
+  assert.deepEqual(getBeatSkillUsage("beat_unknown"), []);
+});
+
+test("clearBeatSkillUsage drops the per-beat entry", () => {
+  __resetBeatSkillUsageForTest();
+  recordBeatSkillUsage("beat_clear", "skill_z");
+  assert.deepEqual(getBeatSkillUsage("beat_clear"), ["skill_z"]);
+
+  clearBeatSkillUsage("beat_clear");
+  assert.deepEqual(getBeatSkillUsage("beat_clear"), []);
+});
+
+test("beat-end round-trip: tally → updateSuccessRate(pass) raises EMA for every used skill", () => {
+  setup();
+  __resetBeatSkillUsageForTest();
+  seedExistingSkillsDetailed(TEST_COMPANY, SEED_DIR);
+
+  const skills = getAllSkills(TEST_COMPANY).slice(0, 2);
+  assert.ok(skills.length === 2, "need at least 2 seed skills");
+  const beatId = "beat_roundtrip_pass";
+  const baseline = skills.map((s) => ({ id: s.id, rate: s.successRate }));
+
+  // Plugin records each skill the agent loaded during the beat.
+  for (const s of skills) recordBeatSkillUsage(beatId, s.id);
+
+  // Mirror runBeat finalisation: drain tally → updateSuccessRate(verdict).
+  const used = getBeatSkillUsage(beatId);
+  assert.equal(used.length, 2);
+  for (const skillId of used) updateSuccessRate(skillId, 1);
+  clearBeatSkillUsage(beatId);
+
+  for (const { id, rate } of baseline) {
+    const after = getSkillById(id)!;
+    assert.ok(after.successRate > rate, `${after.name} EMA must rise on pass`);
+  }
+  assert.deepEqual(getBeatSkillUsage(beatId), [], "tally must be cleared");
+});
+
+test("beat-end round-trip: tally → updateSuccessRate(fail) lowers EMA for every used skill", () => {
+  setup();
+  __resetBeatSkillUsageForTest();
+  seedExistingSkillsDetailed(TEST_COMPANY, SEED_DIR);
+
+  const skill = getAllSkills(TEST_COMPANY)[0]!;
+  // Push EMA up first so a fail has somewhere to drop from.
+  updateSuccessRate(skill.id, 1);
+  updateSuccessRate(skill.id, 1);
+  const beforeRate = getSkillById(skill.id)!.successRate;
+
+  const beatId = "beat_roundtrip_fail";
+  recordBeatSkillUsage(beatId, skill.id);
+
+  for (const skillId of getBeatSkillUsage(beatId)) updateSuccessRate(skillId, 0);
+  clearBeatSkillUsage(beatId);
+
+  const afterRate = getSkillById(skill.id)!.successRate;
+  assert.ok(afterRate < beforeRate, `${skill.name} EMA must drop on fail`);
 });

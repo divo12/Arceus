@@ -12,7 +12,6 @@ import { agentSessions, pendingPromptCompletions, type AgentSessionState } from 
 import { updateAgentSessionState } from "../agents/sessions.js";
 import { formatHippocampusContext } from "../memory/operations.js";
 import { hippocampus } from "../memory/extractors.js";
-import { buildSkillSection } from "../skills/catalog.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent session management
@@ -179,11 +178,8 @@ export async function runPromptText(
   systemPrompt: string,
   text: string,
   tools?: Record<string, boolean>,
-  matchedSkillIds?: string[],
 ) {
   const deployment = ensureDeployment("workerDeployment");
-
-  const skillSection = buildSkillSection(role, matchedSkillIds);
 
   let memoryBlock = "";
   let memoryCount = 0;
@@ -203,13 +199,11 @@ export async function runPromptText(
     emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }
 
-  const enrichedSystemPrompt = [systemPrompt, skillSection, memoryBlock].filter(Boolean).join("\n");
+  const enrichedSystemPrompt = [systemPrompt, memoryBlock].filter(Boolean).join("\n");
 
-  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skills=${skillSection.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
+  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
     detail: {
       systemPromptLen: systemPrompt.length,
-      skillSectionLen: skillSection.length,
-      matchedSkillCount: matchedSkillIds?.length ?? 0,
       memoryBlockLen: memoryBlock.length,
       memoryCount,
       habitCount,
