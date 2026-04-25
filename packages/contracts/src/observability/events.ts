@@ -10,6 +10,7 @@
  */
 import { z } from "zod";
 import { roleTypeSchema } from "../agents.js";
+import { auditCategorySchema, auditSeveritySchema } from "../events.js";
 
 // ── Shared primitives ─────────────────────────────────────────
 const tsField = z.number().int().nonnegative(); // epoch ms
@@ -220,6 +221,40 @@ export const errorSchema = z.object({
   ts: tsField,
 });
 
+/**
+ * Legacy audit-ledger compatibility variant.
+ *
+ * The original `audit-ledger.ts` writer (used in 10+ places across the API for
+ * agent_action / task_lifecycle / system / etc.) predates spec 32's typed
+ * event union. Rather than migrate every call site, the audit-ledger flush
+ * re-emits its buffer through `logEvent` using this variant — single
+ * backend, single source of truth, no call-site churn. New code should
+ * prefer the typed variants above; this is the escape hatch for legacy
+ * free-form data.
+ *
+ * Category, severity, and role reuse existing schemas verbatim — no
+ * duplicated string unions, no coercion. A legacy AuditEvent passes
+ * through with `agentRole` validated via `roleTypeSchema.safeParse` at
+ * the call site (legacy stored it as free-form string, our union demands
+ * a typed role).
+ */
+export const auditSchema = z.object({
+  event: z.literal("audit"),
+  companyId: companyIdField,
+  category: auditCategorySchema,
+  severity: auditSeveritySchema,
+  eventType: z.string(),
+  summary: z.string(),
+  agentRole: roleTypeSchema.nullable(),
+  agentId: z.string().nullable(),
+  beatId: beatIdField.nullable(),
+  detail: z.unknown().nullable(),
+  correlationId: z.string().nullable(),
+  causationId: z.string().nullable(),
+  sequence: z.number().int().nonnegative(),
+  ts: tsField,
+});
+
 // ── Union ─────────────────────────────────────────────────────
 
 export const arceusEventSchema = z.discriminatedUnion("event", [
@@ -246,6 +281,7 @@ export const arceusEventSchema = z.discriminatedUnion("event", [
   permissionRepliedSchema,
   agentReasoningSchema,
   errorSchema,
+  auditSchema,
 ]);
 
 export type ArceusEvent = z.infer<typeof arceusEventSchema>;

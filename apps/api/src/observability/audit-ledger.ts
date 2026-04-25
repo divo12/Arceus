@@ -11,9 +11,14 @@
 
 import { randomUUID } from "node:crypto";
 import type { AuditCategory, AuditSeverity, AuditEvent } from "@arceus/contracts";
-import { isDatabaseConfigured, getDb } from "@arceus/db";
-import { auditEventsTable } from "@arceus/db";
+import { observability, roleTypeSchema, type RoleType } from "@arceus/contracts";
 import { auditConfig } from "../config/audit.js";
+
+// Spec 32 Phase 5 (Option B): the legacy `auditEventsTable` writer was retired.
+// flushToObservability re-emits each buffered AuditEvent through
+// observability.logEvent using the `audit` variant. Single backend; routed
+// through pino + langfuseSink + activityLogSink (Phase 5) like every other
+// ArceusEvent. The `hippocampus.audit_events` table is no longer written to.
 
 // ── Severity ordering (for filtering) ──────────────────────
 
@@ -49,67 +54,54 @@ function broadcast(event: AuditEvent) {
   }
 }
 
-// ── DB flush queue ─────────────────────────────────────────
+// ── Flush queue → observability sink ───────────────────────
 
 let pendingFlush: AuditEvent[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
-let consecutiveDbFailures = 0;
-const MAX_DB_FAILURES = 3;
-let dbFlushDisabled = false;
 
-async function flushToDb() {
+/**
+ * Coerce the legacy free-form `agentRole: string | null` into a typed
+ * `RoleType | null`. Anything that isn't a real role becomes null (system
+ * events, e.g. `_system` startup notices, have no role).
+ */
+function toRoleType(role: string | null | undefined): RoleType | null {
+  if (!role) return null;
+  const parsed = roleTypeSchema.safeParse(role);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Drain the pending buffer through observability.logEvent. The legacy
+ * `hippocampus.audit_events` writer is gone — pino + Langfuse + the Phase 5
+ * activity_log sink decide where data actually lands. logEvent already
+ * swallows sink errors, so this never throws.
+ */
+function flushToObservability(): void {
   if (pendingFlush.length === 0) return;
-  if (!auditConfig.dbEnabled || !isDatabaseConfigured()) {
-    // DB not configured — silently discard pending writes (events live in memory)
-    pendingFlush.length = 0;
-    return;
-  }
-  if (dbFlushDisabled) return;
-
   const batch = pendingFlush.splice(0, auditConfig.dbFlushBatchSize);
-  try {
-    const db = getDb();
-    await db.insert(auditEventsTable).values(
-      batch.map((e) => ({
-        id: e.id,
-        companyId: e.companyId,
-        sequence: e.sequence,
-        category: e.category,
-        severity: e.severity,
-        eventType: e.eventType,
-        agentId: e.agentId,
-        agentRole: e.agentRole,
-        summary: e.summary,
-        detail: e.detail,
-        correlationId: e.correlationId,
-        causationId: e.causationId,
-        beatId: e.beatId,
-        occurredAt: new Date(e.occurredAt),
-      }))
-    );
-    // Reset failure counter on success
-    if (consecutiveDbFailures > 0) {
-      console.log("[AUDIT] DB flush recovered after", consecutiveDbFailures, "failures");
-      consecutiveDbFailures = 0;
-    }
-  } catch (err) {
-    consecutiveDbFailures++;
-    if (consecutiveDbFailures >= MAX_DB_FAILURES) {
-      // Stop retrying — events are safe in the in-memory ring buffer
-      dbFlushDisabled = true;
-      pendingFlush.length = 0; // discard pending queue
-      console.warn(`[AUDIT] DB flush disabled after ${MAX_DB_FAILURES} consecutive failures. Events remain in memory. Last error: ${err instanceof Error ? err.message : err}`);
-    } else {
-      // Retry next interval — put batch back
-      console.warn(`[AUDIT] DB flush failed (attempt ${consecutiveDbFailures}/${MAX_DB_FAILURES}), will retry: ${err instanceof Error ? err.message : err}`);
-      pendingFlush.unshift(...batch);
-    }
+  for (const e of batch) {
+    observability.logEvent({
+      event: "audit",
+      companyId: e.companyId,
+      category: e.category,
+      severity: e.severity,
+      eventType: e.eventType,
+      summary: e.summary,
+      agentRole: toRoleType(e.agentRole),
+      agentId: e.agentId,
+      beatId: e.beatId,
+      detail: e.detail,
+      correlationId: e.correlationId,
+      causationId: e.causationId,
+      sequence: e.sequence,
+      ts: Date.parse(e.occurredAt),
+    });
   }
 }
 
 function startFlushTimer() {
   if (flushTimer || auditConfig.dbFlushIntervalMs <= 0) return;
-  flushTimer = setInterval(() => { flushToDb(); }, auditConfig.dbFlushIntervalMs);
+  flushTimer = setInterval(() => flushToObservability(), auditConfig.dbFlushIntervalMs);
 }
 
 function stopFlushTimer() {
@@ -278,9 +270,7 @@ export function getAuditStats() {
   return {
     bufferSize: buffer.length,
     bufferCapacity: maxBuffer,
-    pendingDbFlush: pendingFlush.length,
-    dbEnabled: auditConfig.dbEnabled && isDatabaseConfigured() && !dbFlushDisabled,
-    dbFlushDisabled,
+    pendingFlush: pendingFlush.length,
     sseSubscribers: subscribers.size,
     sequenceCounters: Object.fromEntries(sequenceCounters),
   };
@@ -289,18 +279,17 @@ export function getAuditStats() {
 /** Drain all pending writes and stop timers. Call on shutdown. */
 export async function drainAuditLedger() {
   stopFlushTimer();
-  await flushToDb();
+  flushToObservability();
 }
 
-/** Start the periodic DB flush. Call on server startup. */
-/** Start the periodic DB flush. Call on server startup. */
+/** Start the periodic flush. Call on server startup. */
 export function startAuditLedger() {
   startFlushTimer();
   audit({
     companyId: "_system",
     category: "system",
     eventType: "audit_ledger_started",
-    summary: `Audit ledger started (buffer=${maxBuffer}, dbFlush=${auditConfig.dbFlushIntervalMs}ms, db=${auditConfig.dbEnabled && isDatabaseConfigured() ? "ON" : "OFF"})`,
+    summary: `Audit ledger started (buffer=${maxBuffer}, flushInterval=${auditConfig.dbFlushIntervalMs}ms, sink=observability)`,
   });
 }
 
