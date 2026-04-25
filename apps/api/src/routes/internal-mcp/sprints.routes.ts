@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { z, ZodError, type ZodSchema } from "zod";
+import { z, ZodError, type ZodTypeAny } from "zod";
 import { createSprintWithTasks } from "../../sprints/proposals.js";
 import { getSnapshot } from "../../persistence/store.js";
 import { observability } from "@arceus/contracts";
@@ -27,7 +27,7 @@ const sendValidation = (reply: FastifyReply, err: ZodError): void => {
   });
 };
 
-const parseOrFail = <T>(schema: ZodSchema<T>, body: unknown, reply: FastifyReply): T | null => {
+const parseOrFail = <S extends ZodTypeAny>(schema: S, body: unknown, reply: FastifyReply): z.output<S> | null => {
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     sendValidation(reply, parsed.error);
