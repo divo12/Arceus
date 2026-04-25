@@ -80,6 +80,19 @@ export function langfuseSink(opts: LangfuseSinkOptions = {}): EventSink {
             },
             tags: ["beat", e.role],
           });
+          // Langfuse v3 UI rejects traces with zero observations as "not found".
+          // Create a beat.started event so the trace is always non-empty even
+          // when the beat does no tool work (e.g. CEO bootstrap beats).
+          trace.event({
+            name: "beat.started",
+            startTime: new Date(e.ts),
+            metadata: {
+              role: e.role,
+              sprintId: e.sprintId,
+              trustBand: e.trustBand,
+              companyId: e.companyId,
+            },
+          });
           beatTraces.set(e.beatId, trace);
           toolStacks.set(e.beatId, []);
           return;
@@ -96,6 +109,19 @@ export function langfuseSink(opts: LangfuseSinkOptions = {}): EventSink {
           }
           trace.update({
             output: {
+              outcome: e.verdictOutcome,
+              score: e.verdictScore,
+              durationMs: e.durationMs,
+            },
+          });
+          // Mirror beat.started: emit a closing event so the trace's observation
+          // list always reflects the lifecycle, not just internal state.
+          trace.event({
+            name: "beat.completed",
+            startTime: new Date(e.ts),
+            level: e.verdictOutcome === "fail" ? "ERROR" : "DEFAULT",
+            metadata: {
+              role: e.role,
               outcome: e.verdictOutcome,
               score: e.verdictScore,
               durationMs: e.durationMs,
