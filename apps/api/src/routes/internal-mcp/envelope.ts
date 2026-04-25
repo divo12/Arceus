@@ -20,7 +20,7 @@ export const success = <T>(
 export const failure = <T = unknown>(
   summary: string,
   cause: ErrorCause,
-  retry: "safe" | "unsafe" | "never",
+  retry: RetrySafety,
   stopWhen: string,
   extras?: Pick<ToolResult<T>, "nextActions">
 ): ToolResult<T> => ({
@@ -63,9 +63,14 @@ export const ERROR_CAUSES = [
   "self_target_not_allowed",
   "target_role_unknown",
   "handoff_too_large",
+  // Spec 31 Phase 3B — idempotency placeholder still mid-flight (DB-backed cache)
+  "in_flight",
 ] as const;
 
 export type ErrorCause = (typeof ERROR_CAUSES)[number];
+
+/** Whether a caller can safely retry the failed request. */
+export type RetrySafety = "safe" | "unsafe" | "never";
 
 export const causeToStatus: Record<ErrorCause, number> = {
   validation: 422,
@@ -97,4 +102,5 @@ export const causeToStatus: Record<ErrorCause, number> = {
   self_target_not_allowed: 422,
   target_role_unknown: 422,
   handoff_too_large: 413,
+  in_flight: 409,
 };

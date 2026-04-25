@@ -4,7 +4,7 @@ type McpHook = (req: FastifyRequest, reply: FastifyReply) => Promise<void | Fast
 import { randomUUID } from "node:crypto";
 import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
 import { resolveBearerToken } from "../../auth/bearer.js";
-import { hashBody, lookupIdempotency, rememberIdempotency } from "./idempotency.js";
+import { hashBody, lookupIdempotency, rememberIdempotency, releaseIdempotency, IDEMPOTENCY_FAILURES } from "./idempotency.js";
 import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
 import { observability, type RoleType } from "@arceus/contracts";
 import { routeToTool } from "./route-to-tool.js";
@@ -134,32 +134,44 @@ export const mcpIdempotencyReplay: McpHook = async (req, reply) => {
   const mcp = req.mcp;
   if (!mcp?.idempotencyKey || req.method === "GET") return;
 
-  const lookup = lookupIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey, req.body);
-  if (lookup.kind === "miss") return;
+  const lookup = await lookupIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey, req.body);
+  if (lookup.kind === "miss") return; // we now hold a pending placeholder
 
-  if (lookup.kind === "conflict") {
-    reply.code(409).send(failure(
-      "Idempotency-Key replayed with a different body.",
-      "conflict",
-      "never",
-      "generate_new_key"
-    ));
+  if (lookup.kind === "fail") {
+    const spec = IDEMPOTENCY_FAILURES[lookup.reason];
+    for (const [name, value] of Object.entries(spec.extraHeaders ?? {})) {
+      void reply.header(name, value);
+    }
+    reply.code(causeToStatus[spec.cause]).send(failure(spec.summary, spec.cause, spec.retry, spec.stopWhen));
     return reply;
   }
 
+  emitIdempotencyReplay(mcp.tool ?? "unknown", mcp.idempotencyKey);
   if (lookup.locationHeader) void reply.header("location", lookup.locationHeader);
   reply.code(lookup.status).send(lookup.body);
   return reply;
 };
 
+/**
+ * Persist a successful response to the idempotency table so subsequent retries
+ * with the same key replay it. Fire-and-forget: the row already exists as a
+ * pending placeholder from `mcpIdempotencyReplay`; we're updating it. Errors
+ * from the DB write are swallowed (the response has already been sent).
+ */
 export const cacheSuccessfulResponse = (
   req: FastifyRequest,
   response: { status: number; body: unknown; locationHeader?: string | null }
 ): void => {
   const mcp = req.mcp;
   if (!mcp?.idempotencyKey || req.method === "GET") return;
-  if (response.status >= 400) return;
-  rememberIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey, req.body, response);
+  if (response.status >= 400) {
+    // Failed handler — drop the pending placeholder so the next retry
+    // (same content-addressed key) can try fresh instead of being blocked
+    // by `in_flight` for the 5-minute pending TTL.
+    void releaseIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey).catch(() => {});
+    return;
+  }
+  void rememberIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey, req.body, response).catch(() => {});
 };
 
 // ── Spec 32 — emit tool.invoked / tool.result / tool.denied ──────────────

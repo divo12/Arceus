@@ -4,8 +4,14 @@ import type { DbClient } from "./_helpers.js";
 
 export type IdempotencyKey = typeof idempotencyKeys.$inferSelect;
 
-/** 24 hour default TTL for stored responses. */
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * TTL split: pending placeholders self-evict in 5 minutes so failed requests
+ * don't block content-addressed retries (spec 25 §3.4 — keys are derived from
+ * (beatId, op, body), so a retry will produce the same key). Once finalized,
+ * the row holds the response for 24h.
+ */
+const PENDING_TTL_MS = 5 * 60 * 1000;
+const FINALIZED_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Attempt to reserve an idempotency key. Returns the stored response if the key was already
@@ -25,7 +31,7 @@ export async function reserveOrGetStored(
       requestHash,
       response: { pending: true },
       statusCode: 0,
-      expiresAt: new Date(Date.now() + DEFAULT_TTL_MS),
+      expiresAt: new Date(Date.now() + PENDING_TTL_MS),
     })
     .onConflictDoNothing()
     .returning();
@@ -49,8 +55,16 @@ export async function finalizeStored(
 ): Promise<void> {
   await db
     .update(idempotencyKeys)
-    .set({ response, statusCode })
+    .set({ response, statusCode, expiresAt: new Date(Date.now() + FINALIZED_TTL_MS) })
     .where(eq(idempotencyKeys.key, key));
+}
+
+/**
+ * Release a pending placeholder (route handler errored or returned >= 400).
+ * Lets the next retry try fresh instead of waiting for PENDING_TTL_MS.
+ */
+export async function releaseStored(db: DbClient, key: string): Promise<void> {
+  await db.delete(idempotencyKeys).where(eq(idempotencyKeys.key, key));
 }
 
 /** TTL sweep — called from a cron-style worker to prune expired keys. */

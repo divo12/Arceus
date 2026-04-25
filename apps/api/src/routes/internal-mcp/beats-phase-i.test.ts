@@ -27,7 +27,7 @@ const headers = () => ({
 });
 
 test("Phase I — watchdog-reset bumps lastActivityAt for a beat", async () => {
-  resetIdempotency();
+  await resetIdempotency();
   resetWatchdogForTests();
   bootstrapCompany({ companyName: "C", boardOwner: "ceo", idea: "i", budgetCents: 100 } as never);
 
@@ -52,7 +52,7 @@ test("Phase I — watchdog-reset bumps lastActivityAt for a beat", async () => {
 });
 
 test("Phase I — watchdog-reset is idempotent (always 200, always bumps)", async () => {
-  resetIdempotency();
+  await resetIdempotency();
   resetWatchdogForTests();
   bootstrapCompany({ companyName: "C", boardOwner: "ceo", idea: "i", budgetCents: 100 } as never);
   const app = await buildApp();

@@ -176,3 +176,161 @@ describe("CRUD basics", () => {
     expect(blocked?.feedback).toBe("waiting on design");
   });
 });
+
+// ── Phase 3B: hydration helpers ──────────────────────────────
+
+import type { Task as ContractTask } from "@arceus/contracts";
+import { artifacts } from "../schema/artifacts.js";
+
+function buildContractTask(overrides: Partial<ContractTask> = {}): ContractTask {
+  return {
+    id: crypto.randomUUID(),
+    companyId,
+    sprintId: null,
+    kind: "implementation",
+    title: "Round-trip test",
+    description: "A task to round-trip through the helpers",
+    problemStatement: "Prove rowToTask(taskToInsert(t)) ≈ t",
+    deliverable: "A passing test",
+    definitionOfDone: ["round-trip preserves all fields"],
+    status: "planned",
+    priority: "medium",
+    assignedRole: "developer",
+    assignedAgentId: null,
+    parentTaskId: null,
+    dependsOnTaskIds: [],
+    childTaskIds: [],
+    artifactIds: [],
+    localPreviewUrl: null,
+    plannerState: {
+      objective: "round-trip",
+      planSteps: ["step 1"],
+      selectedTools: ["edit"],
+      currentStepIndex: 0,
+    },
+    executorState: {
+      currentCommand: "noop",
+      commandsExecuted: ["echo hi"],
+      results: ["hi"],
+    },
+    verifierState: {
+      isVerified: false,
+      feedback: null,
+      verifiedByAgentId: null,
+    },
+    costCents: 42,
+    iterationCount: 1,
+    maxIterations: 5,
+    incomingArtifactIds: ["art_seed"],
+    ...overrides,
+  };
+}
+
+describe("hydration round-trip (Phase 3B)", () => {
+  test("taskToInsert → INSERT → findByIdHydrated returns equivalent task", async () => {
+    const original = buildContractTask();
+    await db.insert(tasks).values(tasksRepo.taskToInsert(original));
+
+    const hydrated = await tasksRepo.findByIdHydrated(db, original.id);
+    expect(hydrated).not.toBeNull();
+    if (!hydrated) return;
+
+    expect(hydrated.id).toBe(original.id);
+    expect(hydrated.title).toBe(original.title);
+    expect(hydrated.problemStatement).toBe(original.problemStatement);
+    expect(hydrated.definitionOfDone).toEqual(original.definitionOfDone);
+    expect(hydrated.costCents).toBe(original.costCents);
+    expect(hydrated.iterationCount).toBe(original.iterationCount);
+    expect(hydrated.maxIterations).toBe(original.maxIterations);
+    expect(hydrated.plannerState).toEqual(original.plannerState);
+    expect(hydrated.executorState).toEqual(original.executorState);
+    expect(hydrated.verifierState).toEqual(original.verifierState);
+    expect(hydrated.incomingArtifactIds).toEqual(original.incomingArtifactIds);
+  });
+
+  test("rowToTask applies defaults when body is missing planner/executor/verifier", async () => {
+    // Insert raw row without using taskToInsert — body stays as the table default ({}).
+    const id = crypto.randomUUID();
+    await db.insert(tasks).values({
+      id,
+      companyId,
+      title: "Bare-bones",
+      assignedRole: "developer",
+      status: "planned",
+    });
+
+    const hydrated = await tasksRepo.findByIdHydrated(db, id);
+    expect(hydrated).not.toBeNull();
+    if (!hydrated) return;
+    expect(hydrated.plannerState.planSteps).toEqual([]);
+    expect(hydrated.executorState.commandsExecuted).toEqual([]);
+    expect(hydrated.verifierState.isVerified).toBe(false);
+    expect(hydrated.incomingArtifactIds).toEqual([]);
+  });
+
+  test("findByIdHydrated returns null for missing task", async () => {
+    const hydrated = await tasksRepo.findByIdHydrated(db, crypto.randomUUID());
+    expect(hydrated).toBeNull();
+  });
+
+  test("hydrated read includes derived artifactIds + childTaskIds", async () => {
+    const parent = buildContractTask();
+    const child = buildContractTask({ parentTaskId: parent.id });
+    await db.insert(tasks).values([
+      tasksRepo.taskToInsert(parent),
+      tasksRepo.taskToInsert(child),
+    ]);
+
+    // Attach an artifact to the parent
+    const [artifact] = await db
+      .insert(artifacts)
+      .values({
+        companyId,
+        agentRole: "developer",
+        title: "Test artifact",
+        kind: "report",
+        content: "x",
+        taskId: parent.id,
+      })
+      .returning({ id: artifacts.id });
+
+    const hydrated = await tasksRepo.findByIdHydrated(db, parent.id);
+    expect(hydrated?.artifactIds).toEqual([artifact.id]);
+    expect(hydrated?.childTaskIds).toEqual([child.id]);
+  });
+
+  test("listByCompanyHydrated batches refs in O(1) extra queries", async () => {
+    const parent = buildContractTask({ title: "P" });
+    const childA = buildContractTask({ title: "A", parentTaskId: parent.id });
+    const childB = buildContractTask({ title: "B", parentTaskId: parent.id });
+    await db.insert(tasks).values([
+      tasksRepo.taskToInsert(parent),
+      tasksRepo.taskToInsert(childA),
+      tasksRepo.taskToInsert(childB),
+    ]);
+
+    const list = await tasksRepo.listByCompanyHydrated(db, companyId);
+    expect(list.length).toBe(3);
+    const parentRow = list.find((t) => t.id === parent.id);
+    expect(parentRow?.childTaskIds.sort()).toEqual([childA.id, childB.id].sort());
+    expect(parentRow?.artifactIds).toEqual([]);
+  });
+
+  test("listByRoleHydrated filters by role + statuses", async () => {
+    const dev = buildContractTask({ assignedRole: "developer", status: "planned" });
+    const tester = buildContractTask({ assignedRole: "tester", status: "planned" });
+    const completedDev = buildContractTask({ assignedRole: "developer", status: "completed" });
+    await db.insert(tasks).values([
+      tasksRepo.taskToInsert(dev),
+      tasksRepo.taskToInsert(tester),
+      tasksRepo.taskToInsert(completedDev),
+    ]);
+
+    const planned = await tasksRepo.listByRoleHydrated(db, companyId, "developer", ["planned"]);
+    expect(planned.length).toBe(1);
+    expect(planned[0].id).toBe(dev.id);
+
+    const allDev = await tasksRepo.listByRoleHydrated(db, companyId, "developer");
+    expect(allDev.length).toBe(2);
+  });
+});
