@@ -101,12 +101,23 @@ export async function runBeat(input: {
     const opencode = await getOpencode();
     const completionPromise = registerPromptCompletion(sessionId, HARD_CAP_MS);
 
+    // Vision Step 6 — pass per-beat tool allowlist so the LLM only sees
+    // function schemas it's allowed to call this beat. Mirrors the static
+    // opencode.json pattern: deny all arceus_* by default, re-enable the
+    // ones in ctx.allowedTools. Built-in tools (bash, edit, read, ...) are
+    // not listed here, so they stay enabled.
+    const toolFilter: Record<string, boolean> = { "arceus_*": false };
+    for (const name of ctx.allowedTools) {
+      toolFilter[`arceus_${name}`] = true;
+    }
+
     await opencode.client.session.prompt({
       path: { id: sessionId },
       body: {
         model: { providerID: "azure", modelID: deployment },
         agent: input.role,
         system: soul,
+        tools: toolFilter,
         parts: [{ type: "text", text: stateText }],
       } as any,
     });

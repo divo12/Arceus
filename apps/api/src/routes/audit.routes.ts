@@ -1,27 +1,16 @@
 /**
  * @module audit.routes
- * Routes for the audit ledger — event queries, stats, SSE stream, and log viewer.
+ * Routes for the audit ledger — event queries, stats, SSE stream.
+ *
+ * Note: the `/logs` HTML viewer used to live here. It moved to
+ * `inspector.routes.ts` so it sits alongside the Spec 32 event stream
+ * it actually displays.
  */
 import type { FastifyInstance } from "fastify";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { auditConfig } from "../config/audit.js";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats } from "../observability/audit-ledger.js";
 
-const __audit_dirname = dirname(fileURLToPath(import.meta.url));
-let logViewerHtml: string | null = null;
-
 export default async function auditRoutes(app: FastifyInstance) {
-  if (auditConfig.logViewerEnabled) {
-    app.get("/logs", async (_request, reply) => {
-      if (!logViewerHtml) {
-        logViewerHtml = readFileSync(join(__audit_dirname, "..", "log-viewer.html"), "utf-8");
-      }
-      reply.type("text/html").send(logViewerHtml);
-    });
-  }
-
   app.get("/api/audit/events", async (request) => {
     const query = request.query as Record<string, string>;
     return getAuditEvents({

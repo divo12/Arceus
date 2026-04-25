@@ -18,6 +18,12 @@ export interface McpRequestContext {
   /** Spec 32 — derived tool name + monotonic invoke timestamp for tool.result correlation. */
   tool?: string;
   invokedAt?: number;
+  /** Spec 32 — envelope.error.cause captured at onSend so tool.result reports the
+   * real cause (e.g. `task_not_claimable`, `deps_unmet`, `governance`) rather than
+   * a lossy HTTP-status fallback (`conflict`, `governance`). */
+  failureCause?: string;
+  failureStopWhen?: string;
+  failureDetails?: Record<string, unknown>;
 }
 
 declare module "fastify" {
@@ -177,6 +183,21 @@ export const cacheSuccessfulResponse = (
 // ── Spec 32 — emit tool.invoked / tool.result / tool.denied ──────────────
 
 /**
+ * Internal endpoints that are runtime housekeeping rather than agent "tools".
+ * Emitting tool.invoked/tool.result for these would spam the inspector and
+ * pollute beat scoring (the watchdog ping fires after every real tool call,
+ * so it would double the event volume on its own).
+ *
+ * Match against the resolved route template, e.g.
+ *   "/api/internal/v1/beats/:beatId/watchdog-reset"
+ */
+const SILENT_ROUTE_URLS = new Set<string>([
+  "/api/internal/v1/beats/:beatId/watchdog-reset",
+]);
+
+const isSilentRoute = (routeUrl: string): boolean => SILENT_ROUTE_URLS.has(routeUrl);
+
+/**
  * preHandler hook — runs after mcpRequestContext, after Fastify has resolved
  * the route template (so req.routeOptions.url is available). Emits tool.invoked
  * once per MCP request, derives a stable tool name, and stamps both onto
@@ -189,6 +210,7 @@ export const mcpEmitToolInvoked: McpHook = async (req) => {
   const mcp = req.mcp;
   if (!mcp) return;
   const routeUrl = (req.routeOptions as { url?: string } | undefined)?.url ?? req.url;
+  if (isSilentRoute(routeUrl)) return;
   const tool = routeToTool(req.method, routeUrl);
   mcp.tool = tool;
   mcp.invokedAt = Date.now();
@@ -219,10 +241,37 @@ export const mcpEmitToolResult = async (req: FastifyRequest, reply: FastifyReply
     beatId: mcp.beatId,
     tool: mcp.tool,
     ok,
-    cause: ok ? undefined : causeFromStatus(status),
+    cause: ok ? undefined : (mcp.failureCause ?? causeFromStatus(status)),
+    details: ok ? undefined : mcp.failureDetails,
     durationMs: ts - mcp.invokedAt,
     ts,
   });
+};
+
+/**
+ * onSend hook — peeks at the outgoing payload to capture the envelope's
+ * `error.cause` and `error.stopWhen` onto `req.mcp` before mcpEmitToolResult
+ * runs in onResponse. Without this, every 409 collapses to `"conflict"` and
+ * loses the distinction between `already_claimed`, `not_claimable`,
+ * `deps_unmet`, etc.
+ */
+export const mcpCapturePayloadCause = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+  payload: unknown,
+): Promise<unknown> => {
+  const mcp = req.mcp;
+  if (!mcp || reply.statusCode < 400) return payload;
+  try {
+    const obj = typeof payload === "string" ? JSON.parse(payload) : payload;
+    const err = (obj as { error?: { cause?: string; stopWhen?: string; details?: Record<string, unknown> } } | null)?.error;
+    if (err?.cause) mcp.failureCause = err.cause;
+    if (err?.stopWhen) mcp.failureStopWhen = err.stopWhen;
+    if (err?.details && typeof err.details === "object") mcp.failureDetails = err.details;
+  } catch {
+    // Payload not JSON or not an envelope — fall back to status mapping.
+  }
+  return payload;
 };
 
 /** Best-effort mapping from HTTP status back to envelope cause for tool.result. */

@@ -2,12 +2,19 @@
  * Spec 32 — Inspector portal API.
  *
  * Read-only surface over the in-process event bus:
+ *   GET /logs                         — HTML viewer (this dashboard)
  *   GET /api/inspector/events         — snapshot with optional filters
  *   GET /api/inspector/events/stream  — SSE; same filters, live tail
  *   GET /api/inspector/stats          — buffer size + capacity
  */
 import type { FastifyInstance } from "fastify";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { snapshot, subscribe, bufferStats, type SnapshotFilter } from "../observability/event-bus.js";
+
+const __inspector_dirname = dirname(fileURLToPath(import.meta.url));
+let viewerHtml: string | null = null;
 
 function parseFilter(query: Record<string, string | undefined>): SnapshotFilter {
   return {
@@ -23,6 +30,13 @@ function parseFilter(query: Record<string, string | undefined>): SnapshotFilter 
 }
 
 export default async function inspectorRoutes(app: FastifyInstance) {
+  app.get("/logs", async (_request, reply) => {
+    if (!viewerHtml) {
+      viewerHtml = readFileSync(join(__inspector_dirname, "..", "log-viewer.html"), "utf-8");
+    }
+    reply.type("text/html").send(viewerHtml);
+  });
+
   app.get("/api/inspector/stats", async () => bufferStats());
 
   app.get("/api/inspector/events", async (request) => {

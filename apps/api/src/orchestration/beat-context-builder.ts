@@ -20,6 +20,29 @@ import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
 import { productDir } from "./state.js";
 
+/**
+ * Statuses that count as "the agent has work to do this beat".
+ *
+ * Mirrors the task-status enum in `@arceus/contracts`. Matters because:
+ *   - `runBeat` skips the prompt entirely when the count is zero
+ *     (the no-work guard, see run-beat.ts).
+ *   - The state-render and procedure block surface the same list to the LLM.
+ *
+ * Excludes terminal states (`completed`, `failed`, `cancelled`) and
+ * `verifying` (work is done, awaiting QA — agent shouldn't redo it).
+ *
+ * Bug history: this used to be `["ready", "in_progress", "blocked"]` —
+ * `"ready"` isn't in the enum at all, and `"created"`/`"planned"` were
+ * missing, so freshly-spawned governance tasks (e.g. "Plan Sprint N")
+ * were invisible and the CEO would no-work-skip its own assignment.
+ */
+const OPEN_TASK_STATUSES: ReadonlyArray<Task["status"]> = [
+  "created",
+  "planned",
+  "in_progress",
+  "blocked",
+];
+
 // ── BeatContext builder ──────────────────────────────────
 
 async function computeTrustBand(_role: Role, _companyId: string): Promise<TrustBand> {
@@ -136,22 +159,25 @@ function renderCompanyState(companyId: string): string {
 export function countOpenTasksForRole(role: Role): number {
   const snapshot = getSnapshot();
   return snapshot.tasks.filter(
-    (t) => t.assignedRole === role && ["ready", "in_progress", "blocked"].includes(t.status),
+    (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   ).length;
 }
 
 function renderOpenTasksForRole(companyId: string, role: Role): string {
   const snapshot = getSnapshot();
   const tasks = snapshot.tasks.filter(
-    (t) => t.assignedRole === role && ["ready", "in_progress", "blocked"].includes(t.status),
+    (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
   if (tasks.length === 0) return "## Your Tasks\n\n_No open tasks._";
   const lines = ["## Your Tasks", ""];
   for (const t of tasks) {
-    const deps = t.dependsOnTaskIds?.length
-      ? ` (depends on: ${t.dependsOnTaskIds.join(", ")})`
-      : "";
-    lines.push(`- [${t.status}] **${t.title}** (${t.id})${deps}`);
+    const unmetDeps = (t.dependsOnTaskIds ?? [])
+      .map((depId) => snapshot.tasks.find((d) => d.id === depId))
+      .filter((d): d is NonNullable<typeof d> => !!d && !(["completed", "verified"] as string[]).includes(d.status));
+    const readiness = unmetDeps.length > 0
+      ? ` ⛔ NOT CLAIMABLE — waiting on: ${unmetDeps.map((d) => `"${d.title}" [${d.status}]`).join(", ")}`
+      : " ✅ claimable";
+    lines.push(`- [${t.status}] **${t.title}** (${t.id})${readiness}`);
     if (t.description) lines.push(`  ${t.description}`);
   }
   return lines.join("\n");
@@ -222,8 +248,15 @@ export function renderStateForAgent(role: Role, companyId: string): string {
 function renderBeatProcedure(companyId: string, role: Role): string {
   const snapshot = getSnapshot();
   const myTasks = snapshot.tasks.filter(
-    (t) => t.assignedRole === role && ["ready", "in_progress", "blocked"].includes(t.status),
+    (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
+  const claimable = myTasks.filter((t) => {
+    const unmet = (t.dependsOnTaskIds ?? []).filter((depId) => {
+      const dep = snapshot.tasks.find((d) => d.id === depId);
+      return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
+    });
+    return unmet.length === 0;
+  });
   if (myTasks.length === 0) {
     return [
       "## How to work this beat",
@@ -232,16 +265,38 @@ function renderBeatProcedure(companyId: string, role: Role): string {
       "Do not invent work. Do not create placeholder or no-op artifacts.",
     ].join("\n");
   }
+  if (claimable.length === 0) {
+    return [
+      "## How to work this beat",
+      "",
+      "You have open tasks but **none are claimable** — every one is waiting on an upstream dependency (see ⛔ markers in `## Your Tasks`).",
+      "End your turn now. Do not call `task_claim` (it will return `deps_unmet`). Do not invent work.",
+    ].join("\n");
+  }
   return [
-    "## How to work this beat",
+    "## How to work this beat — Task Lifecycle Contract",
     "",
-    "1. Pick **one** task ID from the list above.",
-    "2. Call `task_claim({ taskId, reason })` first. Do not call any other mutating tool before this.",
-    "3. Do the work using your other tools (edits, builds, artifact_create, etc.).",
-    "4. When the task's definition-of-done is met, call `task_complete({ taskId, evidence })`.",
-    "5. End your turn. Do not invent extra work after `task_complete`.",
+    "This is a **strict 3-step contract**. Skipping a step or going out of order is a bug.",
     "",
-    "If no task above is workable (all blocked, missing prerequisites), end your turn without calling any tools.",
+    "**Step 1 — Claim**",
+    "- Pick **one** task ID from `## Your Tasks` that is marked ✅ claimable.",
+    "- Use the EXACT id from that list. Never invent or modify ids.",
+    "- Call `task_claim({ taskId, reason })` **before any other mutating tool**.",
+    "- If it returns `ok: false` for ANY reason (`not_found`, `wrong_role`, `deps_unmet`, `already_claimed`, `not_claimable`): **stop, end your turn**. Do not retry. Do not call other tools.",
+    "",
+    "**Step 2 — Work**",
+    "- Do the work using your other tools (edits, builds, `artifact_create`, `task_append_result`, etc.).",
+    "- Every meaningful artifact you produce should be created with `artifact_create` (it auto-attaches to the claimed task).",
+    "- Use `task_append_result` to log notes/evidence as you go.",
+    "",
+    "**Step 3 — Complete (MANDATORY)**",
+    "- When the task's definition-of-done is met, call `task_complete({ taskId, evidence })`.",
+    "- `task_complete` is what unblocks downstream tasks. **Without it, every dependent role stalls.**",
+    "- If you cannot complete the task this beat (genuinely blocked), call `task_block({ taskId, reason })` instead.",
+    "- Never end a beat with a claimed-but-not-completed task unless you called `task_block`.",
+    "",
+    "**Step 4 — End turn**",
+    "- After `task_complete` (or `task_block`), end your turn. Do not invent extra work.",
   ].join("\n");
 }
 

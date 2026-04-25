@@ -6,6 +6,7 @@ import {
   mcpIdempotencyReplay,
   mcpEmitToolInvoked,
   mcpEmitToolResult,
+  mcpCapturePayloadCause,
 } from "./middleware.js";
 import internalMcpTasksRoutes from "./tasks.routes.js";
 import internalMcpArtifactsRoutes from "./artifacts.routes.js";
@@ -37,6 +38,11 @@ export default async function internalMcpRoutes(app: FastifyInstance): Promise<v
   app.addHook("onResponse", async (req, reply) => {
     if (!req.url.startsWith("/api/internal/v1/")) return;
     await mcpEmitToolResult(req, reply);
+  });
+
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (!req.url.startsWith("/api/internal/v1/")) return payload;
+    return mcpCapturePayloadCause(req, reply, payload);
   });
 
   await app.register(internalMcpTasksRoutes);

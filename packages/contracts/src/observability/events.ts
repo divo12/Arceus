@@ -94,6 +94,7 @@ export const toolResultSchema = z.object({
   tool: toolField,
   ok: z.boolean(),
   cause: z.string().optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
   durationMs: z.number().nonnegative(),
   ts: tsField,
 });
