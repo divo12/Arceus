@@ -128,6 +128,18 @@ function renderCompanyState(companyId: string): string {
   return lines.join("\n");
 }
 
+/**
+ * Count of role-assigned tasks in workable states. Used by `runBeat` to skip
+ * the prompt entirely when an agent has nothing to do (avoids filler-work
+ * hallucination from a bored LLM).
+ */
+export function countOpenTasksForRole(role: Role): number {
+  const snapshot = getSnapshot();
+  return snapshot.tasks.filter(
+    (t) => t.assignedRole === role && ["ready", "in_progress", "blocked"].includes(t.status),
+  ).length;
+}
+
 function renderOpenTasksForRole(companyId: string, role: Role): string {
   const snapshot = getSnapshot();
   const tasks = snapshot.tasks.filter(
@@ -198,8 +210,39 @@ export function renderStateForAgent(role: Role, companyId: string): string {
     renderRecentArtifacts(companyId, 10),
     renderRoleMemory(role, companyId),
     renderLastProgressNotes(role, companyId, 5),
+    renderBeatProcedure(companyId, role),
   ];
   return sections.join("\n\n---\n\n");
+}
+
+/**
+ * Tells the agent the workflow contract for this beat: claim → work → complete.
+ * Without this block agents invent filler work to fill the prompt window.
+ */
+function renderBeatProcedure(companyId: string, role: Role): string {
+  const snapshot = getSnapshot();
+  const myTasks = snapshot.tasks.filter(
+    (t) => t.assignedRole === role && ["ready", "in_progress", "blocked"].includes(t.status),
+  );
+  if (myTasks.length === 0) {
+    return [
+      "## How to work this beat",
+      "",
+      "You have **no open tasks**. End your turn now. Do not call any tools.",
+      "Do not invent work. Do not create placeholder or no-op artifacts.",
+    ].join("\n");
+  }
+  return [
+    "## How to work this beat",
+    "",
+    "1. Pick **one** task ID from the list above.",
+    "2. Call `task_claim({ taskId, reason })` first. Do not call any other mutating tool before this.",
+    "3. Do the work using your other tools (edits, builds, artifact_create, etc.).",
+    "4. When the task's definition-of-done is met, call `task_complete({ taskId, evidence })`.",
+    "5. End your turn. Do not invent extra work after `task_complete`.",
+    "",
+    "If no task above is workable (all blocked, missing prerequisites), end your turn without calling any tools.",
+  ].join("\n");
 }
 
 // ── Task-specific context ────────────────────────────────

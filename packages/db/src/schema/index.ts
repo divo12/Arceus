@@ -33,7 +33,6 @@ export { primingStates } from "./priming_states.js";
 
 export { activityLog } from "./activity_log.js";
 export { costEvents } from "./cost_events.js";
-export { serviceRegistry } from "./service_registry.js";
 
 export { sprintSnapshots } from "./sprint_snapshots.js";
 export { assets } from "./assets.js";

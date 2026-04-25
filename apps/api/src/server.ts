@@ -61,7 +61,6 @@ import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./in
 import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";
 import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit-ledger.js";
 import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
-import { seedRegistry } from "./governance/service-registry.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
 import { runBeat } from "./orchestration/run-beat.js";
 import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
@@ -94,7 +93,6 @@ import {
   artifactsRoutes,
   debugRoutes,
   inspectorRoutes,
-  serviceRegistryRoutes,
   hippocampusRoutes,
   skillsRoutes,
   internalMcpRoutes,
@@ -377,13 +375,6 @@ setMeetingScheduler(meetingScheduler);
   const snap = getSnapshot();
   console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
   if (snap.company.id !== "company_pending") {
-    try {
-      const { seeded, skipped } = await seedRegistry(snap.company.id);
-      console.log(`[STARTUP] Re-seeded service registry: ${seeded} tools seeded, ${skipped} skipped`);
-    } catch (err) {
-      console.warn("[STARTUP] Registry re-seed failed:", err instanceof Error ? err.message : err);
-    }
-
     // Auto-resume heartbeat if there's an active sprint (executing or reviewing)
     const activeSprint = snap.sprints.find(
       (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),
@@ -397,8 +388,6 @@ setMeetingScheduler(meetingScheduler);
       }
       console.log(`[STARTUP] Auto-resumed heartbeat + meeting scheduler — Sprint ${activeSprint.number} is ${activeSprint.status}`);
     }
-  } else {
-    console.log("[STARTUP] No company hydrated — skipping registry seed");
   }
 }
 
@@ -438,7 +427,6 @@ await app.register(previewRoutes);
 await app.register(artifactsRoutes);
 await app.register(debugRoutes);
 await app.register(inspectorRoutes);
-await app.register(serviceRegistryRoutes);
 await app.register(hippocampusRoutes);
 await app.register(skillsRoutes);
 await app.register(internalMcpRoutes);

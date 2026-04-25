@@ -28,7 +28,6 @@ type ControlPlaneStatus = {
   components: {
     stateStore: { status: string; dirty: boolean; mutationsSinceHydrate: number };
     auditLedger: { status: string };
-    serviceRegistry: { status: string; toolCount: number };
     executionSubstrate: { status: string };
   };
 };

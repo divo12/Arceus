@@ -9,7 +9,6 @@ import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "../or
 import { resetOrchestratorState, getExecutionStatus } from "../orchestration/state.js";
 import { clearAllSessionContexts } from "../orchestration/session-context.js";
 import { audit } from "../observability/audit-ledger.js";
-import { seedRegistry, clearRegistry } from "../governance/service-registry.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
@@ -41,7 +40,6 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
     const body = bootstrapSchema.parse(request.body);
     const { snapshot, warnings } = await bootstrapCompanyWithWorkspace(body);
     audit({ companyId: snapshot.company.id, category: "system", eventType: "company_bootstrapped", summary: `Company "${body.companyName}" bootstrapped by ${body.boardOwner}`, detail: { idea: body.idea, budgetCents: body.budgetCents, warnings } });
-    await seedRegistry(snapshot.company.id);
     if (warnings.length > 0) {
       request.log?.warn({ warnings }, "Workspace provision completed with warnings");
     }
@@ -85,7 +83,6 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
       }
 
       resetEmployeeActivityLog();
-      clearRegistry(companyId);
       clearAllSessionContexts();
       resetCeoSession();
       await resetOpencodeConnection();

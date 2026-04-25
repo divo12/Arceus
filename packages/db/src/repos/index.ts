@@ -30,7 +30,6 @@ export * as primingStates from "./priming_states.js";
 
 export * as activityLog from "./activity_log.js";
 export * as costEvents from "./cost_events.js";
-export * as serviceRegistry from "./service_registry.js";
 
 export * as workspaces from "./workspaces.js";
 export * as sprintSnapshots from "./sprint_snapshots.js";

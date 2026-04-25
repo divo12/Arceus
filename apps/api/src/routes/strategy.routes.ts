@@ -8,7 +8,6 @@ import { getSnapshot, applyStrategy } from "../persistence/store.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitActivity } from "../observability/activity.js";
 import { strategyOutputSchema, generateStrategy } from "../agents/ceo.js";
-import { seedRegistry } from "../governance/service-registry.js";
 import { bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
@@ -80,7 +79,6 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       if (snapshot.company.id === "company_pending") {
         emitActivity("system", "transition", "Bootstrapping company...");
         snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
-        await seedRegistry(snapshot.company.id);
         emitActivity("system", "transition", `Company bootstrapped: ${snapshot.company.name}`);
       }
 

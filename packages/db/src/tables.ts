@@ -154,34 +154,6 @@ export const auditEventsTable = arceusSchema ? arceusSchema.table("audit_events"
   beatId: text("beat_id"),
 });
 
-export const serviceRegistryTable = arceusSchema ? arceusSchema.table("service_registry", {
-  id: text("id").primaryKey(),
-  companyId: text("company_id").notNull(),
-  toolName: text("tool_name").notNull(),
-  description: text("description").notNull(),
-  allowedRoles: text("allowed_roles").array().notNull(),
-  blastRadius: text("blast_radius").notNull().default("green"),
-  requiresApproval: integer("requires_approval").notNull().default(0),
-  parameters: jsonb("parameters").notNull().default([]),
-  source: text("source").notNull().default("system"),
-  version: integer("version").notNull().default(1),
-  addedBy: text("added_by").notNull().default("system"),
-  addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
-}) : pgTable("service_registry", {
-  id: text("id").primaryKey(),
-  companyId: text("company_id").notNull(),
-  toolName: text("tool_name").notNull(),
-  description: text("description").notNull(),
-  allowedRoles: text("allowed_roles").array().notNull(),
-  blastRadius: text("blast_radius").notNull().default("green"),
-  requiresApproval: integer("requires_approval").notNull().default(0),
-  parameters: jsonb("parameters").notNull().default([]),
-  source: text("source").notNull().default("system"),
-  version: integer("version").notNull().default(1),
-  addedBy: text("added_by").notNull().default("system"),
-  addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
 export const beatRecordsTable = arceusSchema ? arceusSchema.table("beat_records", {
   id: text("id").primaryKey(),
   companyId: text("company_id").notNull(),
@@ -293,7 +265,6 @@ export const workspaceStorageTables = {
   companyStates: companyStatesTable,
   assets: assetsTable,
   auditEvents: auditEventsTable,
-  serviceRegistry: serviceRegistryTable,
   beatRecords: beatRecordsTable,
   trustScores: trustScoresTable,
   policyViolations: policyViolationsTable,

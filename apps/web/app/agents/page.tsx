@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { PageShell } from "../../components/layout/page-shell";
 import { apiUrl } from "../../lib/api";
-import { Shield, Cpu, GitBranch, Wrench, Clock } from "lucide-react";
+import { Shield, Cpu, GitBranch, Clock } from "lucide-react";
 
 type Agent = {
   id: string;
@@ -32,12 +32,6 @@ type Agent = {
     shellCommandCount: number;
     stallReason: string | null;
   } | null;
-};
-
-type RegistryEntry = {
-  toolName: string;
-  source: string;
-  blastRadius: string;
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -73,7 +67,6 @@ function StatusBadge({ status }: { status: string }) {
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selected, setSelected] = useState<Agent | null>(null);
-  const [tools, setTools] = useState<RegistryEntry[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -96,20 +89,6 @@ export default function AgentsPage() {
     const id = setInterval(poll, 2000);
     return () => { active = false; clearInterval(id); };
   }, [selected?.id]);
-
-  useEffect(() => {
-    if (!selected) return;
-    let active = true;
-    async function loadTools() {
-      try {
-        const res = await fetch(apiUrl(`/service-registry/role/${selected!.role}`), { cache: "no-store" });
-        if (!active) return;
-        if (res.ok) setTools(await res.json());
-      } catch { setTools([]); }
-    }
-    loadTools();
-    return () => { active = false; };
-  }, [selected?.role]);
 
   return (
     <PageShell title="Agents" description="Agent roster, capabilities, and live session state">
@@ -272,38 +251,6 @@ export default function AgentsPage() {
                   </div>
                 </div>
               )}
-
-              {/* Tools from service registry */}
-              <div className="border border-[var(--border)] bg-[var(--bg-secondary)] p-5">
-                <h3 className="swiss-h3 text-[var(--text-primary)] mb-3 flex items-center gap-2">
-                  <Wrench className="h-3.5 w-3.5" /> Available Tools
-                  <span className="text-[0.75rem] text-[var(--text-muted)]">({tools.length})</span>
-                </h3>
-                {tools.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {tools.map((tool) => (
-                      <span
-                        key={tool.toolName}
-                        className="inline-flex items-center gap-1 border border-[var(--border)] bg-[var(--bg-primary)] px-2 py-1 text-[0.6875rem] text-[var(--text-secondary)]"
-                        title={`source: ${tool.source}, blast: ${tool.blastRadius}`}
-                      >
-                        <span
-                          className="h-1.5 w-1.5 rounded-full"
-                          style={{
-                            backgroundColor:
-                              tool.blastRadius === "red" ? "var(--status-error)" :
-                              tool.blastRadius === "yellow" ? "var(--status-warning)" :
-                              "var(--status-success)",
-                          }}
-                        />
-                        {tool.toolName}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-[0.75rem] text-[var(--text-muted)]">No tools registered</p>
-                )}
-              </div>
             </div>
           )}
         </div>

@@ -23,7 +23,6 @@ import type {
 import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { audit, auditSystem } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
-import { getRegistryStats, getToolsForRole } from "../governance/service-registry.js";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
 import { beatRecordsTable, trustScoresTable, policyViolationsTable } from "@arceus/db";
 import { desc, eq, and, sql } from "drizzle-orm";
@@ -32,9 +31,6 @@ import {
   adjustTrust,
   buildTrustEvent,
   getTrustTier,
-  filterToolsForAgent,
-  summarizeFilterResult,
-  BASE_POLICY_RULES,
   TRUST_CONFIG,
   ROLE_CAPABILITIES,
 } from "@arceus/company-runtime";
@@ -280,7 +276,6 @@ export type ControlPlaneStatus = {
   components: {
     stateStore: { status: "ok" | "degraded"; inMemory: boolean; dbPersist: boolean; dirty: boolean; mutationsSinceHydrate: number; lastHydratedAt: string | null; lastFlushedAt: string | null };
     auditLedger: { status: "ok" | "degraded" };
-    serviceRegistry: { status: "ok" | "empty"; toolCount: number; bySource: Record<string, number>; byBlastRadius: Record<string, number> };
     executionSubstrate: { status: "ok" | "idle" | "executing" };
   };
 };
@@ -289,7 +284,6 @@ export type ControlPlaneStatus = {
 export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
   const snap = getSnapshot();
   const isPending = snap.company.id === "company_pending";
-  const regStats = getRegistryStats(snap.company.id);
   const lifecycle = getStoreLifecycleState();
 
   return {
@@ -311,12 +305,6 @@ export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
       },
       auditLedger: {
         status: "ok",
-      },
-      serviceRegistry: {
-        status: regStats.total > 0 ? "ok" : "empty",
-        toolCount: regStats.total,
-        bySource: regStats.bySource,
-        byBlastRadius: regStats.byBlastRadius,
       },
       executionSubstrate: {
         status: executionStatus === "idle" ? "idle" : executionStatus === "stopped" ? "idle" : "executing",
@@ -436,34 +424,12 @@ export function cpLoadAgentContext(
   const artifactIds = new Set(agentTasks.flatMap((t) => [...t.artifactIds, ...t.incomingArtifactIds]));
   const artifacts = snap.artifacts.filter((a) => artifactIds.has(a.id));
 
-  // Tools from service registry
-  const tools = getToolsForRole(snap.company.id, agent.role);
-  const toolNames = tools.map((t) => t.toolName);
-
-  // ── Governance: load trust score and filter tools (Spec 13) ──
+  // Tool enforcement is now performed by the OpenCode plugin against
+  // BeatContext.allowedTools (built in beat-context-builder.ts). The
+  // legacy per-company service-registry + trust filter were removed;
+  // we keep agentTrustScore for telemetry / RoleCapabilities only.
   const agentTrustScore = trustScoreCache.get(agentId)?.score ?? TRUST_CONFIG.initialScore;
-  const budgetRemaining = snap.company.budgetCents - snap.company.spentCents;
-  let filteredToolNames = toolNames;
-  if (budgetRemaining <= 0) {
-    filteredToolNames = [];
-    emitEmployeeActivity(agent.role, "decision", `Beat ${beatId}: budget exhausted — all tools denied`, { beatId, detail: { budgetRemaining, agentId } });
-  } else {
-    const filterResult = filterToolsForAgent(
-      agent.role, agentTrustScore, toolNames, BASE_POLICY_RULES,
-      snap.company.id, agentId, beatId,
-    );
-    filteredToolNames = filterResult.allowed;
-    const summary = summarizeFilterResult(filterResult, agent.role);
-    emitEmployeeActivity(agent.role, "decision", `Beat ${beatId}: ${summary}`, {
-      beatId, detail: {
-        trustScore: agentTrustScore,
-        trustTier: getTrustTier(agentTrustScore),
-        allowed: filterResult.allowed,
-        denied: filterResult.denied.map(d => ({ tool: d.tool, rule: d.decision.ruleId })),
-        escalated: filterResult.escalated.map(e => ({ tool: e.tool, rule: e.decision.ruleId })),
-      },
-    });
-  }
+  const filteredToolNames: string[] = [];
 
   // Memory/priming context
   const agentMemory = snap.memories.find((m) => m.agentId === agentId);
@@ -492,7 +458,7 @@ export function cpLoadAgentContext(
     }
   }
 
-  emitEmployeeActivity(agent.role, "context", `Beat ${beatId}: context assembled — ${agentTasks.length} tasks, ${artifacts.length} artifacts, ${filteredToolNames.length}/${toolNames.length} tools (trust=${agentTrustScore.toFixed(2)}), ${agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0} memories, ${agentHabits.length} habits, ${recentMeetings.length} meetings, ${pendingApprovals.length} approvals`, {
+  emitEmployeeActivity(agent.role, "context", `Beat ${beatId}: context assembled — ${agentTasks.length} tasks, ${artifacts.length} artifacts (trust=${agentTrustScore.toFixed(2)}), ${agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0} memories, ${agentHabits.length} habits, ${recentMeetings.length} meetings, ${pendingApprovals.length} approvals`, {
     beatId,
     detail: {
       agentId: agent.id,
@@ -502,7 +468,6 @@ export function cpLoadAgentContext(
       taskIds: agentTasks.map(t => t.id),
       taskTitles: agentTasks.map(t => `[${t.status}] ${t.title}`),
       artifactCount: artifacts.length,
-      toolNames,
       memoryCount: agentMemory ? agentMemory.currentFocus.length + agentMemory.recentLearnings.length + agentMemory.activePatterns.length : 0,
       habitCount: agentHabits.length,
       meetingCount: recentMeetings.length,

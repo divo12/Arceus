@@ -14,7 +14,7 @@ import { updateSuccessRate, ROLE_SOULS, getSkillById } from "@arceus/company-run
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { getOpencode } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
-import { buildBeatContext, renderStateForAgent } from "./beat-context-builder.js";
+import { buildBeatContext, renderStateForAgent, countOpenTasksForRole } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
 import { materializeBeatSkills } from "../opencode/materialize-beat-skills.js";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
@@ -61,6 +61,27 @@ export async function runBeat(input: {
     trustBand: ctx.trustBand,
     ts: beatStartedAt,
   });
+
+  // Vision guard — if the agent has nothing to do, skip the prompt entirely.
+  // Without this, a bored LLM with no claimed task invents filler artifacts
+  // (e.g. placeholder.md, noop.md) just to fill the response window.
+  const openTaskCount = countOpenTasksForRole(input.role);
+  const incomingHandoffCount = ctx.incomingHandoffs.length;
+  if (openTaskCount === 0 && incomingHandoffCount === 0) {
+    unregisterSessionContext(sessionId);
+    await destroyBeatSession(sessionId);
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+    observability.logEvent({
+      event: "beat.completed",
+      beatId,
+      role: input.role,
+      verdictOutcome: "pass",
+      verdictScore: 1,
+      durationMs: Date.now() - beatStartedAt,
+      ts: Date.now(),
+    });
+    return { beatId, sessionId, verdict: "pass", cause: "no-work", tokensUsed };
+  }
 
   // Step 5: materialize skills + swap symlink
   await materializeBeatSkills({
