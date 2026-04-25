@@ -17,6 +17,9 @@ import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
+import { readTaskHybrid, persistTask, CLAIM_FAILURES } from "./task-persistence.js";
+import { getDb } from "@arceus/db";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 
 const TASK_BASE = "/api/internal/v1/tasks";
 
@@ -56,8 +59,11 @@ const parseOrFail = <T>(schema: ZodSchema<T>, body: unknown, reply: FastifyReply
   return parsed.data;
 };
 
-const findTask = (taskId: string): Task | null =>
-  getSnapshot().tasks.find((t) => t.id === taskId) ?? null;
+/**
+ * Phase 3C — DB-first read with store fallback. The fallback is temporary
+ * until Phase 4 migrates remaining writers off the in-memory snapshot.
+ */
+const findTask = (taskId: string): Promise<Task | null> => readTaskHybrid(taskId);
 
 const cacheAndSend = (
   req: FastifyRequest,
@@ -155,7 +161,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const mcp = req.mcp!;
     const taskId = body.id ?? `tsk_${randomUUID().slice(0, 12)}`;
 
-    if (findTask(taskId)) {
+    if (await findTask(taskId)) {
       sendConflict(reply, `Task ${taskId} already exists.`);
       return;
     }
@@ -215,6 +221,8 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       }
     }
 
+    await persistTask(taskId);
+
     const location = `${TASK_BASE}/${taskId}`;
     cacheAndSend(
       req,
@@ -235,7 +243,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     if (!body) return;
     const { taskId } = req.params;
 
-    if (!findTask(taskId)) {
+    if (!(await findTask(taskId))) {
       sendNotFound(reply, `Task ${taskId}`);
       return;
     }
@@ -261,13 +269,14 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       });
     }
 
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} updated.`, { taskId, updated: Boolean(updated) }));
   });
 
   // POST /tasks/:taskId/completion
   app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/completion`, async (req, reply) => {
     const { taskId } = req.params;
-    const existing = findTask(taskId);
+    const existing = await findTask(taskId);
     if (!existing) {
       sendNotFound(reply, `Task ${taskId}`);
       return;
@@ -282,6 +291,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       .filter((t) => t.dependsOnTaskIds.includes(taskId) && (t.status === "created" || t.status === "planned"))
       .map((t) => t.id);
 
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(
       `Task ${taskId} marked completed.`,
       { taskId, status: "completed", unblockedDependents: unblocked },
@@ -294,9 +304,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(blockBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     setTaskStatus(taskId, "blocked", body.reason);
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} blocked.`, { taskId, status: "blocked", reason: body.reason }));
   });
 
@@ -309,9 +320,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(verifyBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     setTaskVerified(taskId, body.verifiedBy);
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} verified.`, { taskId, verifiedBy: body.verifiedBy }));
   });
 
@@ -320,9 +332,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(appendResultBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     appendTaskResult(taskId, body.entry);
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Result appended to ${taskId}.`, { taskId }));
   });
 
@@ -331,9 +344,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(appendCommandBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     appendTaskCommand(taskId, body.command);
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Command appended to ${taskId}.`, { taskId }));
   });
 
@@ -342,9 +356,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(appendPlanStepBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     appendTaskPlanStep(taskId, body.step);
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Plan step appended to ${taskId}.`, { taskId }));
   });
 
@@ -353,7 +368,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(progressBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     const mcp = req.mcp!;
     updateTaskProgress(taskId, {
@@ -366,6 +381,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       notes: body.note ?? "",
     });
 
+    // Progress map lives outside the task row (separate concern); no DB sync needed.
     cacheAndSend(req, reply, 200, success(`Progress updated for ${taskId}.`, { taskId, percent: body.percent ?? null }));
   });
 
@@ -374,9 +390,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(previewUrlBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     setTaskPreviewUrl(taskId, body.url);
+    await persistTask(taskId);
     const status = 204;
     cacheSuccessfulResponse(req, { status, body: "", locationHeader: null });
     reply.code(status).send();
@@ -402,41 +419,32 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(hydrateBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    if (!findTask(taskId)) { sendNotFound(reply, `Task ${taskId}`); return; }
+    if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     hydrateTaskFromSpec(taskId, body);
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} hydrated from spec.`, { taskId }));
   });
 
-  // POST /tasks/:taskId/claim — agent claims a task (vision Step 7)
+  // POST /tasks/:taskId/claim — agent claims a task (Phase 3C: race-safe CAS)
   app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/claim`, async (req, reply) => {
     const body = parseOrFail(claimBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    const existing = findTask(taskId);
+    const existing = await findTask(taskId);
     if (!existing) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     const mcp = req.mcp!;
 
-    // Only planned or created tasks can be claimed
-    if (existing.status !== "planned" && existing.status !== "created") {
-      reply.code(409).send(failure(
-        `Task ${taskId} is "${existing.status}" — only planned/created tasks can be claimed.`,
-        "task_not_claimable", "never", "wait_for_status_change"
-      ));
-      return;
-    }
-
-    // Role check: agent can only claim tasks assigned to their role
+    // Role gate (governance) — repo CAS doesn't know about MCP roles, so we
+    // enforce here before paying the DB roundtrip.
     if (mcp.role && existing.assignedRole !== mcp.role) {
-      reply.code(403).send(failure(
-        `Task ${taskId} is assigned to ${existing.assignedRole}, not ${mcp.role}.`,
-        "governance", "never", "claim_own_role_task"
-      ));
+      const spec = CLAIM_FAILURES.wrong_role;
+      reply.code(spec.status).send(failure(spec.summaryFor(taskId), spec.cause, spec.retry, spec.stopWhen));
       return;
     }
 
-    // Dependency check: all dependsOnTaskIds must be completed or verified
+    // Dependency check — all `dependsOnTaskIds` must be completed/verified.
     if (existing.dependsOnTaskIds.length > 0) {
       const snapshot = getSnapshot();
       const missing = existing.dependsOnTaskIds.filter((depId) => {
@@ -460,7 +468,24 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       }
     }
 
+    // NOTE: do NOT call persistTask here. persistTask does a full UPSERT of
+    // store state including `status`, which would race against the CAS — a
+    // late persistTask from one request can overwrite the in_progress status
+    // a concurrent winner just set via CAS, effectively undoing the claim.
+    // Tasks are dual-written on creation (POST /tasks above), so the DB row
+    // is already there. If a task created by non-route code is missing from
+    // the DB, the CAS correctly returns `not_found` and the caller knows to
+    // reseed before retrying.
+    const result = await tasksRepo.claimTask(getDb(), taskId, mcp.beatId);
+    if (!result.ok) {
+      const spec = CLAIM_FAILURES[result.cause];
+      reply.code(spec.status).send(failure(spec.summaryFor(taskId), spec.cause, spec.retry, spec.stopWhen));
+      return;
+    }
+
+    // Mirror to store so the 14 non-route consumers see the new status.
     setTaskStatus(taskId, "in_progress");
+
     cacheAndSend(req, reply, 200, success(
       `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,
       { taskId, status: "in_progress", claimedBy: mcp.role, reason: body.reason },
@@ -473,7 +498,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     `${TASK_BASE}/:taskId`,
     async (req, reply) => {
       const { taskId } = req.params;
-      const task = findTask(taskId);
+      const task = await findTask(taskId);
       if (!task) { sendNotFound(reply, `Task ${taskId}`); return; }
 
       const includeProgress = req.query.includeProgress === "true";
@@ -522,7 +547,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const body = parseOrFail(reportBugBody, req.body, reply);
     if (!body) return;
     const { taskId } = req.params;
-    const sourceTask = findTask(taskId);
+    const sourceTask = await findTask(taskId);
     if (!sourceTask) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     const mcp = req.mcp!;
@@ -561,6 +586,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     };
 
     upsertTask(bugTask);
+    await persistTask(bugId);
 
     cacheAndSend(
       req,
@@ -579,7 +605,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
   // GET /tasks/:taskId/preview-path — return preview slot info for a task
   app.get<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/preview-path`, async (req, reply) => {
     const { taskId } = req.params;
-    const task = findTask(taskId);
+    const task = await findTask(taskId);
     if (!task) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     cacheAndSend(req, reply, 200, success(`Preview info for ${taskId}.`, {
@@ -593,7 +619,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
   // GET /tasks/:taskId/progress — list plan steps + commands without full task body
   app.get<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/progress`, async (req, reply) => {
     const { taskId } = req.params;
-    const task = findTask(taskId);
+    const task = await findTask(taskId);
     if (!task) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     const planSteps = task.plannerState?.planSteps?.map((s, i) => ({
@@ -630,7 +656,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return;
     }
     const { taskId } = req.params;
-    const existing = findTask(taskId);
+    const existing = await findTask(taskId);
     if (!existing) { sendNotFound(reply, `Task ${taskId}`); return; }
 
     const cleared = updateTask(taskId, (t) => ({
@@ -639,6 +665,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       executorState: { ...t.executorState, commandsExecuted: [], results: [] },
     }));
 
+    await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Progress cleared for ${taskId}.`, {
       taskId,
       cleared: Boolean(cleared),
