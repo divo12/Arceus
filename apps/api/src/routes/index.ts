@@ -16,6 +16,7 @@ export { default as workspaceRoutes } from "./workspace.routes.js";
 export { default as previewRoutes } from "./preview.routes.js";
 export { default as artifactsRoutes } from "./artifacts.routes.js";
 export { default as debugRoutes } from "./debug.routes.js";
+export { default as inspectorRoutes } from "./inspector.routes.js";
 export { default as serviceRegistryRoutes } from "./service-registry.routes.js";
 export { default as hippocampusRoutes } from "./hippocampus.routes.js";
 export { default as skillsRoutes } from "./skills.routes.js";

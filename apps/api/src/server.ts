@@ -26,10 +26,12 @@ process.on("uncaughtException", (err) => {
 //     observability.langfuseSink(),
 //   ]));
 import { observability } from "@arceus/contracts";
+import { eventBusSink } from "./observability/event-bus.js";
 observability.setSink(
   observability.multiSink([
     observability.pinoSink(),
     observability.langfuseSink(),
+    eventBusSink, // Spec 32 — feeds /api/inspector ring buffer + SSE.
   ]),
 );
 
@@ -91,6 +93,7 @@ import {
   previewRoutes,
   artifactsRoutes,
   debugRoutes,
+  inspectorRoutes,
   serviceRegistryRoutes,
   hippocampusRoutes,
   skillsRoutes,
@@ -433,6 +436,7 @@ await app.register(workspaceRoutes);
 await app.register(previewRoutes);
 await app.register(artifactsRoutes);
 await app.register(debugRoutes);
+await app.register(inspectorRoutes);
 await app.register(serviceRegistryRoutes);
 await app.register(hippocampusRoutes);
 await app.register(skillsRoutes);

@@ -1781,7 +1781,7 @@ export default function Page() {
       title: `Error from ${ev.employee}`,
       detail: ev.content.slice(0, 120),
       time: formatRelativeTime(ev.timestamp),
-      href: "/logs",
+      href: "/inspector",
     });
   }
 
