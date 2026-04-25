@@ -351,15 +351,90 @@ Same pattern. Approvals have a decision endpoint — make sure `decided_at` and 
 
 ## Phase 6 — Telemetry (2 days, 1 PR)
 
-### PR #14 — `feat(telemetry): cost_events + activity_log streams`
+### PR #14 — `feat(telemetry): cost_events writes + activity_log projection sink`
+
+This phase realises **Option A** from the deployment section: events are
+the truth, `activity_log` is a projection. Spec 32 already ships the
+event union, the emit sites, the pino + Langfuse sinks, and the legacy
+`audit-ledger` is merged into the same emit path. The remaining work
+here is the **durable Postgres mirror** — a third sink that writes
+every `ArceusEvent` to `public.activity_log`.
 
 **Changes:**
-1. **Cost events:** every LLM call site in `apps/api/src/prompts/llm.ts` (and wherever `structuredCompletion` runs) emits a `cost_events` row with `provider`, `model`, `input_tokens`, `output_tokens`, `cost_cents`, `run_id`, `task_id`, `company_id`.
-2. **Activity log:** every MCP mutation route emits an `activity_log` row with `actor_type`, `actor_id`, `action`, `entity_type`, `entity_id`, `details`.
-3. Do this via a shared helper `emitActivity(tx, { ... })` called inside the same transaction as the mutation, so either both land or neither.
-4. Delete the legacy `audit_events` writes from `apps/api/src/persistence/store-events.ts`.
 
-**Effort:** 2 days.
+1. **Cost events** (high-volume, direct write — not routed through
+   spec-32 events):
+   - Every LLM call site in `apps/api/src/prompts/llm.ts` and
+     `structuredCompletion` callers writes a `cost_events` row with
+     `provider`, `model`, `input_tokens`, `output_tokens`, `cost_cents`,
+     `run_id`, `task_id`, `company_id`.
+   - Use `costEvents.recordCost(db, ...)` from spec-31 Phase 2 repos.
+   - Cost events stay outside the spec-32 event stream because their
+     volume (one per LLM call) and latency profile (sub-millisecond)
+     don't need the multi-sink fan-out.
+
+2. **Activity log via a spec-32 sink** (Option A):
+   - Add `apps/api/src/observability/activity-log-sink.ts` implementing
+     the `EventSink` interface from `@arceus/contracts/observability`.
+   - Sink maps each `ArceusEvent` variant to a row on `public.activity_log`
+     via `activityLog.appendActivity(getDb(), { ... })`:
+     | event | actor_type | actor_id | entity_type | entity_id |
+     |---|---|---|---|---|
+     | `beat.started/completed/idle` | `system` | role | `beat` | beatId |
+     | `tool.invoked/result/denied` | `agent`/`system` | role/`mcp` | `tool` | tool name |
+     | `task.created/updated/...` | `agent` | role | `task` | taskId |
+     | `artifact.created` | `agent` | role | `artifact` | artifactId |
+     | `approval.requested/resolved` | `agent`/`user` | role/`board` | `approval` | approvalId |
+     | `meeting.recorded/contribution` | `system`/`agent` | facilitator/role | `meeting` | meetingId |
+     | `sprint.created/completed` | `system` | `ceo` | `sprint` | sprintId |
+     | `memory.written` | `system` | `hippocampus` | `memory` | scope |
+     | `permission.asked/replied` | `system`/`user` | `opencode`/`board` | `tool` | tool name |
+     | `agent.reasoning` | `agent` | role | `beat` | beatId |
+     | `error` | `system` | where | `error` | beatId or where |
+     | `audit` (legacy bridge) | `agent`/`system` | agentRole or `system` | category | beatId or composite |
+   - **`companyId` resolution:** events that lack `companyId` directly
+     (e.g. `tool.invoked` only carries `beatId`) resolve via an
+     in-memory `beatId → companyId` map populated on `beat.started` and
+     drained ~5 min after `beat.completed`. Events without resolvable
+     `companyId` are dropped — pino + Langfuse + the eventBus ring
+     buffer still hold the event.
+   - **`agent_id` and `run_id` UUID FKs** stay null in the first cut.
+     Wire them once Phase 5/6 of this spec routes runBeat through
+     `repos.heartbeatRuns.startRun` and roles through `repos.agents` —
+     trivial follow-up, not a blocker.
+
+3. **Wire the sink** into the central `multiSink` in `apps/api/src/server.ts`:
+   ```typescript
+   observability.setSink(observability.multiSink([
+     observability.pinoSink(),
+     observability.langfuseSink(),
+     eventBusSink,        // cofounder's /inspector ring buffer
+     activityLogSink,     // ← Phase 6 addition
+   ]));
+   ```
+   No emit-site changes — every existing `logEvent({...})` call from
+   spec-32 Phase 3 automatically lands in `activity_log` once the sink
+   is registered.
+
+4. **Delete the legacy `audit_events` writes**. Spec-32 Option B
+   already retired the `auditEventsTable` writer in
+   `apps/api/src/observability/audit-ledger.ts`. After this phase
+   ships, the `hippocampus.audit_events` table itself can be dropped
+   (Phase 7 of this spec).
+
+**Why this design:**
+- Single source of truth — every event flows through `logEvent` → sinks.
+  No second writer that route handlers must remember to call.
+- Failure isolation — `multiSink` runs sinks with `Promise.allSettled`,
+  so a slow `activity_log` insert never blocks pino + Langfuse.
+- Easy to disable — comment out the sink in server.ts; the rest of the
+  pipeline keeps working.
+- Cofounder's `/inspector` page becomes "ring buffer for hot-path,
+  SQL-backed pagination over `activity_log` for cold-path" with no
+  schema invention — the same `details jsonb` round-trips through
+  `arceusEventSchema.parse(row.details)`.
+
+**Effort:** 2 days (sink ~80 LOC + cost_events writers + tests).
 
 ---
 

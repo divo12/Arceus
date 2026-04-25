@@ -438,6 +438,15 @@ id, company_id FK, actor_type, actor_id, action, entity_type, entity_id, agent_i
 Index: (company_id, created_at desc), (entity_type, entity_id, created_at desc), (run_id)
 ```
 
+**Writer ownership (Option A — events as truth):** This table is **not**
+written by route handlers directly. It is a projection of the spec-32
+`ArceusEvent` stream via `apps/api/src/observability/activity-log-sink.ts`,
+registered in the central `multiSink` in `server.ts`. Every emit site
+that calls `logEvent({...})` (already wired in spec-32 Phase 3) lands
+here automatically. The `details` column carries the full event JSON
+and round-trips through `arceusEventSchema.parse(row.details)`. See
+[31-db-redesign-plan.md §Phase 6](./31-db-redesign-plan.md#phase-6--telemetry-2-days-1-pr).
+
 ### `cost_events`
 ```
 id, company_id FK, agent_id FK, run_id FK, task_id FK, provider, model, input_tokens, cached_input_tokens, output_tokens, cost_cents, occurred_at, created_at
