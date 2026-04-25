@@ -99,6 +99,7 @@ import {
   skillsRoutes,
   internalMcpRoutes,
   internalTelemetryRoutes,
+  internalEventsRoutes,
 } from "./routes/index.js";
 
 // ── Fastify instance ───────────────────────────────────────
@@ -442,6 +443,7 @@ await app.register(hippocampusRoutes);
 await app.register(skillsRoutes);
 await app.register(internalMcpRoutes);
 await app.register(internalTelemetryRoutes);
+await app.register(internalEventsRoutes);
 
 // ── Start audit ledger ──
 startAuditLedger();

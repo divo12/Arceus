@@ -159,6 +159,31 @@ export const ArceusPlugin: Plugin = async () => {
     });
   };
 
+  // ── Spec 32 Phase 4 — ArceusEvent emit channel ───────────
+  // The plugin runs in a separate process from the API, so it cannot share
+  // observability.setSink. Each event POSTs to /api/internal/telemetry/events
+  // where the API validates and re-emits via logEvent — same fan-out as
+  // any in-process emit site.
+  const postEvent = (event: Record<string, unknown>): void => {
+    const api = process.env.ARCEUS_API;
+    const token = process.env.ARCEUS_TOKEN;
+    if (!api || !token) return;
+    void fetch(`${api}/api/internal/telemetry/events`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(event),
+    }).catch(() => {
+      // Fire-and-forget — observability emits never block the agent.
+    });
+  };
+
+  /** Truncate reasoning text to keep payloads + Langfuse storage manageable. */
+  const truncate = (s: string, max = 4_000): string =>
+    s.length > max ? `${s.slice(0, max)}…` : s;
+
   return {
     "tool.execute.before": async (input, output) => {
       // Resolve beat context from session; fall back to env-based governance
@@ -230,6 +255,78 @@ export const ArceusPlugin: Plugin = async () => {
         const ctx = await ensureCtx(input.sessionID);
         if (entry && ctx) postSkillUsage(entry, ctx.beatId);
       }
+    },
+
+    // ── Spec 32 Phase 4 — additional emit hooks ────────────
+
+    "session.idle": async (input: { sessionID: string }) => {
+      const ctx = await ensureCtx(input.sessionID);
+      if (!ctx) return;
+      postEvent({
+        event: "beat.idle",
+        beatId: ctx.beatId,
+        stalledMs: 0,
+        ts: Date.now(),
+      });
+    },
+
+    "session.error": async (input: { sessionID: string }, output: unknown) => {
+      const ctx = await ensureCtx(input.sessionID);
+      const o = output as { error?: { message?: string }; message?: string } | undefined;
+      const message = o?.error?.message ?? o?.message ?? "session error";
+      postEvent({
+        event: "error",
+        where: "opencode_session",
+        message,
+        beatId: ctx?.beatId,
+        ts: Date.now(),
+      });
+    },
+
+    "permission.asked": async (input: { sessionID: string }, output: unknown) => {
+      const ctx = await ensureCtx(input.sessionID);
+      if (!ctx) return;
+      const o = output as { tool?: string; toolName?: string } | undefined;
+      const tool = o?.tool ?? o?.toolName ?? "unknown";
+      postEvent({
+        event: "permission.asked",
+        beatId: ctx.beatId,
+        tool,
+        ts: Date.now(),
+      });
+    },
+
+    "permission.replied": async (input: { sessionID: string }, output: unknown) => {
+      const ctx = await ensureCtx(input.sessionID);
+      if (!ctx) return;
+      const o = output as { tool?: string; toolName?: string; granted?: boolean; allowed?: boolean } | undefined;
+      const tool = o?.tool ?? o?.toolName ?? "unknown";
+      const granted = o?.granted ?? o?.allowed ?? false;
+      postEvent({
+        event: "permission.replied",
+        beatId: ctx.beatId,
+        tool,
+        granted,
+        ts: Date.now(),
+      });
+    },
+
+    "message.part.updated": async (input: { sessionID: string }, output: unknown) => {
+      const fromOutput = (output as { part?: { type?: string; text?: string } } | undefined)?.part;
+      const fromInput = (input as unknown as { part?: { type?: string; text?: string } }).part;
+      const part = fromOutput ?? fromInput;
+      if (!part || part.type !== "reasoning") return;
+      const text = part.text ?? "";
+      if (!text) return;
+      const ctx = await ensureCtx(input.sessionID);
+      if (!ctx) return;
+      postEvent({
+        event: "agent.reasoning",
+        beatId: ctx.beatId,
+        role: ctx.role,
+        text: truncate(text),
+        ts: Date.now(),
+      });
     },
   };
 };

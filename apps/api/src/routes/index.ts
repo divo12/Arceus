@@ -22,3 +22,4 @@ export { default as hippocampusRoutes } from "./hippocampus.routes.js";
 export { default as skillsRoutes } from "./skills.routes.js";
 export { default as internalMcpRoutes } from "./internal-mcp/index.js";
 export { default as internalTelemetryRoutes } from "./internal-telemetry.routes.js";
+export { default as internalEventsRoutes } from "./internal-events.routes.js";
