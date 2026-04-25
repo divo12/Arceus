@@ -31,8 +31,9 @@ export const tasks = pgTable(
     sprintId: uuid("sprint_id").references(() => sprints.id, { onDelete: "set null" }),
     parentTaskId: uuid("parent_task_id").references((): AnyPgColumn => tasks.id, { onDelete: "set null" }),
 
-    taskNumber: integer("task_number").notNull(),
-    identifier: text("identifier").notNull(),
+    // Spec 31 Phase 3A: nullable while we bridge from contracts.Task — re-tightened in Phase 4 backfill.
+    taskNumber: integer("task_number"),
+    identifier: text("identifier"),
 
     title: text("title").notNull(),
     description: text("description"),
@@ -49,6 +50,19 @@ export const tasks = pgTable(
     executionLockedAt: timestamp("execution_locked_at", { withTimezone: true }),
 
     dependsOnTaskIds: uuid("depends_on_task_ids").array().notNull().default(sql`ARRAY[]::uuid[]`),
+
+    // Spec 31 Phase 3A — bridge columns. Hold the contracts.Task fields the
+    // route surface reads/writes today. `body` carries the transient runtime
+    // blob (plannerState/executorState/verifierState/incomingArtifactIds) until
+    // those graduate into their own tables (Phase 5).
+    problemStatement: text("problem_statement"),
+    deliverable: text("deliverable"),
+    definitionOfDone: text("definition_of_done").array().notNull().default(sql`ARRAY[]::text[]`),
+    localPreviewUrl: text("local_preview_url"),
+    costCents: integer("cost_cents").notNull().default(0),
+    iterationCount: integer("iteration_count").notNull().default(0),
+    maxIterations: integer("max_iterations").notNull().default(3),
+    body: jsonb("body").$type<Record<string, unknown>>().notNull().default({}),
 
     plan: jsonb("plan").$type<PlanStep[]>().notNull().default([]),
     evidence: jsonb("evidence").$type<Record<string, unknown>>(),
@@ -84,7 +98,10 @@ export const tasks = pgTable(
 
     statusCheck: check(
       "tasks_status_check",
-      sql`${table.status} IN ('planned','ready','claimed','in_progress','blocked','completed','verified','cancelled')`,
+      // 'created' added in Phase 3A — contracts.Task.status starts at 'created'
+      // before any agent claims/plans the task. Removing it from the enum would
+      // reject every newly-minted task from the route surface.
+      sql`${table.status} IN ('created','planned','ready','claimed','in_progress','blocked','completed','verified','cancelled')`,
     ),
     priorityCheck: check(
       "tasks_priority_check",
