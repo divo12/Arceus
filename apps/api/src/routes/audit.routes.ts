@@ -7,19 +7,39 @@
  * it actually displays.
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { auditCategorySchema, auditSeveritySchema } from "@arceus/contracts";
 import { auditConfig } from "../config/audit.js";
 import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats } from "../observability/audit-ledger.js";
 
+/**
+ * Querystring schema for `GET /api/audit/events`. Coerces `limit` from string,
+ * narrows `category`/`severity` to the typed enums from contracts. Anything
+ * outside the enum (typo, drift) becomes a validation error rather than
+ * silently filtering on a bogus string.
+ */
+const auditQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(1000).optional(),
+  category: auditCategorySchema.optional(),
+  severity: auditSeveritySchema.optional(),
+  companyId: z.string().min(1).optional(),
+  agentRole: z.string().min(1).optional(),
+});
+
 export default async function auditRoutes(app: FastifyInstance) {
-  app.get("/api/audit/events", async (request) => {
-    const query = request.query as Record<string, string>;
-    return getAuditEvents({
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
-      category: (query.category as any) || undefined,
-      severity: (query.severity as any) || undefined,
-      companyId: query.companyId || undefined,
-      agentRole: query.agentRole || undefined,
-    });
+  app.get("/api/audit/events", async (request, reply) => {
+    const parsed = auditQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "Invalid query parameters",
+        details: parsed.error.issues.map((i) => ({
+          field: i.path.join("."),
+          message: i.message,
+        })),
+      };
+    }
+    return getAuditEvents(parsed.data);
   });
 
   app.get("/api/audit/stats", async () => {

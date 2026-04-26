@@ -4,10 +4,51 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { roleTypeSchema, beatTriggerSchema, beatEventTriggerSchema } from "@arceus/contracts";
 import { getSnapshot } from "../persistence/store.js";
 import { cpGetBeatHistory } from "../persistence/control-plane.js";
 import type { HeartbeatEngine, MeetingScheduler, HeartbeatConfig } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
+
+/**
+ * Body for `POST /api/heartbeat/trigger`. Trigger is the contract
+ * `BeatTrigger` (interval | event) with `scheduledAt` made optional —
+ * the route fills it in if the caller omits it.
+ */
+const triggerBodySchema = z.object({
+  agentId: z.string(),
+  role: roleTypeSchema,
+  trigger: z
+    .discriminatedUnion("type", [
+      z.object({ type: z.literal("interval"), scheduledAt: z.string().optional() }),
+      z.object({ type: z.literal("event"), event: beatEventTriggerSchema }),
+    ])
+    .optional(),
+});
+
+/**
+ * Body for `PATCH /api/heartbeat/config`. Only the runtime-tunable subset
+ * is exposed — role intervals, execution mode, and pause-roles are static
+ * config and reload via env vars, not API patches.
+ */
+const heartbeatConfigPatchSchema = z.object({
+  schedulerIntervalMs: z.number().int().positive().optional(),
+  maxConcurrentBeats: z.number().int().positive().optional(),
+  beatTimeoutMs: z.number().int().positive().optional(),
+  beatTokenBudget: z.number().int().nonnegative().optional(),
+  beatCostCeilingCents: z.number().int().nonnegative().optional(),
+  pauseWhenNoActiveSprint: z.boolean().optional(),
+  pauseWhenBudgetExhausted: z.boolean().optional(),
+}) satisfies z.ZodType<Partial<Pick<
+  HeartbeatConfig,
+  | "schedulerIntervalMs"
+  | "maxConcurrentBeats"
+  | "beatTimeoutMs"
+  | "beatTokenBudget"
+  | "beatCostCeilingCents"
+  | "pauseWhenNoActiveSprint"
+  | "pauseWhenBudgetExhausted"
+>>>;
 
 export interface HeartbeatRouteDeps {
   heartbeatEngine: HeartbeatEngine;
@@ -30,14 +71,15 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
   });
 
   app.post("/api/heartbeat/trigger", async (request, reply) => {
-    const body = z.object({
-      agentId: z.string(),
-      role: z.string(),
-      trigger: z.discriminatedUnion("type", [
-        z.object({ type: z.literal("interval"), scheduledAt: z.string().optional() }),
-        z.object({ type: z.literal("event"), event: z.string() }),
-      ]).optional(),
-    }).parse(request.body);
+    const parsed = triggerBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "Invalid trigger body",
+        details: parsed.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })),
+      };
+    }
+    const body = parsed.data;
 
     const snapshot = getSnapshot();
     if (snapshot.company.id === "company_pending") {
@@ -45,16 +87,20 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
       return { error: "No company bootstrapped yet." };
     }
 
-    const trigger = body.trigger ?? { type: "interval" as const, scheduledAt: new Date().toISOString() };
-    if (trigger.type === "interval" && !trigger.scheduledAt) {
-      (trigger as any).scheduledAt = new Date().toISOString();
-    }
+    // Normalise to the contract `BeatTrigger` shape: `interval` requires
+    // `scheduledAt`. The schema accepts it as optional so callers can omit
+    // it and let the server stamp `now`.
+    const now = new Date().toISOString();
+    const trigger: z.infer<typeof beatTriggerSchema> =
+      body.trigger?.type === "event"
+        ? body.trigger
+        : { type: "interval", scheduledAt: body.trigger?.scheduledAt ?? now };
 
     const record = await heartbeatEngine.triggerBeat({
       companyId: snapshot.company.id,
       agentId: body.agentId,
-      role: body.role as any,
-      trigger: trigger as any,
+      role: body.role,
+      trigger,
     });
 
     return record ?? { status: "skipped", reason: "Beat was skipped (locked, paused, or at capacity)" };
@@ -82,18 +128,16 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     return dbHistory.length > 0 ? dbHistory : heartbeatEngine.getHistory(companyId);
   });
 
-  app.patch("/api/heartbeat/config", async (request) => {
-    const body = request.body as Record<string, unknown>;
-    const allowed: (keyof HeartbeatConfig)[] = [
-      "schedulerIntervalMs", "maxConcurrentBeats", "beatTimeoutMs",
-      "beatTokenBudget", "beatCostCeilingCents", "pauseWhenNoActiveSprint",
-      "pauseWhenBudgetExhausted",
-    ];
-    const patch: Record<string, unknown> = {};
-    for (const key of allowed) {
-      if (key in body) patch[key] = body[key];
+  app.patch("/api/heartbeat/config", async (request, reply) => {
+    const parsed = heartbeatConfigPatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "Invalid config patch",
+        details: parsed.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })),
+      };
     }
-    heartbeatEngine.patchConfig(patch as any);
+    heartbeatEngine.patchConfig(parsed.data);
     return { config: heartbeatEngine.getConfig() };
   });
 }
