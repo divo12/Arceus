@@ -337,15 +337,212 @@ Same pattern. Approvals have a decision endpoint — make sure `decided_at` and 
 
 **Effort:** 1.5 days.
 
-### PR #13 — `refactor(hippocampus): memory_units + memory_embeddings on new schema`
+### PR #13 — `refactor(hippocampus): memory_units + memory_embeddings on new schema` (deferred from Phase 5)
 
-**Changes:**
-1. Move existing hippocampus pgvector tables (from `packages/db/migrations/001_hippocampus_memory.sql`) into the new `memory_units` + `memory_embeddings` schema files.
-2. Generate migration that either (a) drops old hippocampus tables + recreates from new schema if dev data (recommended), or (b) renames + restructures in place.
-3. `packages/hippocampus/src/backends/pgvector.ts` — update column names to match new schema.
-4. `priming_states` gets its own table, replacing the JSONB-in-memory-unit pattern.
+> **Status as of 2026-04-26:** explicitly deferred when the rest of Phase 5
+> (governance, runtime, skills) shipped. The "0.5 days, columns map 1:1"
+> estimate did not survive a closer look — the actual delta touches column
+> names, FK semantics, embedding dimension, and a separate `habits` table
+> that the new schema folded into `memory_units` as `type='procedural'`.
+> Below is the cutover plan we'll execute as a standalone PR.
 
-**Effort:** 0.5 days (most of the work is structural, columns mostly map 1:1).
+#### 1. Schema delta (legacy → new)
+
+| Legacy `hippocampus.memory_units` | New `public.memory_units` | Migration action |
+|---|---|---|
+| `id text` | `id uuid` (default randomUUID) | `gen_random_uuid()` per row; build a TEXT→UUID map for FK rewrites |
+| `agent_id text` (free string) | `agent_id uuid NOT NULL → agents.id` | Resolve via `agents.friendly_id` (added in PR #6 via 0006). Rows without a resolvable agent → quarantine table, do not migrate |
+| `company_id text` | `company_id uuid NOT NULL → companies.id` | Same — resolve via `companies.friendly_id` |
+| `memory_type text` | `type text` (CHECK: static/dynamic/procedural/priming/delegation) | Direct rename. Map legacy values: `dynamic`/`static` keep, `behavioral` → `procedural` |
+| `visibility text` | `kind text` (nullable) | Carry forward as the kind discriminator (or null if "private") |
+| `content text` | `content text` | 1:1 |
+| `confidence real` | `confidence real` | 1:1 |
+| `embedding vector(384)` | **moved to** `memory_embeddings.embedding vector(1536)` | **Lossy.** Either re-embed with the new model (preferred) or change new schema to vector(384) (locks in cheaper model). See §3 |
+| `relevance_score real` | dropped | Use `confidence` only — relevance is recomputed from age + outcome at read time |
+| `container text` | dropped | Folded into `kind` (the only legitimate values were privacy markers — already covered) |
+| `source_type text + source_id text` | `source_task_id uuid` + `source_beat_id uuid` (typed FKs) | Decode by prefix: `task:tsk_xyz` → resolve via `tasks.friendly_id`; `beat:beat_xyz` → null (legacy beat ids predate `heartbeat_runs`); anything else → null |
+| `metadata jsonb` | `tags text[]` | Walk known keys (`tag`, `category`, `priority`); push values into `tags[]`. Drop unknown keys |
+| `version int + previous_version_id text` | dropped | Spec-31 model is append-only via new rows. Old version chains: keep the latest, drop older revisions |
+| `deleted_at timestamptz + delete_reason text` | dropped (use `expires_at`) | Soft-deleted rows: skip during migration |
+| `expires_at timestamptz` | `expires_at timestamptz` | 1:1 |
+| `created_at`, `updated_at` | same | 1:1 |
+
+Legacy `hippocampus.habits` table:
+
+| Legacy `hippocampus.habits` | New | Migration action |
+|---|---|---|
+| `(id, agent_id, trigger_condition, action, confidence, usage_count, ...)` | `memory_units WHERE type='procedural'` | Project to one `memory_units` row per habit: `content = trigger_condition + " → " + action`, `confidence = habit.confidence`, `tags = ['habit', "usage:" + usage_count]`. Habit-specific fields (`trigger_condition`/`action`) re-derivable from content split by `" → "` |
+
+Legacy `hippocampus.priming_state` (singular):
+
+| Legacy `hippocampus.priming_state` | New `public.priming_states` (plural) | Migration action |
+|---|---|---|
+| `(agent_id text PK, confidence, caution, morale, recent_events jsonb)` | `(agent_id uuid PK, state jsonb, recent_outcomes jsonb)` | Pack legacy scalar fields into `state = {confidence, caution, morale}`; map `recent_events` → `recent_outcomes` shape `[{beatId, score}]` (lossy if the legacy events weren't beat-scored — synthesise score from string sentiment as a default `0.5`) |
+
+#### 2. PRs (split for reviewability)
+
+**PR #13a — schema introduction (no read flip yet)**
+
+- Confirm `public.memory_units`, `public.memory_embeddings`, `public.priming_states` exist (already created by drizzle 0001+; verified 2026-04-26).
+- Add a `legacy_id text` column on `public.memory_units` for the migration window only (dropped in PR #13c). Indexed unique partial.
+
+```sql
+ALTER TABLE memory_units ADD COLUMN legacy_id text;
+CREATE UNIQUE INDEX memory_units_legacy_id_idx
+  ON memory_units (legacy_id)
+  WHERE legacy_id IS NOT NULL;
+```
+
+**PR #13b — backfill + dual-write**
+
+- New module `apps/api/src/persistence/memory-bridge.ts` that mirrors writes
+  from the existing legacy backend into `public.memory_units` +
+  `public.memory_embeddings`. Reads still go to legacy.
+- Backfill script `packages/db/src/scripts/backfill-memory.ts`:
+
+  ```sql
+  -- 1. Pre-flight — every legacy row must resolve to known agent + company.
+  CREATE TEMP TABLE memory_migration_unresolved AS
+  SELECT m.id, m.agent_id, m.company_id
+  FROM hippocampus.memory_units m
+  LEFT JOIN agents a ON a.friendly_id = m.agent_id OR a.id::text = m.agent_id
+  LEFT JOIN companies c ON c.friendly_id = m.company_id OR c.id::text = m.company_id
+  WHERE m.deleted_at IS NULL
+    AND (a.id IS NULL OR c.id IS NULL);
+  -- Stop and triage if this returns > 0.
+
+  -- 2. Insert in batches of 1000 with FOR UPDATE SKIP LOCKED on the
+  --    legacy row (so re-runs are safe).
+  WITH batch AS (
+    SELECT m.*, a.id AS new_agent_id, c.id AS new_company_id
+    FROM hippocampus.memory_units m
+    JOIN agents a ON a.friendly_id = m.agent_id OR a.id::text = m.agent_id
+    JOIN companies c ON c.friendly_id = m.company_id OR c.id::text = m.company_id
+    WHERE m.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM memory_units mu WHERE mu.legacy_id = m.id
+      )
+    ORDER BY m.created_at
+    LIMIT 1000
+    FOR UPDATE SKIP LOCKED
+  ),
+  inserted AS (
+    INSERT INTO memory_units (
+      legacy_id, company_id, agent_id, type, kind, content, tags,
+      confidence, source_task_id, source_beat_id, expires_at,
+      created_at, updated_at
+    )
+    SELECT
+      b.id,
+      b.new_company_id,
+      b.new_agent_id,
+      CASE b.memory_type WHEN 'behavioral' THEN 'procedural' ELSE b.memory_type END,
+      NULLIF(b.visibility, 'private'),
+      b.content,
+      COALESCE(
+        (SELECT array_agg(value::text) FROM jsonb_each_text(b.metadata) WHERE key IN ('tag','category','priority')),
+        ARRAY[]::text[]
+      ),
+      b.confidence,
+      CASE WHEN b.source_type = 'task' THEN (SELECT id FROM tasks WHERE friendly_id = b.source_id) END,
+      NULL,                                          -- legacy beat ids predate heartbeat_runs
+      b.expires_at,
+      b.created_at,
+      b.updated_at
+    FROM batch b
+    RETURNING id, legacy_id
+  )
+  -- 3. Embedding rows (only for non-null legacy embeddings).
+  INSERT INTO memory_embeddings (memory_id, embedding, model_version, created_at)
+  SELECT
+    i.id,
+    -- Re-embed via the new model OR cast the legacy 384-dim vector if §3
+    -- lands as "keep 384" (in which case the new schema's vector(1536)
+    -- becomes vector(384) in the same migration).
+    embed_via_new_model(m.content),
+    'text-embedding-3-small@2026-04',
+    m.created_at
+  FROM inserted i
+  JOIN hippocampus.memory_units m ON m.id = i.legacy_id
+  WHERE m.embedding IS NOT NULL;
+  ```
+
+- Validation: row counts match (legacy non-deleted = new), random-sample
+  10 rows and diff content/confidence, sanity-check that
+  `tags`/`source_task_id` decoding produced expected values.
+
+- Habits + priming_state migration is a one-shot script, not dual-write —
+  habits are write-rare; priming_state is overwritten every beat anyway.
+
+**PR #13c — read flip + remove legacy**
+
+- Rewrite `packages/hippocampus/src/backends/pgvector.ts` to read from
+  `public.memory_units` + `public.memory_embeddings`. The current backend
+  is ~400 LOC; the rewrite is column-rename plus the embedding-table join.
+  Keep the same interface so call sites don't change.
+- Replace `packages/db/src/memory-tables.ts` with re-exports from
+  `schema/memory_units.ts` + `schema/memory_embeddings.ts` +
+  `schema/priming_states.ts`.
+- Drop `legacy_id` column on `memory_units`.
+- Drop the `hippocampus` schema entirely:
+
+  ```sql
+  DROP SCHEMA hippocampus CASCADE;  -- drops memory_units, habits, priming_state, audit_events
+  ```
+
+- Soak ≥3 days in dev with the new backend before this PR merges.
+
+#### 3. Embedding dimension decision (BLOCKING)
+
+Legacy uses `vector(384)` (all-MiniLM-L6-v2, runs locally via the embedder
+in `packages/hippocampus/src/backends/embedding.ts`). New schema declares
+`vector(1536)` (OpenAI text-embedding-3-small, requires API call per
+write).
+
+Two paths:
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A — Re-embed with 1536** | Better recall; aligns with the schema; future-proof for richer queries | Cost scales with memory count; needs API calls during backfill; runtime write path now hits an external API |
+| **B — Change new schema to 384** | Backfill is `INSERT … SELECT embedding FROM …` (free); runtime stays local | Locks in the cheaper model; future upgrade is another migration |
+
+**Recommendation:** Option B for cutover. We can run an A/B comparison on
+search quality post-cutover and migrate to 1536 in a follow-up PR with the
+same dual-write template.
+
+If we pick B, the schema change is part of PR #13a:
+
+```sql
+ALTER TABLE memory_embeddings DROP COLUMN embedding;
+ALTER TABLE memory_embeddings ADD COLUMN embedding vector(384) NOT NULL;
+DROP INDEX IF EXISTS memory_embeddings_embedding_idx;
+CREATE INDEX memory_embeddings_embedding_idx
+  ON memory_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+```
+
+#### 4. Risks + mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Backfill blocks legacy writes | Use `FOR UPDATE SKIP LOCKED`, batch 1000, sleep 50ms between batches |
+| Legacy rows reference agent strings that don't exist in the new `agents` table | Pre-flight query (§2 step 1) gates the backfill — quarantine table, manual triage before resuming |
+| Embedding re-compute (Option A) costs spike | Cap concurrency at 8 parallel API calls; show progress every 500 rows; resumable via `legacy_id` |
+| Read flip uncovers a column we missed | Soak with `EXPLAIN ANALYZE` on the top-3 hippocampus queries before the flip; 3-day dev burn-in |
+| `priming_state` numeric fields lose precision in jsonb | Store as `numeric` strings inside the jsonb (postgres preserves them) |
+
+#### 5. Verification
+
+- `SELECT count(*) FROM hippocampus.memory_units WHERE deleted_at IS NULL` == `SELECT count(*) FROM public.memory_units WHERE legacy_id IS NOT NULL`
+- `SELECT count(*) FROM hippocampus.habits` == `SELECT count(*) FROM public.memory_units WHERE type = 'procedural'`
+- 10 random rows: pgvector cosine-similarity search returns the same top-3
+  results from legacy and new for the same query embedding (Option B) or
+  same top-1 with ≥0.7 overlap on top-5 (Option A).
+- Hippocampus integration tests pass against the new backend.
+
+**Effort (revised):** 2–3 days. PR #13a (½ day) + PR #13b (1 day) + PR
+#13c (1 day) + soak time. The original "0.5 days" estimate assumed
+column-rename only; the embedding-dimension question and FK resolution
+are the real long pole.
 
 ---
 
@@ -638,7 +835,7 @@ Each PR is revertible independently because:
 | Drizzle CHECK constraint not generated | High | Low | Manually append to initial migration; add test asserting constraint exists |
 | `pg_trgm` / `pgvector` not installable on target | Low | High | Verify on staging before Phase 1 |
 | CAS race in test flaps on slow CI | Medium | Low | Use `FOR UPDATE SKIP LOCKED` or repeat test ×10 |
-| Hippocampus data loss during PR #13 | Medium | High | Take dump before; migrate in separate DB; swap |
+| Hippocampus data loss during PR #13 | Medium | High | `pg_dump hippocampus` snapshot before; PR splits into 13a (schema), 13b (dual-write + backfill via `legacy_id` map), 13c (read flip + drop). See PR #13 §4 for the full risk table. |
 | Long migration time on initial schema creation | Low | Low | DDL only; no data to migrate; 30 CREATE TABLEs = seconds |
 | Ticket counter (`companies.task_counter`) race | Medium | Medium | Allocate via `SELECT ... FOR UPDATE` or sequence per company |
 | `idempotency_keys` growing unbounded | High | Low | TTL sweep job every hour, keep 24h window |
