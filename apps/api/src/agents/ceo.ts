@@ -47,8 +47,14 @@ const ceoMeetingIntentSchema = z.object({
   }
 });
 
+// Roles arrive here already parsed against `strategyRoleSchema` (see the
+// outer object schema below), so use the inferred type rather than a
+// stringly-typed widener — that way `getRoleSoul` / `allowedDirectReports`
+// accept the values without an `as any` cast at every call site.
+type StrategyRole = z.infer<typeof strategyRoleSchema>;
+
 function validateStrategyRoles(
-  roles: Array<{ role: string; parent_role: string | null }>,
+  roles: Array<{ role: StrategyRole; parent_role: StrategyRole | null }>,
   ctx: z.RefinementCtx,
 ) {
   const seen = new Set<string>();
@@ -83,8 +89,8 @@ function validateStrategyRoles(
 
     // Enforce allowed reporting lines from ROLE_SOULS
     if (entry.parent_role !== null) {
-      const parentSoul = getRoleSoul(entry.parent_role as any);
-      if (parentSoul && !parentSoul.allowedDirectReports.includes(entry.role as any)) {
+      const parentSoul = getRoleSoul(entry.parent_role);
+      if (parentSoul && !parentSoul.allowedDirectReports.includes(entry.role)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: [index, "parent_role"],

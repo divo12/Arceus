@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentIdentity, AgentBeatContext, SprintReviewState, Task, DefectArea } from "@arceus/contracts";
+import type { AgentIdentity, AgentBeatContext, SprintReviewState, SprintReviewPhase, Task, DefectArea } from "@arceus/contracts";
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import {
@@ -145,7 +145,7 @@ export async function executeSprintReviewVerification(
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
-  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  const reviewState: SprintReviewState | null = sprint.reviewState ?? null;
   if (!reviewState) {
     return { summary: "No review state found", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
@@ -578,7 +578,7 @@ export async function executeSprintFinalGate(
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
-  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  const reviewState: SprintReviewState | null = sprint.reviewState ?? null;
   if (!reviewState) {
     return { summary: "No review state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
@@ -636,7 +636,7 @@ export async function executeSprintFinalGate(
         gateResults: updatedGateResults,
         bugTaskIds: newBugIds,
         reworkCycleCount: newReworkCount,
-        phase: (escalate ? "escalated" : "rework") as any,
+        phase: (escalate ? "escalated" : "rework") satisfies SprintReviewPhase,
         escalatedToCto: escalate || s.reviewState.escalatedToCto,
         escalatedAt: escalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
       } : s.reviewState,

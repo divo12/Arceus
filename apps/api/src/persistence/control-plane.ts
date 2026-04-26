@@ -190,7 +190,7 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
     case "task_status":
       updateTask(mutation.taskId, (t) => ({
         ...t,
-        status: mutation.status as any,
+        status: mutation.status,
         ...(mutation.summary ? { summary: mutation.summary } : {}),
       }));
       break;
@@ -203,41 +203,41 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
       break;
 
     case "task_create":
-      upsertTask(mutation.task as any);
+      upsertTask(mutation.task);
       break;
 
     case "sprint_status":
       updateSprint(mutation.sprintId, (s) => ({
         ...s,
-        status: mutation.status as any,
+        status: mutation.status,
       }));
       break;
 
     case "sprint_create":
-      upsertSprint(mutation.sprint as any);
+      upsertSprint(mutation.sprint);
       break;
 
     case "meeting_record":
-      upsertMeeting(mutation.meeting as any);
+      upsertMeeting(mutation.meeting);
       break;
 
     case "approval_create":
-      upsertApproval(mutation.approval as any);
+      upsertApproval(mutation.approval);
       break;
 
     case "approval_resolve":
       updateApproval(mutation.approvalId, (a) => ({
         ...a,
-        status: mutation.status as "approved" | "rejected",
+        status: mutation.status,
       }));
       break;
 
     case "chat_message":
-      appendChatMessage(mutation.message as any);
+      appendChatMessage(mutation.message);
       break;
 
     case "transition_append":
-      appendTransition(mutation.transition as any);
+      appendTransition(mutation.transition);
       break;
 
     case "transition_update":
@@ -256,11 +256,15 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
       break;
 
     case "task_progress":
-      updateTaskProgress(mutation.taskId, mutation.progress as TaskProgress);
+      updateTaskProgress(mutation.taskId, mutation.progress);
       break;
 
     default:
-      throw new Error(`Unknown mutation type: ${(mutation as any).type}`);
+      // Exhaustiveness: TS compile-error if a new variant is added to the
+      // union without a case here. `_exhaustive` will be `never` only when
+      // every variant above is handled.
+      const _exhaustive: never = mutation;
+      throw new Error(`Unknown mutation type: ${JSON.stringify(_exhaustive)}`);
   }
 }
 
