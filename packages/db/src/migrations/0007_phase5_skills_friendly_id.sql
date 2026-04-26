@@ -1,0 +1,2 @@
+ALTER TABLE "skill_artifacts" ADD COLUMN "friendly_id" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "skill_artifacts_friendly_id_idx" ON "skill_artifacts" USING btree ("company_id","friendly_id") WHERE "skill_artifacts"."friendly_id" IS NOT NULL;

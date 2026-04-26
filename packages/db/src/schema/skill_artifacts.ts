@@ -7,6 +7,10 @@ export const skillArtifacts = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // Spec 31 Phase 5: friendly id round-trip carrier ("sk_orchestrate_meeting").
+    // Distinct from slug — slug is a human-namespacing convention scoped to
+    // a company, friendlyId is the global string the runtime registry uses.
+    friendlyId: text("friendly_id"),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     role: text("role").notNull(),
@@ -24,6 +28,7 @@ export const skillArtifacts = pgTable(
   },
   (table) => ({
     companySlugUniqueIdx: uniqueIndex("skill_artifacts_company_slug_idx").on(table.companyId, table.slug),
+    friendlyIdIdx: uniqueIndex("skill_artifacts_friendly_id_idx").on(table.companyId, table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
     companyRoleStatusIdx: index("skill_artifacts_company_role_status_idx").on(
       table.companyId,
       table.role,

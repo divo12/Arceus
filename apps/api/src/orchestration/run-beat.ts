@@ -24,6 +24,7 @@ import { registerPromptCompletion } from "../prompts/llm.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
 import { startHeartbeatRun, finishHeartbeatRun, bindSession, unbindSession } from "./beat-lifecycle.js";
 import { updateTrustScore } from "../governance/trust.js";
+import { persistSkillUsageEvent } from "../skills/usage-persistence.js";
 
 const HARD_CAP_MS = 15 * 60 * 1000;
 
@@ -166,8 +167,22 @@ export async function runBeat(input: {
       : await scoreBeatVerdict(beatId);
 
     const usedSkills = getBeatSkillUsage(beatId);
+    const outcomeScore = verdict === "pass" ? 1 : 0;
     for (const skillId of usedSkills) {
-      updateSuccessRate(skillId, verdict === "pass" ? 1 : 0);
+      updateSuccessRate(skillId, outcomeScore);
+      // Spec 31 Phase 5 — durable mirror for the EMA. Read the registry
+      // *after* updateSuccessRate so the persisted row carries the new
+      // rate; the event row independently captures this beat's verdict.
+      const skill = getSkillById(skillId);
+      if (skill) {
+        void persistSkillUsageEvent({
+          skill,
+          companyId: input.companyId,
+          role: input.role,
+          beatDbId: runDbId,
+          outcomeScore,
+        }).catch(() => {});
+      }
     }
 
     // Spec 29 Phase G.3 — EMA-drop trigger. After Pass-1 EMA update, check
