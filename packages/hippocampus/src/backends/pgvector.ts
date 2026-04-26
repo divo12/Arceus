@@ -310,7 +310,13 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
         AND deleted_at IS NULL
         AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / (30.0 * 86400)) < 0.1
     `);
-    deleted += Number((decayed as any).length ?? (decayed as any).rowCount ?? 0);
+    // drizzle's `db.execute(sql\`...\`)` return type varies by driver:
+    //   postgres-js  → { length: number }   (it's an Array-like)
+    //   node-postgres → { rowCount: number }
+    // Both are present at runtime; the union isn't surfaced by drizzle, so we
+    // read whichever is defined.
+    const decayedResult = decayed as { length?: number; rowCount?: number };
+    deleted += Number(decayedResult.length ?? decayedResult.rowCount ?? 0);
 
     // 3. Prune stale: old, low-confidence dynamic facts
     const pruned = await db

@@ -32,14 +32,11 @@ export const registerSprintTools = (
         tasks: z.array(sprintTaskSchema).min(1).max(30).describe("Tasks to create in this sprint"),
       },
     },
-    async ({ goal, tasks }, extra) => {
-      // DEBUG: log what OpenCode passes in the MCP tool callback's extra param
-      console.error(`[MCP-DEBUG sprint_create] extra keys=${Object.keys(extra).join(",")}`);
-      console.error(`[MCP-DEBUG sprint_create] extra.sessionId=${(extra as any).sessionId}`);
-      console.error(`[MCP-DEBUG sprint_create] extra._meta=${JSON.stringify((extra as any)._meta)}`);
-      console.error(`[MCP-DEBUG sprint_create] extra.authInfo=${JSON.stringify((extra as any).authInfo)}`);
-      console.error(`[MCP-DEBUG sprint_create] extra.requestId=${(extra as any).requestId}`);
-      console.error(`[MCP-DEBUG sprint_create] full extra=${JSON.stringify(extra, (k, v) => typeof v === "function" ? "[function]" : v)}`);
+    async ({ goal, tasks }) => {
+      // The `extra` argument from the MCP server callback was used during spec
+      // 25 development to discover where OpenCode injects sessionId (now via
+      // _meta — see spec 25 §4). Investigation complete; the debug logs are
+      // gone and the param itself is unused here.
       const body = { goal, tasks };
       const res = await client.request<ToolResult<unknown>>({
         method: "POST",

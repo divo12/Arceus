@@ -76,6 +76,12 @@ export function applyBoosts(
  *
  * If embeddings are not available, falls back to pure boosted-score ranking
  * (equivalent to lambda = 1.0).
+ *
+ * Internal note: we need each selected memory's embedding to compute
+ * similarity against the next candidate, but the public `ScoredMemory`
+ * shape doesn't carry it. Rather than tack it on with an `as any` cast,
+ * we maintain a parallel typed array of embeddings indexed alongside
+ * `selected`. Same semantics, no escape hatch.
  */
 export function selectByMMR(
   candidates: Array<RawCandidate & { boostedScore: number }>,
@@ -85,6 +91,7 @@ export function selectByMMR(
   if (candidates.length === 0) return [];
 
   const selected: ScoredMemory[] = [];
+  const selectedEmbeddings: Array<number[] | null> = [];
   const remaining = [...candidates];
 
   // Normalize boosted scores to [0, 1] for fair comparison with similarity
@@ -100,10 +107,10 @@ export function selectByMMR(
 
       // Max similarity to already-selected memories
       let maxSimToSelected = 0;
-      if (candidate.embedding && selected.length > 0) {
-        for (const sel of selected) {
-          if ((sel as any).__embedding) {
-            const sim = cosineSimilarity(candidate.embedding, (sel as any).__embedding);
+      if (candidate.embedding && selectedEmbeddings.length > 0) {
+        for (const selEmbedding of selectedEmbeddings) {
+          if (selEmbedding) {
+            const sim = cosineSimilarity(candidate.embedding, selEmbedding);
             if (sim > maxSimToSelected) maxSimToSelected = sim;
           }
         }
@@ -142,15 +149,8 @@ export function selectByMMR(
       tier: winner.tier,
     };
 
-    // Stash embedding internally for subsequent MMR iterations
-    (scored as any).__embedding = winner.embedding;
-
     selected.push(scored);
-  }
-
-  // Clean up internal embedding references
-  for (const s of selected) {
-    delete (s as any).__embedding;
+    selectedEmbeddings.push(winner.embedding ?? null);
   }
 
   return selected;

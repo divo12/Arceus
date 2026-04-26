@@ -10,6 +10,7 @@
 
 import { getInternalAgent, internalAgentRole } from "@arceus/company-runtime";
 import { nowIso } from "@arceus/task-engine";
+import type { Message, Part, SessionPromptData } from "@opencode-ai/sdk";
 import { getOpencode } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
 import { agentSessions, pendingPromptCompletions } from "../orchestration/state.js";
@@ -19,6 +20,12 @@ import { withRetry, isRetryableError } from "../infra/resilience.js";
 import { truncateTelemetry } from "../infra/utils.js";
 import { ensureInternalAgentSession } from "../agents/internal-sessions.js";
 import { registerPromptCompletion } from "./llm.js";
+
+/** Element shape of `client.session.messages({...}).data` per OpenCode SDK. */
+type SessionMessage = { info: Message; parts: Part[] };
+
+/** The `body` we send to `client.session.prompt()`. */
+type SessionPromptBody = NonNullable<SessionPromptData["body"]>;
 
 /**
  * Send a prompt to an internal agent's OpenCode session.
@@ -42,7 +49,7 @@ export async function runInternalAgentPrompt(
   // Use the agent's system prompt on first turn, or the provided override
   const effectiveSystemPrompt = systemPrompt ?? def.systemPrompt;
 
-  emitEmployeeActivity(role as any, "context", `Internal agent prompt: system=${effectiveSystemPrompt.length}ch user=${userMessage.length}ch model=${deployment}`);
+  emitEmployeeActivity(role, "context", `Internal agent prompt: system=${effectiveSystemPrompt.length}ch user=${userMessage.length}ch model=${deployment}`);
 
   updateAgentSessionState(role, {
     promptStartedAt: nowIso(),
@@ -56,7 +63,7 @@ export async function runInternalAgentPrompt(
   const output = await withRetry(
     async () => {
       const opencode = await getOpencode();
-      const promptBody: Record<string, unknown> = {
+      const promptBody: SessionPromptBody = {
         model: { providerID: "azure", modelID: deployment },
         system: effectiveSystemPrompt,
         parts: [{ type: "text", text: userMessage }],
@@ -66,7 +73,7 @@ export async function runInternalAgentPrompt(
 
       await opencode.client.session.prompt({
         path: { id: currentSessionId },
-        body: promptBody as any,
+        body: promptBody,
       });
       await completionPromise;
 
@@ -74,23 +81,30 @@ export async function runInternalAgentPrompt(
         path: { id: currentSessionId },
       });
 
-      const messages = messagesResult.data as Array<{ info: any; parts: Array<{ type: string; text?: string }> }> | undefined;
+      const messages = messagesResult.data as SessionMessage[] | undefined;
       if (!messages || messages.length === 0) return "";
 
-      const assistantMessages = messages.filter((m) => m.info?.role === "assistant");
+      const assistantMessages = messages.filter(
+        (m): m is { info: Extract<Message, { role: "assistant" }>; parts: Part[] } =>
+          m.info?.role === "assistant",
+      );
       const lastAssistant = assistantMessages[assistantMessages.length - 1];
       if (!lastAssistant) return "";
 
-      const infoError = lastAssistant.info?.error;
+      const infoError = lastAssistant.info.error;
       if (infoError) {
-        const errorMsg = infoError.data?.message ?? infoError.name ?? "Unknown OpenCode session error";
+        const errorMsg =
+          ("data" in infoError && typeof infoError.data === "object" && infoError.data !== null && "message" in infoError.data
+            ? String((infoError.data as { message?: unknown }).message)
+            : undefined) ??
+          infoError.name ??
+          "Unknown OpenCode session error";
         throw new Error(`OpenCode internal agent ${agentKey} error: ${errorMsg}`);
       }
 
       return (
         lastAssistant.parts
-          ?.filter((part) => part.type === "text" && part.text)
-          .map((part) => part.text ?? "")
+          ?.flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
           .join("\n")
           .trim() || ""
       );
@@ -104,7 +118,7 @@ export async function runInternalAgentPrompt(
         const { resetOpencodeConnection } = await import("../infra/opencode.js");
         resetOpencodeConnection();
         agentSessions.delete(role);
-        emitEmployeeActivity(role as any, "info", `Internal agent ${agentKey} connection lost — reconnecting (attempt ${attempt})…`);
+        emitEmployeeActivity(role, "info", `Internal agent ${agentKey} connection lost — reconnecting (attempt ${attempt})…`);
         const freshSession = await ensureInternalAgentSession(agentKey);
         currentSessionId = freshSession.sessionId;
       },

@@ -1,4 +1,11 @@
 import type { AgentIdentity, CompanySnapshot } from "@arceus/contracts";
+import type { Message, Part, SessionPromptData } from "@opencode-ai/sdk";
+
+/** Element shape of `client.session.messages({...}).data` per OpenCode SDK. */
+type SessionMessage = { info: Message; parts: Part[] };
+
+/** The `body` we send to `client.session.prompt()`. Required = SessionPromptData["body"]. */
+type SessionPromptBody = NonNullable<SessionPromptData["body"]>;
 import { getAgentByRole, nowIso } from "@arceus/task-engine";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "../infra/opencode.js";
@@ -147,7 +154,7 @@ async function pollPendingPromptCompletions() {
       } else if (!sessionStatus) {
         try {
           const messagesResult = await opencode.client.session.messages({ path: { id: sessionId } });
-          const messages = messagesResult.data as Array<{ info: any }> | undefined;
+          const messages = messagesResult.data as SessionMessage[] | undefined;
           const hasAssistant = messages?.some((m) => m.info?.role === "assistant");
           if (hasAssistant) {
             emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… not in status but has assistant response — resolving`);
@@ -210,7 +217,7 @@ export async function runPromptText(
       totalPromptLen: enrichedSystemPrompt.length,
       userPromptLen: text.length,
       model: deployment,
-      tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [],
+      tools: tools ? Object.entries(tools).filter(([, enabled]) => enabled).map(([k]) => k) : [],
     },
   });
 
@@ -226,13 +233,13 @@ export async function runPromptText(
   const output = await withRetry(
     async () => {
       const opencode = await getOpencode();
-      const promptBody: Record<string, unknown> = {
+      const promptBody: SessionPromptBody = {
         model: { providerID: "azure", modelID: deployment },
         agent: role,
         system: enrichedSystemPrompt,
         parts: [{ type: "text", text }],
+        ...(tools ? { tools } : {}),
       };
-      if (tools) promptBody.tools = tools;
 
       const completionPromise = registerPromptCompletion(currentSessionId);
 
@@ -241,7 +248,7 @@ export async function runPromptText(
       // polling fallback — both feed into completionPromise.
       opencode.client.session.prompt({
         path: { id: currentSessionId },
-        body: promptBody as any,
+        body: promptBody,
       }).catch((err: unknown) => {
         rejectPromptCompletion(
           currentSessionId,
@@ -255,25 +262,32 @@ export async function runPromptText(
         path: { id: currentSessionId },
       });
 
-      const messages = messagesResult.data as Array<{ info: any; parts: Array<{ type: string; text?: string }> }> | undefined;
+      const messages = messagesResult.data as SessionMessage[] | undefined;
       if (!messages || messages.length === 0) {
         return "";
       }
 
-      const assistantMessages = messages.filter((m) => m.info?.role === "assistant");
+      const assistantMessages = messages.filter(
+        (m): m is { info: Extract<Message, { role: "assistant" }>; parts: Part[] } =>
+          m.info?.role === "assistant",
+      );
       const lastAssistant = assistantMessages[assistantMessages.length - 1];
       if (!lastAssistant) return "";
 
-      const infoError = lastAssistant.info?.error;
+      const infoError = lastAssistant.info.error;
       if (infoError) {
-        const errorMsg = infoError.data?.message ?? infoError.name ?? "Unknown OpenCode session error";
+        const errorMsg =
+          ("data" in infoError && typeof infoError.data === "object" && infoError.data !== null && "message" in infoError.data
+            ? String((infoError.data as { message?: unknown }).message)
+            : undefined) ??
+          infoError.name ??
+          "Unknown OpenCode session error";
         throw new Error(`OpenCode ${role} session error: ${errorMsg}`);
       }
 
       return (
         lastAssistant.parts
-          ?.filter((part) => part.type === "text" && part.text)
-          .map((part) => part.text ?? "")
+          ?.flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
           .join("\n")
           .trim() || ""
       );

@@ -138,7 +138,7 @@ export class HippocampusService implements HippocampusGateway {
         ...dynamicResults.map((r) => ({
           ...r,
           tier: "dynamic" as const,
-          decayedScore: (r as any).decayedScore,
+          decayedScore: r.decayedScore,
         })),
       ];
     } else {

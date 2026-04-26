@@ -414,8 +414,8 @@ export function cpLoadAgentContext(
   // reviewState.bugTaskIds (typically assigned to developer) so checkBugFixesReady
   // can see their actual status instead of treating missing tasks as resolved.
   if (caps.verifiesSprintReviews && currentSprint?.status === "reviewing") {
-    const reviewState = (currentSprint as any).reviewState;
-    if (reviewState?.bugTaskIds?.length > 0) {
+    const reviewState = currentSprint.reviewState;
+    if (reviewState && reviewState.bugTaskIds.length > 0) {
       const existingIds = new Set(agentTasks.map((t) => t.id));
       const bugTasks = snap.tasks.filter(
         (t) => (reviewState.bugTaskIds as string[]).includes(t.id) && !existingIds.has(t.id)
@@ -744,10 +744,17 @@ export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
       if (pkg.scripts?.build) cmd = "npm run build";
     } catch { /* use default */ }
 
-    execSync(cmd, { cwd: productDir, timeout: 30_000, stdio: "pipe", shell: true as any });
+    // `shell: true` works at runtime but the @types/node overload only allows
+    // string | URL. We cast through `string` to satisfy the overload without
+    // disabling type-checking on the rest of the call site.
+    execSync(cmd, { cwd: productDir, timeout: 30_000, stdio: "pipe", shell: true as unknown as string });
     lastBuildCheck = { status: "ok", detail: `Build passed (${cmd})`, checkedAt: new Date().toISOString() };
   } catch (err: unknown) {
-    const stderr = (err as any)?.stderr?.toString?.()?.slice(0, 500) ?? "";
+    // execSync errors carry a `stderr: Buffer` field but @types/node only
+    // surfaces it on the rejected-promise path, not the thrown one. Read it
+    // through a narrowed shape rather than `any`.
+    const errWithStderr = err as { stderr?: { toString?: () => string } };
+    const stderr = errWithStderr.stderr?.toString?.().slice(0, 500) ?? "";
     lastBuildCheck = { status: "error", detail: stderr || "Build failed", checkedAt: new Date().toISOString() };
   }
 
@@ -817,16 +824,22 @@ export async function cpUpdateTrustScore(event: TrustEvent): Promise<TrustScore>
   if (isDatabaseConfigured()) {
     try {
       const db = getDb();
+      // The legacy trust_scores table in tables.ts declares `history` as a
+      // bare `jsonb` without a `$type<TrustEvent[]>()` annotation, so drizzle
+      // infers it as `unknown`. The contract-typed `updated.history` is
+      // structurally identical; cast through `unknown` to satisfy drizzle
+      // without losing type-safety on the rest of the values object.
+      const trustHistory = updated.history as unknown as Record<string, unknown>;
       await db.insert(trustScoresTable).values({
         agentId: updated.agentId,
         score: updated.score,
-        history: updated.history as any,
+        history: trustHistory,
         updatedAt: new Date(updated.updatedAt),
       }).onConflictDoUpdate({
         target: trustScoresTable.agentId,
         set: {
           score: updated.score,
-          history: updated.history as any,
+          history: trustHistory,
           updatedAt: new Date(updated.updatedAt),
         },
       });
