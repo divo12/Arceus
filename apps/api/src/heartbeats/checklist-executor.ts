@@ -26,9 +26,7 @@ import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
 import { isCeoStreaming } from "../agents/chat.js";
 import { applyGovernanceToMutation } from "../skills/governance.js";
-import {
-  eventBridgeStarted, setEventBridgeStarted,
-} from "../orchestration/state.js";
+import { eventBridgeStarted } from "../orchestration/state.js";
 import { createWorkflowTask } from "@arceus/task-engine";
 import { upsertTask } from "../persistence/store.js";
 import { checkSprintCompletion } from "../sprints/lifecycle.js";
@@ -85,10 +83,11 @@ export async function executeChecklistAction(
     if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, status, summary, toolCalls, Date.now() - clBeatStart);
   };
 
-  // Ensure the SSE event bridge is running
+  // Ensure the SSE event bridge is running. startEventBridge owns the
+  // started-flag — sets it true only after the SSE handshake succeeds, and
+  // resets it on disconnect (C3 — F-273/274/290 fix).
   if (!eventBridgeStarted) {
     startEventBridge().catch(() => {});
-    setEventBridgeStarted(true);
   }
 
   emitEmployeeActivity(role, "decision", `${shortBeat(beatId)}: ${action.suggestedAction}`, {

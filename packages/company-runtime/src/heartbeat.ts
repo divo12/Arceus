@@ -290,9 +290,17 @@ export class HeartbeatEngine {
       const record = await this.executor(request, beatId);
       this.lastBeatAt.set(request.agentId, Date.now());
       this.recordHistory(record);
-      // Persist to DB (fire-and-forget — don't block the caller)
+      // Persist to DB (fire-and-forget — don't block the caller).
+      // C3 sweep: surface the failure rather than swallow it. The beat is
+      // still in `lastBeatAt` and recordHistory regardless, so a missed DB
+      // write doesn't break the runtime — but it should be visible in logs
+      // so we notice if the beats DB is failing systematically.
       if (this.deps) {
-        this.deps.commitBeatRecord(record).catch(() => {});
+        this.deps.commitBeatRecord(record).catch((err) => {
+          console.warn(
+            `[heartbeat] commitBeatRecord failed for ${record.agentId}/beat ${record.id}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
       }
       return record;
     } finally {

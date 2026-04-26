@@ -16,7 +16,6 @@ import { workspaceManager } from "../workspace/manager.js";
 import {
   setExecutionStatus,
   eventBridgeStarted,
-  setEventBridgeStarted,
   setActiveExecution,
 } from "../orchestration/state.js";
 import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js";
@@ -141,8 +140,9 @@ export async function beginSprintExecution(
     await workspaceManager.ensureLocal(snapshot.company.id);
 
     if (!eventBridgeStarted && onStartEventBridge) {
+      // The bridge owns the started-flag now (C3 — F-273/274/290).
+      // Don't pre-set it true — wait for the SSE handshake.
       onStartEventBridge().catch(() => {});
-      setEventBridgeStarted(true);
     }
 
     emitEmployeeActivity(

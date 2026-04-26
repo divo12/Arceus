@@ -29,17 +29,28 @@ import { setTaskStatus, setTaskPreviewUrl, appendTaskResult, appendTaskCommand }
 /**
  * Start the SSE event bridge that streams events from OpenCode
  * into agent state, governance audit, and prompt completion tracking.
- * Auto-reconnects on disconnect after a brief delay.
+ *
+ * The `eventBridgeStarted` flag is owned by this function — set true
+ * AFTER the SSE handshake succeeds, reset to false on disconnect or
+ * connect failure (cluster C3 — F-273/274/290). Callers either:
+ *   - `await startEventBridge()` and let throws propagate, or
+ *   - `await startEventBridge().catch(...)` to absorb startup failures.
+ *
+ * Either way, the flag never lies about whether the bridge is actually
+ * connected. Auto-reconnects on disconnect via exponential backoff.
  */
-export async function startEventBridge() {
+export async function startEventBridge(): Promise<void> {
   try {
     const opencode = await getOpencode();
     const response = await fetch(`${opencode.server.url}/event`);
 
     if (!response.ok || !response.body) {
       emitEmployeeActivity("system", "error", "Failed to connect to OpenCode event stream");
-      return;
+      throw new Error(`OpenCode /event responded ${response.status}`);
     }
+
+    // Mark started ONLY after the handshake succeeds.
+    setEventBridgeStarted(true);
 
     const reader = response.body.getReader();
     let buffer = "";
@@ -63,18 +74,27 @@ export async function startEventBridge() {
 
         if (!dataLine) continue;
 
+        let parsed: unknown;
         try {
-          void processEvent(JSON.parse(dataLine));
+          parsed = JSON.parse(dataLine);
         } catch {
-          /* ignore parse errors */
+          continue; // malformed event — skip
         }
+        // processEvent is async; surface any rejection rather than swallowing
+        // (was `void processEvent(...)` — F-289 / C3 sweep extra).
+        processEvent(parsed as { type: string; properties?: Record<string, any> }).catch((err) => {
+          emitEmployeeActivity("system", "error", `event-bridge processEvent failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
       }
     }
-  } catch {
-    emitEmployeeActivity("system", "info", "Event bridge disconnected — will reconnect on next OpenCode call");
+  } catch (err) {
+    emitEmployeeActivity("system", "info", `Event bridge disconnected — will reconnect (${err instanceof Error ? err.message : String(err)})`);
     setEventBridgeStarted(false);
     resetOpencodeConnection();
     scheduleReconnect();
+    // Re-throw so a caller doing `await startEventBridge()` knows the
+    // handshake never came up. Callers that don't care can `.catch(() => {})`.
+    throw err;
   }
 }
 
@@ -101,8 +121,10 @@ function scheduleReconnect(): void {
 
   setTimeout(() => {
     if (!eventBridgeStarted) {
+      // startEventBridge owns the started-flag. We don't await here because
+      // the bridge keeps the SSE socket open for the life of the connection;
+      // a successful start does not "resolve". Any error is logged inside.
       startEventBridge().catch(() => {});
-      setEventBridgeStarted(true);
     }
   }, delayMs);
 }
@@ -209,7 +231,13 @@ async function processEvent(event: { type: string; properties?: Record<string, a
                 taskId, detail: { toolName, ruleId: decision.ruleId, decision: decision.decision, trustScore: trustData.score },
               });
               const violationId = `viol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-              cpRecordPolicyViolation({
+              // C3 — F-291 fix: await both governance writes. The violation
+              // and trust adjustment are causally linked (a denied tool
+              // call must produce both a violation row and a score drop)
+              // and should land atomically from the bridge's perspective.
+              // Failures propagate to processEvent's outer .catch in the
+              // SSE loop where they get logged as bridge errors.
+              await cpRecordPolicyViolation({
                 id: violationId, companyId, agentId: agent.id, ruleId: decision.ruleId,
                 tool: toolName, decision: decision.decision, severity: "high",
                 detail: `Agent ${role} invoked denied tool ${toolName}: ${decision.reason}`,
@@ -217,7 +245,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
                 resolvedAt: null, createdAt: new Date().toISOString(),
               });
               const trustEvent = buildTrustEvent(agent.id, "violation", `Invoked denied tool ${toolName}`, new Date().toISOString());
-              cpUpdateTrustScore(trustEvent);
+              await cpUpdateTrustScore(trustEvent);
             } else if (decision.decision === "escalate") {
               emitEmployeeActivity(role, "decision", `Post-hoc escalation: ${toolName} requires approval — rule ${decision.ruleId}`, {
                 taskId, detail: { toolName, ruleId: decision.ruleId, trustScore: trustData.score },
