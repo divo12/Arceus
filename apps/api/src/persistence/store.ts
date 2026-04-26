@@ -21,7 +21,7 @@ import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from 
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { persistCompany } from "./company-persistence.js";
-import { persistSprint, persistMeeting } from "./domain-persistence.js";
+import { persistSprint, persistMeeting, persistApproval, persistChatMessage } from "./domain-persistence.js";
 import { storeEvents } from "./store-events.js";
 
 /**
@@ -222,6 +222,8 @@ export function appendChatMessage(message: ChatMessage) {
     chatMessages: [...snapshot.chatMessages, message],
   });
 
+  // Phase 4E dual-write — store stays authoritative, DB row mirrors.
+  void persistChatMessage(message.id).catch(() => {});
   return message;
 }
 
@@ -405,6 +407,8 @@ export function upsertApproval(approval: Approval) {
     approvals: nextApprovals,
   });
 
+  // Phase 4E dual-write — store stays authoritative, DB row mirrors.
+  void persistApproval(approval.id).catch(() => {});
   return approval;
 }
 

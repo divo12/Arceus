@@ -18,6 +18,8 @@ import { getDb } from "@arceus/db";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import * as meetingsRepo from "@arceus/db/src/repos/meetings.js";
+import * as approvalsRepo from "@arceus/db/src/repos/approvals.js";
+import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
 import postgres from "postgres";
 import { getSnapshot } from "./store.js";
 import type { Artifact as ContractArtifact } from "@arceus/contracts";
@@ -66,5 +68,29 @@ export async function persistMeeting(meetingId: string): Promise<void> {
     await meetingsRepo.upsertMeeting(getDb(), meeting);
   } catch (err) {
     console.warn(`[meetings] DB sync skipped for ${meetingId} (pg=${pgErrorCode(err)})`);
+  }
+}
+
+// ── Approvals (Phase 4E) ──────────────────────────────────────
+
+export async function persistApproval(approvalId: string): Promise<void> {
+  const approval = getSnapshot().approvals.find((a) => a.id === approvalId);
+  if (!approval) return;
+  try {
+    await approvalsRepo.upsertApproval(getDb(), approval);
+  } catch (err) {
+    console.warn(`[approvals] DB sync skipped for ${approvalId} (pg=${pgErrorCode(err)})`);
+  }
+}
+
+// ── Board messages / chat (Phase 4E) ──────────────────────────
+
+export async function persistChatMessage(messageId: string): Promise<void> {
+  const message = getSnapshot().chatMessages.find((m) => m.id === messageId);
+  if (!message) return;
+  try {
+    await boardMessagesRepo.upsertChatMessage(getDb(), message);
+  } catch (err) {
+    console.warn(`[chat] DB sync skipped for ${messageId} (pg=${pgErrorCode(err)})`);
   }
 }
