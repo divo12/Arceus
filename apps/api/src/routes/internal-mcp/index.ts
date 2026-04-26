@@ -23,16 +23,22 @@ import internalMcpSkillsRoutes from "./skills.routes.js";
 export default async function internalMcpRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", async (req, reply) => {
     if (!req.url.startsWith("/api/internal/v1/")) return;
+    // Fastify only short-circuits the request lifecycle when an async hook
+    // *returns* the reply object. Returning `undefined` (or just `return;`)
+    // lets the route handler run even after `reply.send()` has fired,
+    // producing FST_ERR_REP_ALREADY_SENT + an unhandled rejection on every
+    // 401/409/idempotent-replay. Always return `reply` once it's been sent.
     await mcpAuth(req, reply);
-    if (reply.sent) return;
+    if (reply.sent) return reply;
     await mcpRequestContext(req, reply);
-    if (reply.sent) return;
+    if (reply.sent) return reply;
     await mcpRateLimitHeaders(req, reply);
-    if (reply.sent) return;
+    if (reply.sent) return reply;
     await mcpIdempotencyReplay(req, reply);
-    if (reply.sent) return;
+    if (reply.sent) return reply;
     // Spec 32 — emit tool.invoked once we know the tool + ctx are valid.
     await mcpEmitToolInvoked(req, reply);
+    if (reply.sent) return reply;
   });
 
   app.addHook("onResponse", async (req, reply) => {

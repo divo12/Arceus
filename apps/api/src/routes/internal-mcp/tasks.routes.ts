@@ -468,15 +468,27 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       }
     }
 
-    // NOTE: do NOT call persistTask here. persistTask does a full UPSERT of
-    // store state including `status`, which would race against the CAS — a
-    // late persistTask from one request can overwrite the in_progress status
-    // a concurrent winner just set via CAS, effectively undoing the claim.
-    // Tasks are dual-written on creation (POST /tasks above), so the DB row
-    // is already there. If a task created by non-route code is missing from
-    // the DB, the CAS correctly returns `not_found` and the caller knows to
-    // reseed before retrying.
-    const result = await tasksRepo.claimTask(getDb(), taskId, mcp.beatId);
+    // NOTE: persistTask does a full UPSERT of store state including
+    // `status`. We don't call it AFTER a successful CAS — that would race
+    // and let a late persistTask from one request overwrite the
+    // in_progress status a concurrent winner just set, effectively
+    // undoing the claim.
+    //
+    // Tasks SHOULD already be in the DB by the time we reach this handler
+    // (store.upsertTask now fires persistTask fire-and-forget; sprint
+    // creation barriers on a per-task await). If a fast-poll beat lands
+    // before the dual-write resolves we backfill once below.
+    let result = await tasksRepo.claimTask(getDb(), taskId, mcp.beatId);
+    if (!result.ok && result.cause === "not_found") {
+      // Backfill the DB row from the snapshot and retry the CAS once.
+      // Reading snapshot status (planned/created/ready) and upserting BEFORE
+      // the retry is safe: the CAS atomically flips to in_progress, so we
+      // can't clobber a concurrent winner's claim.
+      console.log(`[claim] not_found backfill+retry id=${taskId} beat=${mcp.beatId}`);
+      await persistTask(taskId);
+      result = await tasksRepo.claimTask(getDb(), taskId, mcp.beatId);
+      console.log(`[claim] retry result=${result.ok ? "ok" : result.cause} id=${taskId}`);
+    }
     if (!result.ok) {
       const spec = CLAIM_FAILURES[result.cause];
       reply.code(spec.status).send(failure(spec.summaryFor(taskId), spec.cause, spec.retry, spec.stopWhen));

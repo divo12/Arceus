@@ -215,12 +215,22 @@ export const mcpEmitToolInvoked: McpHook = async (req) => {
   const tool = routeToTool(req.method, routeUrl);
   mcp.tool = tool;
   mcp.invokedAt = Date.now();
+  // Merge path params into args so URL-template tools (e.g. task_claim,
+  // which carries `taskId` only as a path segment) show what the agent
+  // actually targeted. Without this the inspector only sees `{ reason }`
+  // and we can't tell if the agent hallucinated an id.
+  const params = (req.params ?? null) as Record<string, unknown> | null;
+  const body = (req.body ?? null) as Record<string, unknown> | null;
+  let mergedArgs: unknown = body;
+  if (params && Object.keys(params).length > 0) {
+    mergedArgs = { ...(body ?? {}), ...params };
+  }
   observability.logEvent({
     event: "tool.invoked",
     beatId: mcp.beatId,
     role: mcp.role as RoleType,
     tool,
-    args: req.body ?? null,
+    args: mergedArgs,
     idempotencyKey: mcp.idempotencyKey ?? undefined,
     ts: mcp.invokedAt,
   });

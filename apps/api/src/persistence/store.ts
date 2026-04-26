@@ -21,7 +21,7 @@ import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from 
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { persistCompany } from "./company-persistence.js";
-import { persistSprint, persistMeeting, persistApproval, persistChatMessage, persistAgents } from "./domain-persistence.js";
+import { persistSprint, persistTask, persistMeeting, persistApproval, persistChatMessage, persistAgents } from "./domain-persistence.js";
 import { storeEvents } from "./store-events.js";
 
 /**
@@ -251,6 +251,12 @@ export function upsertTask(task: Task) {
     ...snapshot,
     tasks: nextTasks,
   });
+
+  // Dual-write to Postgres (mirrors upsertSprint). Fire-and-forget so we
+  // never block the synchronous mutation path; persistTask swallows pg
+  // errors. Without this the CAS-based claim path returns `not_found`
+  // because the task row was never inserted.
+  void persistTask(task.id).catch(() => {});
 
   return task;
 }

@@ -15,7 +15,10 @@ import type { Task as ContractTask } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import postgres from "postgres";
+import { observability } from "@arceus/contracts";
 import { getSnapshot } from "../../persistence/store.js";
+import { persistCompany } from "../../persistence/company-persistence.js";
+import { persistSprint } from "../../persistence/domain-persistence.js";
 import type { ErrorCause, RetrySafety } from "./envelope.js";
 
 /**
@@ -58,11 +61,47 @@ export async function readTaskHybrid(taskId: string): Promise<ContractTask | nul
  */
 export async function persistTask(taskId: string): Promise<void> {
   const task = getSnapshot().tasks.find((t) => t.id === taskId);
-  if (!task) return;
+  if (!task) {
+    if (process.env.ARCEUS_DEBUG_PERSIST === "1") console.log(`[persist:tasks] miss id=${taskId}`);
+    return;
+  }
   try {
     await tasksRepo.upsertTask(getDb(), task);
+    if (process.env.ARCEUS_DEBUG_PERSIST === "1") console.log(`[persist:tasks] ok id=${taskId}`);
   } catch (err) {
-    console.warn(`[tasks] DB sync skipped for ${taskId} (pg=${pgErrorCode(err)})`);
+    const code = pgErrorCode(err);
+    // 23503 = parent row missing. Backfill company + sprint then retry once.
+    // Same self-healing pattern as domain-persistence.persistTask — both
+    // copies must heal because both can be the first writer to hit a stale
+    // FK after a race during applyStrategy / sprint_create.
+    if (code === "23503") {
+      await persistCompany(task.companyId);
+      if (task.sprintId) await persistSprint(task.sprintId);
+      try {
+        await tasksRepo.upsertTask(getDb(), task);
+        if (process.env.ARCEUS_DEBUG_PERSIST === "1") console.log(`[persist:tasks] ok id=${taskId} (after backfill)`);
+        return;
+      } catch (retryErr) {
+        const retryCode = pgErrorCode(retryErr);
+        console.log(`[persist:tasks] skip pg=${retryCode} id=${taskId} (after backfill)`);
+        observability.logEvent({
+          event: "persist.failed",
+          table: "tasks",
+          id: taskId,
+          pgCode: retryCode,
+          ts: Date.now(),
+        });
+        return;
+      }
+    }
+    console.log(`[persist:tasks] skip pg=${code} id=${taskId}`);
+    observability.logEvent({
+      event: "persist.failed",
+      table: "tasks",
+      id: taskId,
+      pgCode: code,
+      ts: Date.now(),
+    });
   }
 }
 

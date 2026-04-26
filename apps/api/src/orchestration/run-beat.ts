@@ -14,7 +14,7 @@ import { updateSuccessRate, ROLE_SOULS, getSkillById } from "@arceus/company-run
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { getOpencode } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
-import { buildBeatContext, renderStateForAgent, countOpenTasksForRole } from "./beat-context-builder.js";
+import { buildBeatContext, renderStateForAgent, countOpenTasksForRole, summarizeShownTasks } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
 import { materializeBeatSkills } from "../opencode/materialize-beat-skills.js";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
@@ -82,6 +82,17 @@ export async function runBeat(input: {
     sprintId: ctx.sprintId,
     trustBand: ctx.trustBand,
     ts: beatStartedAt,
+  });
+
+  // Diagnostic — capture exactly what the agent will see in `## Your Tasks`.
+  // If the LLM later claims an id that's not in this list, we know it
+  // hallucinated rather than picked from rendered state.
+  observability.logEvent({
+    event: "beat.context",
+    beatId,
+    role: input.role,
+    shownTasks: summarizeShownTasks(input.role),
+    ts: Date.now(),
   });
 
   // Vision guard — if the agent has nothing to do, skip the prompt entirely.

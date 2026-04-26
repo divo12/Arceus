@@ -15,6 +15,7 @@
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import postgres from "postgres";
+import { observability } from "@arceus/contracts";
 import { getSnapshot } from "./store.js";
 
 function pgErrorCode(err: unknown): string {
@@ -43,6 +44,17 @@ export async function persistCompany(companyId: string): Promise<void> {
   try {
     await companiesRepo.upsertCompany(getDb(), company);
   } catch (err) {
-    console.warn(`[companies] DB sync skipped for ${companyId} (pg=${pgErrorCode(err)})`);
+    const code = pgErrorCode(err);
+    console.warn(`[companies] DB sync skipped for ${companyId} (pg=${code})`);
+    // Surface to inspector — without this we can't tell whether the
+    // downstream `persist:tasks pg=23503` cascade is caused by a missing
+    // company row or by a tasks-table issue.
+    observability.logEvent({
+      event: "persist.failed",
+      table: "companies",
+      id: companyId,
+      pgCode: code,
+      ts: Date.now(),
+    });
   }
 }

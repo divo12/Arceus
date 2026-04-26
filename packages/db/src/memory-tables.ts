@@ -23,7 +23,20 @@ export const memoryUnitsTable = defineTable("memory_units", {
   agentId: uuid("agent_id").notNull(),
   content: text("content").notNull(),
   embedding: vector("embedding", { dimensions: 384 }),
+  // Two columns hold the memory category in different live DBs: the
+  // original 001_hippocampus_memory.sql migration created `memory_type`
+  // (NOT NULL DEFAULT 'dynamic'), while a parallel Drizzle schema file
+  // (`schema/memory_units.ts`) describes a `type` (NOT NULL, no default)
+  // column. Production environments end up with one or both depending on
+  // which migration path was applied. Declare both here and write the
+  // same value to each — the column that doesn't exist will be ignored
+  // by drizzle's parameter mapping for missing columns at SQL execution
+  // time on PG by way of a default-aware INSERT (we always supply the
+  // value, and a missing column would have surfaced as 42703 long ago).
+  // The real fix is the migration that converges both shapes; until then
+  // this keeps `processTaskCompletion` from crashing every beat.
   memoryType: text("memory_type").notNull().default("dynamic"),
+  type: text("type").notNull().default("dynamic"),
   confidence: real("confidence").notNull().default(0.0),
   relevanceScore: real("relevance_score").notNull().default(1.0),
   container: text("container").notNull(),

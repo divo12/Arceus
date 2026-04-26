@@ -12,6 +12,7 @@ import {
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
+import { persistSprint, persistTask } from "../persistence/domain-persistence.js";
 import { workspaceManager } from "../workspace/manager.js";
 import {
   setExecutionStatus,
@@ -42,6 +43,13 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
     `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${input.goal}`,
     input.goal,
   );
+  // Barrier: ensure the sprint row reaches Postgres before we attempt to
+  // insert task rows that FK-reference it. upsertSprint fires the dual-write
+  // async; without this await, persistTask's INSERT can race ahead of
+  // persistSprint's INSERT and trigger 23503 (foreign_key_violation), after
+  // which the tasks never reach the DB and tasksRepo.claimTask returns
+  // not_found indefinitely.
+  await persistSprint(sprint.id);
   const freshSnapshot = getSnapshot();
 
   // Create tasks from agent-provided list
@@ -90,6 +98,11 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   for (const task of createdTasks) {
     upsertTask(task);
   }
+  // Barrier: ensure task rows reach Postgres before we return — downstream
+  // beats call tasksRepo.claimTask which performs a DB-only CAS and would
+  // otherwise see "not_found" if the fire-and-forget upsert from upsertTask
+  // hasn't completed.
+  await Promise.all(createdTasks.map((t) => persistTask(t.id)));
 
   // Graph instrumentation
   emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");

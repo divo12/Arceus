@@ -384,7 +384,9 @@
     <option value="">All events</option>
     <optgroup label="Beat">
       <option>beat.started</option>
+      <option>beat.context</option>
       <option>beat.completed</option>
+      <option>beat.scored</option>
       <option>beat.idle</option>
     </optgroup>
     <optgroup label="Tool">
@@ -415,6 +417,7 @@
       <option>idempotency.replay</option>
       <option>error</option>
       <option>audit</option>
+      <option>persist.failed</option>
     </optgroup>
   </select>
   <select id="filter-role">
@@ -486,6 +489,22 @@
       case 'beat.idle':
         push('beat', shortId(ev.beatId)); push('stalledMs', ev.stalledMs);
         break;
+      case 'beat.context':
+        push('role', ev.role); push('beat', shortId(ev.beatId));
+        push('shown', (ev.shownTasks || []).length + ' tasks');
+        if (Array.isArray(ev.shownTasks) && ev.shownTasks.length > 0) {
+          push('ids', ev.shownTasks.map(t => shortId(t.id)).join(','));
+        }
+        break;
+      case 'beat.scored':
+        push('beat', shortId(ev.beatId));
+        push('verdict', ev.verdict);
+        push('branch', ev.branch);
+        push('toolInvoked', ev.toolInvoked);
+        push('claim', ev.claimedOk ? 'ok' : '-');
+        push('complete', ev.completedOrBlocked ? 'ok' : '-');
+        push('shown', ev.shownClaimableCount + ' claimable');
+        break;
       case 'role.handoff':
         push('from', ev.from); push('to', ev.to); push('reason', ev.reason);
         break;
@@ -555,6 +574,9 @@
         break;
       case 'idempotency.replay':
         push('tool', ev.tool); push('key', shortId(ev.key));
+        break;
+      case 'persist.failed':
+        push('table', ev.table); push('id', shortId(ev.id)); push('pg', ev.pgCode);
         break;
       default:
         // Fall back to dumping any non-meta scalar fields.

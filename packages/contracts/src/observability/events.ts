@@ -37,6 +37,24 @@ export const beatStartedSchema = z.object({
   ts: tsField,
 });
 
+/**
+ * Emitted right after `beat.started` with a compact summary of what the
+ * agent was shown. Useful to diagnose why an LLM picked a particular task
+ * id (or hallucinated one).
+ */
+export const beatContextSchema = z.object({
+  event: z.literal("beat.context"),
+  beatId: beatIdField,
+  role: roleTypeSchema,
+  shownTasks: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    status: z.string(),
+    claimable: z.boolean(),
+  })),
+  ts: tsField,
+});
+
 export const beatCompletedSchema = z.object({
   event: z.literal("beat.completed"),
   beatId: beatIdField,
@@ -44,6 +62,42 @@ export const beatCompletedSchema = z.object({
   durationMs: z.number().nonnegative(),
   verdictOutcome: z.enum(["pass", "fail"]),
   verdictScore: z.number().min(0).max(1),
+  ts: tsField,
+});
+
+/**
+ * Diagnostic counterpart to `beat.completed`: surfaces the raw scoring
+ * inputs that produced the verdict. Lets the inspector explain WHY a
+ * beat was passed or failed without having to re-run the heuristic by
+ * eye against the event log.
+ *
+ * `branch` records which terminal `if` in scoreBeatVerdict fired so
+ * regressions like "idle beats wrongly failed" surface as a single-row
+ * diff, not a noisy event re-read.
+ */
+export const beatScoredSchema = z.object({
+  event: z.literal("beat.scored"),
+  beatId: beatIdField,
+  verdict: z.enum(["pass", "fail"]),
+  branch: z.enum([
+    "error",
+    "real_failure",
+    "claimed_without_complete",
+    "productive",
+    "benign_idle_poll",
+    "idle_no_claimable",
+    "no_tool_invoked",
+    "fallthrough",
+  ]),
+  toolInvoked: z.number().int().nonnegative(),
+  productiveOk: z.boolean(),
+  hadError: z.boolean(),
+  realFailure: z.boolean(),
+  benignIdlePoll: z.boolean(),
+  claimedOk: z.boolean(),
+  completedOrBlocked: z.boolean(),
+  sawBeatContext: z.boolean(),
+  shownClaimableCount: z.number().int().nonnegative(),
   ts: tsField,
 });
 
@@ -256,11 +310,29 @@ export const auditSchema = z.object({
   ts: tsField,
 });
 
+/**
+ * Dual-write failure — emitted when the in-memory store mirrors to Postgres
+ * and the upsert throws (FK violation, check constraint, …). Without this
+ * event the failure is invisible in the inspector and the next CAS-only
+ * consumer (e.g. `task_claim`) appears to fail with `not_found` for no
+ * obvious reason. The pg SQLSTATE is the discriminator: 23503 = FK,
+ * 23502 = NOT NULL, 23514 = check, 42703 = column missing, 23505 = unique.
+ */
+export const persistFailedSchema = z.object({
+  event: z.literal("persist.failed"),
+  table: z.string(),
+  id: z.string(),
+  pgCode: z.string(),
+  ts: tsField,
+});
+
 // ── Union ─────────────────────────────────────────────────────
 
 export const arceusEventSchema = z.discriminatedUnion("event", [
   beatStartedSchema,
+  beatContextSchema,
   beatCompletedSchema,
+  beatScoredSchema,
   beatIdleSchema,
   roleHandoffSchema,
   sprintCreatedSchema,
@@ -283,6 +355,7 @@ export const arceusEventSchema = z.discriminatedUnion("event", [
   agentReasoningSchema,
   errorSchema,
   auditSchema,
+  persistFailedSchema,
 ]);
 
 export type ArceusEvent = z.infer<typeof arceusEventSchema>;

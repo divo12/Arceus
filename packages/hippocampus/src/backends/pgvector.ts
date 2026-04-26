@@ -1,4 +1,5 @@
 import { eq, and, isNull, sql, gt, desc, cosineDistance } from "drizzle-orm";
+import { v5 as uuidv5 } from "uuid";
 import { getDb, isDatabaseConfigured, memoryUnitsTable, habitsTable, primingStateTable } from "@arceus/db";
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
 import type { StaticMemoryStore, DynamicMemoryStore, ProceduralMemoryStore, PrimingStore } from "../types";
@@ -75,9 +76,16 @@ function primingRowToState(row: typeof primingStateTable.$inferSelect): PrimingS
 
 /** Extract the raw UUID from prefixed IDs like "agent_developer_36a2d2bb-..." or "company_e95b57fd-...". */
 function extractUuid(prefixedId: string): string {
-  const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const match = prefixedId.match(uuidRegex);
-  return match ? match[0] : prefixedId;
+  // The contracts/db layer uses `toDbId(friendly) = uuidv5(friendly, ARCEUS_UUID_NS)`
+  // when the input isn't already a bare UUID. We mirror that here so that
+  // `memory_units.company_id` / `agent_id` resolve to the same uuid the
+  // `companies` / `agents` tables actually store. A naive regex extract
+  // (e.g. pulling `acee84ad-...` out of `company_acee84ad-...`) produces
+  // a UUID that does not exist in `companies.id` and the FK 23503's.
+  const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (UUID_RE.test(prefixedId)) return prefixedId;
+  return uuidv5(prefixedId, ARCEUS_UUID_NS);
 }
 
 /** Build the Drizzle insert values for a memory unit, extracting UUIDs from prefixed IDs. */
@@ -88,6 +96,11 @@ function buildInsertValues(unit: MemoryUnit, memoryType: "static" | "dynamic") {
     agentId: extractUuid(unit.agentId),
     content: unit.content,
     memoryType,
+    // Shadow column — see comment on `memory_units.type` in
+    // memory-tables.ts. Without this every insert into a DB whose live
+    // schema still has `type NOT NULL` (no default) crashes with 23502
+    // and `processTaskCompletion` aborts the whole beat.
+    type: memoryType,
     confidence: unit.confidence,
     relevanceScore: 1.0,
     container: `company:${unit.companyId}:agent:${unit.agentId}`,

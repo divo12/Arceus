@@ -148,8 +148,7 @@ function renderCompanyState(companyId: string): string {
   return lines.join("\n");
 }
 
-/**
- * Count of role-assigned tasks in workable states. Used by `runBeat` to skip
+/** Count of role-assigned tasks in workable states. Used by `runBeat` to skip
  * the prompt entirely when an agent has nothing to do (avoids filler-work
  * hallucination from a bored LLM).
  */
@@ -158,6 +157,20 @@ export function countOpenTasksForRole(role: Role): number {
   return snapshot.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   ).length;
+}
+
+/** Snapshot of what the role sees in `## Your Tasks` (for diagnostic events). */
+export function summarizeShownTasks(role: Role): Array<{ id: string; title: string; status: string; claimable: boolean }> {
+  const snapshot = getSnapshot();
+  return snapshot.tasks
+    .filter((t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status))
+    .map((t) => {
+      const unmet = (t.dependsOnTaskIds ?? []).some((depId) => {
+        const dep = snapshot.tasks.find((d) => d.id === depId);
+        return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
+      });
+      return { id: t.id, title: t.title, status: t.status, claimable: !unmet };
+    });
 }
 
 function renderOpenTasksForRole(companyId: string, role: Role): string {

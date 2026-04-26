@@ -17,6 +17,7 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as heartbeatRunsRepo from "@arceus/db/src/repos/heartbeat_runs.js";
 import * as sessionBindingsRepo from "@arceus/db/src/repos/session_bindings.js";
 import { toDbId as companyToDbId } from "@arceus/db/src/repos/companies.js";
+import { toDbId } from "@arceus/db/src/repos/tasks.js";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
 import { heartbeatRuns } from "@arceus/db/src/schema/heartbeat_runs.js";
@@ -65,6 +66,12 @@ export async function startHeartbeatRun(input: StartHeartbeatRunInput): Promise<
     if (!agentDbId) return null;
     const beatNumber = await nextBeatNumber(dbCompanyId);
     const row = await heartbeatRunsRepo.startRun(db, {
+      // Pin id to a deterministic hash of the friendly beatId so that the
+      // tasks-CAS path (which sets checkout_run_id = toDbId(beatId) without
+      // knowing the random uuid the DB would otherwise assign) finds a
+      // matching FK target. Without this every successful claim would
+      // 23503-fail on the heartbeat_runs FK.
+      id: toDbId(input.beatId),
       companyId: dbCompanyId,
       agentId: agentDbId,
       beatNumber,

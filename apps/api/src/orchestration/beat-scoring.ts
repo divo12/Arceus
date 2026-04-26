@@ -24,6 +24,7 @@
  * housekeeping (`post_watchdog_reset`) don't count as work on their own.
  */
 import { snapshot } from "../observability/event-bus.js";
+import { observability } from "@arceus/contracts";
 
 // ── Per-beat task transition tracking (legacy; kept for callers) ─
 
@@ -96,11 +97,20 @@ export async function scoreBeatVerdict(beatId: string): Promise<"pass" | "fail">
   let benignIdlePoll = false;
   let claimedOk = false;
   let completedOrBlocked = false;
+  // Track whether the agent was shown any claimable tasks. When the beat
+  // procedure says "no claimable tasks → end your turn", obeying with zero
+  // tool calls is correct behavior, not a failure.
+  let sawBeatContext = false;
+  let shownClaimableCount = 0;
 
   for (const ev of events) {
     switch (ev.event) {
       case "error":
         hadError = true;
+        break;
+      case "beat.context":
+        sawBeatContext = true;
+        for (const t of ev.shownTasks) if (t.claimable) shownClaimableCount++;
         break;
       case "tool.invoked":
         toolInvoked++;
@@ -136,15 +146,53 @@ export async function scoreBeatVerdict(beatId: string): Promise<"pass" | "fail">
     }
   }
 
-  if (hadError) return "fail";
-  if (realFailure && !productiveOk) return "fail";
+  if (hadError) return finishScore("fail", "error");
+  if (realFailure && !productiveOk) return finishScore("fail", "real_failure");
   // Claimed a task but never completed/blocked it — the task stays open and
   // downstream roles stall. This is the "create artifact, walk away" pattern.
-  if (claimedOk && !completedOrBlocked) return "fail";
-  if (productiveOk) return "pass";
+  if (claimedOk && !completedOrBlocked) return finishScore("fail", "claimed_without_complete");
+  if (productiveOk) return finishScore("pass", "productive");
   // Polled and found nothing to claim → idle pass, not a failure.
-  if (benignIdlePoll) return "pass";
-  if (toolInvoked === 0) return "fail";
-  return "fail";
+  if (benignIdlePoll) return finishScore("pass", "benign_idle_poll");
+  // Idle pass: the beat-context render told the agent there were zero
+  // claimable tasks for its role, and the agent correctly declined to
+  // invoke any tools. Failing this would punish good behavior and
+  // contradict the procedure block in the prompt.
+  if (sawBeatContext && shownClaimableCount === 0 && toolInvoked === 0 && !realFailure) {
+    return finishScore("pass", "idle_no_claimable");
+  }
+  if (toolInvoked === 0) return finishScore("fail", "no_tool_invoked");
+  return finishScore("fail", "fallthrough");
+
+  function finishScore(
+    verdict: "pass" | "fail",
+    branch:
+      | "error"
+      | "real_failure"
+      | "claimed_without_complete"
+      | "productive"
+      | "benign_idle_poll"
+      | "idle_no_claimable"
+      | "no_tool_invoked"
+      | "fallthrough",
+  ): "pass" | "fail" {
+    observability.logEvent({
+      event: "beat.scored",
+      beatId,
+      verdict,
+      branch,
+      toolInvoked,
+      productiveOk,
+      hadError,
+      realFailure,
+      benignIdlePoll,
+      claimedOk,
+      completedOrBlocked,
+      sawBeatContext,
+      shownClaimableCount,
+      ts: Date.now(),
+    });
+    return verdict;
+  }
 }
 
