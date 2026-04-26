@@ -83,6 +83,40 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     const parsed = parseOrFail(sprintCreateBody, req.body ?? {}, reply);
     if (parsed === null) return;
 
+    // Boundary validation per vision: every assigned_role must map to a
+    // currently hired agent. The CEO LLM sometimes invents roles
+    // (e.g. "pm", "qa") that aren't in the org chart, which silently
+    // deadlocks the sprint because no agent ever beats with that role and
+    // dependents stay blocked forever. Reject up front and let the CEO
+    // re-reason with a payload_fixed validation failure.
+    const hiredRoles = new Set(getSnapshot().agents.map((a) => a.role));
+    const invalid = parsed.tasks
+      .map((t, i) => ({ idx: i, role: t.assigned_role, title: t.title }))
+      .filter((t) => !hiredRoles.has(t.role as never));
+    if (invalid.length > 0) {
+      const validList = Array.from(hiredRoles).sort().join(", ");
+      const detail = invalid.map((t) => `task[${t.idx}] "${t.title}" → "${t.role}"`).join("; ");
+      reply.code(422).send({
+        ...failure(
+          `Unknown assigned_role on ${invalid.length} task(s). Valid roles for this company: [${validList}]. Offending: ${detail}`,
+          "validation",
+          "never",
+          "payload_fixed",
+        ),
+        error: {
+          cause: "validation" as ErrorCause,
+          retry: "never" as const,
+          stopWhen: "payload_fixed",
+          details: invalid.map((t) => ({
+            field: `tasks.${t.idx}.assigned_role`,
+            message: `"${t.role}" is not a hired role. Valid: [${validList}]`,
+            code: "unknown_role",
+          })),
+        },
+      });
+      return;
+    }
+
     try {
       const result = await createSprintWithTasks(parsed);
       const sprintId = (result as { sprintId?: string; id?: string }).sprintId

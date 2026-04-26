@@ -25,6 +25,10 @@ import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/a
 import { startHeartbeatRun, finishHeartbeatRun, bindSession, unbindSession } from "./beat-lifecycle.js";
 import { updateTrustScore } from "../governance/trust.js";
 import { persistSkillUsageEvent } from "../skills/usage-persistence.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import { getDb } from "@arceus/db";
+import { setTaskStatus } from "../tasks/mutations.js";
+import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 
 const HARD_CAP_MS = 15 * 60 * 1000;
 
@@ -147,7 +151,10 @@ export async function runBeat(input: {
       toolFilter[`arceus_${name}`] = true;
     }
 
-    await opencode.client.session.prompt({
+    // Race the SDK call AND the completion poll against the hard cap.
+    // Sequential await would hang for the full undici body timeout (30m)
+    // if opencode never returns, swallowing the 15m cap entirely.
+    const promptPromise = opencode.client.session.prompt({
       path: { id: sessionId },
       body: {
         model: { providerID: "azure", modelID: deployment },
@@ -158,7 +165,15 @@ export async function runBeat(input: {
       } as any,
     });
 
-    await completionPromise;
+    await Promise.race([
+      Promise.all([promptPromise, completionPromise]),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Beat ${beatId} timed out after ${HARD_CAP_MS}ms (hard cap)`)),
+          HARD_CAP_MS,
+        ).unref(),
+      ),
+    ]);
   } catch (e) {
     const msg = (e as Error).message ?? "";
     cause = msg.includes("timed out") ? "beat_hard_cap" : "prompt_failed";
@@ -179,6 +194,17 @@ export async function runBeat(input: {
 
     const usedSkills = getBeatSkillUsage(beatId);
     const outcomeScore = verdict === "pass" ? 1 : 0;
+    if (usedSkills.length > 0) {
+      const names = usedSkills
+        .map((sid) => getSkillById(sid)?.name ?? sid)
+        .join(", ");
+      emitEmployeeActivity(
+        input.role,
+        "context",
+        `${shortBeat(beatId)}: skills used (${usedSkills.length}) — ${names} → ${verdict}`,
+        { beatId, detail: { skillIds: usedSkills, verdict } },
+      );
+    }
     for (const skillId of usedSkills) {
       updateSuccessRate(skillId, outcomeScore);
       // Spec 31 Phase 5 — durable mirror for the EMA. Read the registry
@@ -214,6 +240,12 @@ export async function runBeat(input: {
               targetSkillId: skillId,
               payload: { baselineEma: baseline, currentEma: skill.successRate, usageCount: skill.usageCount },
             });
+            emitEmployeeActivity(
+              "skills_lead",
+              "decision",
+              `Evolution job enqueued: ${skill.name} (EMA ${skill.successRate.toFixed(2)} < baseline ${baseline.toFixed(2)} − 0.15, n=${skill.usageCount})`,
+              { beatId, detail: { skillId, trigger: "ema_drop", baseline, currentEma: skill.successRate } },
+            );
           }
         }
       } catch (err) {
@@ -229,6 +261,38 @@ export async function runBeat(input: {
 
     clearBeatSkillUsage(beatId);
     clearBeatTaskTransitions(beatId);
+
+    // Vision §11 — release any claims this beat still holds. A claimed
+    // task that didn't reach completed/blocked is orphaned; without this
+    // it stays in_progress with checkout_run_id pointing at a dead beat,
+    // and the next beat for the same role sees shownClaimableCount=0.
+    if (verdict === "fail") {
+      try {
+        const released = await tasksRepo.releaseClaimsForBeat(getDb(), beatId);
+        for (const tid of released) {
+          try { setTaskStatus(tid, "planned", `claim released after beat ${beatId} failed (${cause ?? "unknown"})`); } catch { /* in-memory may not know it */ }
+        }
+        if (released.length > 0) {
+          observability.logEvent({
+            event: "task_lifecycle",
+            beatId,
+            role: input.role,
+            kind: "claim_released",
+            taskIds: released,
+            cause: cause ?? "beat_failed",
+            ts: Date.now(),
+          } as any);
+        }
+      } catch (err) {
+        observability.logEvent({
+          event: "error",
+          where: "run_beat.release_claims",
+          message: err instanceof Error ? err.message : String(err),
+          beatId,
+          ts: Date.now(),
+        });
+      }
+    }
 
     unregisterSessionContext(sessionId);
     await destroyBeatSession(sessionId);

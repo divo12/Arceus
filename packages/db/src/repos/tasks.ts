@@ -177,6 +177,37 @@ export async function releaseClaim(
   return result.length === 1;
 }
 
+/**
+ * Release every in-progress claim held by a given beat/run. Used by the
+ * run-beat cleanup path when a beat dies mid-flight (e.g. fetch-failed
+ * during a long opencode prompt) so the orphaned task doesn't stay locked
+ * to a dead beat. Vision §11 — beats should not leak claims.
+ *
+ * Returns friendly id hints if present in body.friendlyIds, else uuids.
+ */
+export async function releaseClaimsForBeat(
+  db: DbClient,
+  beatId: string,
+): Promise<string[]> {
+  const dbRunId = toDbId(beatId);
+  const released = await db
+    .update(tasks)
+    .set({
+      checkoutRunId: null,
+      executionRunId: null,
+      executionLockedAt: null,
+      status: "ready",
+      claimedAt: null,
+      startedAt: null,
+    })
+    .where(and(eq(tasks.checkoutRunId, dbRunId), eq(tasks.status, "in_progress")))
+    .returning({ id: tasks.id, body: tasks.body });
+  return released.map((r) => {
+    const fid = (r.body as any)?.friendlyIds?.id;
+    return typeof fid === "string" ? fid : r.id;
+  });
+}
+
 // ── Terminal transitions ────────────────────────────────────
 
 export async function completeTask(

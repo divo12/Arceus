@@ -433,12 +433,22 @@ export class HeartbeatEngine {
     const roster = this.deps.getAgentRoster();
     if (roster.length === 0) return;
 
-    // Sort by role priority (CEO first)
-    const sorted = [...roster].sort(
-      (a, b) => (HeartbeatEngine.ROLE_PRIORITY[a.role] ?? 99) - (HeartbeatEngine.ROLE_PRIORITY[b.role] ?? 99)
-    );
-
     const now = Date.now();
+
+    // Sort by overdue-ness (most overdue first), then by static priority as
+    // tiebreaker. Static priority alone starves lower-priority roles like
+    // ui_designer when maxConcurrentBeats=1 and higher-priority roles keep
+    // becoming due — they win every tick. Sorting by (now - lastBeat -
+    // interval) descending guarantees fairness while still preferring CEO
+    // when all overdue ratios are equal.
+    const sorted = [...roster].sort((a, b) => {
+      const intA = this.config.roleIntervals[a.role] ?? this.config.schedulerIntervalMs * 10;
+      const intB = this.config.roleIntervals[b.role] ?? this.config.schedulerIntervalMs * 10;
+      const overdueA = now - (this.lastBeatAt.get(a.agentId) ?? 0) - intA;
+      const overdueB = now - (this.lastBeatAt.get(b.agentId) ?? 0) - intB;
+      if (overdueA !== overdueB) return overdueB - overdueA;
+      return (HeartbeatEngine.ROLE_PRIORITY[a.role] ?? 99) - (HeartbeatEngine.ROLE_PRIORITY[b.role] ?? 99);
+    });
     for (const agent of sorted) {
       // Skip paused roles
       if (this.config.pauseRoles.includes(agent.role)) continue;

@@ -3,7 +3,31 @@ import { readFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, writeFi
 import { promises as fsPromises } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
+import { Agent as UndiciAgent, setGlobalDispatcher, getGlobalDispatcher } from "undici";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
+
+// Beat prompts can run for the full HARD_CAP_MS (15 min) — e.g. a dev beat
+// scaffolding a Vite app and running `npm install`. Node's global fetch is
+// backed by undici whose default headers/body idle timeout is 5 min, which
+// produces a `TypeError: fetch failed` mid-beat and orphans the claim.
+// Replace the global dispatcher once with timeouts well above HARD_CAP_MS.
+const OPENCODE_FETCH_TIMEOUT_MS = 30 * 60_000; // 30 min
+let __opencodeDispatcherInstalled = false;
+function ensureLongFetchTimeouts() {
+  if (__opencodeDispatcherInstalled) return;
+  __opencodeDispatcherInstalled = true;
+  const existing = getGlobalDispatcher();
+  setGlobalDispatcher(
+    new UndiciAgent({
+      headersTimeout: OPENCODE_FETCH_TIMEOUT_MS,
+      bodyTimeout: OPENCODE_FETCH_TIMEOUT_MS,
+      keepAliveTimeout: 60_000,
+      keepAliveMaxTimeout: 10 * 60_000,
+    }),
+  );
+  // Best effort cleanup on shutdown.
+  process.once("beforeExit", () => { try { (existing as any).close?.(); } catch {} });
+}
 import { ensureDeployment, runtimeConfig } from "../config/index.js";
 import { serverConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
@@ -323,6 +347,7 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
 /** Get (or lazily create) the singleton OpenCode server instance. */
 export async function getOpencode() {
   ensureAzureRuntimeEnvironment();
+  ensureLongFetchTimeouts();
 
   if (!opencodePromise) {
     const attempt = (async () => {

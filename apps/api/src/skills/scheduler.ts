@@ -19,6 +19,7 @@ import {
 } from "@arceus/db/src/repos/skill_evolve_jobs.js";
 import { runATAPipeline, type PipelineResult } from "./orchestrator.js";
 import { runCronTriggerSweep, runRollbackMonitor } from "./triggers.js";
+import { emitEmployeeActivity } from "../observability/activity.js";
 
 const TICK_INTERVAL_MS = 60_000;
 const SHUTDOWN_DRAIN_MS = 30_000;
@@ -89,13 +90,32 @@ async function processOnce(): Promise<void> {
   if (!job) return;
 
   console.log(`[SkillScheduler] leased job ${job.id} (trigger=${job.trigger}, attempts=${job.attempts})`);
+  emitEmployeeActivity(
+    "skills_lead",
+    "context",
+    `Evolution job leased: ${job.id} (trigger=${job.trigger}, attempt ${job.attempts + 1})`,
+    { detail: { jobId: job.id, trigger: job.trigger, targetSkillId: job.targetSkillId } },
+  );
   try {
     const result: PipelineResult = await runATAPipeline(job);
     await completeJob(db, job.id, result as unknown as Record<string, unknown>);
     console.log(`[SkillScheduler] job ${job.id} → ${result.status}`);
+    const severity = result.status === "accepted" ? "info" : result.status === "rejected" ? "warning" : "context";
+    emitEmployeeActivity(
+      "skills_lead",
+      severity,
+      `Evolution job ${result.status}: ${job.id}${result.status === "rejected" && (result as any).reason ? ` — ${(result as any).reason}` : ""}`,
+      { detail: { jobId: job.id, status: result.status, audit: (result as any).audit, taskId: (result as any).taskId } },
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[SkillScheduler] job ${job.id} failed: ${msg}`);
+    emitEmployeeActivity(
+      "skills_lead",
+      "error",
+      `Evolution job failed: ${job.id} — ${msg}`,
+      { detail: { jobId: job.id, error: msg } },
+    );
     await failJob(db, job.id, { error: msg }).catch(() => {});
   }
 }

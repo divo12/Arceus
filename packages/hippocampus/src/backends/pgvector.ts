@@ -282,7 +282,7 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
     const decayedScore = sql<number>`
       (1 - (${cosineDistance(memoryUnitsTable.embedding, queryEmbedding)}))
       * ${memoryUnitsTable.relevanceScore}
-      * POWER(0.5, EXTRACT(EPOCH FROM (now() - ${memoryUnitsTable.updatedAt})) / ${DECAY_PERIOD_SECONDS}.0)
+      * POWER(0.5, EXTRACT(EPOCH FROM (now() - ${memoryUnitsTable.updatedAt})) / ${sql.raw(`${DECAY_PERIOD_SECONDS}.0`)})
     `;
 
     const rows = await db
@@ -336,7 +336,7 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
       WHERE company_id = ${companyId}
         AND memory_type = 'dynamic'
         AND deleted_at IS NULL
-        AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / ${DECAY_PERIOD_SECONDS}.0) < ${RELEVANCE_DECAY_DELETE_THRESHOLD}
+        AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / ${sql.raw(`${DECAY_PERIOD_SECONDS}.0`)}) < ${RELEVANCE_DECAY_DELETE_THRESHOLD}
     `);
     // drizzle's `db.execute(sql\`...\`)` return type varies by driver:
     //   postgres-js  → { length: number }   (it's an Array-like)

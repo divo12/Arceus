@@ -11,9 +11,9 @@
     "test": "npx tsx --test src/verification-gate.test.ts"
   },
   "dependencies": {
-    "@arceus/db": "file:../../packages/db",
     "@arceus/company-runtime": "file:../../packages/company-runtime",
     "@arceus/contracts": "file:../../packages/contracts",
+    "@arceus/db": "file:../../packages/db",
     "@arceus/hippocampus": "file:../../packages/hippocampus",
     "@arceus/task-engine": "file:../../packages/task-engine",
     "@fastify/cors": "^10.0.2",
@@ -26,6 +26,7 @@
     "@opentelemetry/semantic-conventions": "^1.28.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
+    "undici": "^8.1.0",
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {

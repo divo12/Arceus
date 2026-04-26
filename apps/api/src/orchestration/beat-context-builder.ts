@@ -136,11 +136,16 @@ function renderCompanyState(companyId: string): string {
   const snapshot = getSnapshot();
   const c = snapshot.company;
   const sprint = snapshot.sprints.find((s) => s.id === c.currentSprintId);
+  const roster = snapshot.agents
+    .map((a) => `${a.role}`)
+    .sort()
+    .join(", ");
   const lines = [
     "## Company State",
     `- **Company:** ${c.name} (${c.id})`,
     `- **Status:** ${c.status}`,
     `- **Goal:** ${c.goal}`,
+    `- **Hired roles:** [${roster || "none"}] — when assigning tasks (e.g. in \`sprint_create\`), \`assigned_role\` MUST be one of these. Do NOT invent roles like "pm" or "qa" if they are not listed.`,
   ];
   if (sprint) {
     lines.push(`- **Sprint ${sprint.number}:** ${sprint.goal} [${sprint.status}]`);
