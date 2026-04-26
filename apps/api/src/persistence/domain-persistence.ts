@@ -1,0 +1,70 @@
+/**
+ * Domain dual-write helpers — Phase 4B/C/D.
+ *
+ * Same shape as `task-persistence.ts` and `company-persistence.ts`, but
+ * one module per remaining domain would be three near-identical files.
+ * Consolidated here so the next dual-write addition (approvals, board
+ * messages…) is one more function in this file rather than a fresh
+ * module.
+ *
+ * Each `persistX(id)` follows the rule:
+ *   1. Look up the entity in the in-memory store (snapshot)
+ *   2. Call the matching `upsertX` repo function
+ *   3. Log + swallow any postgres error code so the route response
+ *      is never blocked. Store remains authoritative; the DB row
+ *      converges on the next mutation if a write transiently fails.
+ */
+import { getDb } from "@arceus/db";
+import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
+import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
+import * as meetingsRepo from "@arceus/db/src/repos/meetings.js";
+import postgres from "postgres";
+import { getSnapshot } from "./store.js";
+import type { Artifact as ContractArtifact } from "@arceus/contracts";
+
+function pgErrorCode(err: unknown): string {
+  if (err instanceof postgres.PostgresError) return err.code;
+  if (err instanceof Error && err.cause instanceof postgres.PostgresError) {
+    return err.cause.code;
+  }
+  return "unknown";
+}
+
+// ── Sprints (Phase 4B) ────────────────────────────────────────
+
+export async function persistSprint(sprintId: string): Promise<void> {
+  const sprint = getSnapshot().sprints.find((s) => s.id === sprintId);
+  if (!sprint) return;
+  try {
+    await sprintsRepo.upsertSprint(getDb(), sprint);
+  } catch (err) {
+    console.warn(`[sprints] DB sync skipped for ${sprintId} (pg=${pgErrorCode(err)})`);
+  }
+}
+
+// ── Artifacts (Phase 4C) ──────────────────────────────────────
+
+/**
+ * Artifacts live in the runtime artifact array (`orchestration/state.ts`),
+ * not the snapshot, so the helper accepts the artifact directly rather
+ * than looking it up. Callers pass the same shape they'd add to the store.
+ */
+export async function persistArtifact(artifact: ContractArtifact): Promise<void> {
+  try {
+    await artifactsRepo.upsertArtifact(getDb(), artifact);
+  } catch (err) {
+    console.warn(`[artifacts] DB sync skipped for ${artifact.id} (pg=${pgErrorCode(err)})`);
+  }
+}
+
+// ── Meetings (Phase 4D) ───────────────────────────────────────
+
+export async function persistMeeting(meetingId: string): Promise<void> {
+  const meeting = getSnapshot().meetings.find((m) => m.id === meetingId);
+  if (!meeting) return;
+  try {
+    await meetingsRepo.upsertMeeting(getDb(), meeting);
+  } catch (err) {
+    console.warn(`[meetings] DB sync skipped for ${meetingId} (pg=${pgErrorCode(err)})`);
+  }
+}

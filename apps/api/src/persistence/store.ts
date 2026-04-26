@@ -21,6 +21,7 @@ import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from 
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { persistCompany } from "./company-persistence.js";
+import { persistSprint, persistMeeting } from "./domain-persistence.js";
 import { storeEvents } from "./store-events.js";
 
 /**
@@ -304,6 +305,8 @@ export function upsertSprint(sprint: Sprint) {
     sprints: nextSprints,
   });
 
+  // Phase 4B dual-write — store stays authoritative, DB row mirrors.
+  void persistSprint(sprint.id).catch(() => {});
   return sprint;
 }
 
@@ -346,6 +349,8 @@ export function upsertMeeting(meeting: Meeting) {
     meetings: nextMeetings,
   });
 
+  // Phase 4D dual-write — store stays authoritative, DB row mirrors.
+  void persistMeeting(meeting.id).catch(() => {});
   return meeting;
 }
 

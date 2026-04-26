@@ -29,6 +29,13 @@
       "when": 1777193334172,
       "tag": "0003_companies_bridge_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777196226396,
+      "tag": "0004_sprints_artifacts_meetings_bridge",
+      "breakpoints": true
     }
   ]
 }
