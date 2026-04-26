@@ -40,3 +40,6 @@ export {
   completeExecutionCycle,
 } from "./execution-cycle";
 export type { ExecutionCycleCallbacks } from "./execution-cycle";
+
+// Limits — central caps for arrays kept on Task records (C17 / F-381)
+export { MAX_INCOMING_ARTIFACT_IDS } from "./limits";

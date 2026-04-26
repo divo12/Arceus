@@ -82,10 +82,20 @@ export async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentI
 // ─────────────────────────────────────────────────────────────────────────────
 
 let promptCompletionPollerHandle: NodeJS.Timeout | null = null;
-const PROMPT_COMPLETION_POLL_INTERVAL_MS = 8_000;
+// Re-import the canonical value from orchestration/state so the two
+// modules stay in lockstep (was a duplicate `8_000` literal — C17).
+import { PROMPT_COMPLETION_POLL_INTERVAL_MS } from "../orchestration/state.js";
+
+/**
+ * Default ceiling on how long `registerPromptCompletion` waits before
+ * rejecting. Mirrors the longest agent prompt timeout in the system —
+ * keeping it as a named constant means callers that want a different
+ * timeout pass it explicitly rather than leaving the magic 5min inline.
+ */
+const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
-export function registerPromptCompletion(sessionId: string, timeoutMs = 5 * 60 * 1000): Promise<void> {
+export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
   if (existing) {
     clearTimeout(existing.timer);

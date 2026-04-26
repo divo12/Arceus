@@ -3,6 +3,11 @@ export { HeartbeatEngine } from "./heartbeat";
 export type { HeartbeatConfig, BeatRequest, BeatExecutor, BeatDependencies } from "./heartbeat";
 export { runChecklist } from "./heartbeat-checklist";
 export type { ChecklistResult } from "./heartbeat-checklist";
+export {
+  loadChecklistConfig,
+  DEFAULT_CHECKLIST_CONFIG,
+} from "./checklist-config";
+export type { ChecklistConfig } from "./checklist-config";
 export { ROLE_SOULS, MANDATORY_ROLES, ROLE_DISPLAY_NAMES, ROLE_CAPABILITIES, ROLE_DEPLOYMENT_MODEL, ROLE_INITIAL_AGENT_STATUS, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
 export type { RoleRuntimeCapabilities } from "./roles";
 export { getAgentSkills, getFullAgentPrompt, listAvailableAgents } from "./agent-skills";

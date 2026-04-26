@@ -122,7 +122,7 @@ export async function chatCompletion(
           "api-key": runtimeConfig.azureApiKey
         },
         body: JSON.stringify({ messages, temperature: 0.7 }),
-        signal: AbortSignal.timeout(90_000),
+        signal: AbortSignal.timeout(AZURE_OPENAI_REQUEST_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -179,6 +179,15 @@ export class LlmTruncatedOutputError extends Error {
  * hit deployment defaults and produce truncated JSON. */
 const DEFAULT_STRUCTURED_MAX_TOKENS = 12000;
 
+/**
+ * Per-request timeout for Azure OpenAI calls. Used by both the streaming
+ * chat completion path and `structuredCompletion`. 90s is well above p99
+ * for sprint proposal / strategy generation prompts (~30-40s) but short
+ * enough that a stuck deployment fails the beat instead of hanging the
+ * whole heartbeat loop.
+ */
+const AZURE_OPENAI_REQUEST_TIMEOUT_MS = 90_000;
+
 export async function structuredCompletion<T>(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
@@ -220,7 +229,7 @@ export async function structuredCompletion<T>(
             },
           },
         }),
-        signal: AbortSignal.timeout(90_000),
+        signal: AbortSignal.timeout(AZURE_OPENAI_REQUEST_TIMEOUT_MS),
       });
 
       if (!response.ok) {

@@ -74,14 +74,37 @@ export async function startEventBridge() {
     emitEmployeeActivity("system", "info", "Event bridge disconnected — will reconnect on next OpenCode call");
     setEventBridgeStarted(false);
     resetOpencodeConnection();
-    // Auto-reconnect after a brief delay
-    setTimeout(() => {
-      if (!eventBridgeStarted) {
-        startEventBridge().catch(() => {});
-        setEventBridgeStarted(true);
-      }
-    }, 3000);
+    scheduleReconnect();
   }
+}
+
+// Cluster C17 — F-302. Exponential backoff with jitter so persistent
+// OpenCode downtime doesn't reconnect-storm the upstream. Resets to base
+// once a successful connection lasts longer than `successResetMs`.
+const RECONNECT_BASE_MS = 250;
+const RECONNECT_MAX_MS = 16_000;
+const RECONNECT_JITTER_MS = 250;
+let reconnectAttempt = 0;
+let lastReconnectAt = 0;
+
+function scheduleReconnect(): void {
+  // If the previous connection lasted long enough, treat the next failure
+  // as fresh (reset attempt counter).
+  if (Date.now() - lastReconnectAt > RECONNECT_MAX_MS * 4) {
+    reconnectAttempt = 0;
+  }
+  const exp = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
+  const jitter = Math.random() * RECONNECT_JITTER_MS;
+  const delayMs = exp + jitter;
+  reconnectAttempt += 1;
+  lastReconnectAt = Date.now();
+
+  setTimeout(() => {
+    if (!eventBridgeStarted) {
+      startEventBridge().catch(() => {});
+      setEventBridgeStarted(true);
+    }
+  }, delayMs);
 }
 
 /** Dispatch a single SSE event to the appropriate agent state / governance handler. */

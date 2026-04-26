@@ -3,6 +3,18 @@ import { getDb, isDatabaseConfigured, memoryUnitsTable, habitsTable, primingStat
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
 import type { StaticMemoryStore, DynamicMemoryStore, ProceduralMemoryStore, PrimingStore } from "../types";
 import { embed } from "./embedding.js";
+import {
+  MEMORY_DECAY_HALF_LIFE_DAYS,
+  SECONDS_PER_DAY,
+  RELEVANCE_DECAY_DELETE_THRESHOLD,
+  MEMORY_LIST_DEFAULT_LIMIT,
+} from "./pgvector-config.js";
+
+// Pre-computed denominator for the decay-formula SQL — keeps the `30 *
+// 86400` magic out of every query. Must stay a plain SQL literal because
+// drizzle's `sql\`\`` template expects positional args, not parameters,
+// inside POWER().
+const DECAY_PERIOD_SECONDS = MEMORY_DECAY_HALF_LIFE_DAYS * SECONDS_PER_DAY;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,7 +120,7 @@ export class PgVectorStaticStore implements StaticMemoryStore {
           isNull(memoryUnitsTable.deletedAt),
         ),
       )
-      .limit(50);
+      .limit(MEMORY_LIST_DEFAULT_LIMIT);
 
     return rows.map(memoryRowToUnit);
   }
@@ -205,7 +217,7 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
           isNull(memoryUnitsTable.deletedAt),
         ),
       )
-      .limit(50);
+      .limit(MEMORY_LIST_DEFAULT_LIMIT);
 
     return rows.map(memoryRowToUnit);
   }
@@ -253,10 +265,11 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
   ): Promise<Array<MemoryUnit & { similarity: number; decayedScore: number }>> {
     const db = getDb();
     const similarity = sql<number>`1 - (${cosineDistance(memoryUnitsTable.embedding, queryEmbedding)})`;
+    // Decay: half the score every MEMORY_DECAY_HALF_LIFE_DAYS days untouched.
     const decayedScore = sql<number>`
       (1 - (${cosineDistance(memoryUnitsTable.embedding, queryEmbedding)}))
       * ${memoryUnitsTable.relevanceScore}
-      * POWER(0.5, EXTRACT(EPOCH FROM (now() - ${memoryUnitsTable.updatedAt})) / (30.0 * 86400))
+      * POWER(0.5, EXTRACT(EPOCH FROM (now() - ${memoryUnitsTable.updatedAt})) / ${DECAY_PERIOD_SECONDS}.0)
     `;
 
     const rows = await db
@@ -302,13 +315,15 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
     deleted += expired.length;
 
     // 2. Soft-delete dynamic memories with decayed relevance below threshold
+    // Same decay formula as searchByEmbedding above — both must agree, hence
+    // the shared MEMORY_DECAY_HALF_LIFE_DAYS / RELEVANCE_DECAY_DELETE_THRESHOLD.
     const decayed = await db.execute(sql`
       UPDATE memory_units
       SET deleted_at = now(), delete_reason = 'relevance_decay'
       WHERE company_id = ${companyId}
         AND memory_type = 'dynamic'
         AND deleted_at IS NULL
-        AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / (30.0 * 86400)) < 0.1
+        AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / ${DECAY_PERIOD_SECONDS}.0) < ${RELEVANCE_DECAY_DELETE_THRESHOLD}
     `);
     // drizzle's `db.execute(sql\`...\`)` return type varies by driver:
     //   postgres-js  → { length: number }   (it's an Array-like)

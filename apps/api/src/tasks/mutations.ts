@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
-import { getAgentByRole, uniqueStrings } from "@arceus/task-engine";
+import { getAgentByRole, uniqueStrings, MAX_INCOMING_ARTIFACT_IDS } from "@arceus/task-engine";
 import { getSnapshot, updateTask, writeArtifactSync } from "../persistence/store.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
@@ -322,7 +322,7 @@ export function setTaskStatus(taskId: string, status: Task["status"], feedback?:
       for (const childId of completedTask.childTaskIds) {
         updateTask(childId, (t) => ({
           ...t,
-          incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...completedTask.artifactIds], 20),
+          incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...completedTask.artifactIds], MAX_INCOMING_ARTIFACT_IDS),
         }));
         const sid = completedTask.sprintId ?? resolveActiveSprintId();
         if (sid) {
@@ -356,7 +356,7 @@ export function setTaskStatus(taskId: string, status: Task["status"], feedback?:
         updateTask(task.id, (t) => ({
           ...t,
           status: "planned" as Task["status"],
-          incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...upstreamArtifactIds], 20),
+          incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...upstreamArtifactIds], MAX_INCOMING_ARTIFACT_IDS),
         }));
         if (task.assignedRole) {
           emitReactive(task.assignedRole, "task_dependency_met");

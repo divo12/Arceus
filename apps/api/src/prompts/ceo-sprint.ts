@@ -7,6 +7,15 @@
  */
 import type { CompanySnapshot, Task, Sprint } from "@arceus/contracts";
 
+/**
+ * In-progress task is "stale" after 10 minutes — surfaced in CEO sprint
+ * planning context so a stuck agent gets noticed during between-sprint
+ * review. Same family as F-265 (the deleted beat-executor stale-threshold)
+ * — kept inline because the CEO surface is one site and config-loading
+ * here would be overengineering.
+ */
+const STALE_TASK_THRESHOLD_MS = 10 * 60 * 1000;
+
 // ── Helpers ──────────────────────────────────────────────
 
 function summariseSprint(sprint: Sprint, tasks: Task[]): string {
@@ -102,7 +111,7 @@ export function buildCeoSprintPlanningPrompt(task: Task, snapshot: CompanySnapsh
   }
 
   // ── Stale in-progress tasks ──
-  const staleThreshold = Date.now() - 10 * 60 * 1000;
+  const staleThreshold = Date.now() - STALE_TASK_THRESHOLD_MS;
   const staleTasks = snapshot.tasks.filter(
     (t) => t.status === "in_progress" &&
       new Date(t.startedAt ?? t.createdAt ?? new Date().toISOString()).getTime() < staleThreshold,

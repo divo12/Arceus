@@ -16,6 +16,24 @@ import type {
   CheckResult,
   AgentIdentity,
 } from "@arceus/contracts";
+import { loadChecklistConfig, type ChecklistConfig } from "./checklist-config";
+
+// ── Config (cluster C17 — F-242 + F-250) ───────────────────
+//
+// `loadChecklistConfig()` reads ARCEUS_CHECKLIST_* env vars on first call.
+// Tests can override via `setChecklistConfigForTests({ ... })`.
+
+let activeConfig: ChecklistConfig = loadChecklistConfig();
+
+/** Test-only: override the active checklist config. */
+export function setChecklistConfigForTests(overrides: Partial<ChecklistConfig>): void {
+  activeConfig = { ...activeConfig, ...overrides };
+}
+
+/** Test-only: reset to env-driven defaults. */
+export function resetChecklistConfigForTests(): void {
+  activeConfig = loadChecklistConfig();
+}
 
 // ── Individual check functions ─────────────────────────────
 
@@ -30,13 +48,17 @@ function checkPendingApprovals(ctx: AgentBeatContext): CheckResult {
   };
 }
 
-/** Check company budget utilization — blocks at 0%, warns above 90%. */
+/**
+ * Check company budget utilization — blocks at 0%, warns above the
+ * unhealthy ratio (default 0.9, configurable via
+ * `ARCEUS_CHECKLIST_BUDGET_UNHEALTHY_RATIO` — F-250).
+ */
 function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
   if (ctx.companyBudgetRemainingCents <= 0) {
     return { status: "blocked", detail: "Budget exhausted", suggestedAction: "Pause work — budget is 0" };
   }
   const usedPct = ((ctx.company.spentCents / ctx.company.budgetCents) * 100).toFixed(1);
-  if (ctx.company.spentCents > ctx.company.budgetCents * 0.9) {
+  if (ctx.company.spentCents > ctx.company.budgetCents * activeConfig.budgetUnhealthyRatio) {
     return { status: "action_needed", detail: `Budget at ${usedPct}%`, suggestedAction: "Review spending" };
   }
   return { status: "ok", detail: `Budget at ${usedPct}%` };
@@ -319,18 +341,17 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
 // ── Spec 21: CTO Escalation Check ─────────────────────────
 
 /**
- * Safety-valve: if an escalation sits without a CTO decision longer than
- * this timeout, force-complete the sprint instead of repeatedly retrying
- * the 3-way review. Keeps stuck sprints from consuming the CTO's beats
- * indefinitely when the LLM can't produce a parseable decision.
- */
-const ESCALATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
  * CTO check: has the sprint been escalated after max rework cycles?
+ *
  * Fires `sprint_review:cto_escalation_review` for a fresh escalation,
  * or `sprint_review:cto_escalation_force_complete` if the escalation
- * has been pending longer than {@link ESCALATION_TIMEOUT_MS}.
+ * has been pending longer than `escalationTimeoutMs` (F-242). Once the
+ * CTO decides "fix" and the sprint is stuck in tester_verification /
+ * rework past `stuckAfterFixTimeoutMs`, force-complete as a safety valve.
+ *
+ * Both timeouts come from `ChecklistConfig` so deployments can tune them
+ * (defaults: 5min escalation, 10min stuck-after-fix) and tests can
+ * shorten them via `setChecklistConfigForTests`.
  */
 function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
@@ -343,7 +364,7 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
     // Safety valve — if escalation has been pending for too long without a
     // decision, force-complete rather than looping the CTO indefinitely.
     const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
-    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > ESCALATION_TIMEOUT_MS) {
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > activeConfig.escalationTimeoutMs) {
       const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
       return {
         status: "action_needed",
@@ -358,19 +379,18 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
     };
   }
 
-  // Extended safety valve (Option 5): CTO already decided "fix" but the sprint
-  // is still stuck in tester_verification or rework past a generous timeout.
-  // This happens when the developer beat has no dispatchable handler for build
+  // Extended safety valve: CTO already decided "fix" but the sprint
+  // is still stuck in tester_verification or rework past a generous timeout
+  // (`stuckAfterFixTimeoutMs`, default 2× `escalationTimeoutMs`). This
+  // happens when the developer beat has no dispatchable handler for build
   // errors during review, or the rework cycle fails to advance.
-  // Use 2× the base timeout to give genuine fix attempts a fair window first.
   if (
     reviewState.escalatedToCto === true &&
     reviewState.ctoDecision === "fix" &&
     ["tester_verification", "rework"].includes(reviewState.phase)
   ) {
     const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
-    const STUCK_AFTER_FIX_TIMEOUT_MS = ESCALATION_TIMEOUT_MS * 2; // 10 minutes
-    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > STUCK_AFTER_FIX_TIMEOUT_MS) {
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > activeConfig.stuckAfterFixTimeoutMs) {
       const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
       return {
         status: "action_needed",

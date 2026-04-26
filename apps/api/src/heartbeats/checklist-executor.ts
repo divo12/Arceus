@@ -1,5 +1,10 @@
 // heartbeats/checklist-executor.ts — Execute a checklist-driven action when no task exists
 import type { AgentBeatContext, AgentIdentity } from "@arceus/contracts";
+import { loadSkillsLeadPolicy } from "./skills-lead-policy.js";
+
+// Cluster C17 — F-281 + F-288. Read once at module load; env-driven so
+// deployments tune via `ARCEUS_SKILLS_LEAD_*` without code changes.
+const skillsLeadPolicy = loadSkillsLeadPolicy();
 import {
   getRoleSoul, getAgentSkills,
   processTaskOutcome, runATAPipeline,
@@ -318,7 +323,7 @@ async function executeSkillsLeadAction(
   try {
     // ── mutate_underperformer: rewrite the worst active skill ──
     if (suggestedAction === "skills_lead:mutate_underperformer") {
-      const underperformers = getUnderperformingSkills(companyId, 0.6);
+      const underperformers = getUnderperformingSkills(companyId, skillsLeadPolicy.underperformerSuccessRate);
       if (underperformers.length === 0) {
         emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: no underperformers`, { beatId });
         return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
@@ -360,13 +365,13 @@ async function executeSkillsLeadAction(
 
     // ── deprecate_unused: flip unused skills to deprecated ──
     if (suggestedAction === "skills_lead:deprecate_unused") {
-      const unused = getUnusedSkills(companyId, 30);
+      const unused = getUnusedSkills(companyId, skillsLeadPolicy.unusedSkillStaleDays);
       if (unused.length === 0) {
         return { summary: "No unused skills to deprecate", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
       }
       const deprecated: string[] = [];
-      for (const s of unused.slice(0, 3)) {
-        registryDeprecateSkill(s.id, `Unused for 30+ days (0 invocations since ${s.lastUsedAt ?? "creation"})`);
+      for (const s of unused.slice(0, skillsLeadPolicy.maxBatchPerBeat)) {
+        registryDeprecateSkill(s.id, `Unused for ${skillsLeadPolicy.unusedSkillStaleDays}+ days (0 invocations since ${s.lastUsedAt ?? "creation"})`);
         deprecated.push(s.name);
         auditAgent(companyId, "skills_lead", "skill_deprecated", `Skills Lead deprecated unused skill ${s.name}`, {
           severity: "info", detail: { skillId: s.id, lastUsedAt: s.lastUsedAt },
@@ -381,13 +386,16 @@ async function executeSkillsLeadAction(
       if (!sprintId) {
         return { summary: "No current sprint — skipping skill-gap fill", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
       }
-      const candidates = analyzeSprintPatterns(companyId, sprintId, 3);
+      const candidates = analyzeSprintPatterns(companyId, sprintId, skillsLeadPolicy.patternClusterMinSize);
       if (candidates.length === 0) {
         return { summary: "No sprint skill gaps detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
       }
       let proposed = 0;
       let refused = 0;
-      for (const candidate of candidates.slice(0, 2)) {
+      // Cap cluster proposals at the same per-beat batch limit as
+      // deprecate_unused — both fan out to the ATA pipeline and we don't
+      // want one beat to monopolise the LLM budget.
+      for (const candidate of candidates.slice(0, skillsLeadPolicy.maxBatchPerBeat)) {
         try {
           const mutation = await proposeSkillFromCluster(candidate);
           const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");

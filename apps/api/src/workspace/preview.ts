@@ -578,7 +578,7 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
   if (launch.runtime === "node" && !existsSync(join(launch.cwd, "node_modules"))) {
     const runner = detectNodeRunner();
     try {
-      execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: 120_000 });
+      execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: previewConfig.installTimeoutMs });
     } catch (err) {
       previewState.status = "error";
       previewState.lastError = `Dependency installation failed: ${err instanceof Error ? err.message : String(err)}`;

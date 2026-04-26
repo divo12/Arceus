@@ -391,10 +391,10 @@ export async function scaffoldProductWorkspace(
       "utf-8",
     );
 
-    // Install dependencies
+    // Install dependencies — shared timeout with the lazy install in preview.ts
     execSync("npm install", {
       cwd: workspaceDir,
-      timeout: 120_000,
+      timeout: previewConfig.installTimeoutMs,
       stdio: "pipe",
       encoding: "utf-8",
     });

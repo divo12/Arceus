@@ -1,5 +1,6 @@
 import type { Task, CompanySnapshot, AgentIdentity } from "@arceus/contracts";
 import { getAgentByRole, uniqueStrings } from "./task-helpers";
+import { MAX_INCOMING_ARTIFACT_IDS } from "./limits";
 
 // ---------------------------------------------------------------------------
 // Dependency-injection interface
@@ -137,7 +138,7 @@ export function setTaskStatus(
           ...t,
           incomingArtifactIds: uniqueStrings(
             [...t.incomingArtifactIds, ...completedTask.artifactIds],
-            20,
+            MAX_INCOMING_ARTIFACT_IDS,
           ),
         }));
         const sid = completedTask.sprintId ?? cb.resolveActiveSprintId();
@@ -178,7 +179,7 @@ export function setTaskStatus(
           status: "planned" as Task["status"],
           incomingArtifactIds: uniqueStrings(
             [...t.incomingArtifactIds, ...upstreamArtifactIds],
-            20,
+            MAX_INCOMING_ARTIFACT_IDS,
           ),
         }));
         // Reactive: wake the assignee — their dependency is now met
