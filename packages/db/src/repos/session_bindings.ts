@@ -13,6 +13,30 @@ export async function createBinding(
   return row;
 }
 
+/** Insert-or-replace by session_id — idempotent path for runBeat dual-write. */
+export async function upsertBindingBySession(
+  db: DbClient,
+  data: NewSessionBinding,
+): Promise<SessionBinding> {
+  const { sessionId, ...rest } = data;
+  const [row] = await db
+    .insert(sessionBindings)
+    .values({ sessionId, ...rest })
+    .onConflictDoUpdate({
+      target: sessionBindings.sessionId,
+      set: {
+        companyId: rest.companyId,
+        beatId: rest.beatId,
+        role: rest.role,
+        trustBand: rest.trustBand,
+        allowedTools: rest.allowedTools,
+        endedAt: null,
+      },
+    })
+    .returning();
+  return row;
+}
+
 export async function findBindingBySession(
   db: DbClient,
   sessionId: string,

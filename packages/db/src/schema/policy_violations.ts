@@ -9,7 +9,12 @@ export const policyViolations = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    // Spec 31 Phase 5: agent_id nullable so deny events recorded before agent
+    // is resolved (e.g. pre-strategy onboarding, internal-system roles) still
+    // land. agent_role carries the role string for those rows so the
+    // dashboard can show "ceo violated rule X" without a join.
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }),
+    agentRole: text("agent_role"),
     ruleId: text("rule_id").notNull(),
     tool: text("tool").notNull(),
     decision: text("decision").notNull(),

@@ -21,7 +21,7 @@ import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from 
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { persistCompany } from "./company-persistence.js";
-import { persistSprint, persistMeeting, persistApproval, persistChatMessage } from "./domain-persistence.js";
+import { persistSprint, persistMeeting, persistApproval, persistChatMessage, persistAgents } from "./domain-persistence.js";
 import { storeEvents } from "./store-events.js";
 
 /**
@@ -702,6 +702,7 @@ export function applyStrategy(output: StrategyOutput) {
   ]);
 
   dualWriteCompany();
+  void persistAgents().catch(() => {});
 
   // Eager trust initialization — fire event so control-plane handles it
   // without a circular import. Fire-and-forget; DB writes must not block

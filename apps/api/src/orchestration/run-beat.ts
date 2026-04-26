@@ -22,6 +22,8 @@ import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
 import { registerPromptCompletion } from "../prompts/llm.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
+import { startHeartbeatRun, finishHeartbeatRun, bindSession, unbindSession } from "./beat-lifecycle.js";
+import { updateTrustScore } from "../governance/trust.js";
 
 const HARD_CAP_MS = 15 * 60 * 1000;
 
@@ -51,6 +53,25 @@ export async function runBeat(input: {
   const ctx = await buildBeatContext(input.role, input.companyId, beatId, sessionId);
   registerSessionContext(ctx);
 
+  // Spec 31 Phase 5 — durable run + session binding rows. Returns null if
+  // dual-write was skipped (e.g. agent FK not yet persisted); subsequent
+  // helpers no-op cleanly in that case.
+  const runDbId = await startHeartbeatRun({
+    beatId,
+    companyId: input.companyId,
+    role: input.role,
+    sessionId,
+    trustBand: ctx.trustBand,
+  });
+  await bindSession({
+    sessionId,
+    beatDbId: runDbId,
+    companyId: input.companyId,
+    role: input.role,
+    trustBand: ctx.trustBand,
+    allowedTools: ctx.allowedTools,
+  });
+
   // Spec 32 — narrate beat start; OTEL sink opens the parent span here.
   observability.logEvent({
     event: "beat.started",
@@ -71,6 +92,9 @@ export async function runBeat(input: {
     unregisterSessionContext(sessionId);
     await destroyBeatSession(sessionId);
     const tokensUsed = drainBeatTokenAccumulator(beatId);
+    await finishHeartbeatRun({ runDbId, beatId, verdict: "pass", cause: "no-work", totalTokens: tokensUsed });
+    await unbindSession(sessionId);
+    void updateTrustScore(input.role, input.companyId, "pass").catch(() => {});
     observability.logEvent({
       event: "beat.completed",
       beatId,
@@ -186,6 +210,11 @@ export async function runBeat(input: {
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
     const beatEndedAt = Date.now();
+
+    // Spec 31 Phase 5 — close out the run + binding, EMA-update trust.
+    await finishHeartbeatRun({ runDbId, beatId, verdict, cause, totalTokens: tokensUsed });
+    await unbindSession(sessionId);
+    void updateTrustScore(input.role, input.companyId, verdict).catch(() => {});
 
     // Spec 32 — narrate beat end. OTEL sink closes the parent span and
     // attaches the verdict; pino sink writes one JSON line.

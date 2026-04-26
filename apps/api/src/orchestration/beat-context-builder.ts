@@ -12,13 +12,14 @@
  *
  * Phase 6.5 — Package I.
  */
-import type { BeatContext, CompanySnapshot, IncomingHandoff, HandoffKind, HandoffUrgency, Task, TrustBand } from "@arceus/contracts";
+import type { BeatContext, CompanySnapshot, IncomingHandoff, HandoffKind, HandoffUrgency, Task } from "@arceus/contracts";
 import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getSnapshot } from "../persistence/store.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
 import { productDir } from "./state.js";
+import { computeTrustBand } from "../governance/trust.js";
 
 /**
  * Statuses that count as "the agent has work to do this beat".
@@ -44,10 +45,6 @@ const OPEN_TASK_STATUSES: ReadonlyArray<Task["status"]> = [
 ];
 
 // ── BeatContext builder ──────────────────────────────────
-
-async function computeTrustBand(_role: Role, _companyId: string): Promise<TrustBand> {
-  return "standard"; // v1 stub — full policy matrix Phase 7+
-}
 
 // ── Incoming handoffs drainer (spec 27 §6) ───────────────
 

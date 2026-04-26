@@ -8,6 +8,7 @@ import { hashBody, lookupIdempotency, rememberIdempotency, releaseIdempotency, I
 import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
 import { observability, type RoleType } from "@arceus/contracts";
 import { routeToTool } from "./route-to-tool.js";
+import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
 
 export interface McpRequestContext {
   companyId: string;
@@ -236,16 +237,45 @@ export const mcpEmitToolResult = async (req: FastifyRequest, reply: FastifyReply
   const status = reply.statusCode;
   const ok = status < 400;
   const ts = Date.now();
+  const cause = ok ? undefined : (mcp.failureCause ?? causeFromStatus(status));
   observability.logEvent({
     event: "tool.result",
     beatId: mcp.beatId,
     tool: mcp.tool,
     ok,
-    cause: ok ? undefined : (mcp.failureCause ?? causeFromStatus(status)),
+    cause,
     details: ok ? undefined : mcp.failureDetails,
     durationMs: ts - mcp.invokedAt,
     ts,
   });
+
+  // Spec 31 Phase 5 — policy_violations DB mirror. Only the typed
+  // ErrorCauses listed in CAUSE_TO_DENY_REASON map to a denial; everything
+  // else (validation, conflict, upstream, …) is a regular error and is
+  // already covered by tool.result. Recording is best-effort telemetry.
+  if (!ok && typeof cause === "string") {
+    const reason = CAUSE_TO_DENY_REASON[cause as ErrorCause];
+    if (reason) {
+      void recordPolicyDeny({
+        companyId: mcp.companyId,
+        role: mcp.role,
+        tool: mcp.tool,
+        reason,
+        detail: cause,
+      }).catch(() => {});
+    }
+  }
+};
+
+/**
+ * Typed mapping from envelope ErrorCause → DenyReason. Only the 403-class
+ * causes are listed; all others map to `undefined` and are skipped. Adding
+ * a new deny-class cause to envelope.ts and this table is a one-line edit
+ * — no `cause === "..."` checks scattered across handlers.
+ */
+const CAUSE_TO_DENY_REASON: Partial<Record<ErrorCause, DenyReason>> = {
+  governance: "governance_block",
+  identity_mismatch: "role_gate",
 };
 
 /**

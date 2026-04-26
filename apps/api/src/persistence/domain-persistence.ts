@@ -20,6 +20,7 @@ import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import * as meetingsRepo from "@arceus/db/src/repos/meetings.js";
 import * as approvalsRepo from "@arceus/db/src/repos/approvals.js";
 import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import postgres from "postgres";
 import { getSnapshot } from "./store.js";
 import type { Artifact as ContractArtifact } from "@arceus/contracts";
@@ -80,6 +81,26 @@ export async function persistApproval(approvalId: string): Promise<void> {
     await approvalsRepo.upsertApproval(getDb(), approval);
   } catch (err) {
     console.warn(`[approvals] DB sync skipped for ${approvalId} (pg=${pgErrorCode(err)})`);
+  }
+}
+
+// ── Agents (Phase 5) ──────────────────────────────────────────
+
+/**
+ * Dual-writes every agent in the snapshot. Called from `applyStrategy`
+ * once the org hierarchy is known. Idempotent — uses the unique
+ * (company_id, role) index for the upsert target.
+ */
+export async function persistAgents(): Promise<void> {
+  const snapshot = getSnapshot();
+  if (snapshot.agents.length === 0) return;
+  const db = getDb();
+  for (const agent of snapshot.agents) {
+    try {
+      await agentsRepo.upsertAgent(db, agent);
+    } catch (err) {
+      console.warn(`[agents] DB sync skipped for ${agent.id} (pg=${pgErrorCode(err)})`);
+    }
   }
 }
 
