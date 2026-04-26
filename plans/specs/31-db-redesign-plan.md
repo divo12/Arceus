@@ -488,6 +488,116 @@ Only merge this after PRs #6–#14 have soaked for ≥ 3 days in dev without reg
 
 ---
 
+## Phase 8.5 — Production readiness (½ day, 1 PR)
+
+Closes the residual gaps from C18 §5 (connection pool + migration
+discipline) and the drift-detection gap from C18 §2. Not strictly part
+of the data-model redesign — but the spec is "done" only when the
+operational layer doesn't have known foot-guns.
+
+### PR #17 — `chore(db): production-readiness pass — advisory lock, pool sizing, drift test`
+
+**Changes:**
+
+1. **Migration advisory lock** — wrap `applyMigrations()` (and the
+   drizzle-kit migrate entry point used in `db:migrate` script) in a
+   single Postgres session that takes
+   `SELECT pg_advisory_lock(<spec_31_lock_key>)` before running and
+   `SELECT pg_advisory_unlock(<spec_31_lock_key>)` after. Two pods
+   racing on deploy: the second blocks until the first finishes, then
+   sees no pending migrations and exits. Lock key: a fixed bigint
+   (e.g. `9_223_372_036_854_775_807` — top of int8 — chosen so it
+   doesn't collide with anything else on the database).
+
+2. **`DATABASE_URL` validation at boot** — `packages/db/src/client.ts`
+   already lazy-resolves the URL via `readAliasedEnv`. Add a
+   fail-loud check inside `getDb()` first call:
+   ```typescript
+   if (!url) {
+     if (process.env.NODE_ENV === "production") {
+       throw new Error(
+         "[@arceus/db] DATABASE_URL (or SUPABASE_DB_URL / ARCEUS_HIPPOCAMPUS_POSTGRES_URL) " +
+         "is required in production",
+       );
+     }
+     console.warn("[@arceus/db] No DATABASE_URL set; falling back to local default postgresql://localhost:5432/arceus_dev");
+   }
+   ```
+   Same pattern as `bearer.resolveBearerToken` (spec 25 §3.5).
+
+3. **Pool sizing via env** — `client.ts` reads
+   `ARCEUS_DB_POOL_SIZE` (default 10), passes to `postgres()` as
+   `max`. Document in the README: scale to ~`(api replicas × 10)` so a
+   single pod restart doesn't exhaust connections.
+
+4. **Migration linter** — add a CI script `packages/db/scripts/lint-migrations.ts`
+   that fails if any single migration file matches both:
+   - DDL: `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, `CREATE INDEX`, `DROP INDEX`
+   - DML: `INSERT INTO`, `UPDATE … SET`, `DELETE FROM`
+
+   Mixing DDL and DML in one migration is the standard SQL anti-pattern
+   the `database-migrations` skill flags — separate concerns means a
+   data backfill can be retried without reapplying schema, and a schema
+   change can be rolled forward without partial backfill state.
+   Exception: `INSERT INTO drizzle.__drizzle_migrations` etc. are
+   skipped via a regex allowlist.
+
+5. **Schema drift test** — `packages/db/tests/drift.test.ts`:
+   ```typescript
+   import { taskSchema } from "@arceus/contracts";
+   import { taskToInsert, rowToTask } from "@arceus/db/repos/tasks";
+
+   test("every contract Task field round-trips through taskToInsert + rowToTask", () => {
+     const sample = taskSchema.parse({ /* canonical fixture */ });
+     const insert = taskToInsert(sample);
+     const restored = rowToTask({ ...insert, /* row defaults */ }, { artifactIds: sample.artifactIds, childTaskIds: sample.childTaskIds });
+     expect(restored).toMatchObject(sample);
+   });
+   ```
+   One test per hydrated entity (Task, Sprint, Meeting, Approval,
+   Artifact). If a future PR adds a field to `taskSchema` but forgets
+   `taskToInsert`, this fails at CI.
+
+6. **Atomic counter update for `companies.spent_cents`** —
+   replace any read-modify-write pattern in cost-event handlers with:
+   ```typescript
+   await db
+     .update(companies)
+     .set({ spentCents: sql`${companies.spentCents} + ${deltaCents}` })
+     .where(eq(companies.id, companyId));
+   ```
+   Same fix applies to any "increment a counter on a row" path the
+   audit flagged. Phase 6 PR #14 is the natural place to enforce this
+   convention; Phase 8.5 just verifies and documents it.
+
+7. **Circuit breaker for DB errors** — `client.ts` wraps repo calls
+   in a simple breaker that opens for 5s after 5 consecutive errors,
+   short-circuits with `DbCircuitOpenError` while open. Repo callers
+   already log + degrade gracefully (we proved this with the
+   `pg=23503` fallthrough in Phase 3C); the breaker just stops the
+   thundering herd of doomed queries during a DB outage.
+
+   Implementation: existing `infra/resilience.ts` already has a
+   circuit breaker — reuse, don't reinvent.
+
+**Tests:**
+- `migrations.lint.test.ts` — run the linter against every migration in
+  `src/migrations/`. Expect zero violations (failure means we created
+  a mixed migration).
+- `drift.test.ts` — round-trip each contract entity (5 tests).
+- Manual: `kill -9` a pod mid-migration on a staging DB, redeploy, see
+  the second pod no-op via advisory lock.
+
+**Effort:** ½ day.
+
+**Why this is its own phase:**
+- Phase 8 is performance (EXPLAIN audit). Phase 8.5 is operational
+  discipline. Conflating them muddles the diff and the soak window.
+- Each item independently revertible. If the advisory lock turns out
+  to break a deploy pipeline, drop just that piece.
+
+---
+
 ## Testing Strategy
 
 ### Per-PR tests

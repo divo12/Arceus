@@ -20,7 +20,20 @@ import type { StrategyOutput } from "../agents/ceo.js";
 import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from "../orchestration/state.js";
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
+import { persistCompany } from "./company-persistence.js";
 import { storeEvents } from "./store-events.js";
+
+/**
+ * Phase 4A dual-write hook. Called after every store mutation that touches
+ * `snapshot.company`, kept synchronous-on-the-outside via fire-and-forget
+ * — the store is still authoritative; the DB row is the mirror that lets
+ * Phase 3C task FKs satisfy. Errors are logged inside `persistCompany`.
+ */
+function dualWriteCompany(): void {
+  const companyId = snapshot.company.id;
+  if (!companyId || companyId === "company_pending") return;
+  void persistCompany(companyId).catch(() => {});
+}
 
 type BootstrapInput = {
   companyName: string;
@@ -314,6 +327,7 @@ export function updateCompanySprint(sprintId: string | null, sprintNumber: numbe
       currentSprintNumber: sprintNumber,
     },
   });
+  dualWriteCompany();
 }
 
 /** Insert or update a meeting in the snapshot by ID. */
@@ -485,6 +499,7 @@ export function updateCompanyStatus(status: string) {
     ...snapshot,
     company: { ...snapshot.company, status: status as CompanySnapshot["company"]["status"] },
   });
+  dualWriteCompany();
 }
 
 /** Bootstrap a new company with initial snapshot and event log. */
@@ -525,6 +540,7 @@ export function bootstrapCompany(input: BootstrapInput) {
     })
   ]);
 
+  dualWriteCompany();
   return snapshot;
 }
 
@@ -675,6 +691,8 @@ export function applyStrategy(output: StrategyOutput) {
       }
     }
   ]);
+
+  dualWriteCompany();
 
   // Eager trust initialization — fire event so control-plane handles it
   // without a circular import. Fire-and-forget; DB writes must not block

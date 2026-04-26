@@ -1,9 +1,28 @@
 import { eq, sql } from "drizzle-orm";
+import { v5 as uuidv5 } from "uuid";
+import type { Company as ContractCompany, CompanyStatus } from "@arceus/contracts";
 import { companies } from "../schema/companies.js";
 import type { DbClient } from "./_helpers.js";
 
 export type Company = typeof companies.$inferSelect;
 export type NewCompany = typeof companies.$inferInsert;
+
+// ── ID boundary: friendly strings ↔ uuid (Phase 4A) ──────────────
+//
+// Same trick as repos/tasks.ts: the runtime hands us friendly ids like
+// `company_xxx`, the schema column is uuid (FK type matches every other
+// table). `toDbId` converts deterministically; `friendlyId` is stored
+// alongside so hydration round-trips back to the original string.
+const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function toDbId(friendly: string): string {
+  return UUID_RE.test(friendly) ? friendly : uuidv5(friendly, ARCEUS_UUID_NS);
+}
+
+export function fromDbId(uuid: string, friendlyHint?: string | null): string {
+  return friendlyHint ?? uuid;
+}
 
 export async function createCompany(db: DbClient, data: NewCompany): Promise<Company> {
   const [row] = await db.insert(companies).values(data).returning();
@@ -11,7 +30,7 @@ export async function createCompany(db: DbClient, data: NewCompany): Promise<Com
 }
 
 export async function findCompanyById(db: DbClient, id: string): Promise<Company | null> {
-  const [row] = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
+  const [row] = await db.select().from(companies).where(eq(companies.id, toDbId(id))).limit(1);
   return row ?? null;
 }
 
@@ -29,19 +48,19 @@ export async function updateCompany(
   id: string,
   patch: Partial<NewCompany>,
 ): Promise<Company | null> {
-  const [row] = await db.update(companies).set(patch).where(eq(companies.id, id)).returning();
+  const [row] = await db.update(companies).set(patch).where(eq(companies.id, toDbId(id))).returning();
   return row ?? null;
 }
 
 export async function setCompanyStatus(
   db: DbClient,
   id: string,
-  status: "active" | "paused" | "archived",
+  status: CompanyStatus,
 ): Promise<Company | null> {
   const [row] = await db
     .update(companies)
     .set({ status })
-    .where(eq(companies.id, id))
+    .where(eq(companies.id, toDbId(id)))
     .returning();
   return row ?? null;
 }
@@ -52,8 +71,69 @@ export async function allocateTaskNumber(db: DbClient, companyId: string): Promi
   const [row] = await db
     .update(companies)
     .set({ taskCounter: sql`${companies.taskCounter} + 1` })
-    .where(eq(companies.id, companyId))
+    .where(eq(companies.id, toDbId(companyId)))
     .returning({ taskCounter: companies.taskCounter });
   if (!row) throw new Error(`Company ${companyId} not found`);
   return row.taskCounter;
+}
+
+// ── Hydration: DB row ↔ contracts.Company (Phase 4A) ──────────────
+
+/** Pure transform from a DB row to a contracts.Company. */
+export function rowToCompany(row: Company): ContractCompany {
+  return {
+    id: fromDbId(row.id, row.friendlyId),
+    name: row.name,
+    boardOwner: row.boardOwner ?? row.boardOwnerEmail ?? "",
+    goal: row.goal ?? "",
+    budgetCents: row.budgetCents,
+    spentCents: row.spentCents,
+    status: row.status as ContractCompany["status"],
+    currentStrategyId: row.currentStrategyId ?? "",
+    currentSprintId: row.currentSprintId,
+    currentSprintNumber: row.currentSprintNumber,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/**
+ * Build the insert payload for a contracts.Company. uuidv5-converts the
+ * friendly id, stashes the original string in `friendly_id` for round-trip,
+ * and maps every contract field to its column.
+ */
+export function companyToInsert(company: ContractCompany): NewCompany {
+  return {
+    id: toDbId(company.id),
+    friendlyId: company.id,
+    name: company.name,
+    boardOwner: company.boardOwner,
+    goal: company.goal,
+    budgetCents: company.budgetCents,
+    spentCents: company.spentCents,
+    status: company.status,
+    currentStrategyId: company.currentStrategyId || null,
+    currentSprintId: company.currentSprintId,
+    currentSprintNumber: company.currentSprintNumber,
+  };
+}
+
+/**
+ * Insert a company or replace it on conflict. The dual-write path in
+ * `apps/api/src/persistence/company-persistence.ts` calls this after
+ * every store mutation to keep the DB in sync.
+ */
+export async function upsertCompany(db: DbClient, company: ContractCompany): Promise<Company> {
+  const { id, ...updateFields } = companyToInsert(company);
+  const [row] = await db
+    .insert(companies)
+    .values({ id, ...updateFields })
+    .onConflictDoUpdate({ target: companies.id, set: updateFields })
+    .returning();
+  return row;
+}
+
+/** Find a company by friendly id and return it as a fully-hydrated contracts.Company. */
+export async function findByIdHydrated(db: DbClient, id: string): Promise<ContractCompany | null> {
+  const row = await findCompanyById(db, id);
+  return row ? rowToCompany(row) : null;
 }
