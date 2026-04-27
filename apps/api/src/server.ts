@@ -27,11 +27,13 @@ process.on("uncaughtException", (err) => {
 //   ]));
 import { observability } from "@arceus/contracts";
 import { eventBusSink } from "./observability/event-bus.js";
+import { activityLogSink } from "./observability/activity-log-sink.js";
 observability.setSink(
   observability.multiSink([
     observability.pinoSink(),
     observability.langfuseSink(),
     eventBusSink, // Spec 32 — feeds /api/inspector ring buffer + SSE.
+    activityLogSink, // Spec 31 Phase 6 — durable Postgres mirror of every event.
   ]),
 );
 
