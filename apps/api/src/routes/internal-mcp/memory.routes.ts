@@ -130,6 +130,11 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
       return;
     }
 
+    // Spec 31 Phase 7.C.a — pre-fetch the company's agents once so the
+    // sourceAgentRole lookup in the map is O(1) instead of N+1 repo hits.
+    const allAgents = await agentsRepo.listAgentsByCompany(getDb(), mcp.companyId);
+    const agentRoleById = new Map(allAgents.map((a) => [a.id, a.role]));
+
     const memories: MemorySearchHit[] = result.memories.map((m) => ({
       id: m.id,
       content: m.content,
@@ -137,7 +142,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
       confidence: m.finalScore,
       recordedAt: m.createdAt,
       sourceTaskId: m.sourceTaskId,
-      sourceAgentRole: (snapshot.agents.find((a) => a.id === m.agentId)?.role ?? mcp.role) as Role,
+      sourceAgentRole: (agentRoleById.get(m.agentId) ?? mcp.role) as Role,
     }));
 
     const data: MemorySearchData = {
@@ -282,7 +287,6 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     // Spec 31 Phase 7.B.5 — agents from canonical. Run target lookups in
     // parallel; ids are independent and the list is small (≤8 in practice).
     const db = getDb();
-    const mcp = req.mcp!;
     const targetAgents = await Promise.all(
       input.targets.map(async (role) => ({
         role,

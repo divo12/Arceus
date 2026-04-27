@@ -59,6 +59,13 @@ function setupMocks(overrides: {
   sprintsSpy?: ReturnType<typeof mock>;
   tasksSpy?: ReturnType<typeof mock>;
   approvalsSpy?: ReturnType<typeof mock>;
+  ideaSpy?: ReturnType<typeof mock>;
+  strategySpy?: ReturnType<typeof mock>;
+  hierarchySpy?: ReturnType<typeof mock>;
+  memoriesSpy?: ReturnType<typeof mock>;
+  meetingsSpy?: ReturnType<typeof mock>;
+  meetingSchedulesSpy?: ReturnType<typeof mock>;
+  chatMessagesSpy?: ReturnType<typeof mock>;
 } = {}) {
   const company = overrides.company === undefined ? makeCompany() : overrides.company;
   const findCompany = mock(async () => company);
@@ -66,6 +73,13 @@ function setupMocks(overrides: {
   const listSprints = overrides.sprintsSpy ?? mock(async () => []);
   const listTasks = overrides.tasksSpy ?? mock(async () => []);
   const listApprovals = overrides.approvalsSpy ?? mock(async () => []);
+  const findIdea = overrides.ideaSpy ?? mock(async () => null);
+  const findStrategy = overrides.strategySpy ?? mock(async () => null);
+  const listHierarchy = overrides.hierarchySpy ?? mock(async () => []);
+  const listMemories = overrides.memoriesSpy ?? mock(async () => []);
+  const listMeetings = overrides.meetingsSpy ?? mock(async () => []);
+  const listMeetingSchedules = overrides.meetingSchedulesSpy ?? mock(async () => []);
+  const listChatMessages = overrides.chatMessagesSpy ?? mock(async () => []);
 
   mock.module("@arceus/db", () => ({ getDb: () => ({}) }));
   mock.module("@arceus/db/src/repos/companies.js", () => ({ findByIdHydrated: findCompany }));
@@ -79,22 +93,58 @@ function setupMocks(overrides: {
     listApprovalsByCompany: listApprovals,
     rowToApproval: (row: unknown) => row,
   }));
+  mock.module("@arceus/db/src/repos/ideas.js", () => ({ findByCompanyHydrated: findIdea }));
+  mock.module("@arceus/db/src/repos/strategy_briefs.js", () => ({
+    findActiveByCompany: findStrategy,
+    rowToStrategy: (row: unknown) => row,
+  }));
+  mock.module("@arceus/db/src/repos/hierarchy_nodes.js", () => ({
+    listByCompany: listHierarchy,
+    rowToNode: (row: unknown) => row,
+  }));
+  mock.module("@arceus/db/src/repos/memory_summaries.js", () => ({
+    listByCompany: listMemories,
+    rowToSummary: (row: unknown) => row,
+  }));
+  mock.module("@arceus/db/src/repos/meetings.js", () => ({
+    listMeetingsByCompany: listMeetings,
+    rowToMeeting: (row: unknown) => row,
+  }));
+  mock.module("@arceus/db/src/repos/meeting_schedules.js", () => ({
+    listByCompany: listMeetingSchedules,
+    rowToSchedule: (row: unknown) => row,
+  }));
+  mock.module("@arceus/db/src/repos/board_messages.js", () => ({
+    listBoardMessages: listChatMessages,
+    rowToChatMessage: (row: unknown) => row,
+  }));
 
-  return { findCompany, listAgents, listSprints, listTasks, listApprovals };
+  return {
+    findCompany, listAgents, listSprints, listTasks, listApprovals,
+    findIdea, findStrategy, listHierarchy, listMemories,
+    listMeetings, listMeetingSchedules, listChatMessages,
+  };
 }
 
-describe("buildSnapshotView (B.4 task-engine adapter)", () => {
-  it("fires exactly 5 canonical reads in parallel", async () => {
+describe("buildSnapshotView (7.C.a full-shape adapter)", () => {
+  it("fires all 12 canonical reads in parallel", async () => {
     const spies = setupMocks({});
 
     const { buildSnapshotView } = await import(`./snapshot-view.js?t=${Date.now()}`);
     const snap = await buildSnapshotView(COMPANY_UUID);
 
     expect(spies.findCompany).toHaveBeenCalledTimes(1);
+    expect(spies.findIdea).toHaveBeenCalledTimes(1);
+    expect(spies.findStrategy).toHaveBeenCalledTimes(1);
     expect(spies.listAgents).toHaveBeenCalledTimes(1);
     expect(spies.listSprints).toHaveBeenCalledTimes(1);
+    expect(spies.listHierarchy).toHaveBeenCalledTimes(1);
+    expect(spies.listMemories).toHaveBeenCalledTimes(1);
     expect(spies.listTasks).toHaveBeenCalledTimes(1);
     expect(spies.listApprovals).toHaveBeenCalledTimes(1);
+    expect(spies.listMeetings).toHaveBeenCalledTimes(1);
+    expect(spies.listMeetingSchedules).toHaveBeenCalledTimes(1);
+    expect(spies.listChatMessages).toHaveBeenCalledTimes(1);
 
     expect(snap.company.id).toBe(COMPANY_UUID);
     expect(snap.agents).toHaveLength(1);
@@ -122,23 +172,48 @@ describe("buildSnapshotView (B.4 task-engine adapter)", () => {
     expect(agent.sessionBindingId).toBe("");
   });
 
-  it("returns the empty-snapshot defaults for unmigrated fields", async () => {
+  it("leaves runtime-state and hippocampus fields at empty defaults", async () => {
     setupMocks({});
 
     const { buildSnapshotView } = await import(`./snapshot-view.js?t=${Date.now()}`);
     const snap = await buildSnapshotView(COMPANY_UUID);
 
-    /** Fields task-engine doesn't read default to the empty shape. */
-    expect(snap.hierarchy).toEqual([]);
+    /** sessions = per-beat, looked up at point of use, not in the snapshot. */
     expect(snap.sessions).toEqual([]);
+    /** artifacts/transitions/feedbackRounds = orchestration runtime state (state.ts). */
     expect(snap.artifacts).toEqual([]);
-    expect(snap.meetings).toEqual([]);
-    expect(snap.memories).toEqual([]);
-    expect(snap.memoryUnits).toEqual([]);
-    expect(snap.chatMessages).toEqual([]);
     expect(snap.transitions).toEqual([]);
     expect(snap.feedbackRounds).toEqual([]);
+    /** memoryUnits/habits/priming = hippocampus subsystem owns these. */
+    expect(snap.memoryUnits).toEqual([]);
+    expect(snap.habits).toEqual([]);
+    expect(snap.priming).toEqual([]);
+  });
+
+  it("populates the canonical-backed fields from repo reads", async () => {
+    /** With empty rows from canonical, the assembled arrays remain empty too —
+     *  but that's a "no rows" outcome, not "field is unmigrated". */
+    setupMocks({});
+
+    const { buildSnapshotView } = await import(`./snapshot-view.js?t=${Date.now()}`);
+    const snap = await buildSnapshotView(COMPANY_UUID);
+
+    expect(snap.hierarchy).toEqual([]);
+    expect(snap.memories).toEqual([]);
+    expect(snap.meetings).toEqual([]);
     expect(snap.meetingSchedules).toEqual([]);
+    expect(snap.chatMessages).toEqual([]);
+  });
+
+  it("falls back to empty-snapshot idea/strategy when canonical has no row", async () => {
+    setupMocks({}); // ideaSpy + strategySpy default to async () => null
+
+    const { buildSnapshotView } = await import(`./snapshot-view.js?t=${Date.now()}`);
+    const snap = await buildSnapshotView(COMPANY_UUID);
+
+    /** Empty-snapshot defaults guarantee idea + strategy are objects, not nulls. */
+    expect(snap.idea).toBeDefined();
+    expect(snap.strategy).toBeDefined();
   });
 
   it("throws when the company does not exist", async () => {
@@ -148,24 +223,47 @@ describe("buildSnapshotView (B.4 task-engine adapter)", () => {
     await expect(buildSnapshotView(COMPANY_UUID)).rejects.toThrow(/company .* not found/);
   });
 
-  it("populates the four task-engine read fields for downstream helpers", async () => {
+  it("populates the task-engine read fields and the new 7.C.a fields end-to-end", async () => {
     const tasks = [{ id: "t1", title: "T1", status: "planned", assignedRole: "developer" }];
     const sprints = [{ id: SPRINT_UUID, number: 1, status: "executing" }];
     const approvals = [{ id: "a1", status: "pending", type: "strategy" }];
+    const meetings = [{ id: "m1", title: "Standup", status: "scheduled" }];
+    const memories = [{ id: "mem1", agentId: AGENT_DEV_UUID, currentFocus: ["x"] }];
     setupMocks({
       tasksSpy: mock(async () => tasks),
       sprintsSpy: mock(async () => sprints),
       approvalsSpy: mock(async () => approvals),
+      meetingsSpy: mock(async () => meetings),
+      memoriesSpy: mock(async () => memories),
     });
 
     const { buildSnapshotView } = await import(`./snapshot-view.js?t=${Date.now()}`);
     const snap = await buildSnapshotView(COMPANY_UUID);
 
-    /** task-engine reads 5 top-level fields: company, agents, sprints, tasks, approvals. */
     expect(snap.company.id).toBe(COMPANY_UUID);
     expect(snap.agents).toHaveLength(1);
     expect(snap.sprints).toHaveLength(1);
     expect(snap.tasks).toHaveLength(1);
     expect(snap.approvals).toHaveLength(1);
+    expect(snap.meetings).toHaveLength(1);
+    expect(snap.memories).toHaveLength(1);
+  });
+
+  it("orders chatMessages chronologically (canonical returns DESC)", async () => {
+    const oldest = { id: "c1", createdAt: "2026-01-01T00:00:00.000Z", content: "first" };
+    const newest = { id: "c2", createdAt: "2026-01-02T00:00:00.000Z", content: "second" };
+    /** board_messages.listBoardMessages returns DESC for cursor pagination —
+     *  buildSnapshotView reverses to chronological so chat consumers don't
+     *  have to know about repo ordering. */
+    setupMocks({
+      chatMessagesSpy: mock(async () => [newest, oldest]),
+    });
+
+    const { buildSnapshotView } = await import(`./snapshot-view.js?t=${Date.now()}`);
+    const snap = await buildSnapshotView(COMPANY_UUID);
+
+    expect(snap.chatMessages).toHaveLength(2);
+    expect(snap.chatMessages[0].id).toBe("c1");
+    expect(snap.chatMessages[1].id).toBe("c2");
   });
 });
