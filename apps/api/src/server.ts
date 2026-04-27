@@ -165,6 +165,9 @@ const beatDeps: BeatDependencies = {
   },
   executeChecklistAction: (ctx, action, beatId) => executeChecklistAction(ctx, action, beatId),
   getAgentRoster: () => {
+    // Spec 31 Phase 7.B.5 — getAgentRoster is sync (BeatDeps surface) so
+    // we keep the in-memory snapshot read here. It collapses to a canonical
+    // listAgentsByCompany() once BeatDeps becomes async-friendly in 7.C.
     const snap = getSnapshot();
     if (snap.company.id === "company_pending") return [];
     return snap.agents.map((a) => ({ agentId: a.id, role: a.role, companyId: snap.company.id }));

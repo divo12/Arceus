@@ -3,15 +3,18 @@
  * Routes for debugging — execution flow, sprint graph inspection, and graph SSE stream.
  */
 import type { FastifyInstance } from "fastify";
-import { getSnapshot } from "../persistence/store.js";
+import { getDb } from "@arceus/db";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orchestration/state.js";
 import { graphStore } from "../observability/graph-store.js";
 
 export default async function debugRoutes(app: FastifyInstance) {
   app.get("/api/execution-flow", async () => {
-    const snapshot = getSnapshot();
+    const companyId = getActiveCompanyId();
+    const tasks = companyId ? await tasksRepo.listByCompanyHydrated(getDb(), companyId) : [];
     return {
-      tasks: snapshot.tasks.map((t) => ({
+      tasks: tasks.map((t) => ({
         id: t.id,
         kind: t.kind,
         title: t.title,

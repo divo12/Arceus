@@ -1,10 +1,15 @@
 /** @module sprints.routes — Routes for sprint listing. */
 import type { FastifyInstance } from "fastify";
-import { getSnapshot } from "../persistence/store.js";
+import { getDb } from "@arceus/db";
+import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 
 export default async function sprintsRoutes(app: FastifyInstance) {
   app.get("/api/sprints", async () => {
-    return getSnapshot().sprints;
+    const companyId = getActiveCompanyId();
+    if (!companyId) return [];
+    const rows = await sprintsRepo.listSprintsByCompany(getDb(), companyId);
+    return rows.map(sprintsRepo.rowToSprint);
   });
 
   // Legacy board-approval endpoints — sprint creation is now agentic via sprint_create MCP tool.

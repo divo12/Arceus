@@ -4,7 +4,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { getDatabaseHealth } from "@arceus/db";
@@ -14,11 +14,9 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   const productDir = workspaceManager.getLegacyProductDir();
 
   app.get("/api/product/overview", async () => {
-    const companyId = getSnapshot().company.id;
-    const workspace = companyId === "company_pending" ? null : await workspaceManager.get(companyId);
-    const files = companyId === "company_pending"
-      ? []
-      : (await workspaceManager.listFiles(companyId)).files;
+    const companyId = getActiveCompanyId();
+    const workspace = companyId ? await workspaceManager.get(companyId) : null;
+    const files = companyId ? (await workspaceManager.listFiles(companyId)).files : [];
 
     return {
       root: workspace?.localPath ?? productDir,
@@ -29,8 +27,8 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/workspace", async () => {
-    const companyId = getSnapshot().company.id;
-    if (companyId === "company_pending") {
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
       return {
         workspace: null,
         snapshots: [],
@@ -46,14 +44,14 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/workspace/snapshots", async () => {
-    const companyId = getSnapshot().company.id;
-    if (companyId === "company_pending") return [];
+    const companyId = getActiveCompanyId();
+    if (!companyId) return [];
     return workspaceManager.listSprintSnapshots(companyId);
   });
 
   app.get("/api/workspace/diff", async (request, reply) => {
-    const companyId = getSnapshot().company.id;
-    if (companyId === "company_pending") {
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
     }
@@ -69,8 +67,8 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/workspace/sync", async (request, reply) => {
-    const companyId = getSnapshot().company.id;
-    if (companyId === "company_pending") {
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
     }
@@ -85,8 +83,8 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/workspace/export", async (request, reply) => {
-    const companyId = getSnapshot().company.id;
-    if (companyId === "company_pending") {
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
     }

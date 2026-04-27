@@ -4,7 +4,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { audit } from "../observability/audit-ledger.js";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "../agents/chat.js";
 
@@ -16,7 +16,7 @@ export default async function chatRoutes(app: FastifyInstance) {
   app.post("/api/chat/ceo", async (request, reply) => {
     try {
       const body = chatSchema.parse(request.body);
-      audit({ companyId: getSnapshot().company.id, category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
+      audit({ companyId: getActiveCompanyId() ?? "company_pending", category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
       return await sendBoardMessageToCeo(body.message);
     } catch (error) {
       request.log?.error?.(error);

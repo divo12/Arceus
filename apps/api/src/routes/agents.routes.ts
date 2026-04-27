@@ -44,6 +44,13 @@ export default async function agentsRoutes(app: FastifyInstance) {
   });
 }
 
+// Spec 31 Phase 7.B.5 — agents.routes intentionally still reads the
+// in-memory snapshot. The /api/employees + /api/employee-memories shape
+// pulls `agents`, `sessions`, and `memories`, none of which
+// `buildSnapshotView` currently populates. Migrating waits for 7.C, when
+// the snapshot view assembles all five missing field families from
+// canonical (agents already canonical; sessions via session_bindings;
+// memories via memory_summaries).
 function getEmployeeDirectory() {
   const snapshot = getSnapshot();
   const liveSessions = getAgentSessions() as Record<string, {

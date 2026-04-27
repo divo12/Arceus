@@ -5,6 +5,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getSnapshot, applyStrategy } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { getDb } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitActivity } from "../observability/activity.js";
 import { strategyOutputSchema, generateStrategy } from "../agents/ceo.js";
@@ -23,8 +26,10 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
   app.post("/api/company/strategy", async (request, reply) => {
     try {
       const { sendBoardMessageToCeo } = await import("../agents/chat.js");
-      audit({ companyId: getSnapshot().company.id, category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
-      return await sendBoardMessageToCeo(getSnapshot().company.goal || "Refine the current idea into a demoable first release.");
+      const companyId = getActiveCompanyId();
+      audit({ companyId: companyId ?? "company_pending", category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
+      const company = companyId ? await companiesRepo.findByIdHydrated(getDb(), companyId) : null;
+      return await sendBoardMessageToCeo(company?.goal || "Refine the current idea into a demoable first release.");
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
@@ -76,7 +81,11 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       emitActivity("system", "transition", `Quick-execute started: "${idea.slice(0, 80)}"`);
 
       let snapshot = getSnapshot();
-      if (snapshot.company.id === "company_pending") {
+      // Spec 31 Phase 7.B.5 — companyId check via the seam helper.
+      // generateStrategy + applyStrategy still consume the full in-memory
+      // snapshot (the strategy generator takes the entire CompanySnapshot
+      // shape), so the rest of the flow stays on getSnapshot() until 7.C.
+      if (!getActiveCompanyId()) {
         emitActivity("system", "transition", "Bootstrapping company...");
         snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
         emitActivity("system", "transition", `Company bootstrapped: ${snapshot.company.name}`);

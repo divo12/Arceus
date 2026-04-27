@@ -32,6 +32,12 @@ export interface CompanyRouteDeps {
 export default async function companyRoutes(app: FastifyInstance, opts: CompanyRouteDeps) {
   const { heartbeatEngine, meetingScheduler } = opts;
 
+  // Spec 31 Phase 7.B.5 — /api/company intentionally still returns the
+  // full in-memory snapshot. Frontend consumes the entire CompanySnapshot
+  // shape (idea, strategy, hierarchy, memories, meetings, sessions, …)
+  // which `buildSnapshotView` does not yet populate. Migrating this
+  // endpoint waits for 7.C, when the snapshot is fully assembled from
+  // canonical reads on demand.
   app.get("/api/company", async () => {
     return getSnapshot();
   });

@@ -5,7 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { roleTypeSchema, beatTriggerSchema, beatEventTriggerSchema } from "@arceus/contracts";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { cpGetBeatHistory } from "../persistence/control-plane.js";
 import type { HeartbeatEngine, MeetingScheduler, HeartbeatConfig } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
@@ -81,8 +81,8 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     }
     const body = parsed.data;
 
-    const snapshot = getSnapshot();
-    if (snapshot.company.id === "company_pending") {
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
     }
@@ -97,7 +97,7 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
         : { type: "interval", scheduledAt: body.trigger?.scheduledAt ?? now };
 
     const record = await heartbeatEngine.triggerBeat({
-      companyId: snapshot.company.id,
+      companyId,
       agentId: body.agentId,
       role: body.role,
       trigger,
@@ -119,8 +119,8 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
   });
 
   app.get("/api/heartbeat/history", async (request) => {
-    const companyId = getSnapshot().company.id;
-    if (companyId === "company_pending") return [];
+    const companyId = getActiveCompanyId();
+    if (!companyId) return [];
     const query = request.query as Record<string, string>;
     const limit = query.limit ? Math.min(Number(query.limit), 500) : 100;
     const agentId = query.agentId || undefined;

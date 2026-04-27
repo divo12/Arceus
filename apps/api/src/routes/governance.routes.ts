@@ -3,17 +3,20 @@
  * Routes for governance — trust scores, policy violations, sprint budgets, and mutation checks.
  */
 import type { FastifyInstance } from "fastify";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { cpGetAllTrustScores, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpHydrateTrustScores } from "../persistence/control-plane.js";
 import { BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
 import { getDb, isDatabaseConfigured, trustScoresTable } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import { inArray } from "drizzle-orm";
 import { getSprintBudget, getAllSprintBudgets, SPRINT_EVOLUTION_BUDGET_CENTS, MAX_MUTATIONS_PER_SPRINT, MIN_TRUST_FOR_MUTATION, canProposeMutation, lintSkillContent, recordMutationProposal } from "../skills/governance.js";
 
 export default async function governanceRoutes(app: FastifyInstance) {
   app.get("/api/governance/trust-scores", async () => {
     const scores = cpGetAllTrustScores();
-    const agents = getSnapshot().agents;
+    const companyId = getActiveCompanyId();
+    const agents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
     const agentById = new Map(agents.map((a) => [a.id, a]));
     const roleFromId = (id: string): string | null => {
       const m = id.match(/^agent_(.+?)_[0-9a-f-]{36}$/);
@@ -24,7 +27,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
       return {
         ...s,
         agentRole: agent?.role ?? roleFromId(s.agentId),
-        agentName: agent?.name ?? null,
+        agentName: agent?.displayName ?? null,
         tier: getTrustTier(s.score),
       };
     });
@@ -55,7 +58,9 @@ export default async function governanceRoutes(app: FastifyInstance) {
     if (!isDatabaseConfigured()) {
       return { deletedCount: 0, reason: "database not configured" };
     }
-    const liveAgentIds = new Set(getSnapshot().agents.map((a) => a.id));
+    const companyId = getActiveCompanyId();
+    const liveAgents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
+    const liveAgentIds = new Set(liveAgents.map((a) => a.id));
     const db = getDb();
     const rows = await db.select({ agentId: trustScoresTable.agentId }).from(trustScoresTable);
     const orphanIds = rows.map((r) => r.agentId).filter((id) => !liveAgentIds.has(id));
@@ -88,8 +93,8 @@ export default async function governanceRoutes(app: FastifyInstance) {
   app.get("/api/governance/stats", async () => {
     const scores = cpGetAllTrustScores();
     const violations = await cpGetPolicyViolations({ limit: 200 });
-    const snap = getSnapshot();
-    const agents = snap.agents ?? [];
+    const companyId = getActiveCompanyId();
+    const agents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
     return {
       agentCount: agents.length,
       trustScoreCount: scores.length,
@@ -127,8 +132,12 @@ export default async function governanceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/governance/budgets", async () => {
-    for (const sprint of getSnapshot().sprints) {
-      getSprintBudget(sprint.id);
+    const companyId = getActiveCompanyId();
+    if (companyId) {
+      const sprints = await sprintsRepo.listSprintsByCompany(getDb(), companyId);
+      for (const sprint of sprints) {
+        getSprintBudget(sprint.id);
+      }
     }
     return {
       mutationCap: MAX_MUTATIONS_PER_SPRINT,
@@ -147,7 +156,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
       skillContent: string;
       estimatedCostCents?: number;
     };
-    const companyId = getSnapshot().company.id;
+    const companyId = getActiveCompanyId() ?? "company_pending";
     const decision = await canProposeMutation({
       proposerAgentId: body.proposerAgentId,
       proposerRole: body.proposerRole as any,

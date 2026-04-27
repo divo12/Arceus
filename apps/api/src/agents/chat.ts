@@ -1,6 +1,7 @@
 import type { FastifyReply } from "fastify";
 import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type CeoCard } from "./ceo.js";
 import { appendChatMessage, getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { ensureDeployment } from "../config/index.js";
 import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "../infra/opencode.js";
 import { getExecutionStatus } from "../orchestration/state.js";
@@ -119,7 +120,12 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   try {
     let snapshot = getSnapshot();
 
-  if (snapshot.company.id === "company_pending") {
+  // Spec 31 Phase 7.B.5 — bootstrap check via the seam helper. The rest of
+  // CEO conversation flow still needs the full in-memory snapshot
+  // (idea / strategy / agents / sessions / memories) for prompt context;
+  // those reads collapse into 7.C alongside `appendConversationMessage`
+  // and `startCeoPromptAsync` argument restructuring.
+  if (!getActiveCompanyId()) {
     snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
   }
 

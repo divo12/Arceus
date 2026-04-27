@@ -3,7 +3,9 @@
  * Routes for the orchestrator — execution control, board review, approvals, and transitions.
  */
 import type { FastifyInstance } from "fastify";
-import { getSnapshot, flush } from "../persistence/store.js";
+import { flush } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { approveBoardReview } from "../orchestration/execution-cycle.js";
@@ -20,24 +22,30 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
   const { heartbeatEngine, meetingScheduler } = opts;
 
   app.get("/api/orchestrator/status", async () => {
-    const snapshot = getSnapshot();
-    const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+    const companyId = getActiveCompanyId();
+    let currentSprint = null;
+    if (companyId) {
+      const snapshot = await buildSnapshotView(companyId);
+      const found = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+      if (found) {
+        currentSprint = { id: found.id, number: found.number, status: found.status, title: found.title };
+      }
+    }
     return {
       executionStatus: getExecutionStatus(),
       agentSessions: (await import("../orchestration/state.js")).getAgentSessions(),
       localPreview: getLocalPreviewState(),
-      sprint: currentSprint
-        ? { id: currentSprint.id, number: currentSprint.number, status: currentSprint.status, title: currentSprint.title }
-        : null,
+      sprint: currentSprint,
     };
   });
 
   app.post("/api/orchestrator/execute", async (request, reply) => {
-    const snapshot = getSnapshot();
-    if (snapshot.company.id === "company_pending") {
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
     }
+    const snapshot = await buildSnapshotView(companyId);
     if (snapshot.agents.length === 0) {
       reply.code(400);
       return { error: "No agents available. Generate a strategy first." };
