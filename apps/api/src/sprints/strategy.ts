@@ -197,6 +197,12 @@ export async function applyStrategyTx(
     }
   });
 
+  // Spec 31 Phase 7.C.d-cp — initialize trust scores for the freshly
+  // hired roster. Replaces the storeEvents `agents-hired` listener.
+  // Fire-and-forget so the route response doesn't wait on per-agent
+  // governance rows; cpInitializeAgentTrust logs failures internally.
+  void (await import("../persistence/control-plane.js")).cpInitializeAgentTrust(agents);
+
   return {
     company: updatedCompany,
     idea: updatedIdea,

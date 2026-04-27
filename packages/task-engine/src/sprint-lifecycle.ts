@@ -7,8 +7,11 @@ import type { AuditEntry } from "./task-state-machine";
 // ---------------------------------------------------------------------------
 
 export interface CreateSprintCallbacks {
-  upsertSprint: (sprint: Sprint) => void;
-  updateCompanySprint: (sprintId: string, number: number) => void;
+  /** Spec 31 Phase 7.C.d — async to write to canonical. */
+  upsertSprint: (sprint: Sprint) => Promise<Sprint> | Sprint;
+  /** Caller passes companyId via closure since this deps object is
+   *  request-scoped and the company is fixed for the operation. */
+  updateCompanySprint: (sprintId: string, number: number) => Promise<void> | void;
   emitReactiveBroadcast: (event: string) => void;
 }
 
@@ -67,16 +70,16 @@ export interface FinalizeSprintCallbacks {
  * Create and persist a new sprint record.
  * Side effects (store, event) are injected via callbacks.
  */
-export function createSprintRecord(
+export async function createSprintRecord(
   cb: CreateSprintCallbacks,
   snapshot: CompanySnapshot,
   title: string,
   goal: string,
-): Sprint {
+): Promise<Sprint> {
   const sprint = createSprintObject(snapshot, title, goal);
 
-  cb.upsertSprint(sprint);
-  cb.updateCompanySprint(sprint.id, sprint.number);
+  await cb.upsertSprint(sprint);
+  await cb.updateCompanySprint(sprint.id, sprint.number);
   cb.emitReactiveBroadcast("sprint_started");
 
   return sprint;

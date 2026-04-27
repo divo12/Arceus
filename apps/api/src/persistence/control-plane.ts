@@ -20,8 +20,9 @@ import type {
   TaskProgress,
   TaskResult,
 } from "@arceus/contracts";
-import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { getActiveCompanyId } from "./active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { audit, auditSystem } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
@@ -42,9 +43,6 @@ import {
   analyzeSprintPatterns,
 } from "@arceus/company-runtime";
 import {
-  getSnapshot,
-  getEvents,
-  getStoreLifecycleState,
   upsertTask,
   updateTask,
   upsertSprint,
@@ -53,13 +51,10 @@ import {
   upsertApproval,
   updateApproval,
   appendChatMessage,
-  appendTransition,
-  updateTransition,
   updateAgentStatus,
   updateCompanyStatus,
   updateTaskProgress,
-} from "./store.js";
-import { storeEvents } from "./store-events.js";
+} from "./mutations.js";
 
 // ── Version tracking ───────────────────────────────────────
 
@@ -79,26 +74,35 @@ function bumpVersion(): number {
 
 // ── Read path ──────────────────────────────────────────────
 
-/** Load the full snapshot. For now wraps store.getSnapshot(). */
-export function cpLoadSnapshot(): CompanySnapshot & { _version: number } {
-  return { ...getSnapshot(), _version: snapshotVersion };
+/**
+ * Load the full snapshot. Spec 31 Phase 7.C.d-cp — assembled from
+ * canonical via `buildSnapshotView`; returns the empty-snapshot shape
+ * (with companyId stamped in) when no company is bootstrapped.
+ */
+export async function cpLoadSnapshot(): Promise<CompanySnapshot & { _version: number }> {
+  const companyId = getActiveCompanyId();
+  if (!companyId) {
+    const { createEmptyCompanySnapshot } = await import("@arceus/company-runtime");
+    return { ...createEmptyCompanySnapshot(), _version: snapshotVersion };
+  }
+  const view = await buildSnapshotView(companyId);
+  return { ...view, _version: snapshotVersion };
 }
 
-/** Load from persisted DB (cold start). */
-export async function cpLoadPersistedSnapshot(companyId?: string) {
-  const persisted = await loadPersistedCompanyState(companyId);
-  if (persisted) {
-    snapshotVersion = 0; // reset on hydrate
-    mutationCount = 0;
-  }
-  return persisted;
+/**
+ * Cold-start hydration. The legacy `company_states` JSON blob is being
+ * dropped in 7.C.d's legacy-tables migration; this path is now a no-op
+ * because canonical is the durable source of truth.
+ */
+export async function cpLoadPersistedSnapshot(_companyId?: string): Promise<null> {
+  return null;
 }
 
 /** Get the current version info. */
-export function cpGetVersion(): SnapshotVersion {
-  const snap = getSnapshot();
+export async function cpGetVersion(): Promise<SnapshotVersion> {
+  const companyId = getActiveCompanyId() ?? "";
   return {
-    companyId: snap.company.id,
+    companyId,
     version: snapshotVersion,
     updatedAt: new Date().toISOString(),
     mutationCount,
@@ -118,15 +122,18 @@ export function cpNotifyStateChange() {
 
 /**
  * Apply a batch of mutations atomically.
- * Each mutation is applied to the in-memory store and audited.
- * Returns the new snapshot version.
+ *
+ * Spec 31 Phase 7.C.d-cp — async; mutators write straight to canonical
+ * via `mutations.ts`. The optimistic-concurrency check is still
+ * disabled (B.4 finding: every concurrent heartbeat raced against
+ * itself), so `expectedVersion` is informational only.
  */
-export function cpApplyMutations(
+export async function cpApplyMutations(
   companyId: string,
   mutations: StateMutation[],
   causation?: { eventId?: string; summary?: string },
   expectedVersion?: number
-): { version: number; applied: number; errors: string[] } {
+): Promise<{ version: number; applied: number; errors: string[] }> {
   // Optimistic concurrency check — disabled: with concurrent heartbeats the
   // version races ahead and every agent's mutations get discarded.
   // if (expectedVersion !== undefined && expectedVersion !== snapshotVersion) {
@@ -142,7 +149,7 @@ export function cpApplyMutations(
 
   for (const mutation of mutations) {
     try {
-      applyOneMutation(companyId, mutation, causation?.eventId);
+      await applyOneMutation(companyId, mutation, causation?.eventId);
       applied++;
       mutationCount++;
     } catch (err) {
@@ -161,10 +168,6 @@ export function cpApplyMutations(
   }
 
   const version = bumpVersion();
-
-  // Persist after mutations
-  const snapshot = getSnapshot();
-  void schedulePersistedCompanyState(snapshot, getEvents()).catch(() => {});
 
   if (applied > 0) {
     audit({
@@ -186,10 +189,10 @@ export function cpApplyMutations(
   return { version, applied, errors };
 }
 
-function applyOneMutation(companyId: string, mutation: StateMutation, causationId?: string) {
+async function applyOneMutation(companyId: string, mutation: StateMutation, _causationId?: string): Promise<void> {
   switch (mutation.type) {
     case "task_status":
-      updateTask(mutation.taskId, (t) => ({
+      await updateTask(mutation.taskId, (t) => ({
         ...t,
         status: mutation.status,
         ...(mutation.summary ? { summary: mutation.summary } : {}),
@@ -197,68 +200,63 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
       break;
 
     case "task_assign":
-      updateTask(mutation.taskId, (t) => ({
+      await updateTask(mutation.taskId, (t) => ({
         ...t,
         assignedTo: mutation.agentId,
       }));
       break;
 
     case "task_create":
-      upsertTask(mutation.task);
+      await upsertTask(mutation.task);
       break;
 
     case "sprint_status":
-      updateSprint(mutation.sprintId, (s) => ({
+      await updateSprint(mutation.sprintId, (s) => ({
         ...s,
         status: mutation.status,
       }));
       break;
 
     case "sprint_create":
-      upsertSprint(mutation.sprint);
+      await upsertSprint(mutation.sprint);
       break;
 
     case "meeting_record":
-      upsertMeeting(mutation.meeting);
+      await upsertMeeting(mutation.meeting);
       break;
 
     case "approval_create":
-      upsertApproval(mutation.approval);
+      await upsertApproval(mutation.approval);
       break;
 
     case "approval_resolve":
-      updateApproval(mutation.approvalId, (a) => ({
+      await updateApproval(mutation.approvalId, (a) => ({
         ...a,
         status: mutation.status,
       }));
       break;
 
     case "chat_message":
-      appendChatMessage(mutation.message);
+      await appendChatMessage(mutation.message);
       break;
 
     case "transition_append":
-      appendTransition(mutation.transition);
+      // Spec 31 Phase 7.B.4 — transitions/feedback retired with the snapshot.
+      // No-op: orchestration/state.ts owns the in-memory log if needed.
       break;
 
     case "transition_update":
-      // Spec 31 Phase 7.C.d — transitions/feedback are no-ops post-shell.
-      updateTransition(mutation.transitionId, (t: unknown) => ({
-        ...(t as Record<string, unknown>),
-        ...mutation.changes,
-      }));
+      // No-op: see transition_append above.
       break;
 
     case "agent_status":
-      void updateAgentStatus(mutation.agentId, mutation.status);
+      await updateAgentStatus(mutation.agentId, mutation.status);
       break;
 
-    case "company_status": {
-      // Spec 31 Phase 7.C.d — updateCompanyStatus needs companyId now.
-      const cid = getActiveCompanyId();
-      if (cid) void updateCompanyStatus(cid, mutation.status as never);
+    case "company_status":
+      // Spec 31 Phase 7.C.d — updateCompanyStatus is keyed by companyId now.
+      await updateCompanyStatus(companyId, mutation.status as never);
       break;
-    }
 
     case "task_progress":
       updateTaskProgress(mutation.taskId, mutation.progress);
@@ -289,28 +287,32 @@ export type ControlPlaneStatus = {
   };
 };
 
-/** Get the Control Plane health and component status summary. */
+/**
+ * Get the Control Plane health and component status summary. Spec 31
+ * Phase 7.C.d-cp — sync-friendly because no DB read is needed; the
+ * canonical-direct architecture has no in-memory cache to report on.
+ */
 export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
-  const snap = getSnapshot();
-  const isPending = snap.company.id === "company_pending";
-  const lifecycle = getStoreLifecycleState();
+  const companyId = getActiveCompanyId() ?? "";
+  const isPending = !companyId;
 
   return {
     healthy: true,
     version: snapshotVersion,
     mutationCount,
     upSince: startedAt,
-    companyId: snap.company.id,
-    snapshotStale: lifecycle.dirty,
+    companyId,
+    snapshotStale: false,
     components: {
       stateStore: {
         status: "ok",
-        inMemory: true,
+        // Post-7.C.d: canonical is the source of truth, no in-memory cache.
+        inMemory: false,
         dbPersist: !isPending,
-        dirty: lifecycle.dirty,
-        mutationsSinceHydrate: lifecycle.mutationsSinceHydrate,
-        lastHydratedAt: lifecycle.lastHydratedAt,
-        lastFlushedAt: lifecycle.lastFlushedAt,
+        dirty: false,
+        mutationsSinceHydrate: 0,
+        lastHydratedAt: null,
+        lastFlushedAt: null,
       },
       auditLedger: {
         status: "ok",
@@ -322,9 +324,32 @@ export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
   };
 }
 
-/** Snapshot summary for the dashboard (lightweight, no full data). */
-export function cpGetSnapshotSummary() {
-  const snap = getSnapshot();
+/**
+ * Snapshot summary for the dashboard (lightweight, no full data).
+ * Spec 31 Phase 7.C.d-cp — async; reads via `buildSnapshotView`.
+ */
+export async function cpGetSnapshotSummary() {
+  const companyId = getActiveCompanyId();
+  if (!companyId) {
+    return {
+      version: snapshotVersion,
+      companyId: "",
+      companyName: "",
+      companyStatus: "ideation",
+      agentCount: 0,
+      activeSessions: 0,
+      taskStats: { total: 0, created: 0, inProgress: 0, completed: 0, failed: 0, blocked: 0 },
+      sprint: null,
+      agents: [],
+      memories: { totalUnits: 0, agentSummaries: 0 },
+      meetings: 0,
+      approvals: { total: 0, pending: 0 },
+      artifacts: 0,
+      chatMessageCount: 0,
+      transitions: 0,
+    };
+  }
+  const snap = await buildSnapshotView(companyId);
   const currentSprint = snap.sprints.find((s) => s.id === snap.company.currentSprintId);
 
   return {
@@ -387,15 +412,21 @@ function getLatestDailySyncBrief(snap: CompanySnapshot) {
 /**
  * Assemble the AgentBeatContext for a given agent.
  * This is the "Phase 1 — Wake" data payload.
+ *
+ * Spec 31 Phase 7.C.d-cp — async; reads from canonical via
+ * `buildSnapshotView`. Returns null when no company is bootstrapped or
+ * the agent is not on the org chart.
  */
-export function cpLoadAgentContext(
+export async function cpLoadAgentContext(
   agentId: string,
   beatId: string,
   beatNumber: number,
   trigger: BeatRecord["trigger"],
   config: { beatTokenBudget: number; beatCostCeilingCents: number }
-): AgentBeatContext | null {
-  const snap = getSnapshot();
+): Promise<AgentBeatContext | null> {
+  const companyId = getActiveCompanyId();
+  if (!companyId) return null;
+  const snap = await buildSnapshotView(companyId);
   const agent = snap.agents.find((a) => a.id === agentId);
   if (!agent) return null;
 
@@ -568,9 +599,14 @@ function buildSkillsLeadContext(companyId: string, currentSprintId: string | nul
   };
 }
 
-/** Load the active sprint from the snapshot (convenience). */
-export function cpLoadActiveSprint() {
-  const snap = getSnapshot();
+/**
+ * Load the active sprint from canonical (convenience).
+ * Spec 31 Phase 7.C.d-cp — async; returns null when no active company.
+ */
+export async function cpLoadActiveSprint() {
+  const companyId = getActiveCompanyId();
+  if (!companyId) return null;
+  const snap = await buildSnapshotView(companyId);
   return snap.sprints.find((s) => s.id === snap.company.currentSprintId) ?? null;
 }
 
@@ -665,14 +701,16 @@ export function cpGetSnapshotVersion(): number {
  * Commit a structured task result when a beat completes a task.
  * Sets task status to completed, stores result artifacts in executorState,
  * and emits an audit event.
+ *
+ * Spec 31 Phase 7.C.d-cp — async; reads the task from canonical via
+ * the tasks repo so the result append works on real DB state.
  */
-export function cpCommitTaskResult(
+export async function cpCommitTaskResult(
   companyId: string,
   taskId: string,
   result: TaskResult,
-): void {
-  const snap = getSnapshot();
-  const task = snap.tasks.find((t) => t.id === taskId);
+): Promise<void> {
+  const task = await tasksRepo.findByIdHydrated(getDb(), taskId);
   if (!task) {
     console.warn(`[CP] cpCommitTaskResult: task ${taskId} not found`);
     return;
@@ -683,7 +721,7 @@ export function cpCommitTaskResult(
   const resultEntry = `[${result.beatId}] ${result.summary}`;
   const updatedResults = [...existingResults, resultEntry].slice(-50);
 
-  updateTask(taskId, (t) => ({
+  await updateTask(taskId, (t) => ({
     ...t,
     status: "completed" as const,
     completedAt: new Date().toISOString(),
@@ -962,11 +1000,16 @@ export async function cpHydrateTrustScores(): Promise<void> {
 /** In-memory recent violations cache. */
 const recentViolationsCache: PolicyViolation[] = [];
 
-// ── Store event subscriptions (breaks store→CP circular dep) ──
-storeEvents.on("state-changed", () => cpNotifyStateChange());
-storeEvents.on("agents-hired", (agents: Array<{ id: string }>) => {
+/**
+ * Initialize trust scores for a freshly hired roster of agents.
+ * Spec 31 Phase 7.C.d-cp — replaces the old `storeEvents.on("agents-hired", …)`
+ * listener that fired from `store.applyStrategy`. Now called explicitly
+ * by `applyStrategyTx` after the transaction commits. Fire-and-forget;
+ * failures are warned but never thrown.
+ */
+export async function cpInitializeAgentTrust(agents: Array<{ id: string }>): Promise<void> {
   const nowIso = new Date().toISOString();
-  void Promise.allSettled(
+  const results = await Promise.allSettled(
     agents.map((a) =>
       cpUpdateTrustScore({
         agentId: a.id,
@@ -976,10 +1019,9 @@ storeEvents.on("agents-hired", (agents: Array<{ id: string }>) => {
         timestamp: nowIso,
       }),
     ),
-  ).then((results) => {
-    const failed = results.filter((r) => r.status === "rejected").length;
-    if (failed > 0) {
-      console.warn(`[Trust] init failed for ${failed}/${agents.length} agents`);
-    }
-  });
-});
+  );
+  const failed = results.filter((r) => r.status === "rejected").length;
+  if (failed > 0) {
+    console.warn(`[Trust] init failed for ${failed}/${agents.length} agents`);
+  }
+}

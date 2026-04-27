@@ -56,19 +56,21 @@ export type BeatExecutor = (request: BeatRequest, beatId: string) => Promise<Bea
  * so the API layer supplies these callbacks at construction time.
  */
 export interface BeatDependencies {
+  /** Spec 31 Phase 7.C.d-cp — async to read from canonical via buildSnapshotView. */
   loadAgentContext: (
     agentId: string, beatId: string, beatNumber: number, trigger: BeatTrigger,
     config: { beatTokenBudget: number; beatCostCeilingCents: number }
-  ) => AgentBeatContext | null;
+  ) => Promise<AgentBeatContext | null>;
 
   getSnapshotVersion: () => number;
 
+  /** Spec 31 Phase 7.C.d-cp — async to write through canonical mutators. */
   applyMutations: (
     companyId: string,
     mutations: Array<{ type: string; [key: string]: unknown }>,
     causation?: { eventId?: string; summary?: string },
     expectedVersion?: number
-  ) => { version: number; applied: number; errors: string[] };
+  ) => Promise<{ version: number; applied: number; errors: string[] }>;
 
   commitBeatRecord: (record: BeatRecord) => Promise<boolean>;
   flushStore: () => Promise<void>;
@@ -187,15 +189,15 @@ export class HeartbeatEngine {
   }
 
   /** Flush all staged mutations via applyMutations, then clear. */
-  private flushStagedMutations(
+  private async flushStagedMutations(
     companyId: string,
     causation: { eventId?: string; summary?: string },
     expectedVersion?: number,
-  ): { version: number; applied: number; errors: string[] } {
+  ): Promise<{ version: number; applied: number; errors: string[] }> {
     if (this.stagedMutations.length === 0 || !this.deps) {
       return { version: expectedVersion ?? 0, applied: 0, errors: [] };
     }
-    const result = this.deps.applyMutations(companyId, this.stagedMutations, causation, expectedVersion);
+    const result = await this.deps.applyMutations(companyId, this.stagedMutations, causation, expectedVersion);
     this.stagedMutations = [];
     return result;
   }
@@ -510,7 +512,7 @@ export class HeartbeatEngine {
       deps.emitBeatEvent?.({ type: "beat_started", beatId, agentId: request.agentId, role: request.role });
 
       snapshotVersionRead = deps.getSnapshotVersion();
-      const ctx = deps.loadAgentContext(
+      const ctx = await deps.loadAgentContext(
         request.agentId, beatId, this.beatCounter, request.trigger,
         { beatTokenBudget: this.config.beatTokenBudget, beatCostCeilingCents: this.config.beatCostCeilingCents }
       );
@@ -663,7 +665,7 @@ export class HeartbeatEngine {
       this.stageMutation({ type: "agent_status", agentId: request.agentId, status: "active" });
 
       // Flush all staged mutations atomically (beat work + heartbeat status)
-      const heartbeatResult = this.flushStagedMutations(
+      const heartbeatResult = await this.flushStagedMutations(
         request.companyId,
         { eventId: beatId, summary: `Beat ${beatId} serialize` },
         snapshotVersionRead ?? undefined

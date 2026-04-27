@@ -137,10 +137,10 @@ await loadActiveCompanyIdFromCanonical();
 // ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
 
 const beatDeps: BeatDependencies = {
-  loadAgentContext: (agentId, beatId, beatNumber, trigger, config) =>
+  loadAgentContext: async (agentId, beatId, beatNumber, trigger, config) =>
     cpLoadAgentContext(agentId, beatId, beatNumber, trigger, config),
   getSnapshotVersion: () => cpGetSnapshotVersion(),
-  applyMutations: (companyId, mutations, causation, expectedVersion) =>
+  applyMutations: async (companyId, mutations, causation, expectedVersion) =>
     cpApplyMutations(companyId, mutations as any, causation, expectedVersion),
   commitBeatRecord: (record) => cpCommitBeatRecord(record),
   flushStore: () => flush(),
