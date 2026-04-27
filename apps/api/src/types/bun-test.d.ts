@@ -41,5 +41,15 @@ declare module "bun:test" {
     not: Omit<Matchers, "not">;
   };
 
-  export function expect(actual: unknown): Matchers;
+  /** Surface for `expect(asyncFn()).rejects.toThrow(/pattern/)`. */
+  type AsyncMatchers = {
+    toThrow(pattern?: string | RegExp): Promise<void>;
+  };
+
+  type ExpectResult = Matchers & {
+    rejects: AsyncMatchers;
+    resolves: Matchers;
+  };
+
+  export function expect(actual: unknown): ExpectResult;
 }

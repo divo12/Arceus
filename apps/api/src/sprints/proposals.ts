@@ -9,6 +9,7 @@ import {
   upsertSprint,
   updateCompanySprint,
 } from "../persistence/store.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
@@ -28,7 +29,11 @@ import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js
  * All reasoning about WHAT to build comes from the CEO agent.
  */
 export async function createSprintWithTasks(input: SprintCreateInput) {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — snapshot reads now go through the
+  // canonical-backed view. The store remains authoritative for
+  // mutations until B.4.2 swaps the mutators.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
 
   // Guard: can't start a new sprint while one is active
   const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
@@ -50,7 +55,9 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   // which the tasks never reach the DB and tasksRepo.claimTask returns
   // not_found indefinitely.
   await persistSprint(sprint.id);
-  const freshSnapshot = getSnapshot();
+  // Re-fetch the view after the sprint write so createWorkflowTask sees
+  // the new sprint id when it computes task dependencies.
+  const freshSnapshot = await buildSnapshotView(companyId);
 
   // Create tasks from agent-provided list
   const taskTitleToId = new Map<string, string>();
@@ -128,7 +135,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   );
 
   setActiveExecution({
-    companyId: freshSnapshot.company.id,
+    companyId,
     buildTaskId: "",
     previewTaskId: "",
     reviewTaskId: "",
@@ -145,12 +152,14 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
 export async function beginSprintExecution(
   onStartEventBridge?: () => Promise<void>,
 ): Promise<void> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — only reads `company.id` from the snapshot
+  // bridge; full snapshot view not needed for this entry point.
+  const companyId = getSnapshot().company.id;
 
   setExecutionStatus("executing");
 
   try {
-    await workspaceManager.ensureLocal(snapshot.company.id);
+    await workspaceManager.ensureLocal(companyId);
 
     if (!eventBridgeStarted && onStartEventBridge) {
       // The bridge owns the started-flag now (C3 — F-273/274/290).

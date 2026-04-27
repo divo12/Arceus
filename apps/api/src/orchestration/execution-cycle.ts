@@ -7,6 +7,7 @@ import { uniqueStrings, nowIso } from "@arceus/task-engine";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { getSnapshot, updateTask } from "../persistence/store.js";
+import { buildSnapshotView } from "./snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphDecision } from "../observability/graph-emitter.js";
 import { stopLocalPreview } from "../workspace/preview.js";
@@ -29,7 +30,9 @@ import { checkSprintCompletion } from "../sprints/lifecycle.js";
 
 /** Finalize the current execution cycle: update status, record meeting, and check sprint completion. */
 export async function completeExecutionCycle(reason: string) {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — task-engine helper takes the canonical-backed view.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const queuedNonCoreTaskCount = getQueuedNonCoreTaskCount(snapshot);
   setExecutionStatus("done");
 
@@ -117,7 +120,9 @@ export async function pauseForBoardReview(reason: string) {
 
 /** Run post-review reconciliation: then complete or pause. */
 export async function reconcilePostReviewExecution() {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — task-engine helper takes the canonical-backed view.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const boardDecision = shouldPauseForBoardReview(snapshot);
 
   {

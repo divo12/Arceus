@@ -20,6 +20,7 @@ import {
 } from "../observability/graph-emitter.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
 import { getSnapshot, updateMeeting, updateSprint } from "../persistence/store.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { flush } from "../persistence/store.js";
 import { ensureAgentSession } from "../prompts/llm.js";
 import { runPromptText } from "../prompts/llm.js";
@@ -133,7 +134,9 @@ async function handleCreateSprintPlanningTask(
   // Ensure any finished sprint is properly marked complete first
   await checkSprintCompletion();
 
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const nextNum = (snapshot.company.currentSprintNumber ?? 0) + 1;
 
   // Guard: don't create duplicate planning tasks
@@ -185,7 +188,9 @@ async function handleCtoEscalationForceComplete(
   finish: FinishFn,
 ): Promise<HandlerResult> {
   startBeatTokenAccumulator(beatId);
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — read via canonical-backed view.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     finish("completed", "No active sprint", 0);
@@ -276,7 +281,9 @@ async function handleFreeformLlmAction(
 ): Promise<HandlerResult> {
   const role = _ctx.role;
   try {
-    const snapshot = getSnapshot();
+    // Spec 31 Phase 7.B.4 — view used for ensureAgentSession's
+    // snapshot input and downstream agent lookups.
+    const snapshot = await buildSnapshotView(_ctx.company.id);
     const soul = getRoleSoul(role);
     const session = await ensureAgentSession(snapshot, role);
     touchAgentSession(role, "working");
@@ -315,8 +322,9 @@ async function executeSkillsLeadAction(
   suggestedAction: string,
 ): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
   startBeatTokenAccumulator(beatId);
-  const snapshot = getSnapshot();
-  const companyId = snapshot.company.id;
+  // Spec 31 Phase 7.B.4 — companyId from beat ctx, snapshot view for agent lookups below.
+  const companyId = _ctx.company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const sprintId = snapshot.company.currentSprintId ?? null;
 
   try {

@@ -2,13 +2,12 @@
  * Orchestrator shared state — mutable singletons, constants, and convenience getters.
  */
 
-import type { AgentIdentity, BeatEventTrigger, CompanySnapshot, Task } from "@arceus/contracts";
+import type { AgentIdentity, BeatEventTrigger, CompanySnapshot, FeedbackRound, Task, Transition } from "@arceus/contracts";
 import type { MeetingScheduler } from "@arceus/company-runtime";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { isInternalAgentRole } from "@arceus/company-runtime";
 import { orchestratorConfig } from "../config/index.js";
-import { getSnapshot } from "../persistence/store.js";
 
 // ─── Types ────────────────────────────────────────────────────────
 export type AgentSessionState = {
@@ -181,10 +180,30 @@ export function getArtifacts() { return artifacts; }
 export function getExecutionStatus() { return executionStatus; }
 /** Get the active execution context (or null). */
 export function getActiveExecution() { return activeExecution; }
-/** Get task state transitions from the snapshot. */
-export function getTransitions() { return getSnapshot().transitions ?? []; }
-/** Get feedback rounds from the snapshot. */
-export function getFeedbackRounds() { return getSnapshot().feedbackRounds ?? []; }
+/**
+ * Spec 31 Phase 7.B.4 — transitions + feedback rounds moved off the
+ * in-memory snapshot. They live in module-local arrays now; spec
+ * 7.A.2 routes them through `activity_log` once that decision lands
+ * (the canonical schema already exists). Until then this is the
+ * single owner of both append + read.
+ */
+const transitionsLog: Transition[] = [];
+const feedbackRoundsLog: FeedbackRound[] = [];
+
+/** Append a state transition to the in-memory log. */
+export function recordTransition(transition: Transition): void {
+  transitionsLog.push(transition);
+}
+
+/** Append a feedback round to the in-memory log. */
+export function recordFeedbackRound(round: FeedbackRound): void {
+  feedbackRoundsLog.push(round);
+}
+
+/** Get task state transitions (read-only view of the log). */
+export function getTransitions(): readonly Transition[] { return transitionsLog; }
+/** Get feedback rounds (read-only view of the log). */
+export function getFeedbackRounds(): readonly FeedbackRound[] { return feedbackRoundsLog; }
 
 // ─── Reset (for tests / server restart) ──────────────────────────
 

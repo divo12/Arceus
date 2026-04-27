@@ -1,6 +1,7 @@
 import type { AgentIdentity, Sprint, SprintReviewState, Task } from "@arceus/contracts";
 import { getAgentByRole, createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { getSnapshot, appendChatMessage, updateSprint, upsertTask } from "../persistence/store.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import {
   emitGraphDecision,
@@ -28,7 +29,9 @@ import {
 export async function checkSprintCompletion(): Promise<boolean> {
   if (sprintCompletionTriggered) return false;
 
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const currentSprintId = snapshot.company.currentSprintId;
   if (!currentSprintId) return false;
 
@@ -89,7 +92,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
     const bugFields = buildGateFailureBugFields(gateResult, currentSprintId);
     if (bugFields) {
       const bugTask = createWorkflowTask(
-        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        snapshot, bugFields.kind, bugFields.assignedRole,
         bugFields.title, bugFields.description, bugFields.problemStatement,
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
@@ -127,7 +130,9 @@ export async function checkSprintCompletion(): Promise<boolean> {
 export async function finalizeSprintCompletion(
   sprintId: string,
 ): Promise<void> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — read via canonical-backed view.
+  const companyId = getSnapshot().company.id;
+  const snapshot = await buildSnapshotView(companyId);
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
 
@@ -182,11 +187,15 @@ export async function finalizeSprintCompletion(
 }
 
 async function tagCurrentSprintSnapshot() {
-  const snapshot = getSnapshot();
-  if (snapshot.company.id === "company_pending") return;
+  // Spec 31 Phase 7.B.4 — read via canonical-backed view.
+  // workspaceManager.tagSprint persists the full snapshot as a git
+  // tag payload, so we still build the full view here.
+  const companyId = getSnapshot().company.id;
+  if (companyId === "company_pending") return;
+  const snapshot = await buildSnapshotView(companyId);
 
   try {
-    const result = await workspaceManager.tagSprint(snapshot.company.id, snapshot.company.currentSprintNumber ?? 1, snapshot);
+    const result = await workspaceManager.tagSprint(companyId, snapshot.company.currentSprintNumber ?? 1, snapshot);
     if (result.warnings.length > 0) {
       emitEmployeeActivity("system", "info", `Sprint snapshot completed with warnings: ${result.warnings.join(" | ")}`, {
         taskId: activeExecution?.reviewTaskId ?? null,

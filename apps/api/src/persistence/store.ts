@@ -22,6 +22,7 @@ import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { persistCompany } from "./company-persistence.js";
 import { persistSprint, persistTask, persistMeeting, persistApproval, persistChatMessage, persistAgents } from "./domain-persistence.js";
+import { recordFeedbackRound, recordTransition } from "../orchestration/state.js";
 import { storeEvents } from "./store-events.js";
 
 /**
@@ -472,28 +473,41 @@ export function updateAgentMemory(agentId: string, updater: (memory: MemorySumma
   return snapshot.memories.find((memory) => memory.agentId === agentId) ?? null;
 }
 
-/** Append a transition to the snapshot. */
+/**
+ * Append a transition. Spec 31 Phase 7.B.4 — transitions own
+ * their storage in `orchestration/state.ts`; this wrapper stays as
+ * a back-compat shim while callers migrate.
+ *
+ * @deprecated call `recordTransition` from `orchestration/state.ts`
+ *             directly. Removed when Spec 7.A.2 routes transitions
+ *             through `activity_log`.
+ */
 export function appendTransition(transition: Transition) {
-  replaceState({
-    ...snapshot,
-    transitions: [...(snapshot.transitions ?? []), transition],
-  });
+  recordTransition(transition);
   return transition;
 }
 
-/** Update a transition by ID using an updater function. */
-export function updateTransition(transitionId: string, updater: (t: Transition) => Transition) {
-  const transitions = (snapshot.transitions ?? []).map((t) => (t.id === transitionId ? updater(t) : t));
-  replaceState({ ...snapshot, transitions });
-  return transitions.find((t) => t.id === transitionId) ?? null;
+/**
+ * Update a transition by ID. The mutable transitions array now
+ * lives outside the snapshot (state.ts owns it); this stub returns
+ * `null` because no caller exists today and the canonical activity
+ * log doesn't support in-place edits.
+ *
+ * @deprecated transitions are append-only after B.4.
+ */
+export function updateTransition(_transitionId: string, _updater: (t: Transition) => Transition) {
+  return null;
 }
 
-/** Append a feedback round to the snapshot. */
+/**
+ * Append a feedback round. Spec 31 Phase 7.B.4 — same model as
+ * `appendTransition`: state.ts owns the array now.
+ *
+ * @deprecated call `recordFeedbackRound` from `orchestration/state.ts`.
+ */
 export function appendFeedbackRound(round: FeedbackRound) {
-  replaceState({
-    ...snapshot,
-    feedbackRounds: [...(snapshot.feedbackRounds ?? []), round],
-  });
+  recordFeedbackRound(round);
+  /** Match the prior signature: tests/types expect a void-ish return. */
   return round;
 }
 

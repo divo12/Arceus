@@ -1,7 +1,9 @@
 import type { AgentIdentity, BeatEventTrigger } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { getSnapshot } from "../persistence/store.js";
+import { buildSnapshotView } from "./snapshot-view.js";
 import { getMeetingSchedulerRef, getReactiveEventEmitter } from "./state.js";
 
 /**
@@ -47,21 +49,28 @@ export function emitReactiveBroadcast(event: BeatEventTrigger): void {
  * Trigger an escalation meeting for a blocked task. Called from
  * `setTaskStatus()` when a task transitions to "blocked".
  *
- * Stays snapshot-bound for now — the underlying
- * `scheduler.createEscalationMeeting(snapshot, ...)` API takes the
- * full snapshot. Migrating it requires reshaping the meeting
- * scheduler, which is a B.4 concern alongside the sprints
- * task-engine work.
+ * Spec 31 Phase 7.B.4 — fire-and-forget. Resolves the task via
+ * `tasksRepo`, the agent via `agentsRepo`, and assembles the
+ * meeting-scheduler input via `buildSnapshotView` (the scheduler's
+ * `createEscalationMeeting` API still takes a full snapshot —
+ * reshaping it is a separate B.4 follow-up). The 5+ callers stay
+ * sync because the meeting is best-effort.
  */
 export function triggerEscalationMeeting(taskId: string, blockerDetail: string): void {
   const scheduler = getMeetingSchedulerRef();
   if (!scheduler) return;
-  const snap = getSnapshot();
-  const task = snap.tasks.find((t) => t.id === taskId);
-  if (!task || !task.assignedRole) return;
+  const companyId = getSnapshot().company.id;
 
-  const agent = snap.agents.find((a) => a.role === task.assignedRole);
-  if (!agent) return;
+  void (async () => {
+    const task = await tasksRepo.findByIdHydrated(getDb(), taskId);
+    if (!task || !task.assignedRole) return;
 
-  scheduler.createEscalationMeeting(snap, agent.id, blockerDetail, taskId);
+    const agent = await agentsRepo.findAgentByRole(getDb(), companyId, task.assignedRole);
+    if (!agent) return;
+
+    const snapshot = await buildSnapshotView(companyId);
+    scheduler.createEscalationMeeting(snapshot, agent.id, blockerDetail, taskId);
+  })().catch((err) => {
+    console.warn(`[reactive] triggerEscalationMeeting failed for task=${taskId}`, err);
+  });
 }
