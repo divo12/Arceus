@@ -1,33 +1,59 @@
 import type { AgentIdentity, BeatEventTrigger } from "@arceus/contracts";
-import { getAgentByRole } from "@arceus/task-engine";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { getSnapshot } from "../persistence/store.js";
 import { getMeetingSchedulerRef, getReactiveEventEmitter } from "./state.js";
 
-/** Emit a reactive event for a specific role (resolves agentId from snapshot). */
-export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger) {
+/**
+ * Emit a reactive event for a specific role. Spec 31 Phase 7.B.3 —
+ * agent lookup goes through `agentsRepo.findAgentByRole` (canonical).
+ * Reactive events are best-effort and fire-and-forget so the
+ * surface stays sync — the 15+ callers don't have to async-cascade.
+ *
+ * `companyId` still derives from the in-memory snapshot until B.5
+ * threads it through via `companyContext`.
+ */
+export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger): void {
   const emitter = getReactiveEventEmitter();
   if (!emitter) return;
-  const snapshot = getSnapshot();
-  const agent = getAgentByRole(snapshot, role);
-  if (!agent) return;
-  emitter(snapshot.company.id, agent.id, role, event);
-}
-
-/** Emit a reactive event to ALL agents (used for broadcast events like sprint_started). */
-export function emitReactiveBroadcast(event: BeatEventTrigger) {
-  const emitter = getReactiveEventEmitter();
-  if (!emitter) return;
-  const snapshot = getSnapshot();
-  for (const agent of snapshot.agents) {
-    emitter(snapshot.company.id, agent.id, agent.role, event);
-  }
+  const companyId = getSnapshot().company.id;
+  void agentsRepo.findAgentByRole(getDb(), companyId, role).then((agent) => {
+    if (!agent) return;
+    emitter(companyId, agent.id, role, event);
+  }).catch((err) => {
+    console.warn(`[reactive] emitReactive lookup failed for role=${role}`, err);
+  });
 }
 
 /**
- * Trigger an escalation meeting for a blocked task.
- * Called from setTaskStatus() when a task transitions to "blocked".
+ * Emit a reactive event to ALL agents. Spec 31 Phase 7.B.3 —
+ * `agentsRepo.listAgentsByCompany` replaces `snapshot.agents`.
+ * Fire-and-forget like `emitReactive`.
  */
-export function triggerEscalationMeeting(taskId: string, blockerDetail: string) {
+export function emitReactiveBroadcast(event: BeatEventTrigger): void {
+  const emitter = getReactiveEventEmitter();
+  if (!emitter) return;
+  const companyId = getSnapshot().company.id;
+  void agentsRepo.listAgentsByCompany(getDb(), companyId).then((agents) => {
+    for (const agent of agents) {
+      emitter(companyId, agent.id, agent.role as AgentIdentity["role"], event);
+    }
+  }).catch((err) => {
+    console.warn("[reactive] emitReactiveBroadcast list failed", err);
+  });
+}
+
+/**
+ * Trigger an escalation meeting for a blocked task. Called from
+ * `setTaskStatus()` when a task transitions to "blocked".
+ *
+ * Stays snapshot-bound for now — the underlying
+ * `scheduler.createEscalationMeeting(snapshot, ...)` API takes the
+ * full snapshot. Migrating it requires reshaping the meeting
+ * scheduler, which is a B.4 concern alongside the sprints
+ * task-engine work.
+ */
+export function triggerEscalationMeeting(taskId: string, blockerDetail: string): void {
   const scheduler = getMeetingSchedulerRef();
   if (!scheduler) return;
   const snap = getSnapshot();

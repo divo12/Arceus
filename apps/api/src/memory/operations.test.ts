@@ -56,10 +56,15 @@ function setupMocks(opts: MockSetup) {
   const findSummary = opts.findByAgentHydratedResult === undefined ? EXISTING_SUMMARY : opts.findByAgentHydratedResult;
   mock.module("@arceus/db/src/repos/agents.js", () => ({
     findAgentByRole: async () => findAgent,
+    findAgentById: async () => null,
+    listAgentsByCompany: async () => [],
   }));
   mock.module("@arceus/db/src/repos/memory_summaries.js", () => ({
     findByAgentHydrated: async () => findSummary,
     upsertSummary: opts.upsertSpy,
+    listByCompany: async () => [],
+    findByAgent: async () => null,
+    rowToSummary: (row: unknown) => row,
   }));
 }
 

@@ -44,9 +44,8 @@ describe("applyMeetingEffects (B.2 read migration)", () => {
       if (role === "tester") return makeAgentRow("tester", AGENT_TESTER_UUID);
       return null;
     });
-    mock.module("@arceus/db/src/repos/agents.js", () => ({
-      findAgentByRole: findAgentSpy,
-    }));
+    mock.module("@arceus/db/src/repos/agents.js", () => ({ 
+      findAgentByRole: findAgentSpy, listAgentsByCompany: async () => [], findAgentById: async () => null }));
     mock.module("@arceus/db/src/repos/tasks.js", () => ({
       findByIdHydrated: async () => null,
       listByCompanyHydrated: async () => [],
@@ -82,9 +81,8 @@ describe("applyMeetingEffects (B.2 read migration)", () => {
   });
 
   it("dispatches memory modifications fire-and-forget without awaiting per-mod persistence", async () => {
-    mock.module("@arceus/db/src/repos/agents.js", () => ({
-      findAgentByRole: async () => null,
-    }));
+    mock.module("@arceus/db/src/repos/agents.js", () => ({ 
+      findAgentByRole: async () => null, listAgentsByCompany: async () => [], findAgentById: async () => null }));
     mock.module("@arceus/db/src/repos/tasks.js", () => ({
       findByIdHydrated: async () => null,
       listByCompanyHydrated: async () => [],
@@ -142,7 +140,7 @@ describe("deriveMeetingMemoryModifications (B.2 read migration)", () => {
       findByIdHydrated: findByIdSpy,
       listByCompanyHydrated: async () => [],
     }));
-    mock.module("@arceus/db/src/repos/agents.js", () => ({ findAgentByRole: async () => null }));
+    mock.module("@arceus/db/src/repos/agents.js", () => ({  findAgentByRole: async () => null, listAgentsByCompany: async () => [], findAgentById: async () => null }));
     mock.module("../memory/operations.js", () => ({
       enrichRoleMemory: async () => undefined,
       clearRoleBlockers: async () => undefined,
@@ -178,7 +176,7 @@ describe("deriveMeetingMemoryModifications (B.2 read migration)", () => {
       findByIdHydrated: async () => null,
       listByCompanyHydrated: async () => [],
     }));
-    mock.module("@arceus/db/src/repos/agents.js", () => ({ findAgentByRole: async () => null }));
+    mock.module("@arceus/db/src/repos/agents.js", () => ({  findAgentByRole: async () => null, listAgentsByCompany: async () => [], findAgentById: async () => null }));
     mock.module("../memory/operations.js", () => ({
       enrichRoleMemory: async () => undefined,
       clearRoleBlockers: async () => undefined,

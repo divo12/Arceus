@@ -14,7 +14,7 @@ import { updateSuccessRate, ROLE_SOULS, getSkillById } from "@arceus/company-run
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { getOpencode } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
-import { buildBeatContext, renderStateForAgent, countOpenTasksForRole, summarizeShownTasks } from "./beat-context-builder.js";
+import { buildBeatContext, prepareBeatRender } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
 import { materializeBeatSkills } from "../opencode/materialize-beat-skills.js";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
@@ -88,6 +88,10 @@ export async function runBeat(input: {
     ts: beatStartedAt,
   });
 
+  // Spec 31 Phase 7.B.3 — single batch fetch yields shownTasks +
+  // openTaskCount + stateText. Replaces three separate snapshot derefs.
+  const beatRender = await prepareBeatRender(input.role, input.companyId);
+
   // Diagnostic — capture exactly what the agent will see in `## Your Tasks`.
   // If the LLM later claims an id that's not in this list, we know it
   // hallucinated rather than picked from rendered state.
@@ -95,14 +99,14 @@ export async function runBeat(input: {
     event: "beat.context",
     beatId,
     role: input.role,
-    shownTasks: summarizeShownTasks(input.role),
+    shownTasks: beatRender.shownTasks,
     ts: Date.now(),
   });
 
   // Vision guard — if the agent has nothing to do, skip the prompt entirely.
   // Without this, a bored LLM with no claimed task invents filler artifacts
   // (e.g. placeholder.md, noop.md) just to fill the response window.
-  const openTaskCount = countOpenTasksForRole(input.role);
+  const openTaskCount = beatRender.openTaskCount;
   const incomingHandoffCount = ctx.incomingHandoffs.length;
   if (openTaskCount === 0 && incomingHandoffCount === 0) {
     unregisterSessionContext(sessionId);
@@ -133,8 +137,9 @@ export async function runBeat(input: {
 
   let cause: string | undefined;
   try {
-    // Step 6: wake the agent (blocks, with hard cap)
-    const stateText = renderStateForAgent(input.role, input.companyId);
+    // Step 6: wake the agent (blocks, with hard cap). State text was
+    // built from the beat-render batch fetch above; no second pass.
+    const stateText = beatRender.stateText;
     const soul = ROLE_SOULS[input.role].systemPrompt;
     const deployment = ensureDeployment("workerDeployment");
 

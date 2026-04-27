@@ -1,21 +1,42 @@
 /**
- * buildBeatContext + renderStateForAgent + buildUnifiedBeatPrompt.
+ * buildBeatContext + renderStateForAgent.
  *
- * Three concerns:
+ * Two concerns:
  * - BeatContext: metadata the plugin + MCP server resolve against.
  * - renderStateForAgent: role-agnostic state of the world.
- * - buildUnifiedBeatPrompt: the full prompt body for any role's beat.
  *
  * Vision: "The orchestrator builds a view of the world, wakes one agent,
  * and gets out of the way." All role-specific instructions live in the
  * soul (systemPrompt). This module provides only state — no role branching.
  *
- * Phase 6.5 — Package I.
+ * Spec 31 Phase 7.B.3 — every snapshot read replaced by a single
+ * `loadBeatRenderContext(companyId, role)` batch fetch (one
+ * `Promise.all` per beat). Renderers are pure functions over the
+ * `BeatRenderContext` so the hot path makes ~7 parallel queries
+ * instead of 10+ in-memory derefs against a stale snapshot.
  */
-import type { BeatContext, CompanySnapshot, IncomingHandoff, HandoffKind, HandoffUrgency, Task } from "@arceus/contracts";
+import type {
+  AgentIdentity,
+  Artifact,
+  BeatContext,
+  Company,
+  IncomingHandoff,
+  HandoffKind,
+  HandoffUrgency,
+  MemorySummary,
+  Sprint,
+  Task,
+} from "@arceus/contracts";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
+import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
+import * as memoryUnitsRepo from "@arceus/db/src/repos/memory_units.js";
+import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
-import { getSnapshot } from "../persistence/store.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
 import { productDir } from "./state.js";
@@ -31,11 +52,6 @@ import { computeTrustBand } from "../governance/trust.js";
  *
  * Excludes terminal states (`completed`, `failed`, `cancelled`) and
  * `verifying` (work is done, awaiting QA — agent shouldn't redo it).
- *
- * Bug history: this used to be `["ready", "in_progress", "blocked"]` —
- * `"ready"` isn't in the enum at all, and `"created"`/`"planned"` were
- * missing, so freshly-spawned governance tasks (e.g. "Plan Sprint N")
- * were invisible and the CEO would no-work-skip its own assignment.
  */
 const OPEN_TASK_STATUSES: ReadonlyArray<Task["status"]> = [
   "created",
@@ -44,31 +60,129 @@ const OPEN_TASK_STATUSES: ReadonlyArray<Task["status"]> = [
   "blocked",
 ];
 
-// ── BeatContext builder ──────────────────────────────────
-
-// ── Incoming handoffs drainer (spec 27 §6) ───────────────
-
 const URGENCY_RANK: Record<HandoffUrgency, number> = { high: 0, normal: 1, low: 2 };
 const MAX_INCOMING_HANDOFFS = 5;
 const HANDOFF_RECENCY_MS = 24 * 60 * 60 * 1000; // last 24h
 
+// ── BeatRenderContext: the per-beat batch-fetched view ────────
+
 /**
- * Read the agent's delegation-typed memory units and project them into the
- * IncomingHandoff shape for beat-context surfacing. Handoffs are stored as
- * MemoryUnit entries with type="delegation" and tag-encoded metadata
- * (from:<role>, kind:<kind>, urgency:<urgency>, handoffId:<id>).
+ * Per-beat snapshot of every entity the renderers need. Built once
+ * by `loadBeatRenderContext` via `Promise.all`; each pure renderer
+ * filters/derives from it without touching the in-memory store.
  *
- * Sorted by urgency desc then receivedAt desc; capped at MAX_INCOMING_HANDOFFS.
- * Only surfaces handoffs received in the last 24h to avoid replaying stale ones.
+ * Sized to the renderer surface — adding a new render function that
+ * needs a new entity = extending this type + the loader.
  */
-function drainIncomingHandoffs(role: Role): IncomingHandoff[] {
-  const snapshot = getSnapshot();
-  const agent = snapshot.agents.find((a) => a.role === role);
-  if (!agent) return [];
+/** Compact per-agent identity slice the renderers need. */
+interface BeatAgentSlice {
+  id: string;
+  role: AgentIdentity["role"];
+  displayName: string;
+}
+
+/**
+ * Compact per-memory-unit slice — what the progress-notes and
+ * handoffs renderers need. Mirrors the canonical row shape, dates
+ * pre-stringified.
+ */
+interface BeatMemoryUnitSlice {
+  id: string;
+  agentId: string;
+  type: string;
+  content: string;
+  /** Set to `content.slice(0, 200)` when the canonical row has no summary column. */
+  summary: string;
+  tags: string[];
+  createdAt: string;
+}
+
+export interface BeatRenderContext {
+  company: Company | null;
+  agents: ReadonlyArray<BeatAgentSlice>;
+  sprints: Sprint[];
+  tasks: Task[];
+  /** Recent first; bounded by `RECENT_ARTIFACT_LIMIT`. */
+  artifacts: Artifact[];
+  /** All summaries for the company; renderers filter by agentId. */
+  memorySummaries: MemorySummary[];
+  /**
+   * Memory units for the role's agent only. Loaded lazily after
+   * agent lookup; `null` when the role has no agent.
+   */
+  roleMemoryUnits: BeatMemoryUnitSlice[] | null;
+  /** The agent for the requesting role, resolved once at load time. */
+  roleAgent: BeatAgentSlice | null;
+}
+
+const RECENT_ARTIFACT_LIMIT = 50;
+const MAX_AGENT_MEMORY_UNITS = 100;
+
+/**
+ * Single batch fetch per beat. Parallelises every entity load via
+ * `Promise.all`; the role-scoped memory units load is sequential
+ * because it needs the resolved agent id from the companies+agents
+ * step.
+ *
+ * Performance note: ~7 parallel queries / beat. The
+ * `db:explain-audit` script tracks latency for these hot paths.
+ */
+export async function loadBeatRenderContext(
+  companyId: string,
+  role: Role,
+): Promise<BeatRenderContext> {
+  const db = getDb();
+  const [company, agentRows, sprintRows, tasks, artifactRows, summaries] = await Promise.all([
+    companiesRepo.findByIdHydrated(db, companyId),
+    agentsRepo.listAgentsByCompany(db, companyId),
+    sprintsRepo.listSprintsByCompany(db, companyId),
+    tasksRepo.listByCompanyHydrated(db, companyId),
+    artifactsRepo.listArtifactsByCompany(db, companyId, RECENT_ARTIFACT_LIMIT),
+    memorySummariesRepo.listByCompany(db, companyId),
+  ]);
+
+  const agents: BeatAgentSlice[] = agentRows.map((row) => ({
+    id: row.id,
+    role: row.role as AgentIdentity["role"],
+    displayName: row.displayName,
+  }));
+  const sprints = sprintRows.map(sprintsRepo.rowToSprint);
+  const artifacts = artifactRows.map(artifactsRepo.rowToArtifact);
+  const memorySummaries = summaries.map(memorySummariesRepo.rowToSummary);
+
+  const roleAgent = agents.find((a) => a.role === role) ?? null;
+  const memoryUnitRows = roleAgent
+    ? await memoryUnitsRepo.listMemoryUnitsByAgent(db, roleAgent.id, undefined, MAX_AGENT_MEMORY_UNITS)
+    : null;
+  const roleMemoryUnits: BeatMemoryUnitSlice[] | null = memoryUnitRows
+    ? memoryUnitRows.map((row) => ({
+        id: row.id,
+        agentId: row.agentId,
+        type: row.type,
+        content: row.content,
+        /** Canonical schema has no `summary` column — derive from content. */
+        summary: row.content.slice(0, 200),
+        tags: row.tags ?? [],
+        createdAt: row.createdAt.toISOString(),
+      }))
+    : null;
+
+  return { company, agents, sprints, tasks, artifacts, memorySummaries, roleMemoryUnits, roleAgent };
+}
+
+// ── Incoming handoffs drainer (spec 27 §6) ───────────────
+
+/**
+ * Project the role's `delegation`-typed memory units into the
+ * `IncomingHandoff` shape. Pure — operates on the pre-fetched
+ * `roleMemoryUnits` slice of `BeatRenderContext`.
+ */
+function drainIncomingHandoffs(ctx: BeatRenderContext): IncomingHandoff[] {
+  if (!ctx.roleMemoryUnits) return [];
 
   const cutoff = Date.now() - HANDOFF_RECENCY_MS;
-  const delegations = snapshot.memoryUnits.filter(
-    (u) => u.agentId === agent.id && u.type === "delegation" && Date.parse(u.createdAt) >= cutoff,
+  const delegations = ctx.roleMemoryUnits.filter(
+    (u) => u.type === "delegation" && Date.parse(u.createdAt) >= cutoff,
   );
 
   const projected: IncomingHandoff[] = delegations.map((u) => {
@@ -106,37 +220,35 @@ function drainIncomingHandoffs(role: Role): IncomingHandoff[] {
   return projected.slice(0, MAX_INCOMING_HANDOFFS);
 }
 
+// ── BeatContext builder ──────────────────────────────────
+
 export async function buildBeatContext(
   role: Role,
   companyId: string,
   beatId: string,
   sessionId: string,
 ): Promise<BeatContext> {
-  // Active sprint at beat start (or null if the company has no active sprint).
-  // Captured here rather than re-derived per consumer so spec-32 emit sites
-  // can read `ctx.sprintId` without touching the snapshot directly.
-  const currentSprintId = getSnapshot().company.currentSprintId ?? null;
-
+  const ctx = await loadBeatRenderContext(companyId, role);
   return {
     beatId,
     sessionId,
     companyId,
-    sprintId: currentSprintId,
+    sprintId: ctx.company?.currentSprintId ?? null,
     role,
     trustBand: await computeTrustBand(role, companyId),
     allowedTools: getAllowedArceusTools(role),
     startedAt: new Date().toISOString(),
-    incomingHandoffs: drainIncomingHandoffs(role),
+    incomingHandoffs: drainIncomingHandoffs(ctx),
   };
 }
 
-// ── State renderer ───────────────────────────────────────
+// ── State renderer (pure functions over BeatRenderContext) ────
 
-function renderCompanyState(companyId: string): string {
-  const snapshot = getSnapshot();
-  const c = snapshot.company;
-  const sprint = snapshot.sprints.find((s) => s.id === c.currentSprintId);
-  const roster = snapshot.agents
+function renderCompanyState(ctx: BeatRenderContext): string {
+  if (!ctx.company) return "## Company State\n\n_Company not yet bootstrapped._";
+  const c = ctx.company;
+  const sprint = ctx.sprints.find((s) => s.id === c.currentSprintId);
+  const roster = ctx.agents
     .map((a) => `${a.role}`)
     .sort()
     .join(", ");
@@ -153,41 +265,42 @@ function renderCompanyState(companyId: string): string {
   return lines.join("\n");
 }
 
-/** Count of role-assigned tasks in workable states. Used by `runBeat` to skip
- * the prompt entirely when an agent has nothing to do (avoids filler-work
- * hallucination from a bored LLM).
+/**
+ * Count of role-assigned tasks in workable states. Used by `runBeat`
+ * to skip the prompt entirely when an agent has nothing to do
+ * (avoids filler-work hallucination from a bored LLM).
  */
-export function countOpenTasksForRole(role: Role): number {
-  const snapshot = getSnapshot();
-  return snapshot.tasks.filter(
+export function countOpenTasks(ctx: BeatRenderContext, role: Role): number {
+  return ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   ).length;
 }
 
 /** Snapshot of what the role sees in `## Your Tasks` (for diagnostic events). */
-export function summarizeShownTasks(role: Role): Array<{ id: string; title: string; status: string; claimable: boolean }> {
-  const snapshot = getSnapshot();
-  return snapshot.tasks
+export function summarizeShownTasks(
+  ctx: BeatRenderContext,
+  role: Role,
+): Array<{ id: string; title: string; status: string; claimable: boolean }> {
+  return ctx.tasks
     .filter((t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status))
     .map((t) => {
       const unmet = (t.dependsOnTaskIds ?? []).some((depId) => {
-        const dep = snapshot.tasks.find((d) => d.id === depId);
+        const dep = ctx.tasks.find((d) => d.id === depId);
         return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
       });
       return { id: t.id, title: t.title, status: t.status, claimable: !unmet };
     });
 }
 
-function renderOpenTasksForRole(companyId: string, role: Role): string {
-  const snapshot = getSnapshot();
-  const tasks = snapshot.tasks.filter(
+function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
+  const tasks = ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
   if (tasks.length === 0) return "## Your Tasks\n\n_No open tasks._";
   const lines = ["## Your Tasks", ""];
   for (const t of tasks) {
     const unmetDeps = (t.dependsOnTaskIds ?? [])
-      .map((depId) => snapshot.tasks.find((d) => d.id === depId))
+      .map((depId) => ctx.tasks.find((d) => d.id === depId))
       .filter((d): d is NonNullable<typeof d> => !!d && !(["completed", "verified"] as string[]).includes(d.status));
     const readiness = unmetDeps.length > 0
       ? ` ⛔ NOT CLAIMABLE — waiting on: ${unmetDeps.map((d) => `"${d.title}" [${d.status}]`).join(", ")}`
@@ -198,9 +311,9 @@ function renderOpenTasksForRole(companyId: string, role: Role): string {
   return lines.join("\n");
 }
 
-function renderRecentArtifacts(companyId: string, limit: number): string {
-  const snapshot = getSnapshot();
-  const recent = snapshot.artifacts.slice(-limit);
+function renderRecentArtifacts(ctx: BeatRenderContext, limit: number): string {
+  /** Repo returns recent-first; take first `limit`. */
+  const recent = ctx.artifacts.slice(0, limit);
   if (recent.length === 0) return "## Recent Artifacts\n\n_No artifacts yet._";
   const lines = ["## Recent Artifacts", ""];
   for (const a of recent) {
@@ -209,11 +322,9 @@ function renderRecentArtifacts(companyId: string, limit: number): string {
   return lines.join("\n");
 }
 
-function renderRoleMemory(role: Role, companyId: string): string {
-  const snapshot = getSnapshot();
-  const agent = snapshot.agents.find((a) => a.role === role);
-  if (!agent) return "## Role Memory\n\n_No agent found._";
-  const mem = snapshot.memories.find((m) => m.agentId === agent.id);
+function renderRoleMemory(ctx: BeatRenderContext): string {
+  if (!ctx.roleAgent) return "## Role Memory\n\n_No agent found._";
+  const mem = ctx.memorySummaries.find((m) => m.agentId === ctx.roleAgent!.id);
   if (!mem) return "## Role Memory\n\n_No memory entries._";
   const lines = ["## Role Memory", ""];
   if (mem.currentFocus.length > 0) {
@@ -228,14 +339,11 @@ function renderRoleMemory(role: Role, companyId: string): string {
   return lines.join("\n");
 }
 
-function renderLastProgressNotes(role: Role, companyId: string, limit: number): string {
-  const snapshot = getSnapshot();
-  const agent = snapshot.agents.find((a) => a.role === role);
-  if (!agent) return "## Progress Notes\n\n_No recent progress notes._";
-  // Memory units from this agent serve as progress notes
-  const units = snapshot.memoryUnits
-    .filter((u) => u.agentId === agent.id)
-    .slice(-limit);
+function renderLastProgressNotes(ctx: BeatRenderContext, limit: number): string {
+  if (!ctx.roleAgent) return "## Progress Notes\n\n_No recent progress notes._";
+  if (!ctx.roleMemoryUnits) return "## Progress Notes\n\n_No recent progress notes._";
+  /** Memory units from this agent serve as progress notes. */
+  const units = ctx.roleMemoryUnits.slice(-limit);
   if (units.length === 0) return "## Progress Notes\n\n_No recent progress notes._";
   const lines = ["## Progress Notes", ""];
   for (const u of units) {
@@ -244,30 +352,141 @@ function renderLastProgressNotes(role: Role, companyId: string, limit: number): 
   return lines.join("\n");
 }
 
-export function renderStateForAgent(role: Role, companyId: string): string {
-  const sections = [
-    renderCompanyState(companyId),
-    renderOpenTasksForRole(companyId, role),
-    renderRecentArtifacts(companyId, 10),
-    renderRoleMemory(role, companyId),
-    renderLastProgressNotes(role, companyId, 5),
-    renderBeatProcedure(companyId, role),
+function renderBudget(ctx: BeatRenderContext): string {
+  if (!ctx.company || ctx.company.budgetCents <= 0) return "";
+  const c = ctx.company;
+  const pct = ((c.spentCents / c.budgetCents) * 100).toFixed(0);
+  return `## Budget\n\n${pct}% used (${c.spentCents}¢ of ${c.budgetCents}¢)`;
+}
+
+function renderSprintHistory(ctx: BeatRenderContext): string {
+  const completedSprints = ctx.sprints
+    .filter((s) => s.status === "completed")
+    .sort((a, b) => b.number - a.number)
+    .slice(0, 3);
+
+  if (completedSprints.length === 0) return "## Previous Sprints\n\n_This is the first sprint — no prior history._";
+
+  const lines = ["## Previous Sprints", ""];
+  for (const sprint of completedSprints) {
+    const sprintTasks = ctx.tasks.filter((t) => t.sprintId === sprint.id);
+    const completed = sprintTasks.filter((t) => t.status === "completed");
+    const failed = sprintTasks.filter((t) => t.status === "failed");
+    const blocked = sprintTasks.filter((t) => t.status === "blocked");
+
+    lines.push(`### Sprint ${sprint.number}: "${sprint.goal}"`);
+    lines.push(`Status: ${sprint.status} | ${completed.length} completed, ${failed.length} failed, ${blocked.length} blocked`);
+    if (completed.length > 0) {
+      lines.push("Completed:");
+      for (const t of completed) lines.push(`  - ${t.title} (${t.assignedRole})`);
+    }
+    if (failed.length > 0) {
+      lines.push("Failed:");
+      for (const t of failed) lines.push(`  - ${t.title} (${t.assignedRole})`);
+    }
+    if (blocked.length > 0) {
+      lines.push("Blocked:");
+      for (const t of blocked) lines.push(`  - ${t.title} (${t.assignedRole})`);
+    }
+    lines.push("");
+  }
+
+  // Carried-forward items from last completed sprint
+  const lastSprint = completedSprints[0];
+  if (lastSprint) {
+    const carryForward = ctx.tasks.filter(
+      (t) => t.sprintId === lastSprint.id && ["failed", "blocked"].includes(t.status),
+    );
+    if (carryForward.length > 0) {
+      lines.push("### Carried-Forward Items");
+      for (const t of carryForward) lines.push(`- ${t.title} (${t.assignedRole}, was ${t.status})`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function renderUpstreamArtifacts(task: Task): string {
+  const upstreamLines = resolveIncomingArtifacts(task);
+  if (upstreamLines.length === 0) return "";
+  return upstreamLines.join("\n");
+}
+
+/**
+ * Banner for any urgency=high handoffs. Renders at the top of the beat
+ * prompt so the agent sees urgent cross-role context before task
+ * details. Empty if no high-urgency handoffs are waiting.
+ */
+function renderIncomingHandoffsBanner(handoffs: IncomingHandoff[]): string {
+  const high = handoffs.filter((h) => h.urgency === "high");
+  if (high.length === 0) return "";
+  const lines = [`## ⚠ High-Priority Handoffs (${high.length})`, ""];
+  for (const h of high) {
+    const snippet = h.excerpt.length > 120 ? `${h.excerpt.slice(0, 120)}…` : h.excerpt;
+    lines.push(`- **[${h.kind}] From ${h.fromRole}:** ${snippet}`);
+    lines.push(`  - handoff id: \`${h.handoffId}\` · memory id: \`${h.memoryId}\``);
+  }
+  lines.push("");
+  lines.push("_Retrieve full content with `memory_search({ scope: \"company\", query: \"<keywords>\" })` or by memory id._");
+  return lines.join("\n");
+}
+
+/**
+ * Full incoming-handoffs section. Shows all handoffs (high, normal, low)
+ * sorted by urgency desc then receivedAt desc. Rendered after role memory.
+ */
+function renderIncomingHandoffsSection(handoffs: IncomingHandoff[]): string {
+  if (handoffs.length === 0) return "";
+  const lines = [`## Incoming Handoffs (${handoffs.length})`, ""];
+  for (const h of handoffs) {
+    lines.push(`### From ${h.fromRole} — ${h.kind} (${h.urgency})`);
+    lines.push(h.excerpt);
+    lines.push(`- Memory id: \`${h.memoryId}\``);
+    if (h.relatedArtifactIds.length > 0) {
+      lines.push(`- Related artifacts: ${h.relatedArtifactIds.map((id) => `\`${id}\``).join(", ")}`);
+    }
+    lines.push(`- Received: ${h.receivedAt}`);
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
+function renderWorkspaceContext(existingFiles?: string[]): string {
+  const preview = getLocalPreviewState();
+  const lines = [
+    "## Workspace",
+    `- **Product directory:** ${productDir}`,
+    `- **Preview status:** ${preview.status}`,
   ];
-  return sections.join("\n\n---\n\n");
+  if (preview.url) lines.push(`- **Preview URL:** ${preview.url}`);
+  if (preview.entryUrl) lines.push(`- **Entry URL:** ${preview.entryUrl}`);
+  if (preview.validationUrl) lines.push(`- **Validation URL:** ${preview.validationUrl}`);
+  if (preview.validationStrategy) lines.push(`- **Validation strategy:** ${preview.validationStrategy}`);
+  if (preview.targetKind) lines.push(`- **Target kind:** ${preview.targetKind}`);
+  if (preview.runtime) lines.push(`- **Runtime:** ${preview.runtime}`);
+  if (preview.framework) lines.push(`- **Framework:** ${preview.framework}`);
+
+  if (existingFiles && existingFiles.length > 0) {
+    lines.push("", `### Existing files (${existingFiles.length})`);
+    const shown = existingFiles.slice(0, 100);
+    for (const f of shown) lines.push(`- ${f}`);
+    if (existingFiles.length > 100) lines.push(`... and ${existingFiles.length - 100} more`);
+  }
+
+  return lines.join("\n");
 }
 
 /**
  * Tells the agent the workflow contract for this beat: claim → work → complete.
  * Without this block agents invent filler work to fill the prompt window.
  */
-function renderBeatProcedure(companyId: string, role: Role): string {
-  const snapshot = getSnapshot();
-  const myTasks = snapshot.tasks.filter(
+function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
+  const myTasks = ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
   const claimable = myTasks.filter((t) => {
     const unmet = (t.dependsOnTaskIds ?? []).filter((depId) => {
-      const dep = snapshot.tasks.find((d) => d.id === depId);
+      const dep = ctx.tasks.find((d) => d.id === depId);
       return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
     });
     return unmet.length === 0;
@@ -331,162 +550,79 @@ function renderTaskContext(task: Task): string {
   return lines.join("\n");
 }
 
-function renderWorkspaceContext(existingFiles?: string[]): string {
-  const preview = getLocalPreviewState();
-  const lines = [
-    "## Workspace",
-    `- **Product directory:** ${productDir}`,
-    `- **Preview status:** ${preview.status}`,
+// ── Public renderers ─────────────────────────────────────
+
+/**
+ * Compose the full role-state prompt section. Async because it does
+ * one batch fetch of `BeatRenderContext`; the renderers themselves
+ * are pure.
+ */
+export async function renderStateForAgent(role: Role, companyId: string): Promise<string> {
+  const ctx = await loadBeatRenderContext(companyId, role);
+  const sections = [
+    renderCompanyState(ctx),
+    renderOpenTasksForRole(ctx, role),
+    renderRecentArtifacts(ctx, 10),
+    renderRoleMemory(ctx),
+    renderLastProgressNotes(ctx, 5),
+    renderBeatProcedure(ctx, role),
   ];
-  if (preview.url) lines.push(`- **Preview URL:** ${preview.url}`);
-  if (preview.entryUrl) lines.push(`- **Entry URL:** ${preview.entryUrl}`);
-  if (preview.validationUrl) lines.push(`- **Validation URL:** ${preview.validationUrl}`);
-  if (preview.validationStrategy) lines.push(`- **Validation strategy:** ${preview.validationStrategy}`);
-  if (preview.targetKind) lines.push(`- **Target kind:** ${preview.targetKind}`);
-  if (preview.runtime) lines.push(`- **Runtime:** ${preview.runtime}`);
-  if (preview.framework) lines.push(`- **Framework:** ${preview.framework}`);
-
-  if (existingFiles && existingFiles.length > 0) {
-    lines.push("", `### Existing files (${existingFiles.length})`);
-    const shown = existingFiles.slice(0, 100);
-    for (const f of shown) lines.push(`- ${f}`);
-    if (existingFiles.length > 100) lines.push(`... and ${existingFiles.length - 100} more`);
-  }
-
-  return lines.join("\n");
-}
-
-function renderSprintHistory(snapshot: CompanySnapshot): string {
-  const completedSprints = snapshot.sprints
-    .filter((s) => s.status === "completed")
-    .sort((a, b) => b.number - a.number)
-    .slice(0, 3);
-
-  if (completedSprints.length === 0) return "## Previous Sprints\n\n_This is the first sprint — no prior history._";
-
-  const lines = ["## Previous Sprints", ""];
-  for (const sprint of completedSprints) {
-    const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprint.id);
-    const completed = sprintTasks.filter((t) => t.status === "completed");
-    const failed = sprintTasks.filter((t) => t.status === "failed");
-    const blocked = sprintTasks.filter((t) => t.status === "blocked");
-
-    lines.push(`### Sprint ${sprint.number}: "${sprint.goal}"`);
-    lines.push(`Status: ${sprint.status} | ${completed.length} completed, ${failed.length} failed, ${blocked.length} blocked`);
-    if (completed.length > 0) {
-      lines.push("Completed:");
-      for (const t of completed) lines.push(`  - ${t.title} (${t.assignedRole})`);
-    }
-    if (failed.length > 0) {
-      lines.push("Failed:");
-      for (const t of failed) lines.push(`  - ${t.title} (${t.assignedRole})`);
-    }
-    if (blocked.length > 0) {
-      lines.push("Blocked:");
-      for (const t of blocked) lines.push(`  - ${t.title} (${t.assignedRole})`);
-    }
-    lines.push("");
-  }
-
-  // Carried-forward items from last completed sprint
-  const lastSprint = completedSprints[0];
-  if (lastSprint) {
-    const carryForward = snapshot.tasks.filter(
-      (t) => t.sprintId === lastSprint.id && ["failed", "blocked"].includes(t.status),
-    );
-    if (carryForward.length > 0) {
-      lines.push("### Carried-Forward Items");
-      for (const t of carryForward) lines.push(`- ${t.title} (${t.assignedRole}, was ${t.status})`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-function renderUpstreamArtifacts(task: Task): string {
-  const upstreamLines = resolveIncomingArtifacts(task);
-  if (upstreamLines.length === 0) return "";
-  return upstreamLines.join("\n");
+  return sections.join("\n\n---\n\n");
 }
 
 /**
- * Banner for any urgency=high handoffs. Renders at the top of the beat prompt
- * so the agent sees urgent cross-role context before task details. Empty if
- * no high-urgency handoffs are waiting.
+ * Convenience wrapper that batch-loads once and returns every read
+ * a beat needs (state text + open task count + shown task summary).
+ * Call this from `run-beat.ts` instead of three separate awaits to
+ * avoid duplicate batch fetches.
  */
-function renderIncomingHandoffsBanner(handoffs: IncomingHandoff[]): string {
-  const high = handoffs.filter((h) => h.urgency === "high");
-  if (high.length === 0) return "";
-  const lines = [`## ⚠ High-Priority Handoffs (${high.length})`, ""];
-  for (const h of high) {
-    const snippet = h.excerpt.length > 120 ? `${h.excerpt.slice(0, 120)}…` : h.excerpt;
-    lines.push(`- **[${h.kind}] From ${h.fromRole}:** ${snippet}`);
-    lines.push(`  - handoff id: \`${h.handoffId}\` · memory id: \`${h.memoryId}\``);
-  }
-  lines.push("");
-  lines.push("_Retrieve full content with `memory_search({ scope: \"company\", query: \"<keywords>\" })` or by memory id._");
-  return lines.join("\n");
-}
-
-/**
- * Full incoming-handoffs section. Shows all handoffs (high, normal, low)
- * sorted by urgency desc then receivedAt desc. Rendered after role memory.
- */
-function renderIncomingHandoffsSection(handoffs: IncomingHandoff[]): string {
-  if (handoffs.length === 0) return "";
-  const lines = [`## Incoming Handoffs (${handoffs.length})`, ""];
-  for (const h of handoffs) {
-    lines.push(`### From ${h.fromRole} — ${h.kind} (${h.urgency})`);
-    lines.push(h.excerpt);
-    lines.push(`- Memory id: \`${h.memoryId}\``);
-    if (h.relatedArtifactIds.length > 0) {
-      lines.push(`- Related artifacts: ${h.relatedArtifactIds.map((id) => `\`${id}\``).join(", ")}`);
-    }
-    lines.push(`- Received: ${h.receivedAt}`);
-    lines.push("");
-  }
-  return lines.join("\n").trimEnd();
-}
-
-function renderBudget(snapshot: CompanySnapshot): string {
-  const c = snapshot.company;
-  if (c.budgetCents <= 0) return "";
-  const pct = ((c.spentCents / c.budgetCents) * 100).toFixed(0);
-  return `## Budget\n\n${pct}% used (${c.spentCents}¢ of ${c.budgetCents}¢)`;
-}
-
-// ── Unified beat prompt ──────────────────────────────────
-//
-// Skill catalog is no longer rendered into the prompt body. Skills reach
-// the agent via filesystem materialization (.opencode/skills/<slug>/SKILL.md)
-// — see materializeBeatSkills + OpenCode's native skill loader. (Spec 23 Pass 2)
-
-/**
- * Build the full prompt body for any role's beat. Role-agnostic —
- * all role-specific instructions live in the soul (systemPrompt).
- * This is pure state: task, workspace, company, history, artifacts.
- */
-export function buildUnifiedBeatPrompt(
-  task: Task,
+export async function prepareBeatRender(
   role: Role,
   companyId: string,
-  snapshot: CompanySnapshot,
+  task?: Task,
   existingFiles?: string[],
-): string {
-  const incomingHandoffs = drainIncomingHandoffs(role);
-  const sections = [
-    renderIncomingHandoffsBanner(incomingHandoffs),
-    renderTaskContext(task),
-    renderWorkspaceContext(existingFiles),
-    renderCompanyState(companyId),
-    renderBudget(snapshot),
-    renderSprintHistory(snapshot),
-    renderOpenTasksForRole(companyId, role),
-    renderRecentArtifacts(companyId, 10),
-    renderRoleMemory(role, companyId),
-    renderIncomingHandoffsSection(incomingHandoffs),
-    renderLastProgressNotes(role, companyId, 5),
-    renderUpstreamArtifacts(task),
-  ].filter(Boolean);
-  return sections.join("\n\n---\n\n");
+): Promise<{
+  ctx: BeatRenderContext;
+  stateText: string;
+  openTaskCount: number;
+  shownTasks: ReturnType<typeof summarizeShownTasks>;
+  unifiedPrompt: string | null;
+}> {
+  const ctx = await loadBeatRenderContext(companyId, role);
+  const incomingHandoffs = drainIncomingHandoffs(ctx);
+
+  const baseSections = [
+    renderCompanyState(ctx),
+    renderOpenTasksForRole(ctx, role),
+    renderRecentArtifacts(ctx, 10),
+    renderRoleMemory(ctx),
+    renderLastProgressNotes(ctx, 5),
+    renderBeatProcedure(ctx, role),
+  ];
+  const stateText = baseSections.join("\n\n---\n\n");
+
+  const unifiedPrompt = task
+    ? [
+        renderIncomingHandoffsBanner(incomingHandoffs),
+        renderTaskContext(task),
+        renderWorkspaceContext(existingFiles),
+        renderCompanyState(ctx),
+        renderBudget(ctx),
+        renderSprintHistory(ctx),
+        renderOpenTasksForRole(ctx, role),
+        renderRecentArtifacts(ctx, 10),
+        renderRoleMemory(ctx),
+        renderIncomingHandoffsSection(incomingHandoffs),
+        renderLastProgressNotes(ctx, 5),
+        renderUpstreamArtifacts(task),
+      ].filter(Boolean).join("\n\n---\n\n")
+    : null;
+
+  return {
+    ctx,
+    stateText,
+    openTaskCount: countOpenTasks(ctx, role),
+    shownTasks: summarizeShownTasks(ctx, role),
+    unifiedPrompt,
+  };
 }

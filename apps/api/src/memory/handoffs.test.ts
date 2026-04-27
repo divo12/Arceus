@@ -64,10 +64,9 @@ function makePendingApprovalRow(overrides: Partial<{ type: string; requestedByAg
 describe("requestApproval", () => {
   it("returns null when no agent matches the requesting role", async () => {
     const upsertSpy = mock(async (_db: unknown, a: unknown) => a);
-    mock.module("@arceus/db/src/repos/agents.js", () => ({
+    mock.module("@arceus/db/src/repos/agents.js", () => ({ 
       findAgentByRole: async () => null,
-      findAgentById: async () => null,
-    }));
+      findAgentById: async () => null, listAgentsByCompany: async () => [] }));
     mock.module("@arceus/db/src/repos/approvals.js", () => ({
       upsertApproval: upsertSpy,
       listApprovalsByCompany: async () => [],
@@ -142,10 +141,9 @@ describe("approvePendingBoardApprovals", () => {
   it("transitions external_action approvals to 'approved' with the matching summary and emits reactive", async () => {
     const upsertSpy = mock(async (_db: unknown, a: unknown) => a);
     const reactiveSpy = mock((_role: string, _event: string) => {});
-    mock.module("@arceus/db/src/repos/agents.js", () => ({
+    mock.module("@arceus/db/src/repos/agents.js", () => ({ 
       findAgentByRole: async () => null,
-      findAgentById: async () => FAKE_AGENT_ROW,
-    }));
+      findAgentById: async () => FAKE_AGENT_ROW, listAgentsByCompany: async () => [] }));
     mock.module("@arceus/db/src/repos/approvals.js", () => ({
       upsertApproval: upsertSpy,
       listApprovalsByCompany: async () => [makePendingApprovalRow({ type: "external_action" })],
@@ -180,10 +178,9 @@ describe("approvePendingBoardApprovals", () => {
   it("transitions non-external approvals to 'applied' and skips reactive when requestedByAgentId is null", async () => {
     const upsertSpy = mock(async (_db: unknown, a: unknown) => a);
     const reactiveSpy = mock((_role: string, _event: string) => {});
-    mock.module("@arceus/db/src/repos/agents.js", () => ({
+    mock.module("@arceus/db/src/repos/agents.js", () => ({ 
       findAgentByRole: async () => null,
-      findAgentById: async () => null,
-    }));
+      findAgentById: async () => null, listAgentsByCompany: async () => [] }));
     mock.module("@arceus/db/src/repos/approvals.js", () => ({
       upsertApproval: upsertSpy,
       listApprovalsByCompany: async () => [makePendingApprovalRow({ type: "strategy", requestedByAgentId: null })],
@@ -214,10 +211,9 @@ describe("approvePendingBoardApprovals", () => {
 
   it("returns an empty array and writes nothing when no approvals are pending", async () => {
     const upsertSpy = mock(async (_db: unknown, a: unknown) => a);
-    mock.module("@arceus/db/src/repos/agents.js", () => ({
+    mock.module("@arceus/db/src/repos/agents.js", () => ({ 
       findAgentByRole: async () => null,
-      findAgentById: async () => null,
-    }));
+      findAgentById: async () => null, listAgentsByCompany: async () => [] }));
     mock.module("@arceus/db/src/repos/approvals.js", () => ({
       upsertApproval: upsertSpy,
       listApprovalsByCompany: async () => [],

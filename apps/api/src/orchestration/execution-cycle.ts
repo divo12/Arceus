@@ -4,6 +4,8 @@
 
 import type { AgentIdentity } from "@arceus/contracts";
 import { uniqueStrings, nowIso } from "@arceus/task-engine";
+import { getDb } from "@arceus/db";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { getSnapshot, updateTask } from "../persistence/store.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphDecision } from "../observability/graph-emitter.js";
@@ -141,14 +143,20 @@ export async function stopExecution(reason = "Board manually stopped company exe
   if (["idle", "done", "error", "paused"].includes(executionStatus) && !activeExecution) {
     throw new Error("No active company execution is running.");
   }
-  auditSystem(getSnapshot().company.id, "execution_stopped", `Execution stopped: ${reason}`, { severity: "warn" });
+  // Spec 31 Phase 7.B.3 — companyId comes from `activeExecution`
+  // when present (the running cycle owns it), otherwise fall back to
+  // the snapshot. The latter remains as a B.5 bridge.
+  const companyId = activeExecution?.companyId ?? getSnapshot().company.id;
+  auditSystem(companyId, "execution_stopped", `Execution stopped: ${reason}`, { severity: "warn" });
 
   clearDeveloperWatchdog();
   stopDeveloperWorkspaceMonitor();
   await stopLocalPreview();
 
-  const snapshot = getSnapshot();
-  const impactedTaskIds = snapshot.tasks
+  // Spec 31 Phase 7.B.3 — task list reads canonical via repo. Filter
+  // stays in TS (status set is small + no canonical listByStatus).
+  const tasks = await tasksRepo.listByCompanyHydrated(getDb(), companyId);
+  const impactedTaskIds = tasks
     .filter((task) => ["in_progress", "verifying"].includes(task.status))
     .map((task) => task.id);
 
@@ -171,7 +179,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
     participantRoles: uniqueStrings([
       "ceo",
       "cto",
-      ...snapshot.tasks
+      ...tasks
         .filter((task) => impactedTaskIds.includes(task.id))
         .map((task) => task.assignedRole),
     ]) as AgentIdentity["role"][],
@@ -206,10 +214,13 @@ export async function approveBoardReview() {
   }
 
   const reviewTaskId = activeExecution.reviewTaskId;
-  const companyId = getSnapshot().company.id;
-  const queuedFollowUpCount = getSnapshot().tasks.filter(
-    (task) => task.kind === "follow_up" && ["created", "planned"].includes(task.status)
-  ).length;
+  const companyId = activeExecution.companyId;
+  // Spec 31 Phase 7.B.3 — count via canonical instead of snapshot
+  // filter. `countTasksByKindAndStatus` was added in Phase 7.A
+  // exactly for this read.
+  const queuedFollowUpCount = await tasksRepo.countTasksByKindAndStatus(
+    getDb(), companyId, "follow_up", ["created", "planned"],
+  );
   const resolvedApprovals = await approvePendingBoardApprovals(companyId);
 
   setExecutionStatus("done");

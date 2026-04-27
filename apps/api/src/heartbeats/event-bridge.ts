@@ -1,12 +1,13 @@
 // heartbeats/event-bridge.ts — SSE event bridge from OpenCode → agent state
 import type { AgentIdentity, PolicyEvalContext } from "@arceus/contracts";
 import { buildTrustEvent, evaluatePolicy, BASE_POLICY_RULES, ROLE_CAPABILITIES } from "@arceus/company-runtime";
-import { getAgentByRole, nowIso } from "@arceus/task-engine";
+import { nowIso } from "@arceus/task-engine";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { auditAgent } from "../observability/audit-ledger.js";
 import { sanitizeToolArgs, truncateTelemetry, extractPreviewUrls } from "../infra/utils.js";
-import { getSnapshot } from "../persistence/store.js";
 import { cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "../persistence/control-plane.js";
 import {
   agentSessions,
@@ -217,8 +218,9 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           });
 
           // ── Governance post-hoc enforcement (Spec 13 Step 8) ──
-          const snap = getSnapshot();
-          const agent = getAgentByRole(snap, role as AgentIdentity["role"]);
+          // Spec 31 Phase 7.B.3 — agent lookup goes through canonical;
+          // companyId is already in scope from `activeExecution`.
+          const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
           if (agent) {
             const trustData = await cpLoadTrustScore(agent.id);
             const policyCtx: PolicyEvalContext = {
