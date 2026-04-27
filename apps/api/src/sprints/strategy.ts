@@ -184,14 +184,16 @@ export async function applyStrategyTx(
   };
 
   // ── Atomic write ────────────────────────────────────────────
+  // Order matters: hierarchy_nodes.agent_id and memory_summaries.agent_id
+  // are FKs to agents.id, so agents must land before either of them.
   await db.transaction(async (tx) => {
     await companiesRepo.upsertCompany(tx, updatedCompany);
     await ideasRepo.upsertIdea(tx, updatedIdea);
     await strategyBriefsRepo.upsertStrategy(tx, updatedStrategy);
-    await hierarchyNodesRepo.replaceForCompany(tx, companyId, hierarchy);
     for (const agent of agents) {
       await agentsRepo.upsertAgent(tx, agent);
     }
+    await hierarchyNodesRepo.replaceForCompany(tx, companyId, hierarchy);
     for (const memory of memories) {
       await memorySummariesRepo.upsertSummary(tx, memory, companyId);
     }
