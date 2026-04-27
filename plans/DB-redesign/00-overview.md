@@ -54,14 +54,28 @@ If you're still pointing at Supabase and the `hippocampus` schema:
 
 ## Related files
 
-- [`01-architecture.md`](./01-architecture.md) — How the schema is structured today
-  (canonical tables, FK graph, friendly-id pattern).
-- [`02-migration-history.md`](./02-migration-history.md) — What each spec 31 phase
-  did (B.5, B.6, B.7, the deferred 31b). Useful when you hit something in the code
-  comments that references a phase number.
-- [`03-cofounder-setup.md`](./03-cofounder-setup.md) — Step-by-step checklist to
-  switch your machine off Supabase + hippocampus and onto local Postgres + public
-  schema. **Start here if you just want to run the server.**
+Read in this order:
+
+1. [`03-cofounder-setup.md`](./03-cofounder-setup.md) — **Start here if you just
+   want to run the server.** Step-by-step checklist to switch your machine off
+   Supabase + hippocampus and onto local Postgres + public schema. ~10 min.
+2. [`01-architecture.md`](./01-architecture.md) — How the schema is structured today
+   (canonical tables, FK graph, friendly-id pattern). Read this before opening
+   any code.
+3. [`02-migration-history.md`](./02-migration-history.md) — What each spec 31 phase
+   did (B.5, B.6, B.7, the deferred 31b). Useful when you hit a code comment
+   referencing a phase number.
+4. [`04-the-repo-layer.md`](./04-the-repo-layer.md) — Deep dive on the repo
+   pattern: `toDbId` / `fromDbId`, `DbClient`, transactions, how to add a repo
+   function. Read this before adding or modifying anything in
+   `packages/db/src/repos/`.
+5. [`05-data-flow-and-transactions.md`](./05-data-flow-and-transactions.md) — How
+   reads (`buildSnapshotView`) and writes (`mutations.ts`, domain transactions)
+   actually work. Walks through `POST /api/quick-execute` end-to-end. Read this
+   before touching any orchestration code.
+6. [`06-recipes.md`](./06-recipes.md) — How-to guide for the most common changes:
+   add a column, add a table, add a repo function, add a domain transaction,
+   reset the DB, debug a "column does not exist" error, etc.
 
 ## State of the cleanup
 
