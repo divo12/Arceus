@@ -30,6 +30,7 @@ export { skillUsageEvents } from "./skill_usage_events.js";
 export { memoryUnits } from "./memory_units.js";
 export { memoryEmbeddings } from "./memory_embeddings.js";
 export { primingStates } from "./priming_states.js";
+export { habits } from "./habits.js";
 
 export { activityLog } from "./activity_log.js";
 export { costEvents } from "./cost_events.js";

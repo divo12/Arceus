@@ -1,9 +1,12 @@
-import { eq, and, isNull, sql, desc, cosineDistance } from "drizzle-orm";
-import { getDb, isDatabaseConfigured, habitsTable, primingStateTable } from "@arceus/db";
+import { eq, and, inArray, isNull, sql, desc, cosineDistance } from "drizzle-orm";
+import { getDb, isDatabaseConfigured } from "@arceus/db";
 import { memoryUnits } from "@arceus/db/src/schema/memory_units.js";
 import { memoryEmbeddings } from "@arceus/db/src/schema/memory_embeddings.js";
+import { habits } from "@arceus/db/src/schema/habits.js";
+import { primingStates } from "@arceus/db/src/schema/priming_states.js";
 import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { LEGACY_EMBEDDING_MODEL } from "@arceus/db/src/bridges/memory-decode.js";
+import { decodePrimingState, encodePrimingState } from "@arceus/db/src/bridges/priming-decode.js";
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
 import type { StaticMemoryStore, DynamicMemoryStore, ProceduralMemoryStore, PrimingStore } from "../types";
 import { embed } from "./embedding.js";
@@ -54,8 +57,8 @@ function canonicalRowToUnit(row: typeof memoryUnits.$inferSelect): MemoryUnit {
   };
 }
 
-/** Convert a Drizzle habits row to the domain Habit type. */
-function habitRowToHabit(row: typeof habitsTable.$inferSelect): Habit {
+/** Convert a canonical `habits` row to the domain Habit type. */
+function canonicalHabitRowToHabit(row: typeof habits.$inferSelect): Habit {
   return {
     id: row.id,
     companyId: row.companyId,
@@ -72,17 +75,23 @@ function habitRowToHabit(row: typeof habitsTable.$inferSelect): Habit {
   };
 }
 
-/** Convert a Drizzle priming_state row to the domain PrimingState type. */
-function primingRowToState(row: typeof primingStateTable.$inferSelect): PrimingState {
+/**
+ * Convert a canonical `priming_states` row to the domain PrimingState
+ * type. Spec 31 PR #13d — legacy `confidence/caution/morale/recent_events`
+ * are encoded inside the canonical `state` jsonb; we decode through
+ * `decodePrimingState` so the codec is the single source of truth.
+ */
+function canonicalPrimingRowToState(row: typeof primingStates.$inferSelect): PrimingState {
+  const decoded = decodePrimingState(row.state);
   return {
     id: `priming_${row.agentId}`,
     companyId: row.companyId,
     agentId: row.agentId,
-    confidence: row.confidence,
-    caution: row.caution,
-    morale: row.morale,
+    confidence: decoded.confidence,
+    caution: decoded.caution,
+    morale: decoded.morale,
     lastDisposition: "",
-    recentEvents: row.recentEvents as string[],
+    recentEvents: decoded.recentEvents,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -424,23 +433,23 @@ export class PgVectorProceduralStore implements ProceduralMemoryStore {
     const db = getDb();
     const rows = await db
       .select()
-      .from(habitsTable)
+      .from(habits)
       .where(
         and(
-          eq(habitsTable.agentId, agentId),
-          eq(habitsTable.isActive, true),
+          eq(habits.agentId, extractUuid(agentId)),
+          eq(habits.isActive, true),
         ),
       );
 
-    return rows.map(habitRowToHabit);
+    return rows.map(canonicalHabitRowToHabit);
   }
 
   async findMatching(agentId: string, taskDescription: string): Promise<Habit[]> {
     // Phase 2: naive token match. Phase 6 upgrades to LLM trigger eval.
-    const habits = await this.list(agentId);
+    const candidates = await this.list(agentId);
     const tokens = new Set(taskDescription.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
 
-    return habits.filter((habit) => {
+    return candidates.filter((habit) => {
       const triggerTokens = `${habit.trigger} ${habit.description}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
       return triggerTokens.some((token) => tokens.has(token));
     });
@@ -448,10 +457,9 @@ export class PgVectorProceduralStore implements ProceduralMemoryStore {
 
   async add(habit: Habit): Promise<void> {
     const db = getDb();
-    await db.insert(habitsTable).values({
-      id: habit.id,
-      companyId: habit.companyId,
-      agentId: habit.agentId,
+    await db.insert(habits).values({
+      companyId: extractUuid(habit.companyId),
+      agentId: extractUuid(habit.agentId),
       triggerCondition: habit.trigger,
       action: habit.action,
       confidence: habit.successRate,
@@ -459,30 +467,28 @@ export class PgVectorProceduralStore implements ProceduralMemoryStore {
       formedFromId: "",
       formationMode: "auto",
       isActive: habit.status === "active",
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
   }
 
   async update(id: string, trigger: string, action: string, confidence: number): Promise<void> {
     const db = getDb();
     await db
-      .update(habitsTable)
+      .update(habits)
       .set({
         triggerCondition: trigger,
         action,
         confidence,
         updatedAt: new Date(),
       })
-      .where(eq(habitsTable.id, id));
+      .where(eq(habits.id, id));
   }
 
   async softDelete(id: string): Promise<void> {
     const db = getDb();
     await db
-      .update(habitsTable)
+      .update(habits)
       .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(habitsTable.id, id));
+      .where(eq(habits.id, id));
   }
 
   async incrementUsage(agentId: string, habitIds: string[]): Promise<void> {
@@ -490,12 +496,12 @@ export class PgVectorProceduralStore implements ProceduralMemoryStore {
 
     const db = getDb();
     await db
-      .update(habitsTable)
-      .set({ usageCount: sql`${habitsTable.usageCount} + 1` })
+      .update(habits)
+      .set({ usageCount: sql`${habits.usageCount} + 1` })
       .where(
         and(
-          eq(habitsTable.agentId, agentId),
-          sql`${habitsTable.id} = ANY(ARRAY[${sql.join(habitIds.map((id) => sql`${id}`), sql`, `)}]::text[])`,
+          eq(habits.agentId, extractUuid(agentId)),
+          inArray(habits.id, habitIds),
         ),
       );
   }
@@ -503,17 +509,17 @@ export class PgVectorProceduralStore implements ProceduralMemoryStore {
   async gc(companyId: string): Promise<number> {
     const db = getDb();
     const deactivated = await db
-      .update(habitsTable)
+      .update(habits)
       .set({ isActive: false })
       .where(
         and(
-          eq(habitsTable.companyId, companyId),
-          eq(habitsTable.isActive, true),
-          eq(habitsTable.usageCount, 0),
-          sql`${habitsTable.createdAt} < now() - interval '30 days'`,
+          eq(habits.companyId, extractUuid(companyId)),
+          eq(habits.isActive, true),
+          eq(habits.usageCount, 0),
+          sql`${habits.createdAt} < now() - interval '30 days'`,
         ),
       )
-      .returning({ id: habitsTable.id });
+      .returning({ id: habits.id });
 
     return deactivated.length;
   }
@@ -532,33 +538,31 @@ export class PgVectorPrimingStore implements PrimingStore {
     const db = getDb();
     const rows = await db
       .select()
-      .from(primingStateTable)
-      .where(eq(primingStateTable.agentId, agentId))
+      .from(primingStates)
+      .where(eq(primingStates.agentId, extractUuid(agentId)))
       .limit(1);
 
-    return rows.length > 0 ? primingRowToState(rows[0]) : null;
+    return rows.length > 0 ? canonicalPrimingRowToState(rows[0]) : null;
   }
 
   async set(state: PrimingState): Promise<void> {
     const db = getDb();
+    const blob = encodePrimingState({
+      confidence: state.confidence,
+      caution: state.caution,
+      morale: state.morale,
+      recentEvents: state.recentEvents,
+    });
     await db
-      .insert(primingStateTable)
+      .insert(primingStates)
       .values({
-        agentId: state.agentId,
-        companyId: state.companyId,
-        confidence: state.confidence,
-        caution: state.caution,
-        morale: state.morale,
-        recentEvents: state.recentEvents,
+        agentId: extractUuid(state.agentId),
+        companyId: extractUuid(state.companyId),
+        state: blob,
       })
       .onConflictDoUpdate({
-        target: primingStateTable.agentId,
-        set: {
-          confidence: state.confidence,
-          caution: state.caution,
-          morale: state.morale,
-          recentEvents: state.recentEvents,
-        },
+        target: primingStates.agentId,
+        set: { state: blob, updatedAt: new Date() },
       });
   }
 }

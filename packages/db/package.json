@@ -17,7 +17,9 @@
     "db:seed": "bun src/seed.ts",
     "db:explain-audit": "bun src/scripts/explain-audit.ts",
     "db:backfill-memory": "bun src/scripts/backfill-memory.ts",
-    "db:backfill-memory-dynamic": "bun src/scripts/backfill-memory-dynamic-fields.ts"
+    "db:backfill-memory-dynamic": "bun src/scripts/backfill-memory-dynamic-fields.ts",
+    "db:backfill-habits": "bun src/scripts/backfill-habits.ts",
+    "db:backfill-priming": "bun src/scripts/backfill-priming.ts"
   },
   "dependencies": {
     "@arceus/contracts": "file:../contracts",
