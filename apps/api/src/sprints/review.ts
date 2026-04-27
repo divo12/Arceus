@@ -3,10 +3,10 @@ import type { AgentIdentity, AgentBeatContext, SprintReviewState, SprintReviewPh
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import {
-  getSnapshot,
   upsertTask,
   updateSprint,
 } from "../persistence/store.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import {
   persistRuntimeArtifact,
   listPersistedArtifacts,
@@ -139,7 +139,8 @@ export async function executeSprintReviewVerification(
   ctx: AgentBeatContext,
   beatId: string,
 ): Promise<BeatResult> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — task-engine call sites use canonical view.
+  const snapshot = await buildSnapshotView(ctx.company.id);
   const sprint = ctx.currentSprint;
   if (!sprint || sprint.status !== "reviewing") {
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
@@ -362,7 +363,7 @@ export async function executeSprintReviewVerification(
 
       if (!previewProbe.reachable && (!qaReport || qaReport.tasks.length === 0)) {
         const bugTask = createWorkflowTask(
-          getSnapshot(), "bug_fix", "developer",
+          snapshot, "bug_fix", "developer",
           "Fix preview — app unreachable",
           `The product preview is not reachable. Error: ${previewProbe.error ?? "unknown"}. The app must start and respond to HTTP requests before the sprint can pass.`,
           `Preview URL ${previewUrl ?? "(none)"} returns error: ${previewProbe.error ?? "no response"}.`,
@@ -404,7 +405,7 @@ export async function executeSprintReviewVerification(
           : "";
 
         const entryBug = createWorkflowTask(
-          getSnapshot(), "bug_fix", "developer",
+          snapshot, "bug_fix", "developer",
           "Wire entry file to product modules",
           `Entry file ${sprintEntryCheck.entryFile ?? "(not found)"} does not import this sprint's components. ${sprintEntryCheck.reason}${orphanList} Components exist on disk but are never rendered.${prescriptionSection}`,
           "Entry file is disconnected from the product modules this sprint produced.",
@@ -428,7 +429,7 @@ export async function executeSprintReviewVerification(
       for (const taskReport of taskReports) {
         if (taskReport.verdict !== "fail") continue;
         const hiredRoles = new Set(
-          getSnapshot().agents.map((a) => a.role as AgentIdentity["role"]),
+          snapshot.agents.map((a) => a.role as AgentIdentity["role"]),
         );
         const actionableFindings = taskReport.findings
           .filter((f) => f.severity === "critical" || f.severity === "high")
@@ -444,7 +445,7 @@ export async function executeSprintReviewVerification(
             hiredRoles,
           });
           const bugTask = createWorkflowTask(
-            getSnapshot(), bugFields.kind, bugFields.assignedRole,
+            snapshot, bugFields.kind, bugFields.assignedRole,
             bugFields.title, bugFields.description, bugFields.problemStatement,
             bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
             bugFields.sprintId,
@@ -567,7 +568,8 @@ export async function executeSprintFinalGate(
   _ctx: AgentBeatContext,
   beatId: string,
 ): Promise<BeatResult> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — task-engine call sites use canonical view.
+  const snapshot = await buildSnapshotView(_ctx.company.id);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
@@ -616,7 +618,7 @@ export async function executeSprintFinalGate(
     const newBugIds = [...reviewState.bugTaskIds];
     if (bugFields) {
       const bugTask = createWorkflowTask(
-        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        snapshot, bugFields.kind, bugFields.assignedRole,
         bugFields.title, bugFields.description, bugFields.problemStatement,
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
@@ -661,7 +663,8 @@ export async function executeRetestAfterRework(
   _ctx: AgentBeatContext,
   beatId: string,
 ): Promise<BeatResult> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — canonical view replaces in-memory snapshot.
+  const snapshot = await buildSnapshotView(_ctx.company.id);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
@@ -693,7 +696,8 @@ export async function executeCtoBeatEscalationReview(
   beatId: string,
 ): Promise<BeatResult> {
   startBeatTokenAccumulator(beatId);
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — canonical view replaces in-memory snapshot.
+  const snapshot = await buildSnapshotView(_ctx.company.id);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };

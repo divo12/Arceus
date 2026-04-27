@@ -199,13 +199,19 @@ export function appendTaskResult(taskId: string, result: string) {
 
 /** Link an artifact to a task and emit a graph event for the sprint. */
 export function attachArtifactToTask(taskId: string, artifactId: string) {
-  updateTask(taskId, (task) => ({
-    ...task,
-    artifactIds: task.artifactIds.includes(artifactId) ? task.artifactIds : [...task.artifactIds, artifactId],
-  }));
+  // Spec 31 Phase 7.B.4.2 — capture sprintId via updater callback closure
+  // instead of re-reading snapshot.tasks after the mutation. Wrap in an
+  // object so TS doesn't narrow the binding to its initial value.
+  const captured: { sprintId: string | null | undefined } = { sprintId: null };
+  updateTask(taskId, (task) => {
+    captured.sprintId = task.sprintId;
+    return {
+      ...task,
+      artifactIds: task.artifactIds.includes(artifactId) ? task.artifactIds : [...task.artifactIds, artifactId],
+    };
+  });
 
-  const task = getSnapshot().tasks.find((t) => t.id === taskId);
-  const sprintId = task?.sprintId ?? resolveActiveSprintId();
+  const sprintId = captured.sprintId ?? resolveActiveSprintId();
   if (sprintId) {
     const artifact = artifacts.find((a) => a.id === artifactId);
     emitGraphArtifactProduced(sprintId, taskId, artifactId, artifact?.kind ?? "output", artifact?.title ?? artifactId);
@@ -278,16 +284,23 @@ export function appendTaskCommand(taskId: string, command: string) {
  * hippocampus memory, and skill outcome tracking.
  */
 export function setTaskStatus(taskId: string, status: Task["status"], feedback?: string | null) {
-  const prev = getSnapshot().tasks.find((t) => t.id === taskId);
+  // Spec 31 Phase 7.B.4.2 — capture prev via updater callback closure
+  // instead of a separate snapshot.tasks.find() pre-read. Wrap in an object
+  // so TS doesn't narrow the binding to its initial null value.
+  const captured: { prev: Task | null } = { prev: null };
+  updateTask(taskId, (task) => {
+    captured.prev = task;
+    return {
+      ...task,
+      status,
+      verifierState: {
+        ...task.verifierState,
+        feedback: feedback ?? task.verifierState.feedback,
+      },
+    };
+  });
+  const prev = captured.prev;
   const prevStatus = prev?.status ?? "unknown";
-  updateTask(taskId, (task) => ({
-    ...task,
-    status,
-    verifierState: {
-      ...task.verifierState,
-      feedback: feedback ?? task.verifierState.feedback,
-    },
-  }));
 
   // ── Graph instrumentation (Spec 22) ──
   const sprintId = prev?.sprintId ?? resolveActiveSprintId();
