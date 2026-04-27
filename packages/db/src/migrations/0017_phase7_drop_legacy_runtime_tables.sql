@@ -1,0 +1,36 @@
+-- Spec 31 Phase 7.B.5 — drop legacy runtime tables that the
+-- application has migrated off.
+--
+-- These three tables were created by legacy bootstrap scripts that
+-- predated the canonical normalized schema introduced in
+-- `0000_initial_normalized_schema.sql`. They were NEVER created via
+-- a drizzle migration in this repo, so on fresh installs they may
+-- not exist at all — the IF EXISTS guards are mandatory.
+--
+-- Application migration mapping (no rollback after this point):
+--   beat_records      → heartbeat_runs           (B.5.1)
+--   company_states    → in-memory state + buildSnapshotView assembly
+--                                              from canonical tables
+--                                              (7.C.d / 7.C.d-cp)
+--   policy_violations → canonical
+--                       schema/policy_violations.ts (B.5.3)
+--
+-- The legacy `policy_violations` text-PK table shared a name with the
+-- canonical uuid-PK table, so the drizzle declaration was just
+-- pointing at the same physical table with a wider type. The DROP is
+-- still safe because:
+--   • If only the legacy text-PK table exists (legacy db), DROP IF
+--     EXISTS removes it; the canonical migration in 0000 will recreate
+--     it on next migrate.
+--   • If only the canonical uuid-PK table exists (fresh install), the
+--     name resolves to the canonical row and a DROP would lose data.
+--     We deliberately do NOT drop policy_violations here — only the
+--     legacy drizzle declaration is removed in `tables.ts`.
+--
+-- `trust_scores` is intentionally NOT dropped: the migration to
+-- canonical `role_trust` is a domain model change (per-agent score
+-- → per-role band) deferred to spec 7.B.5.2-bis. The legacy table
+-- stays in place until that slice lands.
+
+DROP TABLE IF EXISTS "company_states" CASCADE;
+DROP TABLE IF EXISTS "beat_records"   CASCADE;

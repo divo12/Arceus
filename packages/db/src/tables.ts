@@ -12,23 +12,27 @@
  *   sprintSnapshotsTable → schema/sprint_snapshots.ts  (sprintSnapshots)
  *   artifactsTable       → schema/artifacts.ts         (artifacts)
  *   assetsTable          → schema/assets.ts            (assets)
- *   trustScoresTable     → schema/role_trust.ts        (roleTrust)
- *   policyViolationsTable→ schema/policy_violations.ts (policyViolations)
+ *   trustScoresTable     → schema/role_trust.ts        (roleTrust)  — DEFERRED to 7.B.5.2-bis (data model change)
  *   skillArtifactsTable  → schema/skill_artifacts.ts   (skillArtifacts)
  *
- * `companyStatesTable` and `beatRecordsTable` have no canonical
- * replacement — they belong to the in-memory store + heartbeat-record
- * dual-write paths that get deleted as part of the broader Phase 7
- * `getSnapshot()` rewrite. Their declarations stay until the
- * consumers (`persistence/store.ts`, `persistence/control-plane.ts`,
- * `persistence/company-state.ts`) are migrated.
+ * Spec 31 Phase 7.B.5 dropped these obsolete declarations:
+ *   companyStatesTable   — application no longer persists JSON snapshots;
+ *                          state is reassembled from canonical via
+ *                          `buildSnapshotView` (7.C.d / 7.C.d-cp).
+ *   beatRecordsTable     — heartbeat persistence migrated to canonical
+ *                          `heartbeat_runs` with a `triggerDetail._legacy`
+ *                          sidecar (B.5.1).
+ *   policyViolationsTable — control-plane CRUD + reset cascade now use
+ *                          canonical `policyViolations` (B.5.3).
+ * The physical `company_states` and `beat_records` tables are dropped
+ * by migration `0017_phase7_drop_legacy_runtime_tables.sql`.
  *
  * Spec 31 Phase 7 migration 0015 dropped the `hippocampus` schema, so
  * the legacy `arceusSchema` ternary that used to switch between
  * `hippocampus.<table>` and `public.<table>` is gone — every
  * declaration is a plain `pgTable("<name>", …)`.
  */
-import { integer, jsonb, numeric, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
 
 /** @deprecated Use `workspaces` from `@arceus/db/src/schema/workspaces.js`. */
 export const workspacesTable = pgTable("workspaces", {
@@ -75,19 +79,6 @@ export const artifactsTable = pgTable("artifacts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/**
- * @deprecated No canonical replacement — the in-memory snapshot
- *   serialiser is slated for removal in the Phase 7 store rewrite.
- *   Persisted by `apps/api/src/persistence/company-state.ts`.
- */
-export const companyStatesTable = pgTable("company_states", {
-  companyId: text("company_id").primaryKey(),
-  snapshotData: jsonb("snapshot_data").notNull(),
-  eventLog: jsonb("event_log").notNull().default([]),
-  snapshotVersion: integer("snapshot_version").notNull().default(0),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
 /** @deprecated Use `assets` from `@arceus/db/src/schema/assets.js`. */
 export const assetsTable = pgTable("assets", {
   id: text("id").primaryKey(),
@@ -103,54 +94,12 @@ export const assetsTable = pgTable("assets", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/**
- * @deprecated No canonical replacement — the heartbeat-record table
- *   is replaced by `heartbeatRuns` from `@arceus/db/src/schema/heartbeat_runs.js`,
- *   but the consumer (`apps/api/src/persistence/control-plane.ts`)
- *   still writes the legacy shape until the Phase 7 store rewrite
- *   migrates it.
- */
-export const beatRecordsTable = pgTable("beat_records", {
-  id: text("id").primaryKey(),
-  companyId: text("company_id").notNull(),
-  agentId: text("agent_id"),
-  beatNumber: integer("beat_number").notNull(),
-  trigger: jsonb("trigger").notNull(),
-  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
-  endedAt: timestamp("ended_at", { withTimezone: true }),
-  status: text("status").notNull().default("running"),
-  snapshotVersionRead: integer("snapshot_version_read"),
-  snapshotVersionWritten: integer("snapshot_version_written"),
-  phases: jsonb("phases").notNull().default({}),
-  outcome: text("outcome"),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  costCents: numeric("cost_cents", { precision: 12, scale: 4 }).notNull().default("0"),
-  errorMessage: text("error_message"),
-  summary: text("summary"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
 /** @deprecated Use `roleTrust` from `@arceus/db/src/schema/role_trust.js`. */
 export const trustScoresTable = pgTable("trust_scores", {
   agentId: text("agent_id").primaryKey(),
   score: real("score").notNull().default(0.5),
   history: jsonb("history").notNull().default([]),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-/** @deprecated Use `policyViolations` from `@arceus/db/src/schema/policy_violations.js`. */
-export const policyViolationsTable = pgTable("policy_violations", {
-  id: text("id").primaryKey(),
-  companyId: text("company_id").notNull(),
-  agentId: text("agent_id").notNull(),
-  ruleId: text("rule_id").notNull(),
-  tool: text("tool").notNull(),
-  decision: text("decision").notNull(),
-  severity: text("severity").notNull().default("medium"),
-  detail: text("detail").notNull().default(""),
-  beatId: text("beat_id"),
-  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** @deprecated Use `skillArtifacts` from `@arceus/db/src/schema/skill_artifacts.js`. */

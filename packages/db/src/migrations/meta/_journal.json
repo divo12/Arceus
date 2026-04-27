@@ -113,6 +113,13 @@
       "when": 1777300494829,
       "tag": "0016_phase7a_unmigrated_schemas",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1777380360000,
+      "tag": "0017_phase7_drop_legacy_runtime_tables",
+      "breakpoints": true
     }
   ]
 }
