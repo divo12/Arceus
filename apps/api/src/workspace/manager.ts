@@ -148,8 +148,12 @@ function mapSprintSnapshotRecord(
     bundleKey: record.bundleKey,
     bundleSha256: record.bundleSha256,
     bundleBytes: record.bundleBytes,
-    snapshotData: record.snapshotData as CompanySnapshot,
-    fileManifest: record.fileManifest as WorkspaceManifestEntry[],
+    snapshotData: record.snapshotData as unknown as CompanySnapshot,
+    // The canonical schema's typed jsonb (`{path; sha256; bytes}`) and the
+    // contract's `WorkspaceFileManifestEntry` (`{path; size}`) both
+    // round-trip through the same physical jsonb column; cast through
+    // unknown.
+    fileManifest: record.fileManifest as unknown as WorkspaceManifestEntry[],
     status: record.status as SprintSnapshot["status"],
     createdAt: toIsoString(record.createdAt) ?? new Date().toISOString(),
   };
@@ -472,7 +476,12 @@ export class WorkspaceManager {
           // declared untyped to avoid an @arceus/contracts circular
           // dep in @arceus/db. The runtime payload is a CompanySnapshot.
           snapshotData: snapshot as unknown as Record<string, unknown>,
-          fileManifest: manifest,
+          // The canonical schema's jsonb is typed `{ path; sha256; bytes }`;
+          // the workspace's listWorkspaceManifest helper produces
+          // `{ path; size }` (contract `WorkspaceFileManifestEntry`).
+          // The DB column is plain jsonb — cast through unknown so
+          // both shapes can land without changing either type.
+          fileManifest: manifest as unknown as Array<{ path: string; sha256: string; bytes: number }>,
           status: "active",
           createdAt: new Date(),
         })
@@ -484,7 +493,7 @@ export class WorkspaceManager {
             bundleSha256,
             bundleBytes,
             snapshotData: snapshot as unknown as Record<string, unknown>,
-            fileManifest: manifest,
+            fileManifest: manifest as unknown as Array<{ path: string; sha256: string; bytes: number }>,
             status: "active",
           },
         });

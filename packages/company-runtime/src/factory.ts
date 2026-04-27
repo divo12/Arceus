@@ -44,7 +44,7 @@ export function createEmptyCompanySnapshot(): CompanySnapshot {
       scopeBoundary: [],
       roleRationale: [],
       status: "draft",
-      createdByAgentId: "agent_ceo",
+      createdByAgentId: "",
       createdAt
     },
     sprints: [],
