@@ -21,9 +21,14 @@ import { artifacts as runtimeArtifacts, type Artifact as RuntimeArtifact } from 
 import { persistRuntimeArtifact } from "./artifact-persistence.js";
 import { deletePersistedCompanyState, flushPersistedCompanyState, loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
 import { persistCompany } from "./company-persistence.js";
-import { persistSprint, persistTask, persistMeeting, persistApproval, persistChatMessage, persistAgents } from "./domain-persistence.js";
+import { persistSprint, persistTask, persistMeeting, persistApproval, persistChatMessage, persistAgentList } from "./domain-persistence.js";
 import { recordFeedbackRound, recordTransition } from "../orchestration/state.js";
 import { storeEvents } from "./store-events.js";
+import { getDb } from "@arceus/db";
+import * as ideasRepo from "@arceus/db/src/repos/ideas.js";
+import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
+import * as hierarchyNodesRepo from "@arceus/db/src/repos/hierarchy_nodes.js";
+import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 
 /**
  * Phase 4A dual-write hook. Called after every store mutation that touches
@@ -224,7 +229,7 @@ export function appendChatMessage(message: ChatMessage) {
   });
 
   // Phase 4E dual-write — store stays authoritative, DB row mirrors.
-  void persistChatMessage(message.id).catch(() => {});
+  void persistChatMessage(message).catch(() => {});
   return message;
 }
 
@@ -257,7 +262,7 @@ export function upsertTask(task: Task) {
   // never block the synchronous mutation path; persistTask swallows pg
   // errors. Without this the CAS-based claim path returns `not_found`
   // because the task row was never inserted.
-  void persistTask(task.id).catch(() => {});
+  void persistTask(task).catch(() => {});
 
   return task;
 }
@@ -315,7 +320,7 @@ export function upsertSprint(sprint: Sprint) {
   });
 
   // Phase 4B dual-write — store stays authoritative, DB row mirrors.
-  void persistSprint(sprint.id).catch(() => {});
+  void persistSprint(sprint).catch(() => {});
   return sprint;
 }
 
@@ -359,7 +364,7 @@ export function upsertMeeting(meeting: Meeting) {
   });
 
   // Phase 4D dual-write — store stays authoritative, DB row mirrors.
-  void persistMeeting(meeting.id).catch(() => {});
+  void persistMeeting(meeting).catch(() => {});
   return meeting;
 }
 
@@ -415,7 +420,7 @@ export function upsertApproval(approval: Approval) {
   });
 
   // Phase 4E dual-write — store stays authoritative, DB row mirrors.
-  void persistApproval(approval.id).catch(() => {});
+  void persistApproval(approval).catch(() => {});
   return approval;
 }
 
@@ -570,6 +575,11 @@ export function bootstrapCompany(input: BootstrapInput) {
   ]);
 
   dualWriteCompany();
+  // Spec 31 Phase 7.B.4.3 — write idea + strategy to canonical alongside the
+  // company row. Fire-and-forget: company row write may not have landed yet
+  // so a 23503 here is expected and recoverable on the next mutation.
+  void ideasRepo.upsertIdea(getDb(), snapshot.idea).catch(() => {});
+  void strategyBriefsRepo.upsertStrategy(getDb(), snapshot.strategy).catch(() => {});
   return snapshot;
 }
 
@@ -722,7 +732,20 @@ export function applyStrategy(output: StrategyOutput) {
   ]);
 
   dualWriteCompany();
-  void persistAgents().catch(() => {});
+  void persistAgentList(agents).catch(() => {});
+
+  // Spec 31 Phase 7.B.4.3 — fire-and-forget canonical writes for
+  // hierarchy + memories + strategy update. Schemas live under
+  // packages/db/src/schema/{hierarchy_nodes,memory_summaries,strategy_briefs}
+  // (added in Phase 7.A). Errors swallow; the in-memory snapshot is still
+  // authoritative until B.5 routes reads off it.
+  const companyId = snapshot.company.id;
+  const db = getDb();
+  void hierarchyNodesRepo.replaceForCompany(db, companyId, hierarchy).catch(() => {});
+  void strategyBriefsRepo.upsertStrategy(db, snapshot.strategy).catch(() => {});
+  for (const memory of memories) {
+    void memorySummariesRepo.upsertSummary(db, memory, companyId).catch(() => {});
+  }
 
   // Eager trust initialization — fire event so control-plane handles it
   // without a circular import. Fire-and-forget; DB writes must not block

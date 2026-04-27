@@ -17,6 +17,7 @@ import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import postgres from "postgres";
 import { observability } from "@arceus/contracts";
 import { getSnapshot } from "../../persistence/store.js";
+import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import { persistCompany } from "../../persistence/company-persistence.js";
 import { persistSprint } from "../../persistence/domain-persistence.js";
 import type { ErrorCause, RetrySafety } from "./envelope.js";
@@ -76,7 +77,10 @@ export async function persistTask(taskId: string): Promise<void> {
     // FK after a race during applyStrategy / sprint_create.
     if (code === "23503") {
       await persistCompany(task.companyId);
-      if (task.sprintId) await persistSprint(task.sprintId);
+      if (task.sprintId) {
+        const sprint = await sprintsRepo.findByIdHydrated(getDb(), task.sprintId);
+        if (sprint) await persistSprint(sprint);
+      }
       try {
         await tasksRepo.upsertTask(getDb(), task);
         if (process.env.ARCEUS_DEBUG_PERSIST === "1") console.log(`[persist:tasks] ok id=${taskId} (after backfill)`);

@@ -54,7 +54,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   // persistSprint's INSERT and trigger 23503 (foreign_key_violation), after
   // which the tasks never reach the DB and tasksRepo.claimTask returns
   // not_found indefinitely.
-  await persistSprint(sprint.id);
+  await persistSprint(sprint);
   // Re-fetch the view after the sprint write so createWorkflowTask sees
   // the new sprint id when it computes task dependencies.
   const freshSnapshot = await buildSnapshotView(companyId);
@@ -109,7 +109,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   // beats call tasksRepo.claimTask which performs a DB-only CAS and would
   // otherwise see "not_found" if the fire-and-forget upsert from upsertTask
   // hasn't completed.
-  await Promise.all(createdTasks.map((t) => persistTask(t.id)));
+  await Promise.all(createdTasks.map((t) => persistTask(t)));
 
   // Graph instrumentation
   emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");
