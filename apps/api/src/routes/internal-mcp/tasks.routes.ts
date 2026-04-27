@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z, ZodError, type ZodSchema } from "zod";
-import { getSnapshot } from "../../persistence/store.js";
 import {
   setTaskStatus,
   setTaskVerified,
@@ -287,7 +286,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     }
 
     setTaskStatus(taskId, "completed");
-    const unblocked = getSnapshot().tasks
+    // Spec 31 Phase 7.B.5 — read unblocked dependents from canonical instead
+    // of snapshot.tasks. Internal-mcp routes have req.mcp.companyId.
+    const allTasks = await tasksRepo.listByCompanyHydrated(getDb(), req.mcp!.companyId);
+    const unblocked = allTasks
       .filter((t) => t.dependsOnTaskIds.includes(taskId) && (t.status === "created" || t.status === "planned"))
       .map((t) => t.id);
 
@@ -446,9 +448,14 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
 
     // Dependency check — all `dependsOnTaskIds` must be completed/verified.
     if (existing.dependsOnTaskIds.length > 0) {
-      const snapshot = getSnapshot();
-      const missing = existing.dependsOnTaskIds.filter((depId) => {
-        const dep = snapshot.tasks.find((t) => t.id === depId);
+      // Spec 31 Phase 7.B.5 — fetch each dep from canonical via repo. N+1 is
+      // bounded (deps list is small) so this is cheaper than a full company
+      // task list scan and avoids the in-memory snapshot.
+      const deps = await Promise.all(
+        existing.dependsOnTaskIds.map((depId) => tasksRepo.findByIdHydrated(getDb(), depId)),
+      );
+      const missing = existing.dependsOnTaskIds.filter((depId, i) => {
+        const dep = deps[i];
         return !dep || !["completed", "verified"].includes(dep.status);
       });
       if (missing.length > 0) {
@@ -531,7 +538,6 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
         cmd: typeof c === "string" ? c : String(c),
       })) ?? [];
 
-      const snapshot = getSnapshot();
       const totalSteps = planSteps.length || 1;
       const completedSteps = commands.length;
       const percentComplete = Math.min(Math.round((completedSteps / totalSteps) * 100), 100);

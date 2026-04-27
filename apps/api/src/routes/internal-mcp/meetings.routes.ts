@@ -4,7 +4,8 @@ import { z, ZodError, type ZodSchema } from "zod";
 import type { AgentIdentity, Meeting, RoleType, Task } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
-import { getSnapshot, writeMeetingSync } from "../../persistence/store.js";
+import { writeMeetingSync } from "../../persistence/store.js";
+import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -206,7 +207,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
     `${MEETINGS_BASE}/:meetingId`,
     async (req, reply) => {
       const { meetingId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const meeting = snapshot.meetings?.find((m) => m.id === meetingId);
       if (!meeting) {
         reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
@@ -282,7 +283,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       if (!body) return;
 
       const { meetingId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const meeting = snapshot.meetings?.find((m) => m.id === meetingId);
       if (!meeting) {
         reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));

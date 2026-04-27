@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getSnapshot } from "../../persistence/store.js";
 import { cpGetBeatHistory } from "../../persistence/control-plane.js";
 import { recordBeatActivity } from "../../heartbeats/watchdog.js";
-import { getAgentByRole } from "@arceus/task-engine";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { success, failure } from "./envelope.js";
 
 const BEATS_BASE = "/api/internal/v1/beats";
@@ -27,8 +27,8 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
     const query = (req.query ?? {}) as Record<string, string>;
     const n = Math.min(Math.max(parseInt(query.n ?? "3", 10) || 3, 1), 10);
 
-    const snapshot = getSnapshot();
-    const agent = getAgentByRole(snapshot, role);
+    // Spec 31 Phase 7.B.5 — read agent from canonical via repo, not snapshot.
+    const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
     if (!agent) {
       reply.code(404).send(failure(`No agent found for role "${role}".`, "not_found", "never", "agent_exists"));
       return;

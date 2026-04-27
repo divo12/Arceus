@@ -5,7 +5,8 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { getSnapshot } from "../../persistence/store.js";
+import { updateCompanyStatus } from "../../persistence/store.js";
+import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -24,7 +25,7 @@ const cacheAndSend = (
 export default async function internalMcpExecutionRoutes(app: FastifyInstance): Promise<void> {
   // GET /execution — current execution cycle status
   app.get(EXEC_BASE, async (req, reply) => {
-    const snapshot = getSnapshot();
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
     const company = snapshot.company;
     const activeSprint = snapshot.sprints.find((s) => s.id === company.currentSprintId);
 
@@ -46,7 +47,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    const snapshot = getSnapshot();
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
     const sprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
     if (!sprint) {
       reply.code(404).send(failure("No active sprint to complete.", "not_found", "never", "sprint_exists"));
@@ -61,7 +62,9 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    snapshot.company.status = "active";
+    // Spec 31 Phase 7.B.5 — go through the store mutator instead of mutating
+    // snapshot.company directly (which is now a derived view).
+    updateCompanyStatus("active");
     const now = new Date().toISOString();
 
     cacheAndSend(req, reply, 200, success(`Cycle complete. Ready for next sprint.`, {
@@ -85,8 +88,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     const parsed = pauseBody.safeParse(req.body);
     const reason = parsed.success ? parsed.data.reason : undefined;
 
-    const snapshot = getSnapshot();
-    snapshot.company.status = "paused";
+    updateCompanyStatus("paused");
 
     cacheAndSend(req, reply, 200, success("Execution paused.", {
       status: "paused",
@@ -112,10 +114,10 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    const snapshot = getSnapshot();
     if (parsed.data.resumeExecution) {
-      snapshot.company.status = "active";
+      updateCompanyStatus("active");
     }
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
 
     cacheAndSend(req, reply, 200, success("Post-review reconciliation done.", {
       status: snapshot.company.status,
@@ -132,8 +134,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    const snapshot = getSnapshot();
-    snapshot.company.status = "archived";
+    updateCompanyStatus("archived");
 
     cacheAndSend(req, reply, 200, success("Execution stopped.", {
       status: "archived",

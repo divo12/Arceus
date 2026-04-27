@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { requestApproval } from "../../memory/handoffs.js";
-import { getSnapshot, updateApproval } from "../../persistence/store.js";
+import { updateApproval } from "../../persistence/store.js";
+import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { getAgentByRole } from "@arceus/task-engine";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -144,7 +145,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     `${APPROVALS_BASE}/:approvalId`,
     async (req, reply) => {
       const { approvalId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
         reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
@@ -159,7 +160,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     APPROVALS_BASE,
     async (req, reply) => {
       const { status, limit: limitStr, filedByMe, pendingMyDecision, since } = req.query;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const limit = Math.min(parseInt(limitStr || "50", 10), 100);
       let approvals = snapshot.approvals ?? [];
 
@@ -214,7 +215,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     async (req, reply) => {
       const { approvalId } = req.params;
       const role = req.mcp?.role;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
         reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
@@ -268,7 +269,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       if (!body) return;
 
       const { approvalId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
         reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));

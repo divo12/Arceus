@@ -10,7 +10,8 @@ import {
   recordPreview,
   recordTypecheck,
 } from "../../workspace/build-health.js";
-import { getSnapshot } from "../../persistence/store.js";
+import { getDb } from "@arceus/db";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -222,7 +223,8 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       const { taskId } = req.query;
       let previewUrl: string | null = null;
       if (taskId) {
-        const task = getSnapshot().tasks.find((t) => t.id === taskId);
+        // Spec 31 Phase 7.B.5 — read task from canonical via repo.
+        const task = await tasksRepo.findByIdHydrated(getDb(), taskId);
         if (!task) {
           reply.code(404).send(failure(`Task ${taskId} not found.`, "not_found", "never", "resource_created"));
           return;

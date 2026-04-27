@@ -25,9 +25,9 @@ import {
   type MemoryUnit,
 } from "@arceus/contracts";
 import type { AgentIdentity } from "@arceus/contracts";
-import { getAgentByRole } from "@arceus/task-engine";
 import { hippocampus } from "../../memory/index.js";
-import { getSnapshot } from "../../persistence/store.js";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { addArtifact } from "../../tasks/index.js";
 import { emitEmployeeActivity } from "../../observability/activity.js";
 import { success, failure, type ErrorCause } from "./envelope.js";
@@ -87,8 +87,8 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     }
 
     const mcp = req.mcp!;
-    const snapshot = getSnapshot();
-    const agent = getAgentByRole(snapshot, mcp.role as Role);
+    // Spec 31 Phase 7.B.5 — read agent from canonical via repo, not snapshot.
+    const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role as Role);
     if (!agent) {
       reply.code(404).send(
         failure(
@@ -160,8 +160,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     }
 
     const mcp = req.mcp!;
-    const snapshot = getSnapshot();
-    const agent = getAgentByRole(snapshot, mcp.role as Role);
+    const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role as Role);
     if (!agent) {
       reply.code(404).send(
         failure(
@@ -280,12 +279,17 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
       return;
     }
 
-    const snapshot = getSnapshot();
-    const targetAgents = input.targets.map((role) => ({
-      role,
-      agent: getAgentByRole(snapshot, role),
-    }));
-    const missing = targetAgents.filter((t) => t.agent === null);
+    // Spec 31 Phase 7.B.5 — agents from canonical. Run target lookups in
+    // parallel; ids are independent and the list is small (≤8 in practice).
+    const db = getDb();
+    const mcp = req.mcp!;
+    const targetAgents = await Promise.all(
+      input.targets.map(async (role) => ({
+        role,
+        agent: await agentsRepo.findAgentByRole(db, mcp.companyId, role),
+      })),
+    );
+    const missing = targetAgents.filter((t) => !t.agent);
     if (missing.length > 0) {
       reply.code(422).send(
         failure(
@@ -299,7 +303,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     }
 
     // Audit artifact (created first so memory units can reference it)
-    const callerAgent = getAgentByRole(snapshot, callerRole);
+    const callerAgent = await agentsRepo.findAgentByRole(db, mcp.companyId, callerRole);
     const artifact = addArtifact(
       callerAgent?.id ?? `agent_${callerRole}`,
       "handoff",

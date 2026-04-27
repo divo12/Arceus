@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { addArtifactSync, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/index.js";
-import { getSnapshot } from "../../persistence/store.js";
+import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { artifacts, type Artifact } from "../../orchestration/state.js";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -205,7 +205,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     ARTIFACT_BASE,
     async (req, reply) => {
       const { sprintId, kind, limit: limitStr } = req.query;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const limit = Math.min(parseInt(limitStr || "50", 10), 100);
 
       let filtered = artifacts;

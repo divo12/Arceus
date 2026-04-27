@@ -16,7 +16,6 @@ import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import postgres from "postgres";
 import { observability } from "@arceus/contracts";
-import { getSnapshot } from "../../persistence/store.js";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import { persistCompany } from "../../persistence/company-persistence.js";
 import { persistSprint } from "../../persistence/domain-persistence.js";
@@ -40,28 +39,30 @@ function pgErrorCode(err: unknown): string {
 }
 
 /**
- * DB-first read with in-memory fallback. The store fallback is temporary —
- * Phase 4 migrates the remaining writers off `store.ts`, after which this
- * function collapses to a single DB call.
+ * Spec 31 Phase 7.B.5 — DB is authoritative for tasks. Returns null when
+ * the row does not exist. The store fallback that lived here through Phase 4
+ * is gone now that store mutators dual-write to canonical synchronously
+ * enough that route reads can rely on the DB row.
  */
 export async function readTaskHybrid(taskId: string): Promise<ContractTask | null> {
   try {
-    const fromDb = await tasksRepo.findByIdHydrated(getDb(), taskId);
-    if (fromDb) return fromDb;
+    return await tasksRepo.findByIdHydrated(getDb(), taskId);
   } catch (err) {
-    // DB unavailable / not migrated — fall through to store.
-    console.warn(`[tasks] DB read skipped for ${taskId} (pg=${pgErrorCode(err)})`);
+    console.warn(`[tasks] DB read failed for ${taskId} (pg=${pgErrorCode(err)})`);
+    return null;
   }
-  return getSnapshot().tasks.find((t) => t.id === taskId) ?? null;
 }
 
 /**
- * Persist the current store state for a task to the DB. Called after every
- * route mutation so the DB stays in sync. Errors are logged but never thrown
- * — the store is still authoritative until Phase 4 completes the cutover.
+ * Spec 31 Phase 7.B.5 — DB barrier helper. Re-reads the task from canonical
+ * and upserts it to ensure at least one DB write has completed before the
+ * route responds. Belt-and-braces against the fire-and-forget gap from
+ * `store.upsertTask`'s dual-write — once routes stop calling sync store
+ * mutators (B.5.x follow-up), this barrier collapses into the upstream
+ * mutation and this helper goes away.
  */
 export async function persistTask(taskId: string): Promise<void> {
-  const task = getSnapshot().tasks.find((t) => t.id === taskId);
+  const task = await tasksRepo.findByIdHydrated(getDb(), taskId);
   if (!task) {
     if (process.env.ARCEUS_DEBUG_PERSIST === "1") console.log(`[persist:tasks] miss id=${taskId}`);
     return;

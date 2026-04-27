@@ -5,7 +5,8 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { getSnapshot } from "../../persistence/store.js";
+import { updateCompanyStatus } from "../../persistence/store.js";
+import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 
@@ -25,7 +26,7 @@ const cacheAndSend = (
 export default async function internalMcpCompanyRoutes(app: FastifyInstance): Promise<void> {
   // GET /company/summary — pure DB read of company state
   app.get(`${COMPANY_BASE}/summary`, async (req, reply) => {
-    const snapshot = getSnapshot();
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
     const c = snapshot.company;
     const activeSprint = snapshot.sprints.find((s) => s.id === c.currentSprintId);
 
@@ -44,7 +45,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
 
   // GET /agents/sessions — list active beat sessions across employees
   app.get("/api/internal/v1/agents/sessions", async (req, reply) => {
-    const snapshot = getSnapshot();
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
     const agents = snapshot.agents.map((a) => ({
       role: a.role,
       id: a.id,
@@ -72,8 +73,9 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
       return;
     }
 
-    const snapshot = getSnapshot();
-    snapshot.company.status = parsed.data.status;
+    // Spec 31 Phase 7.B.5 — go through the store mutator so the change
+    // dual-writes to canonical instead of silently mutating the snapshot.
+    updateCompanyStatus(parsed.data.status);
 
     cacheAndSend(req, reply, 200, success("Company status updated.", {
       status: parsed.data.status,
@@ -85,7 +87,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
     `${BOARD_BASE}/messages`,
     async (req, reply) => {
       const { since, sinceSprint, cardType, limit: limitStr } = req.query;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const limit = Math.min(parseInt(limitStr || "20", 10), 100);
 
       let messages = snapshot.chatMessages ?? [];

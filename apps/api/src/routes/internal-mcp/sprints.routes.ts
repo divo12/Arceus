@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { createSprintWithTasks } from "../../sprints/proposals.js";
-import { getSnapshot } from "../../persistence/store.js";
+import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
@@ -89,7 +89,9 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     // deadlocks the sprint because no agent ever beats with that role and
     // dependents stay blocked forever. Reject up front and let the CEO
     // re-reason with a payload_fixed validation failure.
-    const hiredRoles = new Set(getSnapshot().agents.map((a) => a.role));
+    // Spec 31 Phase 7.B.5 — agents from canonical view.
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
+    const hiredRoles = new Set(snapshot.agents.map((a) => a.role));
     const invalid = parsed.tasks
       .map((t, i) => ({ idx: i, role: t.assigned_role, title: t.title }))
       .filter((t) => !hiredRoles.has(t.role as never));
@@ -138,7 +140,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
 
   // GET /sprints/active — get the currently active sprint
   app.get(`${SPRINTS_BASE}/active`, async (req, reply) => {
-    const snapshot = getSnapshot();
+    const snapshot = await buildSnapshotView(req.mcp!.companyId);
     const company = snapshot.company;
     const activeSprint = snapshot.sprints.find((s) => s.id === company.currentSprintId);
 
@@ -170,7 +172,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     `${SPRINTS_BASE}/:sprintId/completion`,
     async (req, reply) => {
       const { sprintId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
         reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
@@ -209,7 +211,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         return;
       }
       const { sprintId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
         reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
@@ -241,7 +243,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         return;
       }
       const { sprintId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
         reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
@@ -278,7 +280,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         return;
       }
       const { sprintId } = req.params;
-      const snapshot = getSnapshot();
+      const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
         reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
