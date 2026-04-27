@@ -357,7 +357,7 @@ Same pattern. Approvals have a decision endpoint — make sure `decided_at` and 
 | `visibility text` | `kind text` (nullable) | Carry forward as the kind discriminator (or null if "private") |
 | `content text` | `content text` | 1:1 |
 | `confidence real` | `confidence real` | 1:1 |
-| `embedding vector(384)` | **moved to** `memory_embeddings.embedding vector(1536)` | **Lossy.** Either re-embed with the new model (preferred) or change new schema to vector(384) (locks in cheaper model). See §3 |
+| `embedding vector(384)` | **moved to** `memory_embeddings.embedding vector(384)` | Lossless verbatim copy — legacy is already 384-dim. New schema's previously-declared `vector(1536)` was changed to `vector(384)` per §3 decision; PR #13a's `ALTER COLUMN` makes that the on-disk reality |
 | `relevance_score real` | dropped | Use `confidence` only — relevance is recomputed from age + outcome at read time |
 | `container text` | dropped | Folded into `kind` (the only legitimate values were privacy markers — already covered) |
 | `source_type text + source_id text` | `source_task_id uuid` + `source_beat_id uuid` (typed FKs) | Decode by prefix: `task:tsk_xyz` → resolve via `tasks.friendly_id`; `beat:beat_xyz` → null (legacy beat ids predate `heartbeat_runs`); anything else → null |
@@ -452,15 +452,12 @@ CREATE UNIQUE INDEX memory_units_legacy_id_idx
     FROM batch b
     RETURNING id, legacy_id
   )
-  -- 3. Embedding rows (only for non-null legacy embeddings).
+  -- 3. Embedding rows — verbatim copy (Option B / 384, see §3).
   INSERT INTO memory_embeddings (memory_id, embedding, model_version, created_at)
   SELECT
     i.id,
-    -- Re-embed via the new model OR cast the legacy 384-dim vector if §3
-    -- lands as "keep 384" (in which case the new schema's vector(1536)
-    -- becomes vector(384) in the same migration).
-    embed_via_new_model(m.content),
-    'text-embedding-3-small@2026-04',
+    m.embedding,
+    'all-MiniLM-L6-v2@384',
     m.created_at
   FROM inserted i
   JOIN hippocampus.memory_units m ON m.id = i.legacy_id
@@ -492,25 +489,46 @@ CREATE UNIQUE INDEX memory_units_legacy_id_idx
 
 - Soak ≥3 days in dev with the new backend before this PR merges.
 
-#### 3. Embedding dimension decision (BLOCKING)
+#### 3. Embedding dimension — DECIDED: 384 (Option B)
 
-Legacy uses `vector(384)` (all-MiniLM-L6-v2, runs locally via the embedder
-in `packages/hippocampus/src/backends/embedding.ts`). New schema declares
-`vector(1536)` (OpenAI text-embedding-3-small, requires API call per
-write).
+**Decision:** PR #13 ships with `vector(384)` end-to-end, matching the
+existing `all-MiniLM-L6-v2` model that hippocampus already uses locally
+via `@huggingface/transformers` in
+`packages/hippocampus/src/backends/embedding.ts`. Locked in 2026-04-27.
 
-Two paths:
+**Why 384 won (over the spec's original `vector(1536)` default):**
 
-| Option | Pros | Cons |
-|---|---|---|
-| **A — Re-embed with 1536** | Better recall; aligns with the schema; future-proof for richer queries | Cost scales with memory count; needs API calls during backfill; runtime write path now hits an external API |
-| **B — Change new schema to 384** | Backfill is `INSERT … SELECT embedding FROM …` (free); runtime stays local | Locks in the cheaper model; future upgrade is another migration |
+1. **Backfill becomes a one-line copy.** The legacy
+   `hippocampus.memory_units.embedding` column is already 384-dim, so
+   PR #13b's batch backfill is `INSERT … SELECT embedding FROM …`. Free.
+   1536 would require re-embedding every existing row via Azure
+   text-embedding-3-small — paid API calls during a backfill on a
+   table that grows with company memory.
+2. **Memory writes are hotter than LLM calls.** Every `memory.write`
+   event passes through the embedder. Today that's local CPU at
+   ~20 ms; 1536 would add a 50–200 ms Azure round-trip on the hot
+   path, plus a new external failure mode for memory write latency.
+3. **No new ongoing cost.** 384 stays at $0 per write. 1536 adds
+   ~$0.00002 × N memories — small per-event but compounds, and adds
+   a paid dependency to a previously cost-free path.
+4. **Storage 4× smaller.** 384 floats × 4 bytes = 1.5 KB/row vs 6 KB
+   for 1536. Adds up across 10K+ memories per company at scale.
+5. **The MTEB recall gap doesn't translate.** ~58 → 62 % on benchmark
+   suites; on Arceus's per-company scope (single agent searching its
+   own memories from a few thousand entries), the gap is below
+   user-perceptible. Search recall complaints would be the trigger
+   to revisit.
+6. **Already proven in this codebase.** all-MiniLM-L6-v2 has been
+   generating Arceus embeddings since the original hippocampus.
+   1536 would be a switch with no track record here.
 
-**Recommendation:** Option B for cutover. We can run an A/B comparison on
-search quality post-cutover and migrate to 1536 in a follow-up PR with the
-same dual-write template.
+**When to revisit (move to 1536 in a follow-up PR):**
+- Search recall complaints from users
+- Cross-company semantic search becomes a feature
+- A "find similar companies / global pattern" view that benchmarks
+  against general-purpose embeddings
 
-If we pick B, the schema change is part of PR #13a:
+**PR #13a schema change** (now part of the migration, not optional):
 
 ```sql
 ALTER TABLE memory_embeddings DROP COLUMN embedding;
@@ -520,13 +538,25 @@ CREATE INDEX memory_embeddings_embedding_idx
   ON memory_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 ```
 
+**PR #13b backfill query:**
+
+```sql
+INSERT INTO memory_embeddings (memory_id, embedding, model_version, created_at)
+SELECT mu.id, m.embedding, 'all-MiniLM-L6-v2@384', m.created_at
+  FROM hippocampus.memory_units m
+  JOIN public.memory_units mu ON mu.legacy_id = m.id
+ WHERE m.embedding IS NOT NULL;
+```
+
+No re-embedding pass needed. No Azure calls during backfill.
+
 #### 4. Risks + mitigations
 
 | Risk | Mitigation |
 |---|---|
 | Backfill blocks legacy writes | Use `FOR UPDATE SKIP LOCKED`, batch 1000, sleep 50ms between batches |
 | Legacy rows reference agent strings that don't exist in the new `agents` table | Pre-flight query (§2 step 1) gates the backfill — quarantine table, manual triage before resuming |
-| Embedding re-compute (Option A) costs spike | Cap concurrency at 8 parallel API calls; show progress every 500 rows; resumable via `legacy_id` |
+| ~~Embedding re-compute (Option A) costs spike~~ | N/A — Option B (384) chosen, backfill is verbatim SELECT, no API calls. Risk applies only if a future PR upgrades to 1536 |
 | Read flip uncovers a column we missed | Soak with `EXPLAIN ANALYZE` on the top-3 hippocampus queries before the flip; 3-day dev burn-in |
 | `priming_state` numeric fields lose precision in jsonb | Store as `numeric` strings inside the jsonb (postgres preserves them) |
 
@@ -534,15 +564,16 @@ CREATE INDEX memory_embeddings_embedding_idx
 
 - `SELECT count(*) FROM hippocampus.memory_units WHERE deleted_at IS NULL` == `SELECT count(*) FROM public.memory_units WHERE legacy_id IS NOT NULL`
 - `SELECT count(*) FROM hippocampus.habits` == `SELECT count(*) FROM public.memory_units WHERE type = 'procedural'`
-- 10 random rows: pgvector cosine-similarity search returns the same top-3
-  results from legacy and new for the same query embedding (Option B) or
-  same top-1 with ≥0.7 overlap on top-5 (Option A).
+- 10 random rows: pgvector cosine-similarity search returns the same
+  top-3 results from legacy and new for the same query embedding —
+  exact match expected since we're copying embeddings verbatim, not
+  re-computing.
 - Hippocampus integration tests pass against the new backend.
 
 **Effort (revised):** 2–3 days. PR #13a (½ day) + PR #13b (1 day) + PR
-#13c (1 day) + soak time. The original "0.5 days" estimate assumed
-column-rename only; the embedding-dimension question and FK resolution
-are the real long pole.
+#13c (1 day) + soak time. With the embedding-dimension question now
+resolved (384, §3 above), FK resolution + dual-write plumbing are the
+remaining long poles.
 
 ---
 
