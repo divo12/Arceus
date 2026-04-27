@@ -73,16 +73,64 @@ export function isDatabaseConfigured() {
   return Boolean(getDatabaseConnectionConfig()?.databaseUrl);
 }
 
-/** Returns the singleton Drizzle client, creating it on first call. Throws if DB not configured. */
-export function getDb() {
+/**
+ * Default pool size when `ARCEUS_DB_POOL_SIZE` isn't set.
+ *
+ * Sizing guidance (Spec 31 §Phase 8.5): scale to ~`(api replicas × 10)`
+ * connections so a single pod restart doesn't exhaust the Postgres
+ * connection pool. Raise via `ARCEUS_DB_POOL_SIZE` in production; ensure
+ * `max_connections` on the DB is sized appropriately
+ * (`max_connections >= replicas × pool_size + headroom`).
+ */
+const DEFAULT_POOL_SIZE = 10;
+
+function readPoolSize(): number {
+  const raw = process.env.ARCEUS_DB_POOL_SIZE?.trim();
+  if (!raw) return DEFAULT_POOL_SIZE;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    console.warn(
+      `[@arceus/db] ARCEUS_DB_POOL_SIZE="${raw}" is not a positive integer; falling back to ${DEFAULT_POOL_SIZE}.`,
+    );
+    return DEFAULT_POOL_SIZE;
+  }
+  return parsed;
+}
+
+/**
+ * Validate the database URL at first `getDb()` call. Production:
+ * fail-loud with a clear error so the deploy crashes before serving
+ * traffic. Dev: soft-warn so a misconfigured `.env.local` still
+ * boots into a sensible default for local hacking.
+ *
+ * Same pattern as `bearer.resolveBearerToken` (spec 25 §3.5) — known
+ * good for "must be set in prod, optional in dev".
+ */
+function resolveDatabaseUrl(): string {
   const config = getDatabaseConnectionConfig();
-  if (!config?.databaseUrl) {
-    throw new Error("Database is not configured. Set SUPABASE_DB_URL or a supported fallback URL.");
+  if (config?.databaseUrl) return config.databaseUrl;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "[@arceus/db] DATABASE_URL (or SUPABASE_DB_URL / ARCEUS_HIPPOCAMPUS_POSTGRES_URL) " +
+        "is required in production. Refusing to start with no persistence.",
+    );
   }
 
+  console.warn(
+    "[@arceus/db] No DATABASE_URL set; falling back to local default postgresql://localhost:5432/arceus_dev. " +
+      "This is dev-only — set DATABASE_URL before deploying.",
+  );
+  return "postgresql://localhost:5432/arceus_dev";
+}
+
+/** Returns the singleton Drizzle client, creating it on first call. Throws in production
+ *  if DB not configured (dev falls back to localhost with a warning). */
+export function getDb() {
   if (!sqlClient) {
-    sqlClient = postgres(config.databaseUrl, {
-      max: 5,
+    const databaseUrl = resolveDatabaseUrl();
+    sqlClient = postgres(databaseUrl, {
+      max: readPoolSize(),
       prepare: false,
       idle_timeout: 20,
       connect_timeout: 10,

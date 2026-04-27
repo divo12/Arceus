@@ -212,7 +212,35 @@ export const breakers = {
     cooldownMs: 15_000,
     onStateChange: logStateChange,
   }),
+  /**
+   * Spec 31 §Phase 8.5 — postgres.js Drizzle path. Trips after 5
+   * consecutive failed queries, short-circuits new calls with
+   * CircuitBreakerOpenError for 5 s. Stops the thundering herd of
+   * doomed queries during a DB outage so connections free up and the
+   * pool can recover when Postgres comes back. Repos opt in via the
+   * `withDbBreaker` helper; the dual-write pattern's existing
+   * try/catch wrappers prevent breaker exceptions from leaking into
+   * runtime paths that already degrade gracefully.
+   */
+  postgres: new CircuitBreaker({
+    name: "postgres",
+    failureThreshold: 5,
+    cooldownMs: 5_000,
+    onStateChange: logStateChange,
+  }),
 } as const;
+
+/**
+ * Wrap a Drizzle/postgres.js call with the postgres breaker.
+ * Use sparingly — only on hot paths where a DB outage would otherwise
+ * pile up doomed retries (every cost_events insert, every dual-write
+ * sink). Cold-path one-shots (migrations, admin queries, smokes)
+ * should call the DB directly so breaker state isn't perturbed by
+ * legitimate startup failures.
+ */
+export function withDbBreaker<T>(fn: () => Promise<T>): Promise<T> {
+  return breakers.postgres.execute(fn);
+}
 
 /** Snapshot of all breakers for the /api/health endpoint. */
 export function getBreakersHealth() {

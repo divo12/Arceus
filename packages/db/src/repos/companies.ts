@@ -73,6 +73,35 @@ export async function allocateTaskNumber(db: DbClient, companyId: string): Promi
   return row.taskCounter;
 }
 
+/**
+ * Atomically increment `spent_cents` by `deltaCents` (Spec 31 Phase 8.5).
+ *
+ * Always use this from cost-event accumulator paths — never read-modify-
+ * write `spent_cents` from JS, even with a transaction wrapper. Two
+ * concurrent LLM calls each adding $5 in a read-then-write loop can both
+ * read $0, both write $5, and you've "spent" $10 but recorded $5. This
+ * helper translates to `UPDATE companies SET spent_cents = spent_cents
+ * + $delta`, which is one atomic statement Postgres serialises via the
+ * implicit row lock.
+ *
+ * `deltaCents` is allowed to be negative (refunds), but no clamping is
+ * applied — callers are responsible for not driving the counter below
+ * zero unless their domain allows it.
+ */
+export async function incrementSpentCents(
+  db: DbClient,
+  companyId: string,
+  deltaCents: number,
+): Promise<number> {
+  const [row] = await db
+    .update(companies)
+    .set({ spentCents: sql`${companies.spentCents} + ${deltaCents}` })
+    .where(eq(companies.id, toDbId(companyId)))
+    .returning({ spentCents: companies.spentCents });
+  if (!row) throw new Error(`Company ${companyId} not found`);
+  return row.spentCents;
+}
+
 // ── Hydration: DB row ↔ contracts.Company (Phase 4A) ──────────────
 
 /** Pure transform from a DB row to a contracts.Company. */
