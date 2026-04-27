@@ -461,10 +461,103 @@ After slice B.5:
 
 ---
 
-## Phase 7.C — Delete the shell *(half day, 1 PR, mechanical)*
+## Phase 7.C — Delete the shell *(2–3 days, 4–5 PRs, async cascade + transactional cutover)*
 
-**Goal:** with zero callers, remove the dead code and drop the legacy
-tables.
+**Updated estimate:** the original "half day, mechanical" framing assumed
+B.5 left zero `getSnapshot` callers. Reality: ~67 reads remain in 14
+files plus the deps-callback pattern in `task-engine` /
+`company-runtime`. 7.C is now five sub-slices; each is its own commit /
+PR and stays typecheck-green at every step.
+
+```
+7.C.a  — Extend buildSnapshotView to populate all 13 snapshot fields from canonical
+7.C.b  — Flip deps interfaces to async in packages + apps/api wiring
+7.C.c  — Migrate remaining apps/api direct getSnapshot callers
+7.C.c-bis — Move bootstrapCompany / applyStrategy / resetCompany to
+            domain modules with db.transaction()
+7.C.d  — Delete the shell (files + sentinel + legacy tables)
+```
+
+### C.a — Extend `buildSnapshotView` to populate all snapshot fields
+
+Today `buildSnapshotView` populates 5 fields (`company`, `agents`,
+`sprints`, `tasks`, `approvals`). The deep snapshot consumers in
+`server.ts` / `agents/chat.ts` / meeting pipeline need the full shape.
+
+Add canonical reads for: `idea`, `strategy`, `hierarchy`, `sessions`,
+`memories`, `meetings`, `meetingSchedules`, `chatMessages`. Schemas all
+exist post-7.A. `artifacts`, `memoryUnits`, `habits`, `priming`,
+`transitions`, `feedbackRounds` either default to `[]` (already correct)
+or are owned by orchestration state, not the snapshot.
+
+Single Promise.all of ~13 parallel queries per call. Standalone slice —
+no callers change shape, just gain populated fields. Commit independently.
+
+### C.b — Flip deps interfaces to async
+
+Five dep types use `getSnapshot: () => CompanySnapshot` (sync):
+
+- `packages/task-engine/src/{execution-cycle,sprint-lifecycle,task-state-machine}.ts`
+- `packages/company-runtime/src/{meeting-pipeline,meeting-scheduler}.ts`
+
+All become `() => Promise<CompanySnapshot>`. Internal `cb.getSnapshot()`
+calls add `await`, surrounding functions become `async`. The wiring in
+`apps/api/src/server.ts` switches from `getSnapshot` (the in-memory
+reader) to `() => buildSnapshotView(activeCompanyId)`.
+
+Touches ~10 files in packages, ~5 in apps/api. Mechanical.
+
+### C.c — Migrate remaining `apps/api` direct `getSnapshot()` callers
+
+The ~67 reads in 14 files identified at the top of this phase. Pattern
+per call site:
+
+- Snapshot-shaped reads → `await buildSnapshotView(companyId)` once
+  at the top of the operation, then thread the snapshot down.
+- Single-entity lookups → `tasksRepo.findByIdHydrated` /
+  `agentsRepo.findAgentByRole` / etc.
+- companyId bridges → `getActiveCompanyId()` (which is rewritten to
+  read from the `companies` table in 7.C.d).
+
+Includes `tasks/mutations.ts` deferred reads from B.4.2 (downstream
+promotion + hippocampus paths in `setTaskStatus`) and the four routes
+that B.5 explicitly deferred (`/api/company`, `DELETE /api/company`,
+`/api/employees` employee directory, `agents/chat.ts` deep snapshot
+consumers).
+
+### C.c-bis — Transactional `bootstrapCompany` / `applyStrategy` / `resetCompany`
+
+The deferred Slice 3 of B.4.3 lands here. Today these functions live in
+`store.ts` and fan a series of fire-and-forget canonical writes — fine
+while the snapshot was source of truth, broken once it isn't (a
+half-bootstrapped state survives a partial write).
+
+New domain modules:
+
+```
+apps/api/src/companies/
+  bootstrap.ts        — bootstrapCompany(input): db.transaction(...)
+  reset.ts            — resetCompany(companyId): db.transaction(...)
+
+apps/api/src/sprints/
+  strategy.ts         — applyStrategy(output): db.transaction(...)
+```
+
+Each wraps `db.transaction(async (tx) => { ... })` and passes the
+tx-scoped client to repo calls so the writes are atomic. If any one
+fails, all roll back. Repos stay single-table; compound workflows live
+in domain folders.
+
+Signature flips sync→async — consumers in `routes/strategy.routes.ts`
+and `orchestration/bootstrap.ts` are already `async`, so the cascade is
+absorbed. Tests that call `bootstrapCompany()` synchronously add
+`await`.
+
+Ships in the same PR as 7.C.c — same async cascade, same correctness
+goal. Splitting them produces an awkward middle state where some writes
+are atomic and others are still fire-and-forget.
+
+### C.d — Delete the shell
 
 ```bash
 # Delete the store + its support files
@@ -579,7 +672,7 @@ Realistic, single engineer:
 | 7.B | B.3 heartbeats + orchestration | 3-4 days |
 | 7.B | B.4 write paths + sprints/* + tasks/mutations.ts (absorbed from B.2) | 4 days |
 | 7.B | B.5 routes + companyContext | 4-5 days |
-| 7.C | Delete shell + drop tables | half day |
+| 7.C | Async cascade + transactional cutover + delete shell | 2–3 days |
 | **Total** | | **~3 weeks** |
 
 Parallelisable: B.1 and B.2 can run concurrently in separate
