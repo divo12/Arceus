@@ -493,11 +493,36 @@ DROP TABLE IF EXISTS trust_scores       CASCADE;
 -- policy_violations migrates to canonical schema/policy_violations.ts in B.5.
 ```
 
+### C.1 — Drop the `"company_pending"` sentinel
+
+The empty-snapshot `Company` shape carries `id: "company_pending"` so
+that `createEmptyCompanySnapshot()` can return a non-null `Company`
+without a real bootstrap. That magic string leaks into ~30 callers
+(`if (companyId === "company_pending") …`) and even the B.5
+`getActiveCompanyId()` seam encodes it (`return null` when the snapshot
+id matches the sentinel). Once the snapshot is no longer the source of
+truth, the sentinel is pure overhead.
+
+**Cleanup steps:**
+
+1. Change `getActiveCompanyId()` to read directly from the `companies`
+   table — `row exists` is the bootstrapped signal, no string compare.
+2. Make `Company` an optional field on `CompanySnapshot`
+   (`company?: Company`) — or drop the empty-snapshot shape entirely
+   now that no caller assembles a snapshot before bootstrap.
+3. Replace every `=== "company_pending"` comparison with a
+   `!companyId` / `!snapshot.company` check.
+4. Audit: `grep -r "company_pending" apps/ packages/` → 0 matches.
+
+Lands in the same PR as the shell deletion — both are mechanical and
+scoped to "make `getSnapshot` go away cleanly".
+
 Verify:
 - `grep -r "getSnapshot\|store\.js\|companyStatesTable\|beatRecordsTable" apps/api/` → 0 matches.
+- `grep -r "company_pending" apps/ packages/` → 0 matches.
 - Drift test passes.
 - `db:lint-migrations` clean.
-- Full dev-server boot exercises bootstrap → strategy → sprint → task → meeting → approval flow without a single `getSnapshot()` call.
+- Full dev-server boot exercises bootstrap → strategy → sprint → task → meeting → approval flow without a single `getSnapshot()` call or `company_pending` comparison.
 
 ---
 
