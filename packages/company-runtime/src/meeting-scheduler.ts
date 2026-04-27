@@ -24,7 +24,8 @@ import type {
 // ── Dependencies ───────────────────────────────────────────
 
 export interface MeetingSchedulerDeps {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   upsertMeeting: (meeting: Meeting) => Meeting;
   upsertMeetingSchedule: (schedule: MeetingSchedule) => MeetingSchedule;
   updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => MeetingSchedule | null;
@@ -80,7 +81,7 @@ export class MeetingScheduler {
     if (this.ticking) return; // guard re-entrant ticks
     this.ticking = true;
     try {
-      const snap = this.deps.getSnapshot();
+      const snap = await this.deps.getSnapshot();
       if (snap.company.id === "company_pending") return;
 
       // Auto-create daily sync schedule when 2+ agents exist

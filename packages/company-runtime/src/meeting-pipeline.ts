@@ -16,7 +16,8 @@ import type {
 // ── Dependencies ───────────────────────────────────────────
 
 export interface MeetingPipelineDeps {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   updateMeeting: (id: string, updater: (m: Meeting) => Meeting) => Meeting | null;
   flush: () => Promise<void>;
 
@@ -86,7 +87,7 @@ export class MeetingPipeline {
   async run(meetingId: string): Promise<void> {
     const startMs = Date.now();
 
-    const meeting = this.getMeeting(meetingId);
+    const meeting = await this.getMeeting(meetingId);
     if (!meeting) {
       console.warn(`[MEETING-PIPELINE] Meeting ${meetingId} not found`);
       return;
@@ -131,7 +132,7 @@ export class MeetingPipeline {
     const totalTokensUsed = this.deps.drainTokens?.(meetingId) ?? 0;
 
     // Phase 8: Look up skipCount from the meeting's schedule (meeting debt)
-    const snap = this.deps.getSnapshot();
+    const snap = await this.deps.getSnapshot();
     const schedule = meeting.scheduleId
       ? (snap.meetingSchedules ?? []).find((s) => s.id === meeting.scheduleId)
       : null;
@@ -167,7 +168,7 @@ export class MeetingPipeline {
     );
 
     // Phase 7: Notify escalation handler so it can re-escalate if still unresolved
-    const completedMeeting = this.getMeeting(meetingId);
+    const completedMeeting = await this.getMeeting(meetingId);
     if (completedMeeting?.type === "escalation" && this.deps.onEscalationComplete) {
       this.deps.onEscalationComplete(completedMeeting);
     }
@@ -177,7 +178,7 @@ export class MeetingPipeline {
 
   /** Collect contributions from all participant agents. */
   private async collect(meetingId: string): Promise<CollectResult> {
-    const meeting = this.getMeeting(meetingId);
+    const meeting = await this.getMeeting(meetingId);
     if (!meeting) return { contributionCount: 0 };
 
     if (this.deps.collectContributions) {
@@ -191,7 +192,7 @@ export class MeetingPipeline {
 
   /** Synthesize contributions — detect conflicts, blockers, highlights. */
   private async synthesize(meetingId: string): Promise<SynthesizeResult> {
-    const meeting = this.getMeeting(meetingId);
+    const meeting = await this.getMeeting(meetingId);
     if (!meeting) return { conflictCount: 0, blockerCount: 0 };
 
     if (this.deps.synthesizeMeeting) {
@@ -207,7 +208,7 @@ export class MeetingPipeline {
 
   /** Resolve conflicts and blockers — create task actions, escalations. */
   private async resolve(meetingId: string): Promise<ResolveResult> {
-    const meeting = this.getMeeting(meetingId);
+    const meeting = await this.getMeeting(meetingId);
     if (!meeting) return { decisionCount: 0, tasksCreated: 0, tasksModified: 0, escalationsCreated: 0 };
 
     // Step 1: LLM resolution decisions
@@ -229,7 +230,7 @@ export class MeetingPipeline {
 
   /** Produce daily sync brief for daily_sync meetings. */
   private async produceBrief(meetingId: string): Promise<void> {
-    const meeting = this.getMeeting(meetingId);
+    const meeting = await this.getMeeting(meetingId);
     if (!meeting || meeting.type !== "daily_sync") return;
     if (!this.deps.produceBrief) return;
 
@@ -238,7 +239,7 @@ export class MeetingPipeline {
 
   /** Learn — extract memories from meeting for hippocampus. */
   private async learn(meetingId: string): Promise<LearnResult> {
-    const meeting = this.getMeeting(meetingId);
+    const meeting = await this.getMeeting(meetingId);
     if (!meeting) return { memoriesExtracted: 0 };
 
     if (this.deps.extractMemories) {
@@ -251,8 +252,9 @@ export class MeetingPipeline {
 
   // ── Helpers ────────────────────────────────────────────
 
-  private getMeeting(meetingId: string): Meeting | undefined {
-    return this.deps.getSnapshot().meetings.find((m) => m.id === meetingId);
+  private async getMeeting(meetingId: string): Promise<Meeting | undefined> {
+    const snap = await this.deps.getSnapshot();
+    return snap.meetings.find((m) => m.id === meetingId);
   }
 
   private transition(meetingId: string, status: Meeting["status"]): void {

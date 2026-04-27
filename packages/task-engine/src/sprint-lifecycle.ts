@@ -13,7 +13,8 @@ export interface CreateSprintCallbacks {
 }
 
 export interface CheckSprintCompletionCallbacks {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   emitEmployeeActivity: (role: string, type: string, message: string, detail: { detail: Record<string, unknown>; taskId?: string | null }) => void;
   emitGraphDecision?: (sprintId: string, taskId: string | null, type: string, title: string, detail: string, role: string, confidence: number) => void;
   emitGraphNodeAdded?: (sprintId: string, task: Task) => void;
@@ -37,7 +38,8 @@ export interface CheckSprintCompletionCallbacks {
 }
 
 export interface FinalizeSprintCallbacks {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   stopLocalPreview: () => Promise<void>;
   emitEmployeeActivity: (role: string, type: string, message: string, detail: { detail: Record<string, unknown>; taskId?: string | null }) => void;
   updateSprint: (id: string, updater: (s: Sprint) => Sprint) => void;
@@ -118,7 +120,7 @@ export async function checkSprintCompletion(
 ): Promise<boolean> {
   if (guard.triggered) return false;
 
-  const snapshot = cb.getSnapshot();
+  const snapshot = await cb.getSnapshot();
   const currentSprintId = snapshot.company.currentSprintId;
   if (!currentSprintId) return false;
 
@@ -175,8 +177,11 @@ export async function checkSprintCompletion(
 
     const bugFields = cb.buildGateFailureBugFields(gateResult, currentSprintId);
     if (bugFields) {
+      // Reuse the snapshot we already fetched at the top of this function
+      // — `createWorkflowTask` only reads fields that are stable across the
+      // intervening operations (verification gate). One read per beat.
       const bugTask = createWorkflowTask(
-        cb.getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        snapshot, bugFields.kind, bugFields.assignedRole,
         bugFields.title, bugFields.description, bugFields.problemStatement,
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
@@ -214,7 +219,7 @@ export async function finalizeSprintCompletion(
   cb: FinalizeSprintCallbacks,
   sprintId: string,
 ): Promise<void> {
-  const snapshot = cb.getSnapshot();
+  const snapshot = await cb.getSnapshot();
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
 

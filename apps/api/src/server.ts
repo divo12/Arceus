@@ -64,6 +64,8 @@ import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";
 import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit-ledger.js";
 import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
+import { buildSnapshotView } from "./orchestration/snapshot-view.js";
+import { getActiveCompanyId } from "./persistence/active-company.js";
 import { runBeat } from "./orchestration/run-beat.js";
 import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
 import { serverConfig, orchestratorConfig } from "./config/index.js";
@@ -184,8 +186,20 @@ setReactiveEventEmitter((companyId, agentId, role, event) =>
 
 // ── Meeting Pipeline & Scheduler (Spec 18) ─────────────────
 
+/**
+ * Spec 31 Phase 7.C.b — package deps consume async getSnapshot. The wiring
+ * binds it to `buildSnapshotView` keyed off the active companyId from the
+ * seam helper. No active company → throw is the expected behavior because
+ * the meeting pipeline cannot operate before bootstrap.
+ */
+const getSnapshotForPackages = async () => {
+  const id = getActiveCompanyId();
+  if (!id) throw new Error("No active company; pipeline cannot read snapshot.");
+  return buildSnapshotView(id);
+};
+
 const meetingPipeline = new MeetingPipeline({
-  getSnapshot,
+  getSnapshot: getSnapshotForPackages,
   updateMeeting,
   flush,
 
@@ -363,7 +377,7 @@ const meetingPipeline = new MeetingPipeline({
 const meetingScheduler = new MeetingScheduler(
   { tickIntervalMs: 30_000, defaultDailySyncIntervalMs: 300_000 },
   {
-    getSnapshot,
+    getSnapshot: getSnapshotForPackages,
     upsertMeeting,
     upsertMeetingSchedule,
     updateMeetingSchedule,

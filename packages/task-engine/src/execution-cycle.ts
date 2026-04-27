@@ -5,7 +5,9 @@ import type { Task, Sprint, CompanySnapshot, ExecutionStatus } from "@arceus/con
 // ---------------------------------------------------------------------------
 
 export interface ExecutionCycleCallbacks {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async because the snapshot is now assembled
+   *  from canonical reads on demand, not held in memory. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   updateTask: (id: string, updater: (t: Task) => Task) => void;
   emitEmployeeActivity: (role: string, type: string, message: string, detail: { taskId?: string | null }) => void;
   recordMeeting: (params: {
@@ -80,7 +82,7 @@ export async function completeExecutionCycle(
   activeExecution: { reviewTaskId: string } | null,
   reason: string,
 ): Promise<void> {
-  const snapshot = cb.getSnapshot();
+  const snapshot = await cb.getSnapshot();
   const queuedNonCoreTaskCount = getQueuedNonCoreTaskCount(snapshot, coreTaskKinds);
 
   cb.emitEmployeeActivity(
