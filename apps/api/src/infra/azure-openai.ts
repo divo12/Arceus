@@ -311,7 +311,16 @@ export async function chatCompletionStream(
           "Content-Type": "application/json",
           "api-key": runtimeConfig.azureApiKey
         },
-        body: JSON.stringify({ messages, temperature: 0.7, stream: true })
+        // Spec 31 Phase 6 — request the trailing usage chunk so we can
+        // record cost_events. Without `include_usage:true`, Azure/OpenAI's
+        // SSE stream omits the final usage object and we can't tell how
+        // many tokens the call consumed.
+        body: JSON.stringify({
+          messages,
+          temperature: 0.7,
+          stream: true,
+          stream_options: { include_usage: true },
+        })
       });
 
       if (!response.ok) {
@@ -323,8 +332,6 @@ export async function chatCompletionStream(
         throw new Error("Azure OpenAI returned no stream body.");
       }
 
-      // For streaming, we can't read usage from the response (it's chunked).
-      // Audit a start event with latency-to-first-byte.
       const latencyMs = Math.round(performance.now() - start);
       audit({
         companyId: auditCtx?.companyId ?? "_system",
@@ -337,9 +344,87 @@ export async function chatCompletionStream(
         correlationId: auditCtx?.correlationId ?? null,
       });
 
-      return response.body;
+      // Tee the stream: the caller consumes one branch as raw bytes,
+      // we consume the other looking for the trailing `usage` chunk
+      // and fire recordLlmCost once we find it. The tee is fully
+      // backpressure-aware — caller's consumption rate isn't blocked
+      // by ours and vice versa.
+      const [forCaller, forUsageWatcher] = response.body.tee();
+      void watchForUsageAndRecord(forUsageWatcher, deployment, auditCtx).catch((err) => {
+        console.warn(`[stream-usage] watcher failed for ${deployment}:`, err);
+      });
+      return forCaller;
     },
     { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
   );
+}
+
+/**
+ * Drain a teed copy of the SSE byte stream, parse each `data: {...}`
+ * line, and fire `recordLlmCost` when we find the chunk that carries
+ * the `usage` object (the trailing chunk emitted by Azure/OpenAI when
+ * `stream_options.include_usage=true`).
+ *
+ * Tolerant to:
+ *   - Multi-line buffer splits (we accumulate until newline)
+ *   - The `data: [DONE]` sentinel (skipped, not parsed)
+ *   - Earlier chunks without `usage` (skipped silently)
+ */
+async function watchForUsageAndRecord(
+  stream: ReadableStream<Uint8Array>,
+  deployment: string,
+  auditCtx?: LlmAuditContext,
+): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let recorded = false;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE frames are newline-delimited. Split on `\n` and keep the
+      // trailing partial line in the buffer for the next iteration.
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "" || payload === "[DONE]") continue;
+
+        let parsed: { usage?: AzureOpenAIUsage } | undefined;
+        try {
+          parsed = JSON.parse(payload);
+        } catch {
+          continue; // partial chunk or malformed — skip
+        }
+
+        if (!recorded && parsed?.usage) {
+          recorded = true;
+          const promptTokens = parsed.usage.prompt_tokens ?? 0;
+          const completionTokens = parsed.usage.completion_tokens ?? 0;
+          accumulateBeatTokens(promptTokens + completionTokens);
+          void recordLlmCost({
+            provider: "azure",
+            model: deployment,
+            inputTokens: promptTokens,
+            outputTokens: completionTokens,
+            companyId: auditCtx?.companyId,
+            agentRole: auditCtx?.agentRole,
+            runId: auditCtx?.runId,
+            taskId: auditCtx?.taskId,
+          }).catch(() => { /* recordLlmCost already swallows + warns */ });
+          // Continue draining (we don't break) so the tee'd reader doesn't
+          // back-pressure the caller's branch.
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
