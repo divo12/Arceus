@@ -4,9 +4,9 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { applyStrategy } from "../persistence/store.js";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
+import { applyStrategyTx } from "../sprints/strategy.js";
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { audit } from "../observability/audit-ledger.js";
@@ -43,7 +43,16 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
   app.post("/api/strategy/approve", async (request, reply) => {
     try {
       const body = strategyOutputSchema.parse(request.body);
-      return applyStrategy(body);
+      // Spec 31 Phase 7.C.c-bis — applyStrategyTx is atomic; it either
+      // commits the entire org chart or rolls back. Surface a 409 if no
+      // company has been bootstrapped yet so the board can retry.
+      const companyId = getActiveCompanyId();
+      if (!companyId) {
+        reply.code(409);
+        return { error: "No active company to apply strategy to." };
+      }
+      await applyStrategyTx(companyId, body);
+      return await buildSnapshotView(companyId);
     } catch (error) {
       request.log?.error?.(error);
       reply.code(400);
@@ -56,7 +65,13 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
   app.post("/api/strategy/execute", async (request, reply) => {
     try {
       const body = strategyOutputSchema.parse(request.body);
-      const snapshot = applyStrategy(body);
+      const companyId = getActiveCompanyId();
+      if (!companyId) {
+        reply.code(409);
+        return { error: "No active company to apply strategy to." };
+      }
+      await applyStrategyTx(companyId, body);
+      const snapshot = await buildSnapshotView(companyId);
 
       heartbeatEngine.start();
       if (heartbeatConfig.meetingsEnabled) meetingScheduler.start();
@@ -99,7 +114,9 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       const strategy = await generateStrategy(snapshot);
       emitActivity("ceo", "transition", `Strategy ready: ${strategy.strategy_title}`);
 
-      snapshot = applyStrategy(strategy);
+      // Spec 31 Phase 7.C.c-bis — applyStrategyTx commits org chart atomically.
+      await applyStrategyTx(requireActiveCompanyId(), strategy);
+      snapshot = await buildSnapshotView(requireActiveCompanyId());
       emitActivity("system", "transition", `Strategy applied — ${snapshot.agents.length} agents, ${snapshot.tasks.length} tasks`);
 
       heartbeatEngine.start();

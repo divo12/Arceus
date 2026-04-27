@@ -4,20 +4,19 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { resetCompany, applyStrategy, clearPersistedStoreState } from "../persistence/store.js";
+import { resetCompany, clearPersistedStoreState } from "../persistence/store.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
-import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
-import { resetOrchestratorState, getExecutionStatus } from "../orchestration/state.js";
+import { resetCompanyTx } from "../companies/reset.js";
+import { bootstrapCompanyWithWorkspace } from "../orchestration/bootstrap.js";
+import { resetOrchestratorState } from "../orchestration/state.js";
 import { clearAllSessionContexts } from "../orchestration/session-context.js";
 import { audit } from "../observability/audit-ledger.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { resetOpencodeConnection, resetCeoSession } from "../infra/opencode.js";
-import { getDatabaseHealth, getDb, isDatabaseConfigured, trustScoresTable, policyViolationsTable } from "@arceus/db";
-import { inArray, eq } from "drizzle-orm";
+import { getDatabaseHealth } from "@arceus/db";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
 const bootstrapSchema = z.object({
@@ -62,13 +61,10 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
 
   app.delete("/api/company", async (request, reply) => {
     try {
-      // Spec 31 Phase 7.C.c — companyId + priorAgentIds resolved from
-      // canonical. The DELETE handler is the last reader of agents during
-      // teardown; canonical is the appropriate source.
+      // Spec 31 Phase 7.C.c-bis — DB cascade is now atomic via
+      // `resetCompanyTx`. Filesystem and in-memory cleanup happen
+      // outside the transaction (they're not DB ops).
       const companyId = getActiveCompanyId();
-      const priorAgentIds = companyId
-        ? (await agentsRepo.listAgentsByCompany(getDb(), companyId)).map((a) => a.id)
-        : [];
 
       await resetOrchestratorState();
       heartbeatEngine.stop();
@@ -86,13 +82,9 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
         request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
       }
 
-      if (companyId && isDatabaseConfigured()) {
+      if (companyId) {
         try {
-          const db = getDb();
-          await db.delete(policyViolationsTable).where(eq(policyViolationsTable.companyId, companyId));
-          if (priorAgentIds.length > 0) {
-            await db.delete(trustScoresTable).where(inArray(trustScoresTable.agentId, priorAgentIds));
-          }
+          await resetCompanyTx(companyId);
         } catch (err) {
           request.log?.warn?.({ err }, "Cascade cleanup of governance rows failed");
         }
