@@ -3,6 +3,7 @@ import zodToJsonSchema from "zod-to-json-schema";
 import { runtimeConfig, ensureDeployment } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { audit } from "../observability/audit-ledger.js";
+import { recordLlmCost } from "../observability/cost-recorder.js";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -13,6 +14,15 @@ export type LlmAuditContext = {
   correlationId?: string;
   /** Caller label for the summary, e.g. "ceo_classification" */
   label?: string;
+  /**
+   * Spec 31 Phase 6 — cost-event routing. When set, the cost_events row
+   * inserted by `auditLlmCall` populates these FKs so dashboards can
+   * group spend by beat or by task. Both accept friendly ids (e.g.
+   * "beat_abc...", "tsk_xyz...") — they're hashed to the matching DB
+   * uuids via the same uuidv5 boundary used elsewhere.
+   */
+  runId?: string;
+  taskId?: string;
 };
 
 /** Build the Azure OpenAI chat completions URL for a given deployment. */
@@ -101,6 +111,21 @@ function auditLlmCall(
     },
     correlationId: ctx?.correlationId ?? null,
   });
+
+  // Spec 31 Phase 6 — durable cost mirror. Single fan-out point covers
+  // every structuredCompletion + chatCompletion caller (the audit log
+  // already had to be uniform). Skipped for system-scoped calls where
+  // ctx.companyId is missing/_system (recordLlmCost no-ops in that case).
+  void recordLlmCost({
+    provider: "azure",
+    model: deployment,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    companyId: ctx?.companyId,
+    agentRole: ctx?.agentRole,
+    runId: ctx?.runId,
+    taskId: ctx?.taskId,
+  }).catch(() => { /* recordLlmCost already swallows + warns */ });
 }
 
 /** Send a chat completion request to Azure OpenAI with resilience and audit logging. */
