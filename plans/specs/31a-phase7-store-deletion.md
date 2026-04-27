@@ -313,18 +313,38 @@ prompts from snapshot data.
 ~150 LOC across 5-6 files. Smoke: prompts still render, audit log
 still records.
 
-### Slice B.2 — `meetings/`, `sprints/`, `tasks/` helpers *(low risk, medium effort)*
+### Slice B.2 — `meetings/`, `tasks/helpers.ts` *(low risk, medium effort)*
 
-Leaf logic that the route handlers depend on. ~10 files.
+Leaf logic that the route handlers depend on.
 
 | Subdir | Files | Migration |
 |---|---|---|
-| `meetings/` | `effects.ts`, `recording.ts` | `meetingsRepo.findByBeatId`, `findById`. |
-| `sprints/` | `lifecycle.ts`, `proposals.ts`, `review.ts` (read-side) | `sprintsRepo.getActive`, `findById`. Defer `review.ts` write path to B.4. |
-| `tasks/` | `helpers.ts`, `mutations.ts` (read-side) | `tasksRepo.findById`, `listByCompany`, `listByAgent`. Defer mutator replacement to B.4. |
+| `meetings/` | `effects.ts`, `recording.ts` | All snapshot reads → `agentsRepo.findAgentByRole`, `tasksRepo.findByIdHydrated`, `tasksRepo.listByCompanyHydrated`. Functions become async; pre-resolve agents in `applyMeetingEffects` so per-mod loop stays sync. |
+| `tasks/` | `helpers.ts` | `setTaskVerified` takes `companyId` param. |
 
 ~400 LOC. Watch for `snapshot.tasks.filter(t => t.assignedAgentId === id)`
 patterns — add `tasksRepo.listByAgent(agentId)` if missing.
+
+**Discovered during execution: `sprints/*` and `tasks/mutations.ts`
+defer to B.4.** Originally scoped here; the migration cannot split
+read paths from write paths cleanly because:
+
+- `sprints/lifecycle.ts`, `sprints/proposals.ts`, `sprints/review.ts`
+  pass `snapshot` to `createWorkflowTask` (in `@arceus/task-engine`).
+  That API is a hard fixed-point — until task-engine is restructured
+  to accept `(companyId, repos)` instead of a full snapshot, those
+  reads stay snapshot-bound. Bundling these files with their write
+  paths in B.4 avoids partial migrations.
+- `tasks/mutations.ts` is the same shape — read + mutate interleaved.
+  Migrating just the read side leaves the file half-migrated.
+
+`tasks/helpers.ts` migrates here because it's read-only and doesn't
+touch task-engine.
+
+The sprints/ + mutations.ts work moves into B.4 — that slice grows
+from "write paths only" to "write paths + their interleaved reads".
+The blast-radius difference is small because the writes already
+need to migrate; the reads ride along.
 
 ### Slice B.3 — `heartbeats/`, `orchestration/` *(medium risk, hot path)*
 
@@ -354,10 +374,17 @@ per beat, not once per agent.
 ~600 LOC. Smoke: run a full beat, verify task claim → execute →
 complete.
 
-### Slice B.4 — Write paths (mutators) *(medium risk, ~3 days)*
+### Slice B.4 — Write paths (mutators) + the sprints/tasks read+write tangles *(medium risk, ~4 days)*
 
-Replace store mutators with repo calls. Cuts across all
-directories — ~30 imports.
+**Originally:** "replace store mutators with repo calls — ~30 imports."
+**Adjusted during B.2 execution:** also absorbs the read paths in
+`sprints/lifecycle.ts`, `sprints/proposals.ts`, `sprints/review.ts`,
+and `tasks/mutations.ts` because those files interleave reads with
+writes and pass `snapshot` to `createWorkflowTask` (in
+`@arceus/task-engine`). Migrating just the reads leaves them
+half-migrated; bundling makes the per-file diff coherent.
+
+Mutator replacement table:
 
 | Mutator | Replacement | Callers |
 |---|---|---|
@@ -371,9 +398,26 @@ directories — ~30 imports.
 | `updateTaskProgress`, `getTaskProgress` | not in canonical — keep in-memory `taskProgressMap` for now, or add `task_progress` schema if persistence matters | 2 files |
 | `writeArtifactSync` | already canonical (`persistRuntimeArtifact`) — just inline | 1 file |
 
+Absorbed from B.2 (sprints + mutations):
+
+| File | Why deferred from B.2 | B.4 plan |
+|---|---|---|
+| `sprints/lifecycle.ts` (4 reads) | `checkSprintCompletion` + `finalizeSprintCompletion` read+update interleaved; `tagCurrentSprintSnapshot` passes the full snapshot to `workspaceManager.tagSprint`. | Migrate alongside `updateSprint` mutator replacement. The `tagSprint` snapshot pass-through stays for now — workspace manager is a B.5 concern. |
+| `sprints/proposals.ts` (3 reads) | `createSprintWithTasks` + `beginSprintExecution` both call `createWorkflowTask(snapshot, ...)` and `createSprintRecord(snapshot, ...)`. | Either restructure those task-engine APIs to take `(companyId, repos)`, or build a thin "snapshot view" adapter that reads canonical and assembles only what task-engine needs. Recommended: adapter (smaller blast radius). |
+| `sprints/review.ts` (9 reads) | Many `createWorkflowTask(getSnapshot(), ...)` calls for bug-fix tasks, plus `snapshot.agents.map(...)` for role enumeration. | Same adapter pattern. Heaviest file in this slice. |
+| `tasks/mutations.ts` (7 reads) | `processTaskCompletion` reads `prev` from snapshot.tasks then mutates — classic read-mutate. | Migrate as part of `upsertTask`/`updateTask` replacement. The `prev` lookup goes to `tasksRepo.findByIdHydrated`. |
+
+**Decision required at start of B.4:** restructure
+`@arceus/task-engine` to accept `(companyId, repos)` instead of
+`snapshot`, OR build a `buildSnapshotView(companyId)` adapter that
+fetches the entities task-engine needs and assembles a partial
+snapshot. The adapter is faster to ship; the restructure is the
+right long-term shape. Pick one and document.
+
 After this slice: every state-changing operation goes through repos
 (single-table) or domain workflows (multi-table with `db.transaction`).
 The store's `replaceState()` and `dirty` flag have no callers.
+`sprints/*` and `tasks/mutations.ts` no longer touch `getSnapshot()`.
 
 ### Slice B.5 — `routes/` (HTTP + internal-MCP) *(high risk, biggest surface)*
 
@@ -506,9 +550,9 @@ Realistic, single engineer:
 |---|---|---|
 | 7.A | Foundation (services + unmigrated schemas) | 2-3 days |
 | 7.B | B.1 memory/prompts/observability | 1 day |
-| 7.B | B.2 helpers (meetings/sprints/tasks) | 2 days |
+| 7.B | B.2 helpers (meetings/, tasks/helpers.ts) | 1 day |
 | 7.B | B.3 heartbeats + orchestration | 3-4 days |
-| 7.B | B.4 write paths (mutators + transactions) | 3 days |
+| 7.B | B.4 write paths + sprints/* + tasks/mutations.ts (absorbed from B.2) | 4 days |
 | 7.B | B.5 routes + companyContext | 4-5 days |
 | 7.C | Delete shell + drop tables | half day |
 | **Total** | | **~3 weeks** |
