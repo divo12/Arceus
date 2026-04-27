@@ -14,6 +14,14 @@ export const sprintSnapshots = pgTable(
     bundleKey: text("bundle_key"),
     bundleSha256: text("bundle_sha256"),
     bundleBytes: bigint("bundle_bytes", { mode: "number" }),
+    /**
+     * Spec 31 Phase 7.B.7 — frozen-at-tag CompanySnapshot blob. Restored
+     * verbatim by `workspaceManager.rollbackToSprint` so a rollback
+     * recovers the *state as of sprint completion*, not the current
+     * state of FK-linked rows. Untyped on purpose to avoid a circular
+     * @arceus/contracts dependency in @arceus/db.
+     */
+    snapshotData: jsonb("snapshot_data").$type<Record<string, unknown>>().notNull().default({}),
     fileManifest: jsonb("file_manifest").$type<Array<{ path: string; sha256: string; bytes: number }>>().notNull().default([]),
     status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -30,6 +30,7 @@ export { policyViolations } from "./policy_violations.js";
 export { sessionBindings } from "./session_bindings.js";
 
 export { skillArtifacts } from "./skill_artifacts.js";
+export { skillMutations } from "./skill_mutations.js";
 export { skillRevisions } from "./skill_revisions.js";
 export { skillEvolveJobs } from "./skill_evolve_jobs.js";
 export { skillUsageEvents } from "./skill_usage_events.js";

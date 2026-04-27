@@ -2,7 +2,7 @@ import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CompanySnapshot, ExportResult, SprintSnapshot, WorkspaceFileManifestEntry, WorkspaceInfo } from "@arceus/contracts";
-import { getDb, isDatabaseConfigured, sprintSnapshotsTable, workspaces as workspacesTable } from "@arceus/db";
+import { getDb, isDatabaseConfigured, sprintSnapshots as sprintSnapshotsTable, workspaces as workspacesTable } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { eq } from "drizzle-orm";
@@ -134,10 +134,15 @@ function mapWorkspaceRecord(
   };
 }
 
-function mapSprintSnapshotRecord(record: typeof sprintSnapshotsTable.$inferSelect): SprintSnapshot {
+function mapSprintSnapshotRecord(
+  record: typeof sprintSnapshotsTable.$inferSelect,
+  friendlyCompanyId: string,
+): SprintSnapshot {
+  // Spec 31 Phase 7.B.7 — surface the friendly snapshot id /
+  // companyId; the canonical row stores uuid forms.
   return {
-    id: record.id,
-    companyId: record.companyId,
+    id: `snapshot_${friendlyCompanyId}_${record.sprintNumber}`,
+    companyId: friendlyCompanyId,
     sprintNumber: record.sprintNumber,
     gitTag: record.gitTag,
     bundleKey: record.bundleKey,
@@ -403,11 +408,15 @@ export class WorkspaceManager {
     }
 
     try {
-      const rows = await getDb().select().from(sprintSnapshotsTable);
+      // Spec 31 Phase 7.B.7 — query by indexed company_id uuid FK.
+      const dbCompanyId = companiesRepo.toDbId(companyId);
+      const rows = await getDb()
+        .select()
+        .from(sprintSnapshotsTable)
+        .where(eq(sprintSnapshotsTable.companyId, dbCompanyId));
       return rows
-        .filter((row) => row.companyId === companyId)
         .sort((left, right) => right.sprintNumber - left.sprintNumber)
-        .map(mapSprintSnapshotRecord);
+        .map((row) => mapSprintSnapshotRecord(row, companyId));
     } catch {
       return fallbackSprintSnapshots.get(companyId) ?? [];
     }
@@ -444,17 +453,25 @@ export class WorkspaceManager {
     }
 
     if (isDatabaseConfigured()) {
+      // Spec 31 Phase 7.B.7 — canonical sprint_snapshots uses uuid PK
+      // / FK; map the friendly snapshot id (`snapshot_<companyId>_<n>`)
+      // and friendly companyId to deterministic uuids.
+      const dbId = friendlyToUuid(`snapshot_${companyId}_${sprintNumber}`);
+      const dbCompanyId = companiesRepo.toDbId(companyId);
       await getDb()
         .insert(sprintSnapshotsTable)
         .values({
-          id: `snapshot_${companyId}_${sprintNumber}`,
-          companyId,
+          id: dbId,
+          companyId: dbCompanyId,
           sprintNumber,
           gitTag: tagName,
           bundleKey,
           bundleSha256,
           bundleBytes,
-          snapshotData: snapshot,
+          // Cast through Record<string, unknown> — the schema is
+          // declared untyped to avoid an @arceus/contracts circular
+          // dep in @arceus/db. The runtime payload is a CompanySnapshot.
+          snapshotData: snapshot as unknown as Record<string, unknown>,
           fileManifest: manifest,
           status: "active",
           createdAt: new Date(),
@@ -466,7 +483,7 @@ export class WorkspaceManager {
             bundleKey,
             bundleSha256,
             bundleBytes,
-            snapshotData: snapshot,
+            snapshotData: snapshot as unknown as Record<string, unknown>,
             fileManifest: manifest,
             status: "active",
           },

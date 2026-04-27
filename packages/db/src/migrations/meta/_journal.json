@@ -120,6 +120,20 @@
       "when": 1777380360000,
       "tag": "0017_phase7_drop_legacy_runtime_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1777380480000,
+      "tag": "0018_phase7_sprint_snapshots_data_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777380600000,
+      "tag": "0019_phase7_skill_mutations_table",
+      "breakpoints": true
     }
   ]
 }
