@@ -570,6 +570,59 @@ every `ArceusEvent` to `public.activity_log`.
      volume (one per LLM call) and latency profile (sub-millisecond)
      don't need the multi-sink fan-out.
 
+   #### Status as of f1b3254 (Phase 6 first half landed)
+
+   ✅ **Implemented for the Azure-direct path**, covering all
+   `structuredCompletion` + `chatCompletion` callers via a single
+   instrumentation point in `auditLlmCall` (apps/api/src/infra/azure-openai.ts).
+   The new `apps/api/src/observability/cost-recorder.ts` carries the
+   per-model pricing table and the agent-FK resolver. Smoke verified:
+   row inserts with agent_id resolved, system-scoped calls silently
+   no-op, sub-cent calls clamp to 0.
+
+   ⏳ **Two emit paths still uninstrumented** (deliberately deferred —
+   each is a self-contained follow-up, not a blocker):
+
+   - **OpenCode-SDK callers** — `runBeat` (`apps/api/src/orchestration/run-beat.ts:157`),
+     `runPromptText` (`apps/api/src/prompts/llm.ts:259`), and the
+     internal-agent driver (`apps/api/src/prompts/internal-agent.ts:74`)
+     all reach the LLM through `opencode.client.session.prompt(...)`.
+     The `@opencode-ai/sdk` response shape doesn't currently surface
+     per-call token usage in a way our process can read — `totalTokens=0`
+     in `beat.completed` events confirms the gap (the existing
+     `drainBeatTokenAccumulator` only catches structuredCompletion
+     tokens).
+
+     **Two ways forward, pick one when this is picked up:**
+     1. *Subscribe to OpenCode's session-level events* — the SDK exposes
+        a `session.events` SSE stream that includes `message.completed`
+        with usage. Plumb into `prompts/llm.ts:registerPromptCompletion`
+        so the resolve handler captures usage and calls `recordLlmCost`.
+     2. *Wait for a typed usage field on `session.prompt` response* —
+        upstream is moving in this direction (see anomalyco/opencode
+        roadmap). When it lands, wire one `recordLlmCost` call after
+        each `await opencode.client.session.prompt({...})`.
+
+     Until either ships, OpenCode-driven beats produce no `cost_events`
+     rows — visible as zero `cost_cents` for `provider='opencode'` in
+     dashboards. **Not a correctness gap** (the system still works);
+     **a visibility gap** for the bulk of LLM spend.
+
+   - **`chatCompletionStream`** (`apps/api/src/infra/azure-openai.ts:272`) —
+     streaming responses don't include a `usage` object in the SSE byte
+     stream by default. Azure OpenAI does emit a final `usage` chunk
+     when `stream_options.include_usage=true` is set on the request;
+     the streaming caller would need to (a) opt-in to that flag, (b)
+     parse the trailing chunk, and (c) call `recordLlmCost` from there.
+     Currently used by the `/api/chat/ceo/stream` SSE endpoint — low
+     volume relative to the structured-output path, so deferring is
+     cheap.
+
+   **When to pick this up:** after Phase 7 cleanup (so we're not
+   instrumenting code paths that are about to be deleted), or earlier
+   if dashboards start flagging suspiciously low spend on roles that
+   run primarily through OpenCode (developer, tester).
+
 2. **Activity log via a spec-32 sink** (Option A):
    - Add `apps/api/src/observability/activity-log-sink.ts` implementing
      the `EventSink` interface from `@arceus/contracts/observability`.
