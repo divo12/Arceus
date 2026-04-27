@@ -2,7 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { getAgentByRole, uniqueStrings, MAX_INCOMING_ARTIFACT_IDS } from "@arceus/task-engine";
-import { getSnapshot, updateTask, writeArtifactSync } from "../persistence/store.js";
+import { updateTask, writeArtifactSync } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import {
@@ -43,7 +45,14 @@ export function addArtifact(agent: string, kind: Artifact["kind"], title: string
     createdAt: new Date().toISOString(),
   };
   artifacts.push(artifact);
-  void persistRuntimeArtifact(getSnapshot().company.id, artifact);
+  // Spec 31 Phase 7.C.c — companyId via the seam helper. addArtifact stays
+  // sync because callers from inside synchronous paths (workflow renderers,
+  // beat tooling) rely on the immediate in-memory append. The persist call
+  // is fire-and-forget either way.
+  const companyIdForPersist = getActiveCompanyId();
+  if (companyIdForPersist) {
+    void persistRuntimeArtifact(companyIdForPersist, artifact);
+  }
   // Auto-write artifact to workspace filesystem
   void writeArtifactToDisk(artifact).catch(() => {});
   return artifact;
@@ -118,8 +127,9 @@ export async function writeArtifactToWorkspace(
 
 /** Commit and push the product workspace via git; logs warnings on failure. */
 export async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, message: string) {
-  const companyId = getSnapshot().company.id;
-  if (!companyId || companyId === "company_pending") {
+  // Spec 31 Phase 7.C.c — companyId via the seam helper.
+  const companyId = getActiveCompanyId();
+  if (!companyId) {
     return;
   }
 
@@ -282,8 +292,14 @@ export function appendTaskCommand(taskId: string, command: string) {
  * Transition a task's status with full side-effects: graph instrumentation,
  * audit logging, escalation on block, downstream dependency promotion,
  * hippocampus memory, and skill outcome tracking.
+ *
+ * Spec 31 Phase 7.C.c — async because the downstream-promotion and
+ * terminal-status branches read from canonical via buildSnapshotView.
+ * Callers awaiting setTaskStatus are guaranteed graph + audit emits and
+ * the in-memory updateTask have completed; the hippocampus / skill /
+ * pattern paths remain fire-and-forget Promise chains as before.
  */
-export function setTaskStatus(taskId: string, status: Task["status"], feedback?: string | null) {
+export async function setTaskStatus(taskId: string, status: Task["status"], feedback?: string | null): Promise<void> {
   // Spec 31 Phase 7.B.4.2 — capture prev via updater callback closure
   // instead of a separate snapshot.tasks.find() pre-read. Wrap in an object
   // so TS doesn't narrow the binding to its initial null value.
@@ -310,7 +326,7 @@ export function setTaskStatus(taskId: string, status: Task["status"], feedback?:
 
   // Audit task transitions
   audit({
-    companyId: prev?.companyId ?? getSnapshot().company.id,
+    companyId: prev?.companyId ?? getActiveCompanyId() ?? "company_pending",
     category: "task_lifecycle",
     severity: status === "failed" ? "warn" : "info",
     eventType: `task_${status}`,
@@ -325,9 +341,12 @@ export function setTaskStatus(taskId: string, status: Task["status"], feedback?:
     triggerEscalationMeeting(taskId, feedback ?? `Task "${prev?.title ?? taskId}" is blocked`);
   }
 
-  // Auto-promote downstream tasks when a task completes
+  // Auto-promote downstream tasks when a task completes.
+  // Spec 31 Phase 7.C.c — read from canonical instead of in-memory snapshot.
   if (status === "completed") {
-    const snapshot = getSnapshot();
+    const companyId = prev?.companyId ?? getActiveCompanyId();
+    if (!companyId) return; // No company → no downstream graph to promote.
+    const snapshot = await buildSnapshotView(companyId);
     const completedTask = snapshot.tasks.find((t) => t.id === taskId);
 
     // Propagate artifacts from the completed task to its direct children
@@ -378,9 +397,13 @@ export function setTaskStatus(taskId: string, status: Task["status"], feedback?:
     }
   }
 
-  // Hippocampus: store memory + update priming on terminal status
+  // Hippocampus: store memory + update priming on terminal status.
+  // Spec 31 Phase 7.C.c — canonical-backed snapshot for the terminal-status
+  // side effects. Same companyId resolution as the completion branch above.
   if (["completed", "failed", "cancelled"].includes(status)) {
-    const snapshot = getSnapshot();
+    const companyId = prev?.companyId ?? getActiveCompanyId();
+    if (!companyId) return;
+    const snapshot = await buildSnapshotView(companyId);
     const task = snapshot.tasks.find((t) => t.id === taskId);
     if (task) {
       const agent = getAgentByRole(snapshot, task.assignedRole);

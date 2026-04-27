@@ -4,7 +4,10 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getSnapshot, resetCompany, applyStrategy, clearPersistedStoreState } from "../persistence/store.js";
+import { resetCompany, applyStrategy, clearPersistedStoreState } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import { resetOrchestratorState, getExecutionStatus } from "../orchestration/state.js";
 import { clearAllSessionContexts } from "../orchestration/session-context.js";
@@ -32,14 +35,18 @@ export interface CompanyRouteDeps {
 export default async function companyRoutes(app: FastifyInstance, opts: CompanyRouteDeps) {
   const { heartbeatEngine, meetingScheduler } = opts;
 
-  // Spec 31 Phase 7.B.5 — /api/company intentionally still returns the
-  // full in-memory snapshot. Frontend consumes the entire CompanySnapshot
-  // shape (idea, strategy, hierarchy, memories, meetings, sessions, …)
-  // which `buildSnapshotView` does not yet populate. Migrating this
-  // endpoint waits for 7.C, when the snapshot is fully assembled from
-  // canonical reads on demand.
+  // Spec 31 Phase 7.C.c — buildSnapshotView now assembles the full
+  // CompanySnapshot from canonical (idea, strategy, hierarchy, memories,
+  // meetings, schedules, chatMessages all populated). When no company is
+  // bootstrapped yet we return the empty snapshot so the dashboard can
+  // render its pre-bootstrap state.
   app.get("/api/company", async () => {
-    return getSnapshot();
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
+      const { createEmptyCompanySnapshot } = await import("@arceus/company-runtime");
+      return createEmptyCompanySnapshot();
+    }
+    return buildSnapshotView(companyId);
   });
 
   app.post("/api/company/bootstrap", async (request, reply) => {
@@ -55,20 +62,23 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
 
   app.delete("/api/company", async (request, reply) => {
     try {
-      const snap = getSnapshot();
-      const companyId = snap.company.id;
-      const priorAgentIds = snap.agents.map((a) => a.id);
+      // Spec 31 Phase 7.C.c — companyId + priorAgentIds resolved from
+      // canonical. The DELETE handler is the last reader of agents during
+      // teardown; canonical is the appropriate source.
+      const companyId = getActiveCompanyId();
+      const priorAgentIds = companyId
+        ? (await agentsRepo.listAgentsByCompany(getDb(), companyId)).map((a) => a.id)
+        : [];
 
       await resetOrchestratorState();
       heartbeatEngine.stop();
       heartbeatEngine.reset();
       meetingScheduler.stop();
-      // Always clean the workspace — after a server restart the companyId
-      // reverts to "company_pending" but stale files from the previous run
-      // remain on disk.
-      const archiveResult = await workspaceManager.archive(companyId);
+      // Always clean the workspace — after a server restart the company
+      // is unbootstrapped but stale files from the previous run remain.
+      const archiveResult = await workspaceManager.archive(companyId ?? "company_pending");
       const warnings = archiveResult.warnings;
-      if (companyId !== "company_pending") {
+      if (companyId) {
         await clearPersistedStoreState(companyId);
         await deletePersistedArtifacts(companyId);
       }
@@ -76,7 +86,7 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
         request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
       }
 
-      if (companyId !== "company_pending" && isDatabaseConfigured()) {
+      if (companyId && isDatabaseConfigured()) {
         try {
           const db = getDb();
           await db.delete(policyViolationsTable).where(eq(policyViolationsTable.companyId, companyId));

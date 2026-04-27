@@ -3,12 +3,33 @@
  * Routes for the employee/agent directory, memories, and activity stream.
  */
 import type { FastifyInstance } from "fastify";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getAgentSessions } from "../orchestration/state.js";
-import { getArtifacts } from "../orchestration/state.js";
-import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
-import { getEmployeeActivityLog, resetEmployeeActivityLog, streamEmployeeActivity } from "../observability/activity.js";
+import { getEmployeeActivityLog, streamEmployeeActivity } from "../observability/activity.js";
 import { ROLE_DEPLOYMENT_MODEL } from "@arceus/company-runtime";
+
+interface LiveSessionState {
+  sessionId: string;
+  status: string;
+  lastEventAt: string | null;
+  lastEventType: string | null;
+  lastEventSummary: string | null;
+  lastToolName: string | null;
+  lastToolStatus: "invoked" | "completed" | null;
+  lastToolAt: string | null;
+  lastProgressAt: string | null;
+  lastWorkspaceChangeAt: string | null;
+  awaiting: string | null;
+  activeTaskId: string | null;
+  promptStartedAt: string | null;
+  promptCompletedAt: string | null;
+  eventCount: number;
+  toolInvocationCount: number;
+  fileEditCount: number;
+  shellCommandCount: number;
+  stallReason: string | null;
+}
 
 export default async function agentsRoutes(app: FastifyInstance) {
   app.get("/api/employees", async () => {
@@ -16,7 +37,8 @@ export default async function agentsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/employee-memories", async () => {
-    return getEmployeeDirectory().map((employee) => ({
+    const directory = await getEmployeeDirectory();
+    return directory.map((employee) => ({
       id: employee.id,
       name: employee.name,
       role: employee.role,
@@ -44,39 +66,26 @@ export default async function agentsRoutes(app: FastifyInstance) {
   });
 }
 
-// Spec 31 Phase 7.B.5 — agents.routes intentionally still reads the
-// in-memory snapshot. The /api/employees + /api/employee-memories shape
-// pulls `agents`, `sessions`, and `memories`, none of which
-// `buildSnapshotView` currently populates. Migrating waits for 7.C, when
-// the snapshot view assembles all five missing field families from
-// canonical (agents already canonical; sessions via session_bindings;
-// memories via memory_summaries).
-function getEmployeeDirectory() {
-  const snapshot = getSnapshot();
-  const liveSessions = getAgentSessions() as Record<string, {
-    sessionId: string;
-    status: string;
-    lastEventAt: string | null;
-    lastEventType: string | null;
-    lastEventSummary: string | null;
-    lastToolName: string | null;
-    lastToolStatus: "invoked" | "completed" | null;
-    lastToolAt: string | null;
-    lastProgressAt: string | null;
-    lastWorkspaceChangeAt: string | null;
-    awaiting: string | null;
-    activeTaskId: string | null;
-    promptStartedAt: string | null;
-    promptCompletedAt: string | null;
-    eventCount: number;
-    toolInvocationCount: number;
-    fileEditCount: number;
-    shellCommandCount: number;
-    stallReason: string | null;
-  }>;
+/**
+ * Build the employee directory from canonical (agents + memories) merged
+ * with the live orchestration session state.
+ *
+ * Spec 31 Phase 7.C.c — agents + memories now come from
+ * `buildSnapshotView`, which populates them via canonical repos. The
+ * `snapshot.sessions` field stays empty by design — session bindings are
+ * a per-beat surface looked up at point of use, not part of the snapshot
+ * shape. The dashboard reads runtime session info from `getAgentSessions`
+ * (the in-memory orchestration state map) which is updated by the
+ * heartbeat lifecycle.
+ */
+async function getEmployeeDirectory() {
+  const companyId = getActiveCompanyId();
+  if (!companyId) return [];
+
+  const snapshot = await buildSnapshotView(companyId);
+  const liveSessions = getAgentSessions() as Record<string, LiveSessionState>;
 
   return snapshot.agents.map((agent) => {
-    const persistedSession = snapshot.sessions.find((session) => session.agentId === agent.id) ?? null;
     const liveSession = liveSessions[agent.role];
 
     return {
@@ -87,31 +96,31 @@ function getEmployeeDirectory() {
       status: agent.status,
       profile: agent.profile,
       memory: snapshot.memories.find((memory) => memory.agentId === agent.id) ?? null,
-      session: !persistedSession && !liveSession
+      session: !liveSession
         ? null
         : {
-            id: persistedSession?.id ?? agent.sessionBindingId,
-            runtimeStatus: liveSession?.status ?? persistedSession?.runtimeStatus ?? "idle",
-            model: persistedSession?.model ?? ROLE_DEPLOYMENT_MODEL[agent.role] ?? "azure/worker-deployment",
-            lastSeenAt: liveSession?.lastEventAt ?? persistedSession?.lastSeenAt ?? new Date().toISOString(),
-            sessionId: liveSession?.sessionId ?? persistedSession?.sessionId ?? null,
-            lastEventAt: liveSession?.lastEventAt ?? null,
-            lastEventType: liveSession?.lastEventType ?? null,
-            lastEventSummary: liveSession?.lastEventSummary ?? null,
-            lastToolName: liveSession?.lastToolName ?? null,
-            lastToolStatus: liveSession?.lastToolStatus ?? null,
-            lastToolAt: liveSession?.lastToolAt ?? null,
-            lastProgressAt: liveSession?.lastProgressAt ?? null,
-            lastWorkspaceChangeAt: liveSession?.lastWorkspaceChangeAt ?? null,
-            awaiting: liveSession?.awaiting ?? null,
-            activeTaskId: liveSession?.activeTaskId ?? null,
-            promptStartedAt: liveSession?.promptStartedAt ?? null,
-            promptCompletedAt: liveSession?.promptCompletedAt ?? null,
-            eventCount: liveSession?.eventCount ?? 0,
-            toolInvocationCount: liveSession?.toolInvocationCount ?? 0,
-            fileEditCount: liveSession?.fileEditCount ?? 0,
-            shellCommandCount: liveSession?.shellCommandCount ?? 0,
-            stallReason: liveSession?.stallReason ?? null,
+            id: agent.sessionBindingId,
+            runtimeStatus: liveSession.status ?? "idle",
+            model: ROLE_DEPLOYMENT_MODEL[agent.role] ?? "azure/worker-deployment",
+            lastSeenAt: liveSession.lastEventAt ?? new Date().toISOString(),
+            sessionId: liveSession.sessionId ?? null,
+            lastEventAt: liveSession.lastEventAt ?? null,
+            lastEventType: liveSession.lastEventType ?? null,
+            lastEventSummary: liveSession.lastEventSummary ?? null,
+            lastToolName: liveSession.lastToolName ?? null,
+            lastToolStatus: liveSession.lastToolStatus ?? null,
+            lastToolAt: liveSession.lastToolAt ?? null,
+            lastProgressAt: liveSession.lastProgressAt ?? null,
+            lastWorkspaceChangeAt: liveSession.lastWorkspaceChangeAt ?? null,
+            awaiting: liveSession.awaiting ?? null,
+            activeTaskId: liveSession.activeTaskId ?? null,
+            promptStartedAt: liveSession.promptStartedAt ?? null,
+            promptCompletedAt: liveSession.promptCompletedAt ?? null,
+            eventCount: liveSession.eventCount ?? 0,
+            toolInvocationCount: liveSession.toolInvocationCount ?? 0,
+            fileEditCount: liveSession.fileEditCount ?? 0,
+            shellCommandCount: liveSession.shellCommandCount ?? 0,
+            stallReason: liveSession.stallReason ?? null,
           },
     };
   });

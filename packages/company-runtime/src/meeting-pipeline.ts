@@ -40,7 +40,8 @@ export interface MeetingPipelineDeps {
   extractMemories?: (meeting: Meeting) => Promise<number>;
 
   /** Phase 7: Called after an escalation meeting completes so the caller can re-escalate if unresolved. */
-  onEscalationComplete?: (meeting: Meeting) => void;
+  /** Spec 31 Phase 7.C.c — async to read from canonical. */
+  onEscalationComplete?: (meeting: Meeting) => Promise<void> | void;
 
   /** Phase 8: Start token accumulator for a meeting pipeline run. */
   startTokenTracking?: (meetingId: string) => void;
@@ -170,7 +171,7 @@ export class MeetingPipeline {
     // Phase 7: Notify escalation handler so it can re-escalate if still unresolved
     const completedMeeting = await this.getMeeting(meetingId);
     if (completedMeeting?.type === "escalation" && this.deps.onEscalationComplete) {
-      this.deps.onEscalationComplete(completedMeeting);
+      await this.deps.onEscalationComplete(completedMeeting);
     }
   }
 

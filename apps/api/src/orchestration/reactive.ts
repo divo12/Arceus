@@ -2,7 +2,7 @@ import type { AgentIdentity, BeatEventTrigger } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "./snapshot-view.js";
 import { getMeetingSchedulerRef, getReactiveEventEmitter } from "./state.js";
 
@@ -18,7 +18,8 @@ import { getMeetingSchedulerRef, getReactiveEventEmitter } from "./state.js";
 export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger): void {
   const emitter = getReactiveEventEmitter();
   if (!emitter) return;
-  const companyId = getSnapshot().company.id;
+  const companyId = getActiveCompanyId();
+  if (!companyId) return;
   void agentsRepo.findAgentByRole(getDb(), companyId, role).then((agent) => {
     if (!agent) return;
     emitter(companyId, agent.id, role, event);
@@ -35,7 +36,8 @@ export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigge
 export function emitReactiveBroadcast(event: BeatEventTrigger): void {
   const emitter = getReactiveEventEmitter();
   if (!emitter) return;
-  const companyId = getSnapshot().company.id;
+  const companyId = getActiveCompanyId();
+  if (!companyId) return;
   void agentsRepo.listAgentsByCompany(getDb(), companyId).then((agents) => {
     for (const agent of agents) {
       emitter(companyId, agent.id, agent.role as AgentIdentity["role"], event);
@@ -59,7 +61,8 @@ export function emitReactiveBroadcast(event: BeatEventTrigger): void {
 export function triggerEscalationMeeting(taskId: string, blockerDetail: string): void {
   const scheduler = getMeetingSchedulerRef();
   if (!scheduler) return;
-  const companyId = getSnapshot().company.id;
+  const companyId = getActiveCompanyId();
+  if (!companyId) return;
 
   void (async () => {
     const task = await tasksRepo.findByIdHydrated(getDb(), taskId);

@@ -19,7 +19,8 @@ import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
 } from "../observability/graph-emitter.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
-import { getSnapshot, updateMeeting, updateSprint } from "../persistence/store.js";
+import { updateMeeting, updateSprint } from "../persistence/store.js";
+import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { flush } from "../persistence/store.js";
 import { ensureAgentSession } from "../prompts/llm.js";
@@ -135,7 +136,7 @@ async function handleCreateSprintPlanningTask(
   await checkSprintCompletion();
 
   // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
-  const companyId = getSnapshot().company.id;
+  const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
   const nextNum = (snapshot.company.currentSprintNumber ?? 0) + 1;
 
@@ -189,7 +190,7 @@ async function handleCtoEscalationForceComplete(
 ): Promise<HandlerResult> {
   startBeatTokenAccumulator(beatId);
   // Spec 31 Phase 7.B.4 — read via canonical-backed view.
-  const companyId = getSnapshot().company.id;
+  const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {

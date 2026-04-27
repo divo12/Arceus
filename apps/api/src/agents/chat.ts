@@ -1,7 +1,8 @@
 import type { FastifyReply } from "fastify";
 import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type CeoCard } from "./ceo.js";
-import { appendChatMessage, getSnapshot } from "../persistence/store.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { appendChatMessage } from "../persistence/store.js";
+import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { ensureDeployment } from "../config/index.js";
 import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "../infra/opencode.js";
 import { getExecutionStatus } from "../orchestration/state.js";
@@ -118,19 +119,17 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
 
   ceoStreaming = true;
   try {
-    let snapshot = getSnapshot();
-
-  // Spec 31 Phase 7.B.5 — bootstrap check via the seam helper. The rest of
-  // CEO conversation flow still needs the full in-memory snapshot
-  // (idea / strategy / agents / sessions / memories) for prompt context;
-  // those reads collapse into 7.C alongside `appendConversationMessage`
-  // and `startCeoPromptAsync` argument restructuring.
-  if (!getActiveCompanyId()) {
-    snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
-  }
+    // Spec 31 Phase 7.C.c — bootstrap if needed, then assemble the
+    // snapshot from canonical for CEO prompt context.
+    let snapshot: CompanySnapshot;
+    if (!getActiveCompanyId()) {
+      snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
+    } else {
+      snapshot = await buildSnapshotView(requireActiveCompanyId());
+    }
 
   appendConversationMessage(snapshot, "board", trimmedMessage);
-  snapshot = getSnapshot();
+  snapshot = await buildSnapshotView(requireActiveCompanyId());
 
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
@@ -189,7 +188,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       }
     }
 
-    let nextSnapshot = getSnapshot();
+    let nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
     if (fullText) {
       try {
         sseWrite(reply, "status", { phase: "classifying" });
@@ -197,7 +196,9 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
         // Spec 01: No side effects during ideation. Meetings and tasks are only
         // created after strategy approval when the company is active with agents.
         const meeting = await recordCeoCardMeeting(card, trimmedMessage, fullText);
-        appendConversationMessage(getSnapshot(), "ceo", fullText, card);
+        // Re-read after recordCeoCardMeeting may have appended tasks/meetings.
+        const postMeetingSnapshot = await buildSnapshotView(requireActiveCompanyId());
+        appendConversationMessage(postMeetingSnapshot, "ceo", fullText, card);
         if (meeting) {
           sseWrite(reply, "meeting", {
             meetingId: meeting.id,
@@ -207,11 +208,12 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
             memoryDeltaCount: 0,
           });
         }
-        nextSnapshot = getSnapshot();
+        nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
         sseWrite(reply, "proposal", card);
       } catch (cardErr) {
-        appendConversationMessage(getSnapshot(), "ceo", fullText);
-        nextSnapshot = getSnapshot();
+        const errorSnapshot = await buildSnapshotView(requireActiveCompanyId());
+        appendConversationMessage(errorSnapshot, "ceo", fullText);
+        nextSnapshot = errorSnapshot;
         sseWrite(reply, "error", {
           message: cardErr instanceof Error ? cardErr.message : "Card classification failed"
         });
@@ -252,14 +254,16 @@ export async function sendBoardMessageToCeo(message: string) {
     throw new Error("CEO chat message cannot be empty.");
   }
 
-  let snapshot = getSnapshot();
-
-  if (snapshot.company.id === "company_pending") {
+  // Spec 31 Phase 7.C.c — bootstrap if needed, then read from canonical.
+  let snapshot: CompanySnapshot;
+  if (!getActiveCompanyId()) {
     snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
+  } else {
+    snapshot = await buildSnapshotView(requireActiveCompanyId());
   }
 
   appendConversationMessage(snapshot, "board", trimmedMessage);
-  snapshot = getSnapshot();
+  snapshot = await buildSnapshotView(requireActiveCompanyId());
 
   const strategy = await generateStrategy(snapshot);
   const assistantMessage = [strategy.summary, `First release: ${strategy.first_release}`].join("\n\n");
@@ -303,12 +307,13 @@ export async function sendBoardMessageToCeo(message: string) {
     },
   };
 
-  appendConversationMessage(getSnapshot(), "ceo", assistantMessage, card);
+  const postSnapshot = await buildSnapshotView(requireActiveCompanyId());
+  appendConversationMessage(postSnapshot, "ceo", assistantMessage, card);
 
   return {
     assistantMessage,
     strategy,
     card,
-    snapshot: getSnapshot(),
+    snapshot: await buildSnapshotView(requireActiveCompanyId()),
   };
 }

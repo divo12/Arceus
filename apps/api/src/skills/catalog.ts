@@ -1,4 +1,4 @@
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 import { seedExistingSkills } from "@arceus/company-runtime";
 import { hydrateSkillRegistryFromDb, isSkillsDbWritethroughEnabled } from "./db-writethrough.js";
 
@@ -9,11 +9,13 @@ import { hydrateSkillRegistryFromDb, isSkillsDbWritethroughEnabled } from "./db-
  * When ARCEUS_SKILLS_DB_WRITETHROUGH=1, returns a Promise that resolves once
  * DB hydration completes, then the Markdown seed runs in "preserve" mode
  * (DB rows win on collision). Without the flag, it's synchronous.
+ *
+ * Spec 31 Phase 7.C.c — companyId via the seam helper. Silently no-ops
+ * before bootstrap because the skill registry is per-company.
  */
 export function ensureSkillsSeeded(): void {
-  const snapshot = getSnapshot();
-  const companyId = snapshot.company.id;
-  if (!companyId || companyId === "company_empty") return;
+  const companyId = getActiveCompanyId();
+  if (!companyId) return;
 
   if (isSkillsDbWritethroughEnabled()) {
     // Fire-and-forget hydration. The Markdown seed below uses the default

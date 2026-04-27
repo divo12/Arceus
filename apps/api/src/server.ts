@@ -45,7 +45,6 @@ process.once("SIGINT", () => { void observability.flushLangfuseSink(); });
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
-  getSnapshot,
   hydrate,
   flush,
   teardown,
@@ -65,8 +64,11 @@ import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit
 import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
 import { buildSnapshotView } from "./orchestration/snapshot-view.js";
-import { getActiveCompanyId } from "./persistence/active-company.js";
+import { getActiveCompanyId, requireActiveCompanyId } from "./persistence/active-company.js";
 import { runBeat } from "./orchestration/run-beat.js";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import type { AgentIdentity } from "@arceus/contracts";
 import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
 import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
@@ -166,13 +168,16 @@ const beatDeps: BeatDependencies = {
     };
   },
   executeChecklistAction: (ctx, action, beatId) => executeChecklistAction(ctx, action, beatId),
-  getAgentRoster: () => {
-    // Spec 31 Phase 7.B.5 — getAgentRoster is sync (BeatDeps surface) so
-    // we keep the in-memory snapshot read here. It collapses to a canonical
-    // listAgentsByCompany() once BeatDeps becomes async-friendly in 7.C.
-    const snap = getSnapshot();
-    if (snap.company.id === "company_pending") return [];
-    return snap.agents.map((a) => ({ agentId: a.id, role: a.role, companyId: snap.company.id }));
+  getAgentRoster: async () => {
+    // Spec 31 Phase 7.C.c — async, reads agents from canonical via repo.
+    const companyId = getActiveCompanyId();
+    if (!companyId) return [];
+    const agents = await agentsRepo.listAgentsByCompany(getDb(), companyId);
+    return agents.map((a) => ({
+      agentId: a.id,
+      role: a.role as AgentIdentity["role"],
+      companyId,
+    }));
   },
   emitBeatEvent: (event) => emitBeatEvent(event),
 };
@@ -207,9 +212,10 @@ const meetingPipeline = new MeetingPipeline({
   startTokenTracking: (meetingId) => startMeetingTokenAccumulator(meetingId),
   drainTokens: (meetingId) => drainMeetingTokenAccumulator(meetingId),
 
-  // Phase 4a (Spec 24): Collect contributions by directly prompting each agent's session
+  // Phase 4a (Spec 24): Collect contributions by directly prompting each agent's session.
+  // Spec 31 Phase 7.C.c — canonical-backed snapshot.
   async collectContributions(meeting) {
-    const snap = getSnapshot();
+    const snap = await getSnapshotForPackages();
 
     for (const agentId of meeting.participantAgentIds) {
       const agent = snap.agents.find((a) => a.id === agentId);
@@ -253,13 +259,14 @@ const meetingPipeline = new MeetingPipeline({
       }
     }
 
-    return getSnapshot().meetings.find((m) => m.id === meeting.id) ?? meeting;
+    const post = await getSnapshotForPackages();
+    return post.meetings.find((m) => m.id === meeting.id) ?? meeting;
   },
 
   // Phase 4b (Spec 24): Facilitator Agent — synthesize, resolve, brief in one session
   async synthesizeMeeting(meeting) {
     const { runFacilitatorSession } = await import("./meetings/facilitator.js");
-    const snap = getSnapshot();
+    const snap = await getSnapshotForPackages();
     const result = await runFacilitatorSession(meeting, snap);
 
     const updated = updateMeeting(meeting.id, (m) => ({
@@ -281,7 +288,7 @@ const meetingPipeline = new MeetingPipeline({
   // Phase 5: Execute resolution decisions
   async executeMeetingDecisions(meeting) {
     const { executeMeetingDecisions: execute } = await import("./meetings/resolution.js");
-    const snap = getSnapshot();
+    const snap = await getSnapshotForPackages();
     const result = execute(meeting, snap, { upsertTask, updateTask, upsertApproval, appendChatMessage, flush });
     await flush();
     return result;
@@ -291,7 +298,7 @@ const meetingPipeline = new MeetingPipeline({
   async produceBrief(meeting) {
     if (!meeting.brief) return meeting;
     const { postDailySyncSummary } = await import("./meetings/resolution.js");
-    const snap = getSnapshot();
+    const snap = await getSnapshotForPackages();
     postDailySyncSummary(meeting, meeting.brief, snap, appendChatMessage);
     await flush();
     return meeting;
@@ -305,7 +312,7 @@ const meetingPipeline = new MeetingPipeline({
     const { z } = await import("zod");
     const { hippocampus } = await import("./memory/extractors.js");
 
-    const snap = getSnapshot();
+    const snap = await getSnapshotForPackages();
 
     const extractedFactSchema = z.object({
       facts: z.array(z.object({
@@ -352,14 +359,15 @@ const meetingPipeline = new MeetingPipeline({
     return totalStored;
   },
 
-  // Phase 7: Re-escalate if blocker is still unresolved after escalation meeting
-  onEscalationComplete(meeting) {
+  // Phase 7: Re-escalate if blocker is still unresolved after escalation meeting.
+  // Spec 31 Phase 7.C.c — async; canonical-backed snapshot.
+  async onEscalationComplete(meeting) {
     // Extract related task ID from title format: "Escalation: ... [taskId]"
     const taskIdMatch = meeting.title.match(/\[([^\]]+)\]$/);
     const relatedTaskId = taskIdMatch?.[1] ?? null;
 
     if (relatedTaskId && relatedTaskId !== "general") {
-      const snap = getSnapshot();
+      const snap = await getSnapshotForPackages();
       const task = snap.tasks.find((t) => t.id === relatedTaskId);
       if (task && task.status === "blocked") {
         console.log(`[ESCALATION] Task ${relatedTaskId} still blocked after escalation meeting ${meeting.id} — escalating up`);
@@ -389,11 +397,15 @@ const meetingScheduler = new MeetingScheduler(
 // Wire meeting scheduler to orchestrator for escalation triggers (Phase 7)
 setMeetingScheduler(meetingScheduler);
 
-// Re-seed service registry on startup if a company already exists (survives server restarts)
+// Re-seed service registry on startup if a company already exists (survives server restarts).
+// Spec 31 Phase 7.C.c — read from canonical via the seam helper + buildSnapshotView.
 {
-  const snap = getSnapshot();
-  console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
-  if (snap.company.id !== "company_pending") {
+  const startupCompanyId = getActiveCompanyId();
+  if (!startupCompanyId) {
+    console.log("[STARTUP] Company state: no active company");
+  } else {
+    const snap = await buildSnapshotView(startupCompanyId);
+    console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
     // Auto-resume heartbeat if there's an active sprint (executing or reviewing)
     const activeSprint = snap.sprints.find(
       (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),

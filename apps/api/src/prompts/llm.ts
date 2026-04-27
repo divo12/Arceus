@@ -10,7 +10,8 @@ import { getAgentByRole, nowIso } from "@arceus/task-engine";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
@@ -204,11 +205,12 @@ export async function runPromptText(
   let memoryCount = 0;
   let habitCount = 0;
   try {
-    // Spec 31 Phase 7.B.1 — read agent from canonical agents repo.
-    // companyId still comes from the snapshot until B.5 threads it
-    // through `runPromptText`'s caller chain via companyContext.
-    const companyId = getSnapshot().company.id;
-    const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
+    // Spec 31 Phase 7.B.1 / 7.C.c — read agent from canonical via repo,
+    // companyId via the seam helper.
+    const companyId = getActiveCompanyId();
+    const agent = companyId
+      ? await agentsRepo.findAgentByRole(getDb(), companyId, role)
+      : null;
     if (agent) {
       const ctx = await hippocampus.prepareAgentContext(agent.id, text);
       memoryBlock = formatHippocampusContext(ctx);
@@ -316,7 +318,10 @@ export async function runPromptText(
         resetOpencodeConnection();
         agentSessions.delete(role);
         emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
-        const snap = getSnapshot();
+        // Spec 31 Phase 7.C.c — canonical-backed view for the retry path.
+        const retryCompanyId = getActiveCompanyId();
+        if (!retryCompanyId) return;
+        const snap = await buildSnapshotView(retryCompanyId);
         const freshSession = await ensureAgentSession(snap, role);
         currentSessionId = freshSession.sessionId;
       },

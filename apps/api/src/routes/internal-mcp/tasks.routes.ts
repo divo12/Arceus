@@ -285,7 +285,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return;
     }
 
-    setTaskStatus(taskId, "completed");
+    await setTaskStatus(taskId, "completed");
     // Spec 31 Phase 7.B.5 — read unblocked dependents from canonical instead
     // of snapshot.tasks. Internal-mcp routes have req.mcp.companyId.
     const allTasks = await tasksRepo.listByCompanyHydrated(getDb(), req.mcp!.companyId);
@@ -308,7 +308,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    setTaskStatus(taskId, "blocked", body.reason);
+    await setTaskStatus(taskId, "blocked", body.reason);
     await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} blocked.`, { taskId, status: "blocked", reason: body.reason }));
   });
@@ -503,7 +503,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     }
 
     // Mirror to store so the 14 non-route consumers see the new status.
-    setTaskStatus(taskId, "in_progress");
+    await setTaskStatus(taskId, "in_progress");
 
     cacheAndSend(req, reply, 200, success(
       `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,

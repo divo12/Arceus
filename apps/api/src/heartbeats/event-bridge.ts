@@ -378,7 +378,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
       setExecutionStatus("error");
     }
     if (caps.escalatesOnSessionError && activeExecution) {
-      setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? `${role} session error`);
+      await setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? `${role} session error`);
       const typedRole = role as AgentIdentity["role"];
       await recordMeeting({
         type: "escalation",

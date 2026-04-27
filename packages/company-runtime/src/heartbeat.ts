@@ -94,7 +94,8 @@ export interface BeatDependencies {
   }>;
 
   /** Return list of agents for the scheduler to iterate. */
-  getAgentRoster?: () => Array<{ agentId: string; role: AgentIdentity["role"]; companyId: string }>;
+  /** Spec 31 Phase 7.C.c — async to read from canonical via repos. */
+  getAgentRoster?: () => Promise<Array<{ agentId: string; role: AgentIdentity["role"]; companyId: string }>>;
 
   /** Emit beat lifecycle events for SSE streaming. */
   emitBeatEvent?: (event: { type: string; beatId: string; agentId: string; role: string; data?: Record<string, unknown> }) => void;
@@ -430,7 +431,7 @@ export class HeartbeatEngine {
     // Need agent roster to auto-schedule
     if (!this.deps?.getAgentRoster) return;
 
-    const roster = this.deps.getAgentRoster();
+    const roster = await this.deps.getAgentRoster();
     if (roster.length === 0) return;
 
     const now = Date.now();

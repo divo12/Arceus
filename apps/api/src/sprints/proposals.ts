@@ -2,13 +2,13 @@ import type { AgentIdentity, Sprint, Task } from "@arceus/contracts";
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { createSprintRecord } from "@arceus/task-engine";
 import {
-  getSnapshot,
   upsertTask,
   updateTask,
   updateSprint,
   upsertSprint,
   updateCompanySprint,
 } from "../persistence/store.js";
+import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
@@ -32,7 +32,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   // Spec 31 Phase 7.B.4 — snapshot reads now go through the
   // canonical-backed view. The store remains authoritative for
   // mutations until B.4.2 swaps the mutators.
-  const companyId = getSnapshot().company.id;
+  const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
 
   // Guard: can't start a new sprint while one is active
@@ -154,7 +154,7 @@ export async function beginSprintExecution(
 ): Promise<void> {
   // Spec 31 Phase 7.B.4 — only reads `company.id` from the snapshot
   // bridge; full snapshot view not needed for this entry point.
-  const companyId = getSnapshot().company.id;
+  const companyId = requireActiveCompanyId();
 
   setExecutionStatus("executing");
 

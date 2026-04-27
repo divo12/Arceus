@@ -6,7 +6,8 @@ import type { AgentIdentity } from "@arceus/contracts";
 import { uniqueStrings, nowIso } from "@arceus/task-engine";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
-import { getSnapshot, updateTask } from "../persistence/store.js";
+import { updateTask } from "../persistence/store.js";
+import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "./snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphDecision } from "../observability/graph-emitter.js";
@@ -31,7 +32,8 @@ import { checkSprintCompletion } from "../sprints/lifecycle.js";
 /** Finalize the current execution cycle: update status, record meeting, and check sprint completion. */
 export async function completeExecutionCycle(reason: string) {
   // Spec 31 Phase 7.B.4 — task-engine helper takes the canonical-backed view.
-  const companyId = getSnapshot().company.id;
+  // Phase 7.C.c — companyId from the seam helper.
+  const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
   const queuedNonCoreTaskCount = getQueuedNonCoreTaskCount(snapshot);
   setExecutionStatus("done");
@@ -120,8 +122,8 @@ export async function pauseForBoardReview(reason: string) {
 
 /** Run post-review reconciliation: then complete or pause. */
 export async function reconcilePostReviewExecution() {
-  // Spec 31 Phase 7.B.4 — task-engine helper takes the canonical-backed view.
-  const companyId = getSnapshot().company.id;
+  // Spec 31 Phase 7.B.4 / 7.C.c — task-engine helper takes the canonical-backed view.
+  const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
   const boardDecision = shouldPauseForBoardReview(snapshot);
 
@@ -148,10 +150,9 @@ export async function stopExecution(reason = "Board manually stopped company exe
   if (["idle", "done", "error", "paused"].includes(executionStatus) && !activeExecution) {
     throw new Error("No active company execution is running.");
   }
-  // Spec 31 Phase 7.B.3 — companyId comes from `activeExecution`
-  // when present (the running cycle owns it), otherwise fall back to
-  // the snapshot. The latter remains as a B.5 bridge.
-  const companyId = activeExecution?.companyId ?? getSnapshot().company.id;
+  // Spec 31 Phase 7.B.3 / 7.C.c — companyId comes from `activeExecution`
+  // when present (the running cycle owns it), otherwise from the seam.
+  const companyId = activeExecution?.companyId ?? requireActiveCompanyId();
   auditSystem(companyId, "execution_stopped", `Execution stopped: ${reason}`, { severity: "warn" });
 
   clearDeveloperWatchdog();
@@ -165,8 +166,10 @@ export async function stopExecution(reason = "Board manually stopped company exe
     .filter((task) => ["in_progress", "verifying"].includes(task.status))
     .map((task) => task.id);
 
+  // Spec 31 Phase 7.C.c — setTaskStatus is async; await each so the
+  // graph + audit emits land before we record the escalation meeting.
   for (const taskId of impactedTaskIds) {
-    setTaskStatus(taskId, "blocked", reason);
+    await setTaskStatus(taskId, "blocked", reason);
   }
 
   for (const session of agentSessions.values()) {

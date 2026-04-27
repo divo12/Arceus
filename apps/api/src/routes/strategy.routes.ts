@@ -4,8 +4,9 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getSnapshot, applyStrategy } from "../persistence/store.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { applyStrategy } from "../persistence/store.js";
+import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { audit } from "../observability/audit-ledger.js";
@@ -80,15 +81,18 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       const { idea } = quickExecuteSchema.parse(request.body);
       emitActivity("system", "transition", `Quick-execute started: "${idea.slice(0, 80)}"`);
 
-      let snapshot = getSnapshot();
-      // Spec 31 Phase 7.B.5 — companyId check via the seam helper.
-      // generateStrategy + applyStrategy still consume the full in-memory
-      // snapshot (the strategy generator takes the entire CompanySnapshot
-      // shape), so the rest of the flow stays on getSnapshot() until 7.C.
+      // Spec 31 Phase 7.C.c — bootstrap if needed, then assemble the
+      // snapshot from canonical for `generateStrategy`. `bootstrapIdea-
+      // WithWorkspace` returns a snapshot directly so we use it; afterward
+      // each stage rebuilds from canonical so the CEO LLM sees the
+      // up-to-date view.
+      let snapshot;
       if (!getActiveCompanyId()) {
         emitActivity("system", "transition", "Bootstrapping company...");
         snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
         emitActivity("system", "transition", `Company bootstrapped: ${snapshot.company.name}`);
+      } else {
+        snapshot = await buildSnapshotView(requireActiveCompanyId());
       }
 
       emitActivity("ceo", "transition", "CEO generating strategy...");

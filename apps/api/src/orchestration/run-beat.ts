@@ -275,7 +275,7 @@ export async function runBeat(input: {
       try {
         const released = await tasksRepo.releaseClaimsForBeat(getDb(), beatId);
         for (const tid of released) {
-          try { setTaskStatus(tid, "planned", `claim released after beat ${beatId} failed (${cause ?? "unknown"})`); } catch { /* in-memory may not know it */ }
+          try { await setTaskStatus(tid, "planned", `claim released after beat ${beatId} failed (${cause ?? "unknown"})`); } catch { /* in-memory may not know it */ }
         }
         if (released.length > 0) {
           observability.logEvent({
