@@ -71,6 +71,13 @@
       "when": 1777286464930,
       "tag": "0010_tasks_status_kind_zod_aligned",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777289724645,
+      "tag": "0011_narrow_active_claim_idx",
+      "breakpoints": true
     }
   ]
 }

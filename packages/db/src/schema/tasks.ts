@@ -96,10 +96,14 @@ export const tasks = pgTable(
     // Trigram search on title — requires pg_trgm extension
     titleSearchIdx: index("tasks_title_search_idx").using("gin", sql`${table.title} gin_trgm_ops`),
 
-    // Business invariant: at most one active claim per task
+    // Business invariant: at most one active claim per task. After 0010
+    // tightened tasks_status_check to taskStatusSchema.options, 'claimed'
+    // is no longer a reachable status — narrowed the WHERE clause to the
+    // only value that can hold a claim today. If a future contract adds
+    // an intermediate "claimed" state again, widen the partial accordingly.
     activeClaimUniqueIdx: uniqueIndex("tasks_active_claim_idx")
       .on(table.id)
-      .where(sql`checkout_run_id IS NOT NULL AND status IN ('claimed','in_progress')`),
+      .where(sql`checkout_run_id IS NOT NULL AND status = 'in_progress'`),
 
     // Spec 31 follow-up to friend's 0009: drive both checks off the Zod
     // source-of-truth (taskStatusSchema, taskKindSchema, prioritySchema)

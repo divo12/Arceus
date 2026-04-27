@@ -1,8 +1,8 @@
 import { eq, sql } from "drizzle-orm";
-import { v5 as uuidv5 } from "uuid";
 import type { Company as ContractCompany, CompanyStatus } from "@arceus/contracts";
 import { companies } from "../schema/companies.js";
 import type { DbClient } from "./_helpers.js";
+import { friendlyToUuid } from "./_uuid.js";
 
 export type Company = typeof companies.$inferSelect;
 export type NewCompany = typeof companies.$inferInsert;
@@ -11,14 +11,10 @@ export type NewCompany = typeof companies.$inferInsert;
 //
 // Same trick as repos/tasks.ts: the runtime hands us friendly ids like
 // `company_xxx`, the schema column is uuid (FK type matches every other
-// table). `toDbId` converts deterministically; `friendlyId` is stored
-// alongside so hydration round-trips back to the original string.
-const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function toDbId(friendly: string): string {
-  return UUID_RE.test(friendly) ? friendly : uuidv5(friendly, ARCEUS_UUID_NS);
-}
+// table). `toDbId` converts deterministically via `_uuid.friendlyToUuid`;
+// `friendlyId` is stored alongside so hydration round-trips back to the
+// original string.
+export const toDbId = friendlyToUuid;
 
 export function fromDbId(uuid: string, friendlyHint?: string | null): string {
   return friendlyHint ?? uuid;

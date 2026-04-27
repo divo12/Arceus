@@ -1,5 +1,4 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { v5 as uuidv5 } from "uuid";
 import type {
   Task as ContractTask,
   RoleType,
@@ -10,6 +9,7 @@ import type {
 import { tasks } from "../schema/tasks.js";
 import { artifacts } from "../schema/artifacts.js";
 import type { DbClient } from "./_helpers.js";
+import { friendlyToUuid } from "./_uuid.js";
 
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
@@ -32,14 +32,10 @@ export type TaskStatus = Task["status"];
 // hydration can return them verbatim instead of leaking uuid format
 // to API consumers.
 
-/** Fixed v5 namespace — DO NOT change after data exists, would invalidate PKs. */
-const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Map a friendly id (`tsk_abc`) to a deterministic uuid; valid uuids pass through. */
-export function toDbId(friendly: string): string {
-  return UUID_RE.test(friendly) ? friendly : uuidv5(friendly, ARCEUS_UUID_NS);
-}
+/** Map a friendly id (`tsk_abc`) to a deterministic uuid; valid uuids pass through.
+ *  Single source of truth lives in `_uuid.ts` — DO NOT change the namespace
+ *  after data exists, would invalidate every PK derived from a friendly string. */
+export const toDbId = friendlyToUuid;
 
 /** Restore the friendly id from body if it was stashed; otherwise fall back to the uuid. */
 export function fromDbId(uuid: string, friendlyHint?: string | null): string {

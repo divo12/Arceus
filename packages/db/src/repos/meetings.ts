@@ -1,5 +1,4 @@
 import { and, asc, eq } from "drizzle-orm";
-import { v5 as uuidv5 } from "uuid";
 import type {
   Meeting as ContractMeeting,
   MeetingContribution as ContractMeetingContribution,
@@ -11,6 +10,7 @@ import type {
 import { meetings } from "../schema/meetings.js";
 import { meetingContributions } from "../schema/meeting_contributions.js";
 import type { DbClient } from "./_helpers.js";
+import { friendlyToUuid } from "./_uuid.js";
 
 export type Meeting = typeof meetings.$inferSelect;
 export type NewMeeting = typeof meetings.$inferInsert;
@@ -18,11 +18,7 @@ export type MeetingContribution = typeof meetingContributions.$inferSelect;
 export type NewMeetingContribution = typeof meetingContributions.$inferInsert;
 
 // ── ID boundary: friendly strings ↔ uuid (Phase 4D) ──────────────
-const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export const toDbId = (friendly: string): string =>
-  UUID_RE.test(friendly) ? friendly : uuidv5(friendly, ARCEUS_UUID_NS);
+export const toDbId = friendlyToUuid;
 
 export const fromDbId = (uuid: string, friendlyHint?: string | null): string =>
   friendlyHint ?? uuid;

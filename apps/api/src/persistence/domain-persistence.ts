@@ -50,26 +50,41 @@ function pgErrorDetail(err: unknown): string {
  * Structured dual-write logger. Set `ARCEUS_DEBUG_PERSIST=1` to also see
  * successful writes (useful when diagnosing FK ordering races); errors
  * are always logged so missing dual-writes never go silent.
+ *
+ * For `outcome="skip"`, pass the original error — the logger extracts
+ * both the SQLSTATE (pg=23503/23502/…) and constraint/detail/table/
+ * column hints. The event sink keeps just the typed pgCode; stdout gets
+ * the richer detail line so a scrolling tail surfaces the actual
+ * constraint name when something goes wrong.
  */
 const PERSIST_DEBUG = process.env.ARCEUS_DEBUG_PERSIST === "1";
-function logPersist(table: string, id: string, outcome: "ok" | "skip" | "miss", code?: string): void {
+function logPersist(
+  table: string,
+  id: string,
+  outcome: "ok" | "skip" | "miss",
+  err?: unknown,
+): void {
   if (outcome === "ok" && !PERSIST_DEBUG) return;
   if (outcome === "miss" && !PERSIST_DEBUG) return;
-  const tag = outcome === "ok" ? "ok" : outcome === "miss" ? "miss" : `skip pg=${code ?? "unknown"}`;
-  // eslint-disable-next-line no-console
-  console.log(`[persist:${table}] ${tag} id=${id}`);
-  // Surface dual-write failures to the inspector — without this the FK
-  // violation that causes the next CAS to return `not_found` is invisible
-  // to anyone watching `/logs`. `miss`/`ok` stay stdout-only.
   if (outcome === "skip") {
+    const code = pgErrorCode(err);
+    const detail = pgErrorDetail(err);
+    // eslint-disable-next-line no-console
+    console.log(`[persist:${table}] skip pg=${code} id=${id}${detail ? ` ${detail}` : ""}`);
+    // Surface dual-write failures to the inspector — without this the FK
+    // violation that causes the next CAS to return `not_found` is invisible
+    // to anyone watching `/logs`. `miss`/`ok` stay stdout-only.
     observability.logEvent({
       event: "persist.failed",
       table,
       id,
-      pgCode: code ?? "unknown",
+      pgCode: code,
       ts: Date.now(),
     });
+    return;
   }
+  // eslint-disable-next-line no-console
+  console.log(`[persist:${table}] ${outcome} id=${id}`);
 }
 
 // ── Sprints (Phase 4B) ────────────────────────────────────────
@@ -93,11 +108,11 @@ export async function persistSprint(sprintId: string): Promise<void> {
         logPersist("sprints", sprintId, "ok");
         return;
       } catch (retryErr) {
-        logPersist("sprints", sprintId, "skip", pgErrorCode(retryErr));
+        logPersist("sprints", sprintId, "skip", retryErr);
         return;
       }
     }
-    logPersist("sprints", sprintId, "skip", code);
+    logPersist("sprints", sprintId, "skip", err);
   }
 }
 
@@ -129,15 +144,11 @@ export async function persistTask(taskId: string): Promise<void> {
         logPersist("tasks", taskId, "ok");
         return;
       } catch (retryErr) {
-        // eslint-disable-next-line no-console
-        console.log(`[persist:tasks] retry-failed ${pgErrorDetail(retryErr)}`);
-        logPersist("tasks", taskId, "skip", pgErrorCode(retryErr));
+        logPersist("tasks", taskId, "skip", retryErr);
         return;
       }
     }
-    // eslint-disable-next-line no-console
-    console.log(`[persist:tasks] first-failed ${pgErrorDetail(err)}`);
-    logPersist("tasks", taskId, "skip", code);
+    logPersist("tasks", taskId, "skip", err);
   }
 }
 
@@ -153,7 +164,7 @@ export async function persistArtifact(artifact: ContractArtifact): Promise<void>
     await artifactsRepo.upsertArtifact(getDb(), artifact);
     logPersist("artifacts", artifact.id, "ok");
   } catch (err) {
-    logPersist("artifacts", artifact.id, "skip", pgErrorCode(err));
+    logPersist("artifacts", artifact.id, "skip", err);
   }
 }
 
@@ -166,7 +177,7 @@ export async function persistMeeting(meetingId: string): Promise<void> {
     await meetingsRepo.upsertMeeting(getDb(), meeting);
     logPersist("meetings", meetingId, "ok");
   } catch (err) {
-    logPersist("meetings", meetingId, "skip", pgErrorCode(err));
+    logPersist("meetings", meetingId, "skip", err);
   }
 }
 
@@ -179,7 +190,7 @@ export async function persistApproval(approvalId: string): Promise<void> {
     await approvalsRepo.upsertApproval(getDb(), approval);
     logPersist("approvals", approvalId, "ok");
   } catch (err) {
-    logPersist("approvals", approvalId, "skip", pgErrorCode(err));
+    logPersist("approvals", approvalId, "skip", err);
   }
 }
 
@@ -199,7 +210,7 @@ export async function persistAgents(): Promise<void> {
       await agentsRepo.upsertAgent(db, agent);
       logPersist("agents", agent.id, "ok");
     } catch (err) {
-      logPersist("agents", agent.id, "skip", pgErrorCode(err));
+      logPersist("agents", agent.id, "skip", err);
     }
   }
 }
@@ -213,6 +224,6 @@ export async function persistChatMessage(messageId: string): Promise<void> {
     await boardMessagesRepo.upsertChatMessage(getDb(), message);
     logPersist("chat", messageId, "ok");
   } catch (err) {
-    logPersist("chat", messageId, "skip", pgErrorCode(err));
+    logPersist("chat", messageId, "skip", err);
   }
 }

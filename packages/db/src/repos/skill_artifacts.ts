@@ -2,13 +2,17 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { v5 as uuidv5 } from "uuid";
 import { skillArtifacts } from "../schema/skill_artifacts.js";
 import type { DbClient } from "./_helpers.js";
+import { ARCEUS_UUID_NS, UUID_RE } from "./_uuid.js";
 
 export type SkillArtifact = typeof skillArtifacts.$inferSelect;
 export type NewSkillArtifact = typeof skillArtifacts.$inferInsert;
 
 // ── ID boundary: friendly slug ↔ uuid (Phase 5) ──────────────────
-const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//
+// Distinct from the global single-arg `friendlyToUuid` in `_uuid.ts`:
+// skill slugs are namespaced PER COMPANY (two companies' "sk_foo"
+// resolve to different uuids). The shared NS constant + UUID_RE come
+// from `_uuid.ts` so the per-company variant stays in sync.
 
 /**
  * Friendly skill ids (e.g. `sk_orchestrate_meeting`) are namespaced per

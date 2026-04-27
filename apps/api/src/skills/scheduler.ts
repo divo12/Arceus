@@ -100,7 +100,15 @@ async function processOnce(): Promise<void> {
     const result: PipelineResult = await runATAPipeline(job);
     await completeJob(db, job.id, result as unknown as Record<string, unknown>);
     console.log(`[SkillScheduler] job ${job.id} → ${result.status}`);
-    const severity = result.status === "accepted" ? "info" : result.status === "rejected" ? "warning" : "context";
+    // ATA outcome → activity-kind. The activity union has no "warning"
+    // variant; rejection maps to "decision" (the deliberate ATA verdict
+    // that the mutation should NOT merge), not "error" (which is reserved
+    // for thrown exceptions and pipeline crashes — see catch block below).
+    const severity = result.status === "accepted"
+      ? "info"
+      : result.status === "rejected"
+        ? "decision"
+        : "context";
     emitEmployeeActivity(
       "skills_lead",
       severity,

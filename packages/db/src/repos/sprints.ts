@@ -1,22 +1,14 @@
 import { and, desc, eq } from "drizzle-orm";
-import { v5 as uuidv5 } from "uuid";
 import type { Sprint as ContractSprint, SprintReviewState } from "@arceus/contracts";
 import { sprints } from "../schema/sprints.js";
 import type { DbClient } from "./_helpers.js";
+import { friendlyToUuid } from "./_uuid.js";
 
 export type Sprint = typeof sprints.$inferSelect;
 export type NewSprint = typeof sprints.$inferInsert;
 
 // ── ID boundary: friendly strings ↔ uuid (Phase 4B) ──────────────
-//
-// Same trick as repos/tasks.ts and repos/companies.ts: app gives us
-// `spr_xxx`, schema column is uuid. Convert deterministically; round-trip
-// the original string via `friendly_id`.
-const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export const toDbId = (friendly: string): string =>
-  UUID_RE.test(friendly) ? friendly : uuidv5(friendly, ARCEUS_UUID_NS);
+export const toDbId = friendlyToUuid;
 
 export const fromDbId = (uuid: string, friendlyHint?: string | null): string =>
   friendlyHint ?? uuid;

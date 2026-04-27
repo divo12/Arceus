@@ -11,7 +11,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
-import { v5 as uuidv5 } from "uuid";
 import internalMcpRoutes from "./index.js";
 import { __resetForTest as resetIdempotency } from "./idempotency.js";
 import { __resetBearerToken } from "../../auth/bearer.js";
@@ -21,15 +20,12 @@ import { companies } from "@arceus/db/src/schema/companies.js";
 import { agents } from "@arceus/db/src/schema/agents.js";
 import { heartbeatRuns } from "@arceus/db/src/schema/heartbeat_runs.js";
 import { tasks } from "@arceus/db/src/schema/tasks.js";
+import { friendlyToUuid as toDbId } from "@arceus/db/src/repos/_uuid.js";
 import { eq } from "drizzle-orm";
 
 const TEST_TOKEN = "arceus-test-token-cas";
 process.env.ARCEUS_INTERNAL_TOKEN = TEST_TOKEN;
 __resetBearerToken();
-
-// Same namespace as the repo helper — keeps friendly→uuid stable across runs.
-const ARCEUS_UUID_NS = "8eb53fc9-9111-4f3f-a16d-0c8f7e2c7bb5";
-const toDbId = (s: string) => uuidv5(s, ARCEUS_UUID_NS);
 
 const COMPANY = "c_cas_test";
 const BEAT = "beat_cas_test";
