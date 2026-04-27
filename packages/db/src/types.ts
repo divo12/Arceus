@@ -1,89 +1,11 @@
 /**
  * @module db/types
- * Core database type definitions: EntityName, EntityRecordMap, DatabaseAdapter,
- * DatabaseConnectionConfig, DatabaseHealth, and TableDefinition.
+ * Connection-config types for the postgres.js + Supabase clients in
+ * `client.ts`. The legacy `EntityName` / `DatabaseAdapter` /
+ * `TableDefinition` triad backed an in-memory adapter that the spec
+ * 31 redesign retired — drizzle queries against `schema/*` are the
+ * only persistence path now.
  */
-import type {
-  AgentIdentity,
-  AssetRecord,
-  Approval,
-  Artifact,
-  BeatRecord,
-  ChatMessage,
-  Company,
-  EventEnvelope,
-  ExportResult,
-  Habit,
-  Meeting,
-  MemorySummary,
-  MemoryUnit,
-  PolicyViolation,
-  PrimingState,
-  SessionBinding,
-  SkillArtifact,
-  Sprint,
-  SprintSnapshot,
-  StrategyBrief,
-  Task,
-  TrustScore,
-  FundamentalIdea,
-  HierarchyNode,
-  WorkspaceInfo,
-} from "@arceus/contracts";
-
-export type EntityName =
-  | "companies"
-  | "ideas"
-  | "strategies"
-  | "sprints"
-  | "hierarchy"
-  | "agents"
-  | "sessions"
-  | "tasks"
-  | "artifacts"
-  | "chatMessages"
-  | "meetings"
-  | "approvals"
-  | "events"
-  | "workspaces"
-  | "sprintSnapshots"
-  | "assets"
-  | "memorySummaries"
-  | "memoryUnits"
-  | "habits"
-  | "primingStates"
-  | "beatRecords"
-  | "trustScores"
-  | "policyViolations"
-  | "skillArtifacts";
-
-export type EntityRecordMap = {
-  companies: Company;
-  ideas: FundamentalIdea;
-  strategies: StrategyBrief;
-  sprints: Sprint;
-  hierarchy: HierarchyNode;
-  agents: AgentIdentity;
-  sessions: SessionBinding;
-  tasks: Task;
-  artifacts: Artifact;
-  chatMessages: ChatMessage;
-  meetings: Meeting;
-  approvals: Approval;
-  events: EventEnvelope;
-  workspaces: WorkspaceInfo;
-  sprintSnapshots: SprintSnapshot;
-  assets: AssetRecord;
-  memorySummaries: MemorySummary;
-  memoryUnits: MemoryUnit;
-  habits: Habit;
-  primingStates: PrimingState;
-  beatRecords: BeatRecord;
-  trustScores: TrustScore;
-  policyViolations: PolicyViolation;
-  skillArtifacts: SkillArtifact;
-};
-
 export type DatabaseHealth = {
   ok: boolean;
   kind: string;
@@ -97,21 +19,4 @@ export type DatabaseConnectionConfig = {
   supabaseServiceRoleKey: string;
   databaseUrl: string;
   mode: DatabaseRuntimeMode;
-};
-
-export interface DatabaseAdapter {
-  readonly kind: "noop" | "postgres";
-  list<K extends EntityName>(entity: K): Promise<Array<EntityRecordMap[K]>>;
-  getById<K extends EntityName>(entity: K, id: string): Promise<EntityRecordMap[K] | null>;
-  upsert<K extends EntityName>(entity: K, record: EntityRecordMap[K] & { id: string }): Promise<EntityRecordMap[K]>;
-  delete<K extends EntityName>(entity: K, id: string): Promise<boolean>;
-  healthCheck(): Promise<DatabaseHealth>;
-}
-
-export type TableDefinition<K extends EntityName = EntityName> = {
-  entity: K;
-  tableName: string;
-  primaryKey: string;
-  notes: string;
-  indexes: string[];
 };

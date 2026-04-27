@@ -99,6 +99,13 @@
       "when": 1777380120000,
       "tag": "0014_pr13d_habits_canonical",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1777380240000,
+      "tag": "0015_phase7_drop_legacy_hippocampus",
+      "breakpoints": true
     }
   ]
 }

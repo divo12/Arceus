@@ -5,8 +5,8 @@ import { memoryEmbeddings } from "@arceus/db/src/schema/memory_embeddings.js";
 import { habits } from "@arceus/db/src/schema/habits.js";
 import { primingStates } from "@arceus/db/src/schema/priming_states.js";
 import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
-import { LEGACY_EMBEDDING_MODEL } from "@arceus/db/src/bridges/memory-decode.js";
-import { decodePrimingState, encodePrimingState } from "@arceus/db/src/bridges/priming-decode.js";
+import { EMBEDDING_MODEL_VERSION } from "@arceus/db/src/constants/embedding.js";
+import { decodePrimingState, encodePrimingState } from "@arceus/db/src/codecs/priming-state.js";
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
 import type { StaticMemoryStore, DynamicMemoryStore, ProceduralMemoryStore, PrimingStore } from "../types";
 import { embed } from "./embedding.js";
@@ -146,10 +146,10 @@ async function upsertEmbedding(memoryId: string, embedding: number[]): Promise<v
   const db = getDb();
   await db
     .insert(memoryEmbeddings)
-    .values({ memoryId, embedding, modelVersion: LEGACY_EMBEDDING_MODEL })
+    .values({ memoryId, embedding, modelVersion: EMBEDDING_MODEL_VERSION })
     .onConflictDoUpdate({
       target: memoryEmbeddings.memoryId,
-      set: { embedding, modelVersion: LEGACY_EMBEDDING_MODEL },
+      set: { embedding, modelVersion: EMBEDDING_MODEL_VERSION },
     });
 }
 
