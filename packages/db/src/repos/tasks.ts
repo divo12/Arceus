@@ -156,19 +156,22 @@ export async function claimTask(
   return { ok: false, cause: "not_claimable" };
 }
 
-/** Release a claim without completing — moves back to `ready` so another beat can pick it up. */
+/** Release a claim without completing — moves back to `planned` so another beat can pick it up. */
 export async function releaseClaim(
   db: DbClient,
   taskId: string,
   runId: string,
 ): Promise<boolean> {
+  // Released tasks land in `planned` (Zod taskStatusSchema) — the in-memory
+  // store sets the same value (see run-beat.ts), so DB + snapshot agree.
+  // The legacy `ready` value was DB-only and would Zod-fail on hydration.
   const result = await db
     .update(tasks)
     .set({
       checkoutRunId: null,
       executionRunId: null,
       executionLockedAt: null,
-      status: "ready",
+      status: "planned",
       claimedAt: null,
       startedAt: null,
     })
@@ -190,13 +193,15 @@ export async function releaseClaimsForBeat(
   beatId: string,
 ): Promise<string[]> {
   const dbRunId = toDbId(beatId);
+  // Same `planned` rationale as releaseClaim — match Zod taskStatusSchema +
+  // the in-memory store mutation in run-beat.ts so DB + snapshot agree.
   const released = await db
     .update(tasks)
     .set({
       checkoutRunId: null,
       executionRunId: null,
       executionLockedAt: null,
-      status: "ready",
+      status: "planned",
       claimedAt: null,
       startedAt: null,
     })

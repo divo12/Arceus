@@ -11,10 +11,15 @@ import {
   uniqueIndex,
   check,
 } from "drizzle-orm/pg-core";
+import { taskKindSchema, taskStatusSchema, prioritySchema } from "@arceus/contracts";
 import { companies } from "./companies.js";
 import { sprints } from "./sprints.js";
 import { agents } from "./agents.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
+
+/** SQL `IN ('a','b',...)` literal driven by a Zod enum's `.options`. */
+const inLiteral = (values: readonly string[]) =>
+  sql.raw(values.map((v) => `'${v.replace(/'/g, "''")}'`).join(", "));
 
 export type PlanStep = {
   stepNumber: number;
@@ -96,20 +101,23 @@ export const tasks = pgTable(
       .on(table.id)
       .where(sql`checkout_run_id IS NOT NULL AND status IN ('claimed','in_progress')`),
 
+    // Spec 31 follow-up to friend's 0009: drive both checks off the Zod
+    // source-of-truth (taskStatusSchema, taskKindSchema, prioritySchema)
+    // via inLiteral so adding a new enum value to contracts auto-widens
+    // the DB CHECK on the next db:generate. Prior hand-typed lists drifted
+    // (DB allowed `ready`/`claimed`/`verified`/`standard`/`skill_apply_proposal`
+    // that Zod doesn't, and was missing `verifying`/`failed` that Zod has).
     statusCheck: check(
       "tasks_status_check",
-      // 'created' added in Phase 3A — contracts.Task.status starts at 'created'
-      // before any agent claims/plans the task. Removing it from the enum would
-      // reject every newly-minted task from the route surface.
-      sql`${table.status} IN ('created','planned','ready','claimed','in_progress','blocked','completed','verified','cancelled')`,
+      sql`${table.status} IN (${inLiteral(taskStatusSchema.options)})`,
     ),
     priorityCheck: check(
       "tasks_priority_check",
-      sql`${table.priority} IN ('low','medium','high','critical')`,
+      sql`${table.priority} IN (${inLiteral(prioritySchema.options)})`,
     ),
     kindCheck: check(
       "tasks_kind_check",
-      sql`${table.kind} IN ('standard','technical_plan','acceptance_spec','implementation','board_handoff','service_validation','skill_apply_proposal')`,
+      sql`${table.kind} IN (${inLiteral(taskKindSchema.options)})`,
     ),
   }),
 );

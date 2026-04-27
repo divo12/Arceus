@@ -64,6 +64,13 @@
       "when": 1777231800000,
       "tag": "0009_tasks_kind_check_expand",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777286464930,
+      "tag": "0010_tasks_status_kind_zod_aligned",
+      "breakpoints": true
     }
   ]
 }
