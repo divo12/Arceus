@@ -144,7 +144,7 @@ export default function DashboardPage() {
   const company = snapshot?.company;
   const tasks = snapshot?.tasks ?? [];
   const agents = snapshot?.agents ?? [];
-  const isPending = !company || company.id === "company_pending";
+  const isPending = !company || !company.id;
 
   const tasksByStatus = {
     created: tasks.filter((t) => t.status === "created").length,

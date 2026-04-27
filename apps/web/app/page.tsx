@@ -339,28 +339,28 @@ const emptyProductOverview: ProductOverview = {
 
 const emptySnapshot: CompanySnapshot = {
   company: {
-    id: "company_pending",
+    id: "",
     name: "Arceus",
     boardOwner: "board_primary",
     goal: "",
     budgetCents: 0,
     spentCents: 0,
     status: "ideation",
-    currentStrategyId: "strategy_pending",
+    currentStrategyId: "",
     currentSprintId: null,
     currentSprintNumber: null,
     createdAt: new Date(0).toISOString()
   },
   idea: {
-    id: "idea_pending",
-    companyId: "company_pending",
+    id: "",
+    companyId: "",
     coreIdea: "",
     currentDirection: "",
     refinedWithBoard: false
   },
   strategy: {
-    id: "strategy_pending",
-    companyId: "company_pending",
+    id: "",
+    companyId: "",
     title: "CEO workspace is waiting for your first message",
     summary: "Describe what you want the company to build. The CEO will narrow it into a real first release and propose the initial org chart.",
     firstRelease: "",
@@ -1889,7 +1889,7 @@ export default function Page() {
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-5">
         <div className="flex items-center gap-2">
           <span className="text-[0.75rem] font-semibold text-[var(--text-primary)]">
-            {snapshot.company.id === "company_pending" ? "Arceus" : snapshot.company.name}
+            {!snapshot.company.id ? "Arceus" : snapshot.company.name}
           </span>
           {currentSprint ? (
             <Badge variant="outline" className="text-[0.625rem]">Sprint {currentSprint.number}</Badge>
