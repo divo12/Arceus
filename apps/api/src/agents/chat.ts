@@ -1,6 +1,6 @@
 import type { FastifyReply } from "fastify";
 import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type CeoCard } from "./ceo.js";
-import { appendChatMessage } from "../persistence/store.js";
+import { appendChatMessage } from "../persistence/mutations.js";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { ensureDeployment } from "../config/index.js";

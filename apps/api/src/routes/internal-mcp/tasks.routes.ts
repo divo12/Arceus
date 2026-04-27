@@ -11,7 +11,7 @@ import {
   attachArtifactToTask,
   hydrateTaskFromSpec,
 } from "../../tasks/index.js";
-import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/store.js";
+import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/mutations.js";
 import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -247,7 +247,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return;
     }
 
-    const updated = updateTask(taskId, (t) => ({
+    const updated = await updateTask(taskId, (t) => ({
       ...t,
       ...(body.title !== undefined && { title: body.title }),
       ...(body.description !== undefined && { description: body.description }),

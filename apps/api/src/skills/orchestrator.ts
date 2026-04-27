@@ -34,7 +34,7 @@ import { getDb, skillArtifacts as skillArtifactsTable } from "@arceus/db";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { addArtifactSync, attachArtifactToTask } from "../tasks/mutations.js";
-import { upsertTask } from "../persistence/store.js";
+import { upsertTask } from "../persistence/mutations.js";
 import { gitShowFileAtTag } from "./git.js";
 import type { Task } from "@arceus/contracts";
 import type { SkillEvolveJob } from "@arceus/db/src/repos/skill_evolve_jobs.js";

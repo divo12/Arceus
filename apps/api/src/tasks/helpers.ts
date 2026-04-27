@@ -1,5 +1,5 @@
 import type { Task, CompanySnapshot } from "@arceus/contracts";
-import { updateTask } from "../persistence/store.js";
+import { updateTask } from "../persistence/mutations.js";
 import { audit } from "../observability/audit-ledger.js";
 import { isTaskReady } from "@arceus/task-engine";
 import { CORE_EXECUTION_TASK_KINDS, AUTONOMOUS_READY_TASK_ROLES } from "../orchestration/state.js";

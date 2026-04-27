@@ -113,10 +113,11 @@ export interface ExecutionResult {
 }
 
 export interface ExecutionDeps {
-  upsertTask: (task: Task) => Task;
-  updateTask: (taskId: string, updater: (t: Task) => Task) => Task | null;
-  upsertApproval: (approval: Approval) => Approval;
-  appendChatMessage: (msg: ChatMessage) => ChatMessage;
+  /** Spec 31 Phase 7.C.d — async to write to canonical. */
+  upsertTask: (task: Task) => Promise<Task>;
+  updateTask: (taskId: string, updater: (t: Task) => Task) => Promise<Task | null>;
+  upsertApproval: (approval: Approval) => Promise<Approval>;
+  appendChatMessage: (msg: ChatMessage) => Promise<ChatMessage>;
   flush: () => Promise<void>;
 }
 
@@ -124,11 +125,11 @@ export interface ExecutionDeps {
  * Apply resolution decisions to the store: create tasks, modify tasks,
  * create escalation approvals + CEO chat cards.
  */
-export function executeMeetingDecisions(
+export async function executeMeetingDecisions(
   meeting: Meeting,
   snap: CompanySnapshot,
   deps: ExecutionDeps,
-): ExecutionResult {
+): Promise<ExecutionResult> {
   const resolutions = meeting.resolutions;
   if (!resolutions) return { tasksCreated: 0, tasksModified: 0, escalationsCreated: 0 };
 
@@ -172,7 +173,7 @@ export function executeMeetingDecisions(
           startedAt: null,
           completedAt: null,
         };
-        deps.upsertTask(task);
+        await deps.upsertTask(task);
         tasksCreated++;
         break;
       }
@@ -181,7 +182,7 @@ export function executeMeetingDecisions(
         const ta = decision.taskAction;
         const targetId = ta.issueId;
         if (!targetId) break;
-        deps.updateTask(targetId, (t) => ({
+        await deps.updateTask(targetId, (t) => ({
           ...t,
           ...(ta.title ? { title: ta.title } : {}),
           ...(ta.description ? { description: ta.description } : {}),
@@ -209,10 +210,10 @@ export function executeMeetingDecisions(
           agendaItemId: decision.conflictId ?? decision.blockerId ?? null,
           resolutionSummary: null,
         };
-        deps.upsertApproval(approval);
+        await deps.upsertApproval(approval);
 
         // Post CEO chat card for board visibility
-        deps.appendChatMessage({
+        await deps.appendChatMessage({
           id: `msg_${crypto.randomUUID()}`,
           companyId: snap.company.id,
           sprintId: snap.company.currentSprintId ?? null,
@@ -290,12 +291,12 @@ export async function buildDailySyncBrief(
 /**
  * Post a daily_sync_summary card to CEO chat with the brief content.
  */
-export function postDailySyncSummary(
+export async function postDailySyncSummary(
   meeting: Meeting,
   brief: DailySyncBrief,
   snap: CompanySnapshot,
-  appendChatMessage: (msg: ChatMessage) => ChatMessage,
-): void {
+  appendChatMessage: (msg: ChatMessage) => Promise<ChatMessage>,
+): Promise<void> {
   const blockerLine = brief.activeBlockers.length > 0
     ? `\n**Blockers:** ${brief.activeBlockers.join("; ")}`
     : "";
@@ -314,7 +315,7 @@ export function postDailySyncSummary(
     decisionLine,
   ].filter(Boolean).join("\n");
 
-  appendChatMessage({
+  await appendChatMessage({
     id: `msg_${crypto.randomUUID()}`,
     companyId: snap.company.id,
     sprintId: snap.company.currentSprintId ?? null,

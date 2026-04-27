@@ -1,7 +1,7 @@
 import type { AgentIdentity, Meeting, Task } from "@arceus/contracts";
 import type { CeoCard } from "../agents/ceo.js";
 import { getAgentByRole, uniqueStrings, createWorkflowTask } from "@arceus/task-engine";
-import { upsertMeeting, upsertTask } from "../persistence/store.js";
+import { upsertMeeting, upsertTask } from "../persistence/mutations.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";

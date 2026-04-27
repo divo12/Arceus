@@ -237,7 +237,7 @@ export class HeartbeatEngine {
       return;
     }
     this.running = true;
-    this.schedulerTimer = setInterval(() => this.tick(), this.config.schedulerIntervalMs);
+    this.schedulerTimer = setInterval(() => void this.tick(), this.config.schedulerIntervalMs);
     console.log(
       `[HEARTBEAT] Engine started (interval=${this.config.schedulerIntervalMs}ms, maxConcurrent=${this.config.maxConcurrentBeats})`
     );
@@ -422,7 +422,7 @@ export class HeartbeatEngine {
    * Called every schedulerIntervalMs. Expires stale locks, then auto-dispatches
    * beats for agents whose role interval has elapsed, in priority order.
    */
-  private tick(): void {
+  private async tick(): Promise<void> {
     const expired = this.locks.expireStale(this.config.beatTimeoutMs);
     if (expired.length > 0) {
       console.warn("[HEARTBEAT] Expired stale locks for agents:", expired.join(", "));

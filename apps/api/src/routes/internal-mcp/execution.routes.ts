@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { updateCompanyStatus } from "../../persistence/store.js";
+import { updateCompanyStatus } from "../../persistence/mutations.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
@@ -62,9 +62,8 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    // Spec 31 Phase 7.B.5 — go through the store mutator instead of mutating
-    // snapshot.company directly (which is now a derived view).
-    updateCompanyStatus("active");
+    // Spec 31 Phase 7.C.d — direct canonical write keyed by request companyId.
+    await updateCompanyStatus(req.mcp!.companyId, "active");
     const now = new Date().toISOString();
 
     cacheAndSend(req, reply, 200, success(`Cycle complete. Ready for next sprint.`, {
@@ -88,7 +87,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     const parsed = pauseBody.safeParse(req.body);
     const reason = parsed.success ? parsed.data.reason : undefined;
 
-    updateCompanyStatus("paused");
+    await updateCompanyStatus(req.mcp!.companyId, "paused");
 
     cacheAndSend(req, reply, 200, success("Execution paused.", {
       status: "paused",
@@ -115,7 +114,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     }
 
     if (parsed.data.resumeExecution) {
-      updateCompanyStatus("active");
+      await updateCompanyStatus(req.mcp!.companyId, "active");
     }
     const snapshot = await buildSnapshotView(req.mcp!.companyId);
 
@@ -134,7 +133,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    updateCompanyStatus("archived");
+    await updateCompanyStatus(req.mcp!.companyId, "archived");
 
     cacheAndSend(req, reply, 200, success("Execution stopped.", {
       status: "archived",

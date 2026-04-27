@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { getAgentByRole, uniqueStrings, MAX_INCOMING_ARTIFACT_IDS } from "@arceus/task-engine";
-import { updateTask, writeArtifactSync } from "../persistence/store.js";
+import { updateTask, writeArtifactSync } from "../persistence/mutations.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { audit } from "../observability/audit-ledger.js";

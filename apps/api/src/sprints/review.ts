@@ -5,7 +5,7 @@ import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import {
   upsertTask,
   updateSprint,
-} from "../persistence/store.js";
+} from "../persistence/mutations.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import {
   persistRuntimeArtifact,

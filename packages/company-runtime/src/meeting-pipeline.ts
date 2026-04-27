@@ -18,7 +18,8 @@ import type {
 export interface MeetingPipelineDeps {
   /** Spec 31 Phase 7.C.b — async to read from canonical. */
   getSnapshot: () => Promise<CompanySnapshot>;
-  updateMeeting: (id: string, updater: (m: Meeting) => Meeting) => Meeting | null;
+  /** Spec 31 Phase 7.C.d — async to write directly to canonical. */
+  updateMeeting: (id: string, updater: (m: Meeting) => Meeting) => Promise<Meeting | null>;
   flush: () => Promise<void>;
 
   /** Phase 4: Trigger contribution collection from all participant agents. */
@@ -104,25 +105,25 @@ export class MeetingPipeline {
     this.deps.startTokenTracking?.(meetingId);
 
     // Step 1: Collect contributions
-    this.transition(meetingId, "collecting");
+    await this.transition(meetingId, "collecting");
     const collectResult = await this.collect(meetingId);
 
     // Step 2: Synthesize — identify conflicts, blockers, highlights
-    this.transition(meetingId, "synthesizing");
+    await this.transition(meetingId, "synthesizing");
     const synthesizeResult = await this.synthesize(meetingId);
 
     // Step 3: Resolve — make decisions (skippable for daily_sync with no issues)
     const shouldSkipResolve = this.shouldSkipResolve(meeting, synthesizeResult);
     let resolveResult: ResolveResult = { decisionCount: 0, tasksCreated: 0, tasksModified: 0, escalationsCreated: 0 };
     if (!shouldSkipResolve) {
-      this.transition(meetingId, "resolving");
+      await this.transition(meetingId, "resolving");
       resolveResult = await this.resolve(meetingId);
     } else {
       console.log(`[MEETING-PIPELINE] Skipping resolve for ${meetingId} (no conflicts/blockers)`);
     }
 
     // Step 4: Learn — extract memories
-    this.transition(meetingId, "learning");
+    await this.transition(meetingId, "learning");
     const learnResult = await this.learn(meetingId);
 
     // Step 4b: Produce daily sync brief (for daily_sync meetings)
@@ -139,7 +140,7 @@ export class MeetingPipeline {
       : null;
     const skippedBefore = schedule?.skipCount ?? 0;
 
-    this.deps.updateMeeting(meetingId, (m) => ({
+    await this.deps.updateMeeting(meetingId, (m) => ({
       ...m,
       status: "completed",
       completedAt: new Date().toISOString(),
@@ -258,8 +259,8 @@ export class MeetingPipeline {
     return snap.meetings.find((m) => m.id === meetingId);
   }
 
-  private transition(meetingId: string, status: Meeting["status"]): void {
-    this.deps.updateMeeting(meetingId, (m) => ({ ...m, status }));
+  private async transition(meetingId: string, status: Meeting["status"]): Promise<void> {
+    await this.deps.updateMeeting(meetingId, (m) => ({ ...m, status }));
   }
 
   /**

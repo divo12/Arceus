@@ -73,15 +73,18 @@ export async function applyStrategyTx(
 
   const db = getDb();
 
-  // Read the current rows we need to update.
-  const [currentCompany, currentIdea, currentStrategy] = await Promise.all([
+  // Read the current rows we need to update. findActiveByCompany returns
+  // the raw row (Date timestamps); hydrate via rowToStrategy so we work in
+  // contract types (ISO strings) end-to-end.
+  const [currentCompany, currentIdea, strategyRow] = await Promise.all([
     companiesRepo.findByIdHydrated(db, companyId),
     ideasRepo.findByCompanyHydrated(db, companyId),
     strategyBriefsRepo.findActiveByCompany(db, companyId),
   ]);
   if (!currentCompany) throw new Error(`applyStrategyTx: company ${companyId} not found`);
   if (!currentIdea) throw new Error(`applyStrategyTx: idea for company ${companyId} not found`);
-  if (!currentStrategy) throw new Error(`applyStrategyTx: strategy for company ${companyId} not found`);
+  if (!strategyRow) throw new Error(`applyStrategyTx: strategy for company ${companyId} not found`);
+  const currentStrategy = strategyBriefsRepo.rowToStrategy(strategyRow);
 
   // ── Build the org chart in memory ────────────────────────────
   const roleToAgentId = new Map<string, string>();

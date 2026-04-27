@@ -56,7 +56,7 @@ import {
   updateTask,
   upsertApproval,
   appendChatMessage,
-} from "./persistence/store.js";
+} from "./persistence/mutations.js";
 import { cpLoadAgentContext, cpApplyMutations, cpCommitBeatRecord, cpGetSnapshotVersion, cpSetBuildCheckDir, cpHydrateTrustScores } from "./persistence/control-plane.js";
 import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./infra/azure-openai.js";
 import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";
@@ -64,7 +64,7 @@ import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit
 import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
 import { buildSnapshotView } from "./orchestration/snapshot-view.js";
-import { getActiveCompanyId, requireActiveCompanyId } from "./persistence/active-company.js";
+import { getActiveCompanyId, requireActiveCompanyId, loadActiveCompanyIdFromCanonical } from "./persistence/active-company.js";
 import { runBeat } from "./orchestration/run-beat.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
@@ -129,6 +129,10 @@ cpSetBuildCheckDir(productDir);
 const persistenceMode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
 console.log(`[STARTUP] Company state persistence mode: ${persistenceMode}`);
 await hydrate();
+// Spec 31 Phase 7.C.d — populate the active-company seam from canonical so
+// sync callers (route handlers, fire-and-forget reactive paths) can resolve
+// companyId immediately on first request after a restart.
+await loadActiveCompanyIdFromCanonical();
 
 // ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
 
@@ -269,7 +273,7 @@ const meetingPipeline = new MeetingPipeline({
     const snap = await getSnapshotForPackages();
     const result = await runFacilitatorSession(meeting, snap);
 
-    const updated = updateMeeting(meeting.id, (m) => ({
+    const updated = await updateMeeting(meeting.id, (m) => ({
       ...m,
       synthesis: result.synthesis,
       resolutions: result.resolutions,
@@ -289,7 +293,7 @@ const meetingPipeline = new MeetingPipeline({
   async executeMeetingDecisions(meeting) {
     const { executeMeetingDecisions: execute } = await import("./meetings/resolution.js");
     const snap = await getSnapshotForPackages();
-    const result = execute(meeting, snap, { upsertTask, updateTask, upsertApproval, appendChatMessage, flush });
+    const result = await execute(meeting, snap, { upsertTask, updateTask, upsertApproval, appendChatMessage, flush });
     await flush();
     return result;
   },
@@ -299,7 +303,7 @@ const meetingPipeline = new MeetingPipeline({
     if (!meeting.brief) return meeting;
     const { postDailySyncSummary } = await import("./meetings/resolution.js");
     const snap = await getSnapshotForPackages();
-    postDailySyncSummary(meeting, meeting.brief, snap, appendChatMessage);
+    await postDailySyncSummary(meeting, meeting.brief, snap, appendChatMessage);
     await flush();
     return meeting;
   },

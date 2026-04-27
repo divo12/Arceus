@@ -1,22 +1,16 @@
 /**
- * Company persistence dual-write — Phase 4A.
+ * Company persistence helper — Spec 31 Phase 7.C.d.
  *
- * Same pattern as `task-persistence.ts`: route + store mutators call
- * `persistCompany(companyId)` after every change to keep the Postgres
- * row in sync with the in-memory snapshot. Read-fallback isn't needed
- * here today — every consumer reads `getSnapshot().company` directly,
- * not by id — so we ship the write path now and migrate readers in a
- * later phase if the use case appears.
- *
- * Failures are logged with the postgres error code and never thrown;
- * the store remains authoritative until Phase 5+ migrates company
- * readers off `getSnapshot()`.
+ * Post-7.C.d, the in-memory snapshot is gone. `persistCompany(companyId)`
+ * is now a thin re-up of the canonical row read directly from the DB.
+ * It survives as a name because `task-persistence.ts` still calls it as
+ * an FK-retry helper (read-modify-write the company row when a child
+ * insert hits 23503).
  */
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import postgres from "postgres";
 import { observability } from "@arceus/contracts";
-import { getSnapshot } from "./store.js";
 
 function pgErrorCode(err: unknown): string {
   if (err instanceof postgres.PostgresError) return err.code;
@@ -27,28 +21,18 @@ function pgErrorCode(err: unknown): string {
 }
 
 /**
- * Persist the current `snapshot.company` to the DB. Called after every
- * store mutation that touches the company row (bootstrapCompany,
- * updateCompanyStatus, updateCompanySprint, strategy approval, budget
- * spend, etc.). The store stays authoritative; the DB row is kept in
- * sync so Phase 3C+ task FK writes succeed.
+ * Re-upsert the company row keyed by id. Used by the FK-retry path in
+ * `task-persistence.ts` to make sure the parent row exists before
+ * retrying a child insert. No-op if the row doesn't exist.
  */
 export async function persistCompany(companyId: string): Promise<void> {
-  const company = getSnapshot().company;
-  if (!company || company.id !== companyId) return;
-  // Don't persist the placeholder company id used before bootstrap —
-  // it has no `boardOwner`, no real budget, and no strategy id; the
-  // upsert would write a useless row that confuses anyone debugging
-  // the table.
-  if (company.id === "company_pending") return;
+  const company = await companiesRepo.findByIdHydrated(getDb(), companyId);
+  if (!company) return;
   try {
     await companiesRepo.upsertCompany(getDb(), company);
   } catch (err) {
     const code = pgErrorCode(err);
     console.warn(`[companies] DB sync skipped for ${companyId} (pg=${code})`);
-    // Surface to inspector — without this we can't tell whether the
-    // downstream `persist:tasks pg=23503` cascade is caused by a missing
-    // company row or by a tasks-table issue.
     observability.logEvent({
       event: "persist.failed",
       table: "companies",

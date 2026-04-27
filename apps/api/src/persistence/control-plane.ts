@@ -21,6 +21,7 @@ import type {
   TaskResult,
 } from "@arceus/contracts";
 import { loadPersistedCompanyState, schedulePersistedCompanyState } from "./company-state.js";
+import { getActiveCompanyId } from "./active-company.js";
 import { audit, auditSystem } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
@@ -241,19 +242,23 @@ function applyOneMutation(companyId: string, mutation: StateMutation, causationI
       break;
 
     case "transition_update":
-      updateTransition(mutation.transitionId, (t) => ({
-        ...t,
+      // Spec 31 Phase 7.C.d — transitions/feedback are no-ops post-shell.
+      updateTransition(mutation.transitionId, (t: unknown) => ({
+        ...(t as Record<string, unknown>),
         ...mutation.changes,
       }));
       break;
 
     case "agent_status":
-      updateAgentStatus(mutation.agentId, mutation.status);
+      void updateAgentStatus(mutation.agentId, mutation.status);
       break;
 
-    case "company_status":
-      updateCompanyStatus(mutation.status);
+    case "company_status": {
+      // Spec 31 Phase 7.C.d — updateCompanyStatus needs companyId now.
+      const cid = getActiveCompanyId();
+      if (cid) void updateCompanyStatus(cid, mutation.status as never);
       break;
+    }
 
     case "task_progress":
       updateTaskProgress(mutation.taskId, mutation.progress);

@@ -26,9 +26,10 @@ import type {
 export interface MeetingSchedulerDeps {
   /** Spec 31 Phase 7.C.b — async to read from canonical. */
   getSnapshot: () => Promise<CompanySnapshot>;
-  upsertMeeting: (meeting: Meeting) => Meeting;
-  upsertMeetingSchedule: (schedule: MeetingSchedule) => MeetingSchedule;
-  updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => MeetingSchedule | null;
+  /** Spec 31 Phase 7.C.d — async to write directly to canonical. */
+  upsertMeeting: (meeting: Meeting) => Promise<Meeting>;
+  upsertMeetingSchedule: (schedule: MeetingSchedule) => Promise<MeetingSchedule>;
+  updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => Promise<MeetingSchedule | null>;
   flush: () => Promise<void>;
   runPipeline: (meetingId: string) => Promise<void>;
 }
@@ -85,7 +86,7 @@ export class MeetingScheduler {
       if (snap.company.id === "company_pending") return;
 
       // Auto-create daily sync schedule when 2+ agents exist
-      this.ensureDailySyncExists(snap);
+      await this.ensureDailySyncExists(snap);
 
       const now = Date.now();
       const schedules = snap.meetingSchedules ?? [];
@@ -117,7 +118,7 @@ export class MeetingScheduler {
           if (!sprintId || alreadyFiredThisSprint) {
             const nowIso = new Date().toISOString();
             const nextCheckIso = new Date(now + schedule.intervalMs).toISOString();
-            this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+            await this.deps.updateMeetingSchedule(schedule.id, (s) => ({
               ...s,
               lastCheckedAt: nowIso,
               nextCheckAt: nextCheckIso,
@@ -134,7 +135,7 @@ export class MeetingScheduler {
 
         if (!needsMeeting) {
           // Skip — increment skip counter, advance nextCheckAt
-          this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+          await this.deps.updateMeetingSchedule(schedule.id, (s) => ({
             ...s,
             lastCheckedAt: nowIso,
             nextCheckAt: nextCheckIso,
@@ -146,10 +147,10 @@ export class MeetingScheduler {
 
         // Create scheduled meeting
         const meeting = this.createScheduledMeeting(snap, schedule);
-        this.deps.upsertMeeting(meeting);
+        await this.deps.upsertMeeting(meeting);
 
         // Update schedule — link meeting, reset skip count, advance
-        this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+        await this.deps.updateMeetingSchedule(schedule.id, (s) => ({
           ...s,
           lastCheckedAt: nowIso,
           lastMeetingId: meeting.id,
@@ -216,7 +217,7 @@ export class MeetingScheduler {
    * Ensures a daily_sync schedule exists when 2+ agents are active.
    * Idempotent — safe to call every tick.
    */
-  ensureDailySyncExists(snap: CompanySnapshot): void {
+  async ensureDailySyncExists(snap: CompanySnapshot): Promise<void> {
     const schedules = snap.meetingSchedules ?? [];
     const hasDailySync = schedules.some((s) => s.type === "daily_sync");
     if (hasDailySync) return;
@@ -250,7 +251,7 @@ export class MeetingScheduler {
       },
     };
 
-    this.deps.upsertMeetingSchedule(schedule);
+    await this.deps.upsertMeetingSchedule(schedule);
     console.log(`[MEETING-SCHEDULER] Auto-created daily_sync schedule for ${activeAgents.length} agents`);
   }
 
@@ -286,12 +287,12 @@ export class MeetingScheduler {
    * Returns null if no manager exists for the role or if an active
    * escalation meeting already exists for this task.
    */
-  createEscalationMeeting(
+  async createEscalationMeeting(
     snap: CompanySnapshot,
     blockedAgentId: string,
     blockerDetail: string,
     relatedTaskId: string | null,
-  ): Meeting | null {
+  ): Promise<Meeting | null> {
     const blockedAgent = snap.agents.find((a) => a.id === blockedAgentId);
     if (!blockedAgent) return null;
 
@@ -331,7 +332,7 @@ export class MeetingScheduler {
       completedAt: null,
     };
 
-    this.deps.upsertMeeting(meeting);
+    await this.deps.upsertMeeting(meeting);
     console.log(
       `[MEETING-SCHEDULER] Escalation meeting ${meeting.id}: ${blockedAgent.role} → ${managerRole} (${blockerDetail.slice(0, 80)})`,
     );
@@ -350,12 +351,12 @@ export class MeetingScheduler {
    *
    * Returns null if the chain is exhausted (already at CEO level).
    */
-  escalateUp(
+  async escalateUp(
     snap: CompanySnapshot,
     previousMeeting: Meeting,
     blockerDetail: string,
     relatedTaskId: string | null,
-  ): Meeting | null {
+  ): Promise<Meeting | null> {
     // The facilitator of the previous meeting is the manager who couldn't resolve.
     // Escalate to THEIR manager.
     const prevManager = snap.agents.find((a) => a.id === previousMeeting.facilitatorAgentId);
@@ -392,7 +393,7 @@ export class MeetingScheduler {
       completedAt: null,
     };
 
-    this.deps.upsertMeeting(meeting);
+    await this.deps.upsertMeeting(meeting);
     console.log(
       `[MEETING-SCHEDULER] Escalation UP ${meeting.id}: ${prevManager.role} → ${nextManagerRole}`,
     );

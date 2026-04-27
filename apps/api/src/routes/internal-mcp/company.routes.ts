@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { updateCompanyStatus } from "../../persistence/store.js";
+import { updateCompanyStatus } from "../../persistence/mutations.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
@@ -73,9 +73,9 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
       return;
     }
 
-    // Spec 31 Phase 7.B.5 — go through the store mutator so the change
-    // dual-writes to canonical instead of silently mutating the snapshot.
-    updateCompanyStatus(parsed.data.status);
+    // Spec 31 Phase 7.C.d — direct canonical write keyed by the request's
+    // companyId from the MCP middleware.
+    await updateCompanyStatus(req.mcp!.companyId, parsed.data.status);
 
     cacheAndSend(req, reply, 200, success("Company status updated.", {
       status: parsed.data.status,

@@ -25,6 +25,59 @@ import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as ideasRepo from "@arceus/db/src/repos/ideas.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
+import { setActiveCompanyId } from "../persistence/active-company.js";
+
+function titleCase(value: string) {
+  return value
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+/**
+ * Derive a creative 1–2 word company name from a free-text idea via
+ * an LLM. Falls back to a deterministic title-cased extract when the
+ * model is unavailable. Spec 31 Phase 7.C.d — moved here from the
+ * dying `persistence/store.ts`; lives next to the only caller
+ * (bootstrapCompanyTx via `orchestration/bootstrap.ts`).
+ */
+export async function deriveCompanyNameFromIdea(idea: string): Promise<string> {
+  try {
+    const { structuredCompletion } = await import("../infra/azure-openai.js");
+    const { z } = await import("zod");
+    const schema = z.object({ name: z.string() });
+    const result = await structuredCompletion(
+      "ceoDeployment",
+      [
+        {
+          role: "system",
+          content:
+            "Generate a creative, fun, abstract company name (1-2 words). " +
+            "It should feel like a startup name — evocative, memorable, slightly playful. " +
+            "Do NOT include generic suffixes like Labs, Inc, Co, Corp, etc. " +
+            "Return ONLY the name. Examples of good names: Nebula, Helix, Prism, Opal, Zigzag.",
+        },
+        { role: "user", content: `Business idea: ${idea.slice(0, 200)}` },
+      ],
+      schema,
+      "company_name",
+      { temperature: 1.0, maxTokens: 30 },
+    );
+    const name = result.name?.trim();
+    if (name && name.length >= 2 && name.length <= 30) return name;
+  } catch {
+    // fall through to deterministic fallback
+  }
+  const core = idea
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" ");
+  return core ? titleCase(core) : "New Company";
+}
 
 export interface BootstrapInput {
   companyName: string;
@@ -87,6 +140,10 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
     await ideasRepo.upsertIdea(tx, idea);
     await strategyBriefsRepo.upsertStrategy(tx, strategy);
   });
+
+  // The transaction committed — wire the active-company seam so sync
+  // callers can resolve companyId without a DB roundtrip.
+  setActiveCompanyId(companyId);
 
   return { company, idea, strategy };
 }

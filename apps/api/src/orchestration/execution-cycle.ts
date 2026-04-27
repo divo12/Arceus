@@ -6,7 +6,7 @@ import type { AgentIdentity } from "@arceus/contracts";
 import { uniqueStrings, nowIso } from "@arceus/task-engine";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
-import { updateTask } from "../persistence/store.js";
+import { updateTask } from "../persistence/mutations.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "./snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";

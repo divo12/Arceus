@@ -9,8 +9,7 @@
  * view consumers expect.
  */
 
-import { bootstrapCompanyTx, type BootstrapInput } from "../companies/bootstrap.js";
-import { deriveCompanyNameFromIdea } from "../persistence/store.js";
+import { bootstrapCompanyTx, deriveCompanyNameFromIdea, type BootstrapInput } from "../companies/bootstrap.js";
 import { buildSnapshotView } from "./snapshot-view.js";
 import { workspaceManager } from "../workspace/manager.js";
 

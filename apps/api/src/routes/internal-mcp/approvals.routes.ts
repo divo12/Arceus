@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { requestApproval } from "../../memory/handoffs.js";
-import { updateApproval } from "../../persistence/store.js";
+import { updateApproval } from "../../persistence/mutations.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { getAgentByRole } from "@arceus/task-engine";
 import { observability } from "@arceus/contracts";

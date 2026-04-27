@@ -1,151 +1,30 @@
-import { desc, eq } from "drizzle-orm";
-import type { CompanySnapshot, EventEnvelope } from "@arceus/contracts";
-import { companyStatesTable, getDb, isDatabaseConfigured } from "@arceus/db";
-
 /**
- * When ARCEUS_PERSISTENCE_MODE=local, company state is kept in-memory only.
- * DB reads/writes are skipped so co-founders sharing a Supabase instance
- * don't pollute each other's local runs.  Default: "local".
+ * Spec 31 Phase 7.C.d — compatibility shim.
+ *
+ * The original `company_states` table is being dropped in 7.C.d's
+ * legacy-tables migration. These functions used to read/write that
+ * table; now they're no-ops kept around for control-plane.ts which
+ * still imports them. Deleted in 7.C.d-cp.
  */
-function isCompanyStatePersistenceEnabled(): boolean {
-  const mode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
-  return mode === "db" && isDatabaseConfigured();
-}
+import type { CompanySnapshot, EventEnvelope } from "@arceus/contracts";
 
-type PersistedCompanyState = {
+export interface PersistedCompanyState {
   snapshot: CompanySnapshot;
   events: EventEnvelope[];
-  updatedAt: string;
-};
-
-let pendingPersist: PersistedCompanyState | null = null;
-let persistQueue: Promise<void> = Promise.resolve();
-let lastPersistError: Error | null = null;
-
-function clonePersistedState(snapshot: CompanySnapshot, events: EventEnvelope[]): PersistedCompanyState {
-  return {
-    snapshot: structuredClone(snapshot),
-    events: structuredClone(events),
-    updatedAt: new Date().toISOString(),
-  };
 }
 
-async function writePersistedCompanyState(state: PersistedCompanyState) {
-  try {
-    await getDb()
-      .insert(companyStatesTable)
-      .values({
-        companyId: state.snapshot.company.id,
-        snapshotData: state.snapshot,
-        eventLog: state.events,
-        updatedAt: new Date(state.updatedAt),
-      })
-      .onConflictDoUpdate({
-        target: companyStatesTable.companyId,
-        set: {
-          snapshotData: state.snapshot,
-          eventLog: state.events,
-          updatedAt: new Date(state.updatedAt),
-        },
-      });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[PERSIST] writePersistedCompanyState FAILED for ${state.snapshot.company.id}: ${msg}`);
-    throw err;
-  }
+export async function loadPersistedCompanyState(_companyId?: string): Promise<PersistedCompanyState | null> {
+  return null;
 }
 
-async function drainPersistQueue() {
-  while (pendingPersist) {
-    const next = pendingPersist;
-    pendingPersist = null;
-    await writePersistedCompanyState(next);
-  }
+export async function schedulePersistedCompanyState(_snapshot: CompanySnapshot, _events: EventEnvelope[]): Promise<void> {
+  // no-op
 }
 
-/** Load the most recent persisted company state from the DB, optionally filtered by company ID. */
-export async function loadPersistedCompanyState(companyId?: string): Promise<PersistedCompanyState | null> {
-  if (!isCompanyStatePersistenceEnabled()) {
-    return null;
-  }
-
-  try {
-    if (companyId) {
-      const rows = await getDb().select().from(companyStatesTable).where(eq(companyStatesTable.companyId, companyId)).limit(1);
-      const row = rows[0];
-      return row
-        ? {
-            snapshot: row.snapshotData as CompanySnapshot,
-            events: row.eventLog as EventEnvelope[],
-            updatedAt: row.updatedAt.toISOString(),
-          }
-        : null;
-    }
-
-    const rows = await getDb().select().from(companyStatesTable).orderBy(desc(companyStatesTable.updatedAt)).limit(1);
-    const row = rows[0];
-    return row
-      ? {
-          snapshot: row.snapshotData as CompanySnapshot,
-          events: row.eventLog as EventEnvelope[],
-          updatedAt: row.updatedAt.toISOString(),
-        }
-      : null;
-  } catch {
-    return null;
-  }
+export async function flushPersistedCompanyState(): Promise<void> {
+  // no-op
 }
 
-/** Schedule a coalescing persist of company state — only the latest snapshot is written. */
-export function schedulePersistedCompanyState(snapshot: CompanySnapshot, events: EventEnvelope[]) {
-  if (!isCompanyStatePersistenceEnabled() || snapshot.company.id === "company_pending") {
-    return Promise.resolve();
-  }
-
-  pendingPersist = clonePersistedState(snapshot, events);
-  persistQueue = persistQueue.then(
-    async () => {
-      await drainPersistQueue();
-      lastPersistError = null;
-    },
-    async () => {
-      await drainPersistQueue();
-      lastPersistError = null;
-    }
-  ).catch((error) => {
-    lastPersistError = error instanceof Error ? error : new Error("Company state persistence failed.");
-    throw lastPersistError;
-  });
-
-  return persistQueue;
-}
-
-/** Flush all pending company state writes. Ignores errors since in-memory state is authoritative. */
-export async function flushPersistedCompanyState() {
-  if (!isCompanyStatePersistenceEnabled()) {
-    return;
-  }
-
-  await persistQueue.catch(() => undefined);
-  if (pendingPersist) {
-    await schedulePersistedCompanyState(pendingPersist.snapshot, pendingPersist.events).catch(() => undefined);
-  }
-  await persistQueue.catch(() => undefined);
-
-  if (lastPersistError) {
-    console.error(`[PERSIST] flushPersistedCompanyState ignoring error (in-memory state is authoritative): ${lastPersistError.message}`);
-    lastPersistError = null;
-  }
-}
-
-/** Delete persisted company state for a given company ID and clear the pending queue. */
-export async function deletePersistedCompanyState(companyId: string) {
-  if (!isCompanyStatePersistenceEnabled()) {
-    return;
-  }
-
-  pendingPersist = null;
-  await persistQueue.catch(() => undefined);
-  lastPersistError = null;
-  await getDb().delete(companyStatesTable).where(eq(companyStatesTable.companyId, companyId));
+export async function deletePersistedCompanyState(_companyId: string): Promise<void> {
+  // no-op
 }

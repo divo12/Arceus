@@ -7,7 +7,7 @@ import {
   updateSprint,
   upsertSprint,
   updateCompanySprint,
-} from "../persistence/store.js";
+} from "../persistence/mutations.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
@@ -42,8 +42,15 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   }
 
   // Create Sprint N+1
-  const sprint = createSprintRecord(
-    { upsertSprint, updateCompanySprint, emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void },
+  // Spec 31 Phase 7.C.d — updateCompanySprint mutator is now
+  // (companyId, sprintId, number); the task-engine helper passes only
+  // (sprintId, number), so close over companyId here.
+  const sprint = await createSprintRecord(
+    {
+      upsertSprint,
+      updateCompanySprint: (sprintId, number) => updateCompanySprint(companyId, sprintId, number),
+      emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void,
+    },
     snapshot,
     `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${input.goal}`,
     input.goal,

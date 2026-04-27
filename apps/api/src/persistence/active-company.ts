@@ -1,35 +1,73 @@
 /**
- * Single-company tenancy seam — Spec 31 Phase 7.B.5.
+ * Single-company tenancy seam — Spec 31 Phase 7.B.5 / 7.C.d.
  *
- * Arceus is currently single-company-per-process. Many handlers historically
- * read `getSnapshot().company.id` to get the active company. This module
- * provides a stable seam they can call instead so the snapshot dependency
- * disappears once Phase 7.C retires `store.ts`.
+ * Arceus runs single-company-per-process today. The seam is a sync
+ * read because most callers (route handlers, fire-and-forget reactive
+ * paths, sync mutators) can't tolerate awaiting a DB roundtrip just
+ * to learn which company they're operating against.
  *
- * Resolution order:
- *   1. In-memory snapshot company id (still authoritative during B.5).
- *   2. Latest hydrated companyId persisted to `companies` table (fallback
- *      once B.5 cuts over and the in-memory snapshot is gone).
+ * Implementation:
+ *   - Module-local `activeCompanyId` variable.
+ *   - `setActiveCompanyId` is called by `bootstrapCompanyTx` after the
+ *     transaction commits.
+ *   - `loadActiveCompanyIdFromCanonical()` is called at server startup
+ *     to populate it from the `companies` table when an existing
+ *     company survived a process restart.
+ *   - `clearActiveCompanyId` is called by reset / teardown paths.
  *
- * Returns `null` (or throws via `requireActiveCompanyId`) when no company
- * has been bootstrapped yet — the caller decides which signal to surface.
+ * Multi-tenant T1+ replaces this with a per-request `companyContext`
+ * middleware. Until then this is the single source of truth for "which
+ * company is the current process serving."
  */
-import { getSnapshot } from "./store.js";
+import { getDb } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 
-const PENDING_COMPANY_ID = "company_pending";
+let activeCompanyId: string | null = null;
 
 /** Return the active company id or null when no company has been bootstrapped. */
 export function getActiveCompanyId(): string | null {
-  const snapshotId = getSnapshot().company.id;
-  if (snapshotId && snapshotId !== PENDING_COMPANY_ID) return snapshotId;
-  return null;
+  return activeCompanyId;
 }
 
 /** Return the active company id or throw a 409-shaped error when missing. */
 export function requireActiveCompanyId(): string {
-  const id = getActiveCompanyId();
-  if (!id) {
+  if (!activeCompanyId) {
     throw new Error("No active company. Bootstrap a company before calling this endpoint.");
   }
-  return id;
+  return activeCompanyId;
+}
+
+/**
+ * Set the active company id. Called by `bootstrapCompanyTx` after the
+ * transaction commits. Idempotent — safe to call with the same id.
+ */
+export function setActiveCompanyId(id: string): void {
+  activeCompanyId = id;
+}
+
+/** Clear the active company id. Called by reset / teardown paths. */
+export function clearActiveCompanyId(): void {
+  activeCompanyId = null;
+}
+
+/**
+ * Hydrate the active company id from canonical at server startup.
+ * Picks the most-recently-created company row when multiple exist
+ * (single-company-per-process today, so usually 0 or 1 rows).
+ */
+export async function loadActiveCompanyIdFromCanonical(): Promise<string | null> {
+  try {
+    const all = await companiesRepo.listCompanies(getDb());
+    if (all.length === 0) {
+      activeCompanyId = null;
+      return null;
+    }
+    // Pick the most recent; deterministic when there's just one.
+    const sorted = [...all].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    activeCompanyId = sorted[0].id;
+    return activeCompanyId;
+  } catch (err) {
+    console.warn("[active-company] failed to load from canonical:", err);
+    return null;
+  }
 }
