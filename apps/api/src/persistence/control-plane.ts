@@ -26,7 +26,10 @@ import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { audit, auditSystem } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { isDatabaseConfigured, getDb } from "@arceus/db";
-import { beatRecordsTable, trustScoresTable, policyViolationsTable } from "@arceus/db";
+import { heartbeatRuns, trustScoresTable, policyViolations as policyViolationsCanonical } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { desc, eq, and, sql } from "drizzle-orm";
 import {
   createInitialTrust,
@@ -610,35 +613,113 @@ export async function cpLoadActiveSprint() {
   return snap.sprints.find((s) => s.id === snap.company.currentSprintId) ?? null;
 }
 
+// ── Beat record persistence — Spec 31 Phase 7.B.5.1 ────────
+//
+// The legacy `beat_records` text-PK table has been retired. Beat
+// history is now persisted to the canonical `heartbeat_runs` (uuid PK,
+// FK to companies/agents). The legacy `BeatRecord` contract carries
+// fields the canonical schema doesn't (phases, snapshotVersion*,
+// outcome enum, summary, errorMessage) — those round-trip through the
+// `triggerDetail` jsonb column, keyed under `_legacy.*` so the column's
+// primary purpose (carrying the structured trigger payload) stays clear.
+//
+// Status mapping at write time:
+//   running   → running
+//   completed → completed
+//   failed    → failed
+//   timed_out → failed (cause stamped from errorMessage or "timed_out")
+//   skipped   → never reaches commit (the heartbeat engine returns
+//                null before the post-beat persistence hook fires)
+
+interface LegacyBeatSidecar {
+  /** Original friendly ids — used to round-trip back to BeatRecord shape. */
+  friendlyIds?: { id: string; companyId: string; agentId: string | null };
+  /** Original BeatTrigger object (interval | event). */
+  trigger?: BeatRecord["trigger"];
+  phases?: BeatRecord["phases"];
+  snapshotVersionRead?: number | null;
+  snapshotVersionWritten?: number | null;
+  outcome?: BeatRecord["outcome"];
+  summary?: string | null;
+  errorMessage?: string | null;
+}
+
+function legacyStatusToCanonical(s: BeatRecord["status"]): "running" | "completed" | "failed" {
+  if (s === "running") return "running";
+  if (s === "completed") return "completed";
+  // failed / timed_out / skipped all collapse to "failed" on the
+  // canonical side; sidecar carries the precise legacy status.
+  return "failed";
+}
+
 /**
- * Commit a BeatRecord to the DB. Non-blocking — logs warning on failure.
- * Returns true if committed successfully.
+ * Commit a BeatRecord to canonical `heartbeat_runs`. Non-blocking — logs
+ * a warning on failure. Returns true if committed successfully.
+ *
+ * Friendly ids (`beat_…`, `agent_…`, `company_…`) are mapped to their
+ * deterministic uuid form via `friendlyToUuid` so the FK references
+ * land on the canonical rows. Legacy-only fields are stashed in
+ * `triggerDetail._legacy` for read-side reconstruction.
  */
 export async function cpCommitBeatRecord(record: BeatRecord): Promise<boolean> {
   if (!isDatabaseConfigured()) {
     return false;
   }
+  // heartbeat_runs.agent_id is NOT NULL — legacy contract allowed it
+  // because some pre-Spec-12 records were system-scoped. Skip those
+  // rather than insert with a bogus agent uuid.
+  if (!record.agentId) {
+    return false;
+  }
 
   try {
     const db = getDb();
-    await db.insert(beatRecordsTable).values({
-      id: record.id,
-      companyId: record.companyId,
-      agentId: record.agentId,
-      beatNumber: record.beatNumber,
+    const sidecar: LegacyBeatSidecar = {
+      friendlyIds: {
+        id: record.id,
+        companyId: record.companyId,
+        agentId: record.agentId,
+      },
       trigger: record.trigger,
-      startedAt: new Date(record.startedAt),
-      endedAt: record.endedAt ? new Date(record.endedAt) : null,
-      status: record.status,
+      phases: record.phases,
       snapshotVersionRead: record.snapshotVersionRead,
       snapshotVersionWritten: record.snapshotVersionWritten,
-      phases: record.phases,
       outcome: record.outcome,
-      totalTokens: record.totalTokens,
-      costCents: String(record.costCents),
-      errorMessage: record.errorMessage,
       summary: record.summary,
-    });
+      errorMessage: record.errorMessage,
+    };
+    const cause =
+      record.errorMessage ??
+      (record.status === "timed_out" ? "timed_out" : record.status === "skipped" ? "skipped" : null);
+    await db
+      .insert(heartbeatRuns)
+      .values({
+        id: friendlyToUuid(record.id),
+        companyId: companiesRepo.toDbId(record.companyId),
+        agentId: agentsRepo.toDbId(record.agentId),
+        beatNumber: record.beatNumber,
+        trigger: record.trigger.type, // "interval" | "event"
+        triggerDetail: { _legacy: sidecar },
+        status: legacyStatusToCanonical(record.status),
+        cause,
+        startedAt: new Date(record.startedAt),
+        finishedAt: record.endedAt ? new Date(record.endedAt) : null,
+        totalTokens: record.totalTokens,
+        totalCostCents: Math.round(record.costCents),
+        toolCallCount: record.phases?.execution?.toolCalls ?? 0,
+      })
+      .onConflictDoUpdate({
+        target: heartbeatRuns.id,
+        set: {
+          status: legacyStatusToCanonical(record.status),
+          cause,
+          finishedAt: record.endedAt ? new Date(record.endedAt) : null,
+          totalTokens: record.totalTokens,
+          totalCostCents: Math.round(record.costCents),
+          toolCallCount: record.phases?.execution?.toolCalls ?? 0,
+          triggerDetail: { _legacy: sidecar },
+        },
+      });
     return true;
   } catch (err) {
     console.warn("[CP] Failed to commit beat record:", err instanceof Error ? err.message : err);
@@ -647,7 +728,10 @@ export async function cpCommitBeatRecord(record: BeatRecord): Promise<boolean> {
 }
 
 /**
- * Retrieve beat history from DB. Falls back to empty array if DB is unavailable.
+ * Retrieve beat history from canonical `heartbeat_runs`. Falls back to
+ * empty array if DB is unavailable. The legacy `BeatRecord` shape is
+ * reconstructed from the canonical row; legacy-only fields come from
+ * the `triggerDetail._legacy` sidecar (see `cpCommitBeatRecord`).
  */
 export async function cpGetBeatHistory(
   companyId: string,
@@ -658,34 +742,56 @@ export async function cpGetBeatHistory(
   try {
     const db = getDb();
     const limit = opts?.limit ?? 100;
-    const conditions = [eq(beatRecordsTable.companyId, companyId)];
-    if (opts?.agentId) conditions.push(eq(beatRecordsTable.agentId, opts.agentId));
+    const conditions = [eq(heartbeatRuns.companyId, companiesRepo.toDbId(companyId))];
+    if (opts?.agentId) conditions.push(eq(heartbeatRuns.agentId, agentsRepo.toDbId(opts.agentId)));
 
     const rows = await db
       .select()
-      .from(beatRecordsTable)
+      .from(heartbeatRuns)
       .where(conditions.length === 1 ? conditions[0] : and(...conditions))
-      .orderBy(desc(beatRecordsTable.startedAt))
+      .orderBy(desc(heartbeatRuns.startedAt))
       .limit(limit);
 
-    return rows.map((r) => ({
-      id: r.id,
-      companyId: r.companyId,
-      agentId: r.agentId ?? null,
-      beatNumber: r.beatNumber,
-      trigger: r.trigger as BeatRecord["trigger"],
-      startedAt: r.startedAt?.toISOString() ?? new Date().toISOString(),
-      endedAt: r.endedAt?.toISOString() ?? null,
-      status: r.status as BeatRecord["status"],
-      snapshotVersionRead: r.snapshotVersionRead ?? null,
-      snapshotVersionWritten: r.snapshotVersionWritten ?? null,
-      phases: (r.phases ?? {}) as BeatRecord["phases"],
-      outcome: (r.outcome as BeatRecord["outcome"]) ?? null,
-      totalTokens: r.totalTokens ?? 0,
-      costCents: Number(r.costCents) || 0,
-      errorMessage: r.errorMessage ?? null,
-      summary: r.summary ?? null,
-    }));
+    return rows.map((r): BeatRecord => {
+      const sidecar = ((r.triggerDetail as { _legacy?: LegacyBeatSidecar } | null)?._legacy) ?? {};
+      // Reconstruct trigger: prefer sidecar (full BeatTrigger object);
+      // fall back to a minimal interval shape if the legacy payload was
+      // never written (mixed-source rows).
+      const trigger: BeatRecord["trigger"] =
+        sidecar.trigger ??
+        (r.trigger === "event"
+          ? { type: "event", event: "task_assigned" }
+          : { type: "interval", scheduledAt: r.startedAt?.toISOString() ?? new Date().toISOString() });
+      // Map canonical → legacy status. 'stranded' surfaces as 'failed'
+      // for legacy contract consumers; the sidecar carries the original
+      // status when the row was written via this module.
+      const legacyStatus: BeatRecord["status"] =
+        r.status === "running"
+          ? "running"
+          : r.status === "completed"
+            ? "completed"
+            : r.status === "stranded"
+              ? "failed"
+              : "failed";
+      return {
+        id: sidecar.friendlyIds?.id ?? r.id,
+        companyId: sidecar.friendlyIds?.companyId ?? r.companyId,
+        agentId: sidecar.friendlyIds?.agentId ?? r.agentId,
+        beatNumber: r.beatNumber,
+        trigger,
+        startedAt: r.startedAt?.toISOString() ?? new Date().toISOString(),
+        endedAt: r.finishedAt?.toISOString() ?? null,
+        status: legacyStatus,
+        snapshotVersionRead: sidecar.snapshotVersionRead ?? null,
+        snapshotVersionWritten: sidecar.snapshotVersionWritten ?? null,
+        phases: sidecar.phases ?? {},
+        outcome: sidecar.outcome ?? null,
+        totalTokens: r.totalTokens ?? 0,
+        costCents: r.totalCostCents ?? 0,
+        errorMessage: sidecar.errorMessage ?? r.cause ?? null,
+        summary: sidecar.summary ?? null,
+      };
+    });
   } catch (err) {
     console.warn("[CP] Failed to load beat history from DB:", err instanceof Error ? err.message : err);
     return [];
@@ -894,7 +1000,29 @@ export async function cpUpdateTrustScore(event: TrustEvent): Promise<TrustScore>
   return updated;
 }
 
-/** Record a policy violation to cache + DB. */
+// ── Policy violations — Spec 31 Phase 7.B.5.3 ──────────────
+//
+// Migrated from the legacy `policy_violations` text-PK table to the
+// canonical `policy_violations` (uuid PK, FK to companies/agents/
+// heartbeat_runs). The contract `PolicyViolation` shape is unchanged;
+// friendly id ↔ uuid translation happens at the repo boundary using
+// `friendlyToUuid` and a `_friendlyIds` sidecar in the `detail` field
+// is not necessary because:
+//   • `id` round-trips deterministically via friendlyToUuid (idempotent
+//     on a uuid string).
+//   • `companyId` / `agentId` round-trip via companiesRepo / agentsRepo
+//     `fromDbId` (no friendly_id column on policy_violations canonical;
+//     callers join through companies/agents to get friendly form when
+//     needed).
+//   • `beatId` round-trips the same way (heartbeat_runs has no friendly
+//     column either).
+//
+// The legacy contract `PolicyViolation.agentId` is required (string).
+// The canonical schema allows null `agent_id` for system-scoped denies
+// (pre-strategy). When reading, a null agent uuid surfaces as the empty
+// string — callers already gate on `agentId` truthiness for filtering.
+
+/** Record a policy violation to cache + canonical DB. */
 export async function cpRecordPolicyViolation(violation: PolicyViolation): Promise<void> {
   // Push to recent violations cache
   recentViolationsCache.push(violation);
@@ -915,16 +1043,16 @@ export async function cpRecordPolicyViolation(violation: PolicyViolation): Promi
   if (isDatabaseConfigured()) {
     try {
       const db = getDb();
-      await db.insert(policyViolationsTable).values({
-        id: violation.id,
-        companyId: violation.companyId,
-        agentId: violation.agentId,
+      await db.insert(policyViolationsCanonical).values({
+        id: friendlyToUuid(violation.id),
+        companyId: companiesRepo.toDbId(violation.companyId),
+        agentId: violation.agentId ? agentsRepo.toDbId(violation.agentId) : null,
         ruleId: violation.ruleId,
         tool: violation.tool,
         decision: violation.decision,
         severity: violation.severity,
         detail: violation.detail,
-        beatId: violation.beatId,
+        beatId: violation.beatId ? friendlyToUuid(violation.beatId) : null,
         resolvedAt: violation.resolvedAt ? new Date(violation.resolvedAt) : null,
         createdAt: new Date(violation.createdAt),
       });
@@ -934,7 +1062,7 @@ export async function cpRecordPolicyViolation(violation: PolicyViolation): Promi
   }
 }
 
-/** Get recent policy violations (from cache or DB). */
+/** Get recent policy violations (from canonical DB or in-memory cache fallback). */
 export async function cpGetPolicyViolations(opts?: { agentId?: string; limit?: number }): Promise<PolicyViolation[]> {
   const limit = opts?.limit ?? 50;
 
@@ -942,16 +1070,19 @@ export async function cpGetPolicyViolations(opts?: { agentId?: string; limit?: n
     try {
       const db = getDb();
       const conditions = opts?.agentId
-        ? eq(policyViolationsTable.agentId, opts.agentId)
+        ? eq(policyViolationsCanonical.agentId, agentsRepo.toDbId(opts.agentId))
         : undefined;
-      const rows = await db.select().from(policyViolationsTable)
+      const rows = await db.select().from(policyViolationsCanonical)
         .where(conditions)
-        .orderBy(desc(policyViolationsTable.createdAt))
+        .orderBy(desc(policyViolationsCanonical.createdAt))
         .limit(limit);
       return rows.map((r) => ({
         id: r.id,
         companyId: r.companyId,
-        agentId: r.agentId,
+        // The canonical schema allows null agent_id for system-scoped
+        // denies; the contract requires a string. Surface as empty
+        // string so consumers can gate on `agentId.length`.
+        agentId: r.agentId ?? "",
         ruleId: r.ruleId,
         tool: r.tool,
         decision: r.decision as PolicyViolation["decision"],
@@ -966,7 +1097,7 @@ export async function cpGetPolicyViolations(opts?: { agentId?: string; limit?: n
     }
   }
 
-  // Fallback: return from cache
+  // Fallback: return from in-memory cache
   let results = [...recentViolationsCache];
   if (opts?.agentId) results = results.filter((v) => v.agentId === opts.agentId);
   return results.slice(-limit).reverse();

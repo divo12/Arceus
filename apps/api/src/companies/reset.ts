@@ -13,7 +13,7 @@
  * (workspace archive) and in-memory state reset outside the
  * transaction — those aren't database operations.
  */
-import { getDb, isDatabaseConfigured, trustScoresTable, policyViolationsTable } from "@arceus/db";
+import { getDb, isDatabaseConfigured, trustScoresTable, policyViolations as policyViolationsCanonical } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { inArray, eq } from "drizzle-orm";
@@ -46,10 +46,12 @@ export async function resetCompanyTx(companyId: string): Promise<ResetCompanyRes
   let trustScoresCleared = 0;
 
   await db.transaction(async (tx) => {
+    // Spec 31 Phase 7.B.5.3 — companyId is now a uuid FK on the
+    // canonical `policy_violations` table; map the friendly id.
     const pv = await tx
-      .delete(policyViolationsTable)
-      .where(eq(policyViolationsTable.companyId, companyId))
-      .returning({ id: policyViolationsTable.id });
+      .delete(policyViolationsCanonical)
+      .where(eq(policyViolationsCanonical.companyId, companiesRepo.toDbId(companyId)))
+      .returning({ id: policyViolationsCanonical.id });
     policyViolationsCleared = pv.length;
 
     if (agentIds.length > 0) {
