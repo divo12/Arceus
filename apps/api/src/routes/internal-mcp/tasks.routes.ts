@@ -322,7 +322,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    setTaskVerified(taskId, body.verifiedBy);
+    setTaskVerified(req.mcp!.companyId, taskId, body.verifiedBy);
     await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} verified.`, { taskId, verifiedBy: body.verifiedBy }));
   });

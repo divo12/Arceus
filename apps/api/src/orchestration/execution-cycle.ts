@@ -55,7 +55,7 @@ export async function completeExecutionCycle(reason: string) {
     }));
   }
 
-  recordMeeting({
+  await recordMeeting({
     type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],
@@ -84,9 +84,9 @@ export async function completeExecutionCycle(reason: string) {
 }
 
 /** Pause execution and request board-level intervention. */
-export function pauseForBoardReview(reason: string) {
+export async function pauseForBoardReview(reason: string) {
   setExecutionStatus("awaiting_board_review");
-  recordMeeting({
+  await recordMeeting({
     type: "eval_triggered",
     facilitatorRole: "cto",
     participantRoles: ["cto", "ceo"],
@@ -129,7 +129,7 @@ export async function reconcilePostReviewExecution() {
   }
 
   if (boardDecision.shouldPause) {
-    pauseForBoardReview(boardDecision.reason ?? "Board review required.");
+    await pauseForBoardReview(boardDecision.reason ?? "Board review required.");
     return;
   }
 
@@ -165,7 +165,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
 
   setExecutionStatus("paused");
 
-  recordMeeting({
+  await recordMeeting({
     type: "escalation",
     facilitatorRole: "ceo",
     participantRoles: uniqueStrings([
@@ -233,7 +233,7 @@ export async function approveBoardReview() {
     },
   }));
 
-  recordMeeting({
+  await recordMeeting({
     type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],

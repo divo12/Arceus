@@ -32,6 +32,8 @@ declare module "bun:test" {
     toBe(expected: unknown): void;
     toEqual(expected: unknown): void;
     toBeNull(): void;
+    toBeLessThan(expected: number): void;
+    toBeGreaterThan(expected: number): void;
     toMatch(pattern: string | RegExp): void;
     toHaveBeenCalled(): void;
     toHaveBeenCalledTimes(n: number): void;

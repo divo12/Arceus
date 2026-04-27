@@ -1,15 +1,17 @@
-import type { Task, CompanySnapshot, AgentIdentity } from "@arceus/contracts";
-import { getSnapshot, updateTask } from "../persistence/store.js";
+import type { Task, CompanySnapshot } from "@arceus/contracts";
+import { updateTask } from "../persistence/store.js";
 import { audit } from "../observability/audit-ledger.js";
 import { isTaskReady } from "@arceus/task-engine";
 import { CORE_EXECUTION_TASK_KINDS, AUTONOMOUS_READY_TASK_ROLES } from "../orchestration/state.js";
 
 /**
- * Mark a task as independently verified. This MUST be called by a verification
- * step (preview validation, tester, CTO review) — not by the agent that did
- * the work.
+ * Mark a task as independently verified. Spec 31 Phase 7.B.2 — caller
+ * threads `companyId` so the audit log can attribute the event without
+ * touching the in-memory snapshot. MUST be called by a verification
+ * step (preview validation, tester, CTO review) — not by the agent
+ * that did the work.
  */
-export function setTaskVerified(taskId: string, verifiedBy: string) {
+export function setTaskVerified(companyId: string, taskId: string, verifiedBy: string) {
   updateTask(taskId, (task) => ({
     ...task,
     verifierState: {
@@ -21,7 +23,7 @@ export function setTaskVerified(taskId: string, verifiedBy: string) {
     },
   }));
   audit({
-    companyId: getSnapshot().company.id,
+    companyId,
     category: "task_lifecycle",
     severity: "info",
     eventType: "task_verified",
