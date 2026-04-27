@@ -28,7 +28,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
     try {
       const { sendBoardMessageToCeo } = await import("../agents/chat.js");
       const companyId = getActiveCompanyId();
-      audit({ companyId: companyId ?? "company_pending", category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
+      audit({ companyId: companyId ?? "", category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
       const company = companyId ? await companiesRepo.findByIdHydrated(getDb(), companyId) : null;
       return await sendBoardMessageToCeo(company?.goal || "Refine the current idea into a demoable first release.");
     } catch (error) {

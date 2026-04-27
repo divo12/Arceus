@@ -191,8 +191,9 @@ async function tagCurrentSprintSnapshot() {
   // Spec 31 Phase 7.B.4 — read via canonical-backed view.
   // workspaceManager.tagSprint persists the full snapshot as a git
   // tag payload, so we still build the full view here.
+  // requireActiveCompanyId throws when no company; the dead "company_pending"
+  // string-equality guard from 7.B was retired by 7.C.1.
   const companyId = requireActiveCompanyId();
-  if (companyId === "company_pending") return;
   const snapshot = await buildSnapshotView(companyId);
 
   try {

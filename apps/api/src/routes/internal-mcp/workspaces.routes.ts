@@ -140,7 +140,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const mcp = req.mcp!;
     const companyId = mcp.companyId;
 
-    if (!companyId || companyId === "company_pending") {
+    if (!companyId) {
       reply.code(409).send(
         failure(
           "Company workspace not provisioned yet.",

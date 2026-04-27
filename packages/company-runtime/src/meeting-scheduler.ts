@@ -83,7 +83,8 @@ export class MeetingScheduler {
     this.ticking = true;
     try {
       const snap = await this.deps.getSnapshot();
-      if (snap.company.id === "company_pending") return;
+      // Spec 31 Phase 7.C.1 — empty company id signals "no company yet."
+      if (!snap.company.id) return;
 
       // Auto-create daily sync schedule when 2+ agents exist
       await this.ensureDailySyncExists(snap);

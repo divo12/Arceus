@@ -20,7 +20,7 @@ export type PersistedRuntimeArtifact = {
 
 /** Persist a runtime artifact to the DB and upload its content to Supabase storage. */
 export async function persistRuntimeArtifact(companyId: string, artifact: PersistedRuntimeArtifact) {
-  if (!companyId || companyId === "company_pending") {
+  if (!companyId) {
     return;
   }
 
@@ -65,7 +65,7 @@ export async function persistRuntimeArtifact(companyId: string, artifact: Persis
 
 /** List all persisted artifacts for a company, ordered by creation date descending. */
 export async function listPersistedArtifacts(companyId: string): Promise<PersistedRuntimeArtifact[]> {
-  if (!isDatabaseConfigured() || !companyId || companyId === "company_pending") {
+  if (!isDatabaseConfigured() || !companyId) {
     return [];
   }
 
@@ -95,7 +95,7 @@ export async function getPersistedArtifactById(companyId: string, id: string): P
 
 /** Delete all persisted artifacts for a company. */
 export async function deletePersistedArtifacts(companyId: string) {
-  if (!isDatabaseConfigured() || !companyId || companyId === "company_pending") {
+  if (!isDatabaseConfigured() || !companyId) {
     return;
   }
 

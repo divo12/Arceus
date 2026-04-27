@@ -156,7 +156,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
       skillContent: string;
       estimatedCostCents?: number;
     };
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     const decision = await canProposeMutation({
       proposerAgentId: body.proposerAgentId,
       proposerRole: body.proposerRole as any,

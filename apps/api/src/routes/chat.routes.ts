@@ -16,7 +16,7 @@ export default async function chatRoutes(app: FastifyInstance) {
   app.post("/api/chat/ceo", async (request, reply) => {
     try {
       const body = chatSchema.parse(request.body);
-      audit({ companyId: getActiveCompanyId() ?? "company_pending", category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
+      audit({ companyId: getActiveCompanyId() ?? "", category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
       return await sendBoardMessageToCeo(body.message);
     } catch (error) {
       request.log?.error?.(error);

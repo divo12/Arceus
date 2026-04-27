@@ -40,7 +40,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/skills/health", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     if (companyId && companyId !== "company_empty") {
       seedExistingSkills(companyId);
     }
@@ -49,7 +49,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   app.get("/api/skills/:name/history", async (request) => {
     const { name } = request.params as { name: string };
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     if (companyId && companyId !== "company_empty") {
       seedExistingSkills(companyId);
     }
@@ -58,7 +58,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/skills/mutations", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     const mutations = getMutationsForCompany(companyId);
     return {
       mutations: mutations.map((m) => ({
@@ -85,7 +85,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/skills/attributions", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     return {
       attributions: getAttributionsForCompany(companyId),
     };
@@ -102,7 +102,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
       executionTrace?: string;
       sprintId?: string;
     };
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     if (companyId && companyId !== "company_empty") {
       seedExistingSkills(companyId);
     }
@@ -183,7 +183,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   // ── Pattern Learning ──
 
   app.get("/api/patterns", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     const patterns = getPatternsForCompany(companyId);
     return {
       companyId,
@@ -209,7 +209,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/patterns/clusters", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     return {
       companyId,
       clusters: clusterPatterns(companyId),
@@ -217,7 +217,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/patterns/candidates", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     return {
       companyId,
       candidates: checkSkillCandidates(companyId),
@@ -226,7 +226,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   app.post("/api/patterns/promote/:clusterId", async (request) => {
     const { clusterId } = request.params as { clusterId: string };
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     const candidate = checkSkillCandidates(companyId).find((c) => c.clusterId === clusterId);
     if (!candidate) {
       return {
@@ -246,7 +246,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/patterns/sweep", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     const result = await runPatternPromotionSweep(companyId);
     return { companyId, ...result };
   });
@@ -254,7 +254,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   // ── Unused / underperforming skills ──
 
   app.get("/api/skills/unused", async () => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     if (companyId && companyId !== "company_empty") {
       seedExistingSkills(companyId);
     }
@@ -266,7 +266,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/skills/underperforming", async (request) => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     if (companyId && companyId !== "company_empty") {
       seedExistingSkills(companyId);
     }
@@ -279,7 +279,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/skills/sprint-candidates/:sprintId", async (request) => {
-    const companyId = getActiveCompanyId() ?? "company_pending";
+    const companyId = getActiveCompanyId() ?? "";
     const { sprintId } = request.params as { sprintId: string };
     const query = request.query as { minFrequency?: string };
     const minFrequency = query.minFrequency ? Number.parseInt(query.minFrequency, 10) : 3;

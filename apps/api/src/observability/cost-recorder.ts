@@ -101,7 +101,10 @@ function pgErrorCode(err: unknown): string {
   return "unknown";
 }
 
-const SYSTEM_COMPANIES = new Set(["", "_system", "company_pending"]);
+// Spec 31 Phase 7.C.1 — `"company_pending"` retired. The empty string
+// is the canonical "no company" marker now; `"_system"` is reserved
+// for bootstrap-time LLM calls that have no company FK target.
+const SYSTEM_COMPANIES = new Set(["", "_system"]);
 
 /**
  * Insert a cost_events row for one LLM call. Best-effort — pg failures

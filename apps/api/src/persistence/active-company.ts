@@ -54,6 +54,14 @@ export function clearActiveCompanyId(): void {
  * Hydrate the active company id from canonical at server startup.
  * Picks the most-recently-created company row when multiple exist
  * (single-company-per-process today, so usually 0 or 1 rows).
+ *
+ * Returns the **friendly** id (`company_<uuid>`) so the active-id
+ * shape matches what `bootstrapCompanyTx` writes via
+ * `setActiveCompanyId`. Without `fromDbId`, we'd return the bare
+ * canonical UUID column, which mismatches the friendly form used in
+ * audit logs / string comparisons / event correlation. Repos
+ * round-trip both forms through `toDbId`, but consistency at the
+ * seam matters for everything that string-formats the id.
  */
 export async function loadActiveCompanyIdFromCanonical(): Promise<string | null> {
   try {
@@ -64,7 +72,8 @@ export async function loadActiveCompanyIdFromCanonical(): Promise<string | null>
     }
     // Pick the most recent; deterministic when there's just one.
     const sorted = [...all].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    activeCompanyId = sorted[0].id;
+    const row = sorted[0];
+    activeCompanyId = companiesRepo.fromDbId(row.id, row.friendlyId);
     return activeCompanyId;
   } catch (err) {
     console.warn("[active-company] failed to load from canonical:", err);

@@ -4,34 +4,40 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-/** Create a blank CompanySnapshot with placeholder IDs, ready for bootstrap. */
+/**
+ * Create a blank CompanySnapshot with empty-string placeholder IDs,
+ * ready for bootstrap. Spec 31 Phase 7.C.1 — the legacy
+ * `"company_pending"` magic string is gone; consumers test for
+ * `!snapshot.company.id` (or use `getActiveCompanyId()` which returns
+ * null) to detect the pre-bootstrap state.
+ */
 export function createEmptyCompanySnapshot(): CompanySnapshot {
   const createdAt = nowIso();
 
   return {
     company: {
-      id: "company_pending",
+      id: "",
       name: "Untitled Company",
       boardOwner: "board_primary",
       goal: "Awaiting board bootstrap.",
       budgetCents: 0,
       spentCents: 0,
       status: "ideation",
-      currentStrategyId: "strategy_pending",
+      currentStrategyId: "",
       currentSprintId: null,
       currentSprintNumber: null,
       createdAt
     },
     idea: {
-      id: "idea_pending",
-      companyId: "company_pending",
+      id: "",
+      companyId: "",
       coreIdea: "",
       currentDirection: "",
       refinedWithBoard: false
     },
     strategy: {
-      id: "strategy_pending",
-      companyId: "company_pending",
+      id: "",
+      companyId: "",
       title: "Awaiting CEO refinement",
       summary: "No strategy has been generated yet.",
       firstRelease: "",
@@ -62,11 +68,12 @@ export function createEmptyCompanySnapshot(): CompanySnapshot {
 
 /** Create an EventEnvelope for a bootstrap-phase mutation (actor = board). */
 export function createBootstrapEvent(summary: string, payload: Record<string, unknown>): EventEnvelope {
+  const companyIdFromPayload = typeof payload.companyId === "string" ? payload.companyId : "";
   return {
     eventId: crypto.randomUUID(),
-    companyId: typeof payload.companyId === "string" ? payload.companyId : "company_pending",
+    companyId: companyIdFromPayload,
     entityType: "company",
-    entityId: typeof payload.companyId === "string" ? payload.companyId : "company_pending",
+    entityId: companyIdFromPayload,
     eventType: "company.updated",
     causationId: null,
     correlationId: crypto.randomUUID(),

@@ -326,7 +326,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
 
   // Audit task transitions
   audit({
-    companyId: prev?.companyId ?? getActiveCompanyId() ?? "company_pending",
+    companyId: prev?.companyId ?? getActiveCompanyId() ?? "",
     category: "task_lifecycle",
     severity: status === "failed" ? "warn" : "info",
     eventType: `task_${status}`,

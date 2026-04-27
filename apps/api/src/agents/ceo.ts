@@ -298,7 +298,7 @@ function summarizeMeetings(snapshot: CompanySnapshot) {
 
 /** Infer the current CEO conversation stage from company snapshot state. */
 export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
-  if (snapshot.company.id === "company_pending") {
+  if (!snapshot.company.id) {
     return "welcome";
   }
 

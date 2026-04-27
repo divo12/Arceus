@@ -70,16 +70,18 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
       heartbeatEngine.stop();
       heartbeatEngine.reset();
       meetingScheduler.stop();
-      // Always clean the workspace — after a server restart the company
-      // is unbootstrapped but stale files from the previous run remain.
-      const archiveResult = await workspaceManager.archive(companyId ?? "company_pending");
-      const warnings = archiveResult.warnings;
+      // Spec 31 Phase 7.C.1 — workspace archive is keyed by companyId
+      // (it cleans the company's cache directory). When no company is
+      // active there's nothing company-specific to archive; legacy
+      // directories survive across resets and aren't this route's
+      // responsibility.
       if (companyId) {
+        const archiveResult = await workspaceManager.archive(companyId);
+        if (archiveResult.warnings.length > 0) {
+          request.log?.warn({ warnings: archiveResult.warnings }, "Reset completed with filesystem cleanup warnings");
+        }
         await clearPersistedStoreState(companyId);
         await deletePersistedArtifacts(companyId);
-      }
-      if (warnings.length > 0) {
-        request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
       }
 
       if (companyId) {
