@@ -23,10 +23,12 @@ import {
   approvalSchema,
   artifactSchema,
   meetingSchema,
+  memorySummarySchema,
   sprintSchema,
   type Approval,
   type Artifact,
   type Meeting,
+  type MemorySummary,
   type Sprint,
 } from "@arceus/contracts";
 
@@ -34,11 +36,13 @@ import { rowToSprint, sprintToInsert } from "../src/repos/sprints.js";
 import { rowToApproval, approvalToInsert } from "../src/repos/approvals.js";
 import { rowToArtifact, artifactToInsert } from "../src/repos/artifacts.js";
 import { rowToMeeting, meetingToInsert } from "../src/repos/meetings.js";
+import { rowToSummary, summaryToInsert } from "../src/repos/memory_summaries.js";
 
 import type { Sprint as SprintRow } from "../src/repos/sprints.js";
 import type { Approval as ApprovalRow } from "../src/repos/approvals.js";
 import type { Artifact as ArtifactRow } from "../src/repos/artifacts.js";
 import type { Meeting as MeetingRow } from "../src/repos/meetings.js";
+import type { MemorySummary as MemorySummaryRow } from "../src/repos/memory_summaries.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────
 //
@@ -108,6 +112,20 @@ function artifactFixture(): Artifact {
     contentType: "text/markdown",
     metadata: { reviewer: "tester", commit: "abc123" },
     createdAt: NOW_ISO,
+  });
+}
+
+function memorySummaryFixture(): MemorySummary {
+  return memorySummarySchema.parse({
+    /** Spec 31 Phase 7.A id convention — `memory_${agentUuid}`. */
+    id: `memory_${AGENT_UUID}`,
+    agentId: AGENT_UUID,
+    currentFocus: ["ship spec 31", "review PR"],
+    recentLearnings: ["test fixtures should round-trip"],
+    activePatterns: ["small slices, frequent commits"],
+    openBlockers: ["waiting on review"],
+    importantDecisions: ["use repos directly, no service layer"],
+    updatedAt: NOW_ISO,
   });
 }
 
@@ -201,6 +219,18 @@ function asArtifactRow(insert: ReturnType<typeof artifactToInsert>): ArtifactRow
   } as ArtifactRow;
 }
 
+function asMemorySummaryRow(insert: ReturnType<typeof summaryToInsert>): MemorySummaryRow {
+  return {
+    ...insert,
+    currentFocus: insert.currentFocus ?? [],
+    recentLearnings: insert.recentLearnings ?? [],
+    activePatterns: insert.activePatterns ?? [],
+    openBlockers: insert.openBlockers ?? [],
+    importantDecisions: insert.importantDecisions ?? [],
+    updatedAt: NOW_DATE,
+  } as MemorySummaryRow;
+}
+
 function asMeetingRow(insert: ReturnType<typeof meetingToInsert>): MeetingRow {
   return {
     ...insert,
@@ -247,6 +277,15 @@ describe("drift: every contract field round-trips through repo helpers", () => {
     const original = meetingFixture();
     const insert = meetingToInsert(original);
     const restored = rowToMeeting(asMeetingRow(insert));
+    assert.deepEqual(restored, original);
+  });
+
+  it("MemorySummary", () => {
+    const original = memorySummaryFixture();
+    /** Phase 7.A repo takes companyId alongside summary because the
+     *  canonical row stores it for cascade-delete on company drop. */
+    const insert = summaryToInsert(original, COMPANY_UUID);
+    const restored = rowToSummary(asMemorySummaryRow(insert));
     assert.deepEqual(restored, original);
   });
 });

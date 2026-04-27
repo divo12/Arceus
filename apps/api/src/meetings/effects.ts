@@ -83,25 +83,25 @@ export function applyTaskModification(modification: TaskModificationInput) {
   }
 }
 
-function applyMemoryModification(modification: MemoryModificationInput) {
+async function applyMemoryModification(companyId: string, modification: MemoryModificationInput): Promise<void> {
   switch (modification.modificationType) {
     case "current_focus":
-      enrichRoleMemory(modification.role, { currentFocus: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { currentFocus: [modification.content] });
       break;
     case "recent_learning":
-      enrichRoleMemory(modification.role, { recentLearnings: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { recentLearnings: [modification.content] });
       break;
     case "active_pattern":
-      enrichRoleMemory(modification.role, { activePatterns: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { activePatterns: [modification.content] });
       break;
     case "open_blocker":
-      enrichRoleMemory(modification.role, { openBlockers: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { openBlockers: [modification.content] });
       break;
     case "important_decision":
-      enrichRoleMemory(modification.role, { importantDecisions: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { importantDecisions: [modification.content] });
       break;
     case "clear_blocker":
-      clearRoleBlockers(modification.role, [modification.content]);
+      await clearRoleBlockers(companyId, modification.role, [modification.content]);
       break;
   }
 }
@@ -171,12 +171,27 @@ export function deriveMeetingMemoryModifications(params: {
   });
 }
 
-/** Apply all task and memory modifications produced by a meeting. */
-export function applyMeetingEffects(taskModifications: TaskModificationInput[], memoryModifications: MemoryModificationInput[]) {
+/**
+ * Apply all task and memory modifications produced by a meeting.
+ *
+ * Task mods are synchronous (in-memory store + dual-write).
+ * Memory mods now hit the canonical `memory_summaries` table — those
+ * writes are fire-and-forget so this function stays sync at the
+ * surface. Matches the existing dual-write semantics where DB writes
+ * complete after the caller returns.
+ */
+export function applyMeetingEffects(taskModifications: TaskModificationInput[], memoryModifications: MemoryModificationInput[]): void {
   for (const modification of taskModifications) {
     applyTaskModification(modification);
   }
-  for (const modification of memoryModifications) {
-    applyMemoryModification(modification);
-  }
+  if (memoryModifications.length === 0) return;
+
+  const companyId = getSnapshot().company.id;
+  void Promise.all(
+    memoryModifications.map((modification) =>
+      applyMemoryModification(companyId, modification).catch((err) => {
+        console.warn(`[meetings] memory modification failed (${modification.modificationType})`, err);
+      }),
+    ),
+  );
 }

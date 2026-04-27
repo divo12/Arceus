@@ -1,13 +1,14 @@
 import type { AgentIdentity, Approval } from "@arceus/contracts";
-import { getAgentByRole } from "@arceus/task-engine";
-import { getSnapshot, upsertApproval, updateApproval } from "../persistence/store.js";
+import { getDb, type DbClient } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as approvalsRepo from "@arceus/db/src/repos/approvals.js";
 import { emitReactive } from "../orchestration/reactive.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Generic approval request
+// Generic approval request — Spec 31 Phase 7.B.1: DB-direct, no snapshot.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Input for {@link requestApproval} — generalized board approval request, agnostic to role or task kind. */
+/** Input for {@link requestApproval} — generalised board approval request. */
 export interface RequestApprovalInput {
   type: Approval["type"];
   requestedByRole: AgentIdentity["role"];
@@ -18,22 +19,25 @@ export interface RequestApprovalInput {
 }
 
 /**
- * Create a pending board approval on behalf of any role.
+ * Create a pending board approval on behalf of any role. Looks up the
+ * requesting agent by `(companyId, role)` and persists the approval
+ * via `approvalsRepo.upsertApproval`. Returns `null` if the role has
+ * no provisioned agent for the company.
  *
- * Generalizes the former role-specific helpers (e.g. `createMarketingExternalApproval`) so
- * any agent can request approval via the `approval_request` MCP tool. Returns `null` if the
- * requesting role has no provisioned agent in the current snapshot.
+ * `db` is optional — defaults to `getDb()` for the common case;
+ * override only when you need a transaction-scoped client.
  */
-export function requestApproval(input: RequestApprovalInput): Approval | null {
-  const snapshot = getSnapshot();
-  const requestor = getAgentByRole(snapshot, input.requestedByRole);
-  if (!requestor) {
-    return null;
-  }
+export async function requestApproval(
+  companyId: string,
+  input: RequestApprovalInput,
+  db: DbClient = getDb(),
+): Promise<Approval | null> {
+  const requestor = await agentsRepo.findAgentByRole(db, companyId, input.requestedByRole);
+  if (!requestor) return null;
 
   const approval: Approval = {
     id: `approval_${crypto.randomUUID()}`,
-    companyId: snapshot.company.id,
+    companyId,
     type: input.type,
     status: "pending",
     title: input.title,
@@ -44,29 +48,41 @@ export function requestApproval(input: RequestApprovalInput): Approval | null {
     resolutionSummary: null,
   };
 
-  upsertApproval(approval);
+  await approvalsRepo.upsertApproval(db, approval);
   return approval;
 }
 
-/** Approve all pending board approvals and emit reactive events to requestors. */
-export function approvePendingBoardApprovals() {
-  const pendingApprovals = getSnapshot().approvals.filter((approval) => approval.status === "pending");
+/**
+ * Approve all pending board approvals for a company and emit
+ * reactive events to the requestors. Returns the list of approvals
+ * that were transitioned (status was `pending` at the start).
+ */
+export async function approvePendingBoardApprovals(
+  companyId: string,
+  db: DbClient = getDb(),
+): Promise<Approval[]> {
+  const pendingRows = await approvalsRepo.listApprovalsByCompany(db, companyId, "pending");
+  const pending = pendingRows.map(approvalsRepo.rowToApproval);
 
-  for (const approval of pendingApprovals) {
-    updateApproval(approval.id, (current) => ({
-      ...current,
-      status: current.type === "external_action" ? "approved" : "applied",
-      resolutionSummary: current.type === "external_action"
-        ? "Board approved the recommended external action. No automated outbound action was executed by Arceus."
-        : "Board approved the pending request during CTO handoff review.",
-    }));
+  for (const approval of pending) {
+    const nextStatus: Approval["status"] = approval.type === "external_action" ? "approved" : "applied";
+    const resolutionSummary = approval.type === "external_action"
+      ? "Board approved the recommended external action. No automated outbound action was executed by Arceus."
+      : "Board approved the pending request during CTO handoff review.";
 
-    const snap = getSnapshot();
-    const requestor = snap.agents.find((a: { id: string; role: AgentIdentity["role"] }) => a.id === approval.requestedByAgentId);
-    if (requestor) {
-      emitReactive(requestor.role, "approval_granted");
+    await approvalsRepo.upsertApproval(db, {
+      ...approval,
+      status: nextStatus,
+      resolutionSummary,
+    });
+
+    if (approval.requestedByAgentId) {
+      const requestor = await agentsRepo.findAgentById(db, approval.requestedByAgentId);
+      if (requestor) {
+        emitReactive(requestor.role as AgentIdentity["role"], "approval_granted");
+      }
     }
   }
 
-  return pendingApprovals;
+  return pending;
 }

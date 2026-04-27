@@ -206,10 +206,11 @@ export async function approveBoardReview() {
   }
 
   const reviewTaskId = activeExecution.reviewTaskId;
+  const companyId = getSnapshot().company.id;
   const queuedFollowUpCount = getSnapshot().tasks.filter(
     (task) => task.kind === "follow_up" && ["created", "planned"].includes(task.status)
   ).length;
-  const resolvedApprovals = approvePendingBoardApprovals();
+  const resolvedApprovals = await approvePendingBoardApprovals(companyId);
 
   setExecutionStatus("done");
   emitEmployeeActivity(

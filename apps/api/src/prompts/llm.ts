@@ -11,6 +11,8 @@ import { getRoleSoul } from "@arceus/company-runtime";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
 import { getSnapshot } from "../persistence/store.js";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { withRetry, isRetryableError } from "../infra/resilience.js";
@@ -202,8 +204,11 @@ export async function runPromptText(
   let memoryCount = 0;
   let habitCount = 0;
   try {
-    const snapshot = getSnapshot();
-    const agent = getAgentByRole(snapshot, role);
+    // Spec 31 Phase 7.B.1 — read agent from canonical agents repo.
+    // companyId still comes from the snapshot until B.5 threads it
+    // through `runPromptText`'s caller chain via companyContext.
+    const companyId = getSnapshot().company.id;
+    const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
     if (agent) {
       const ctx = await hippocampus.prepareAgentContext(agent.id, text);
       memoryBlock = formatHippocampusContext(ctx);

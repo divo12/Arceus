@@ -90,7 +90,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     const body = parseOrFail(createApprovalBody, req.body, reply);
     if (!body) return;
 
-    const approval = requestApproval({
+    const approval = await requestApproval(req.mcp!.companyId, {
       type: body.type as "strategy" | "hire" | "meeting_blocker" | "external_action" | "tool_governance",
       requestedByRole: body.requestedByRole,
       title: body.title,
