@@ -8,6 +8,13 @@ export { agents } from "./agents.js";
 export { sprints } from "./sprints.js";
 export { workspaces } from "./workspaces.js";
 
+// Spec 31 Phase 7.A — canonical replacements for snapshot fields.
+export { ideas } from "./ideas.js";
+export { strategyBriefs } from "./strategy_briefs.js";
+export { hierarchyNodes } from "./hierarchy_nodes.js";
+export { memorySummaries } from "./memory_summaries.js";
+export { meetingSchedules } from "./meeting_schedules.js";
+
 export { heartbeatRuns, type VerdictSignals } from "./heartbeat_runs.js";
 export { tasks, type PlanStep } from "./tasks.js";
 export { artifacts } from "./artifacts.js";

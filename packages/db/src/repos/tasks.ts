@@ -78,6 +78,51 @@ export async function listTasksBySprint(db: DbClient, sprintId: string): Promise
   return db.select().from(tasks).where(eq(tasks.sprintId, toDbId(sprintId)));
 }
 
+/**
+ * Spec 31 Phase 7 — list tasks claimed by a specific agent. Used by
+ * the heartbeat path that previously did
+ * `snapshot.tasks.filter(t => t.assignedAgentId === agentId)`.
+ */
+export async function listTasksByAgent(
+  db: DbClient,
+  agentId: string,
+  statuses?: TaskStatus[],
+): Promise<Task[]> {
+  const conditions = [eq(tasks.assignedAgentId, toDbId(agentId))];
+  if (statuses && statuses.length > 0) {
+    conditions.push(inArray(tasks.status, statuses));
+  }
+  return db
+    .select()
+    .from(tasks)
+    .where(and(...conditions));
+}
+
+/**
+ * Spec 31 Phase 7 — count tasks for a company filtered by `kind` +
+ * `status`. Used by the execution-cycle "queued follow-ups" gate.
+ * Returns a count rather than rows because callers don't need the
+ * payload.
+ */
+export async function countTasksByKindAndStatus(
+  db: DbClient,
+  companyId: string,
+  kind: string,
+  statuses: TaskStatus[],
+): Promise<number> {
+  const rows = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.companyId, toDbId(companyId)),
+        eq(tasks.kind, kind),
+        inArray(tasks.status, statuses),
+      ),
+    );
+  return rows.length;
+}
+
 export async function updateTask(
   db: DbClient,
   id: string,

@@ -57,3 +57,13 @@ export async function endBinding(db: DbClient, sessionId: string): Promise<Sessi
     .returning();
   return row ?? null;
 }
+
+/**
+ * Spec 31 Phase 7.A — list every binding for a company. Used by the
+ * snapshot-replacement path that previously read `snapshot.sessions`.
+ * Includes ended bindings; callers filter on `endedAt IS NULL` if
+ * they only want active sessions.
+ */
+export async function listByCompany(db: DbClient, companyId: string): Promise<SessionBinding[]> {
+  return db.select().from(sessionBindings).where(eq(sessionBindings.companyId, companyId));
+}
