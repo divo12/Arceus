@@ -79,10 +79,15 @@ interface RawLegacyRow {
   content: string;
   memory_type: LegacyMemoryType;
   confidence: number;
+  relevance_score: number;
+  container: string;
   visibility: LegacyVisibility;
   source_type: LegacySourceType | null;
   source_id: string | null;
   metadata: Record<string, unknown>;
+  version: number;
+  deleted_at: Date | null;
+  delete_reason: string;
   expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -97,10 +102,15 @@ function fromRaw(raw: RawLegacyRow): LegacyMemoryRow {
     content: raw.content,
     memoryType: raw.memory_type,
     confidence: raw.confidence,
+    relevanceScore: raw.relevance_score,
+    container: raw.container,
     visibility: raw.visibility,
     sourceType: raw.source_type,
     sourceId: raw.source_id,
     metadata: raw.metadata ?? {},
+    version: raw.version,
+    deletedAt: raw.deleted_at,
+    deleteReason: raw.delete_reason,
     expiresAt: raw.expires_at,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
@@ -120,11 +130,15 @@ function vectorLiteral(values: number[]): string {
 
 const REQUIRED_LEGACY_COLUMNS = [
   "deleted_at",
+  "delete_reason",
   "memory_type",
   "visibility",
   "source_type",
   "source_id",
   "metadata",
+  "relevance_score",
+  "container",
+  "version",
   "embedding",
 ] as const;
 
@@ -204,7 +218,8 @@ async function processBatch(): Promise<BatchStats> {
 
     const legacyRows = await tx<RawLegacyRow[]>`
       SELECT id, company_id, agent_id, content, memory_type, confidence,
-             visibility, source_type, source_id, metadata,
+             relevance_score, container, visibility, source_type, source_id,
+             metadata, version, deleted_at, delete_reason,
              expires_at, created_at, updated_at, embedding
         FROM ${tx(`${LEGACY_SCHEMA}.memory_units`)} m
        WHERE m.deleted_at IS NULL
@@ -241,7 +256,8 @@ async function mirrorOne(tx: TransactionSql, legacy: LegacyMemoryRow): Promise<M
   const [row] = await tx<{ id: string }[]>`
     INSERT INTO memory_units (
       legacy_id, company_id, agent_id, type, kind, content, tags,
-      confidence, source_task_id, source_beat_id, expires_at,
+      confidence, relevance_score, container, deleted_at, delete_reason,
+      version, source_task_id, source_beat_id, expires_at,
       created_at, updated_at
     ) VALUES (
       ${v.legacyId ?? null},
@@ -252,6 +268,11 @@ async function mirrorOne(tx: TransactionSql, legacy: LegacyMemoryRow): Promise<M
       ${v.content},
       ${tx.array(v.tags ?? [])},
       ${v.confidence ?? 0.8},
+      ${v.relevanceScore ?? 1.0},
+      ${v.container ?? ""},
+      ${v.deletedAt ?? null},
+      ${v.deleteReason ?? ""},
+      ${v.version ?? 1},
       ${v.sourceTaskId ?? null},
       ${v.sourceBeatId ?? null},
       ${v.expiresAt ?? null},

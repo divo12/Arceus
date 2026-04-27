@@ -25,10 +25,13 @@ export type LegacySourceType = "task" | "meeting" | "delegation" | "system";
 
 /**
  * Mirror of the legacy `hippocampus.memory_units` row — only the
- * columns the new schema actually consumes. Tombstones (`deleted_at`,
- * `delete_reason`), bookkeeping (`version`, `previous_version_id`,
- * `relevance_score`, `container`), and any other column the redesign
- * deliberately drops are not part of this surface.
+ * columns the new schema actually consumes. Bookkeeping the redesign
+ * drops (`previous_version_id`) is not part of this surface.
+ *
+ * PR #13c expanded the surface: `relevanceScore`, `container`,
+ * `deletedAt`, `deleteReason`, and `version` carry over so the
+ * dynamic-store decay/GC and soft-delete behaviour is preserved on
+ * the canonical side.
  */
 export interface LegacyMemoryRow {
   id: string;
@@ -37,10 +40,15 @@ export interface LegacyMemoryRow {
   content: string;
   memoryType: LegacyMemoryType;
   confidence: number;
+  relevanceScore: number;
+  container: string;
   visibility: LegacyVisibility;
   sourceType: LegacySourceType | null;
   sourceId: string | null;
   metadata: Record<string, unknown>;
+  version: number;
+  deletedAt: Date | null;
+  deleteReason: string;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -133,6 +141,11 @@ export function buildMemoryUnitInsert(
     content: legacy.content,
     tags: decodeTags(legacy.metadata),
     confidence: legacy.confidence,
+    relevanceScore: legacy.relevanceScore,
+    container: legacy.container,
+    deletedAt: legacy.deletedAt,
+    deleteReason: legacy.deleteReason,
+    version: legacy.version,
     sourceTaskId,
     sourceBeatId: null,
     expiresAt: legacy.expiresAt,

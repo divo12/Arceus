@@ -1,6 +1,9 @@
-import { eq, and, isNull, sql, gt, desc, cosineDistance } from "drizzle-orm";
-import { getDb, isDatabaseConfigured, memoryUnitsTable, habitsTable, primingStateTable } from "@arceus/db";
+import { eq, and, isNull, sql, desc, cosineDistance } from "drizzle-orm";
+import { getDb, isDatabaseConfigured, habitsTable, primingStateTable } from "@arceus/db";
+import { memoryUnits } from "@arceus/db/src/schema/memory_units.js";
+import { memoryEmbeddings } from "@arceus/db/src/schema/memory_embeddings.js";
 import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
+import { LEGACY_EMBEDDING_MODEL } from "@arceus/db/src/bridges/memory-decode.js";
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
 import type { StaticMemoryStore, DynamicMemoryStore, ProceduralMemoryStore, PrimingStore } from "../types";
 import { embed } from "./embedding.js";
@@ -21,21 +24,31 @@ const DECAY_PERIOD_SECONDS = MEMORY_DECAY_HALF_LIFE_DAYS * SECONDS_PER_DAY;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Convert a Drizzle memory_units row to the domain MemoryUnit type. */
-function memoryRowToUnit(row: typeof memoryUnitsTable.$inferSelect): MemoryUnit {
+/**
+ * Convert a canonical `public.memory_units` row to the domain
+ * `MemoryUnit` type. Spec 31 PR #13c — the `kind` column carries what
+ * legacy stored as `visibility`, and `source` is derived from the
+ * presence of `source_task_id` (the canonical schema collapses
+ * legacy's `source_type` enum into the FK relationship).
+ */
+function canonicalRowToUnit(row: typeof memoryUnits.$inferSelect): MemoryUnit {
   return {
     id: row.id,
     companyId: row.companyId,
     agentId: row.agentId,
-    sourceTaskId: row.sourceId,
+    sourceTaskId: row.sourceTaskId,
     sourceArtifactId: null,
-    type: row.memoryType as MemoryUnit["type"],
-    visibility: row.visibility as MemoryUnit["visibility"],
-    source: (row.sourceType ?? "system") as MemoryUnit["source"],
+    type: row.type as MemoryUnit["type"],
+    visibility: (row.kind ?? "private") as MemoryUnit["visibility"],
+    // Domain `source` enum doesn't include the legacy "task" literal;
+    // the canonical schema captures task linkage via `source_task_id`,
+    // so when that FK is set we surface "task_completion" (the closest
+    // semantic match) and fall back to "system" otherwise.
+    source: row.sourceTaskId ? "task_completion" : "system",
     content: row.content,
     summary: row.content.slice(0, 200),
     confidence: row.confidence,
-    tags: [],
+    tags: row.tags ?? [],
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt?.toISOString() ?? null,
   };
@@ -89,27 +102,46 @@ function primingRowToState(row: typeof primingStateTable.$inferSelect): PrimingS
  */
 const extractUuid = friendlyToUuid;
 
-/** Build the Drizzle insert values for a memory unit, extracting UUIDs from prefixed IDs. */
-function buildInsertValues(unit: MemoryUnit, memoryType: "static" | "dynamic") {
+/**
+ * Build canonical `memory_units` insert values from a domain
+ * `MemoryUnit`. Spec 31 PR #13c — replaces the legacy `buildInsertValues`
+ * that targeted `hippocampus.memory_units`. UUIDs are derived from
+ * friendly ids via `friendlyToUuid`.
+ */
+function buildCanonicalInsertValues(
+  unit: MemoryUnit,
+  type: "static" | "dynamic",
+): typeof memoryUnits.$inferInsert {
   return {
-    id: crypto.randomUUID(),
     companyId: extractUuid(unit.companyId),
     agentId: extractUuid(unit.agentId),
     content: unit.content,
-    memoryType,
-    // Shadow column — see comment on `memory_units.type` in
-    // memory-tables.ts. Without this every insert into a DB whose live
-    // schema still has `type NOT NULL` (no default) crashes with 23502
-    // and `processTaskCompletion` aborts the whole beat.
-    type: memoryType,
+    type,
+    kind: unit.visibility === "private" ? null : unit.visibility,
+    tags: unit.tags ?? [],
     confidence: unit.confidence,
     relevanceScore: 1.0,
     container: `company:${unit.companyId}:agent:${unit.agentId}`,
-    visibility: unit.visibility === "team" ? "shared" : "private",
-    sourceType: unit.source === "role_seed" ? "system" : unit.source ?? null,
-    sourceId: unit.sourceTaskId,
+    sourceTaskId: unit.sourceTaskId ? extractUuid(unit.sourceTaskId) : null,
     expiresAt: unit.expiresAt ? new Date(unit.expiresAt) : null,
   };
+}
+
+/**
+ * Upsert the embedding row for a memory unit. Inserts on first write,
+ * overwrites on re-embed. Spec 31 PR #13c moved embeddings off
+ * `memory_units.embedding` onto a dedicated `memory_embeddings` table
+ * so this helper keeps the call sites readable.
+ */
+async function upsertEmbedding(memoryId: string, embedding: number[]): Promise<void> {
+  const db = getDb();
+  await db
+    .insert(memoryEmbeddings)
+    .values({ memoryId, embedding, modelVersion: LEGACY_EMBEDDING_MODEL })
+    .onConflictDoUpdate({
+      target: memoryEmbeddings.memoryId,
+      set: { embedding, modelVersion: LEGACY_EMBEDDING_MODEL },
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -126,55 +158,64 @@ export class PgVectorStaticStore implements StaticMemoryStore {
     const db = getDb();
     const rows = await db
       .select()
-      .from(memoryUnitsTable)
+      .from(memoryUnits)
       .where(
         and(
-          eq(memoryUnitsTable.agentId, extractUuid(agentId)),
-          eq(memoryUnitsTable.memoryType, "static"),
-          isNull(memoryUnitsTable.deletedAt),
+          eq(memoryUnits.agentId, extractUuid(agentId)),
+          eq(memoryUnits.type, "static"),
+          isNull(memoryUnits.deletedAt),
         ),
       )
       .limit(MEMORY_LIST_DEFAULT_LIMIT);
 
-    return rows.map(memoryRowToUnit);
+    return rows.map(canonicalRowToUnit);
   }
 
   async add(unit: MemoryUnit): Promise<void> {
     const db = getDb();
-    const values = buildInsertValues(unit, "static");
-    // Generate embedding for vector search (fire-and-forget update if embedding fails)
+    const values = buildCanonicalInsertValues(unit, "static");
+    const [row] = await db.insert(memoryUnits).values(values).returning({ id: memoryUnits.id });
+    if (!row) return;
+
+    // Embedding is best-effort: search still works without it, but
+    // ranking falls back to insertion order. The embed() call can
+    // fail if the model isn't loaded yet, so we swallow the error.
     try {
       const embedding = await embed(unit.content);
-      await db.insert(memoryUnitsTable).values({ ...values, embedding });
+      await upsertEmbedding(row.id, embedding);
     } catch {
-      await db.insert(memoryUnitsTable).values(values);
+      /* embedding failed — the row is still searchable by metadata */
     }
   }
 
   async update(id: string, content: string, confidence: number): Promise<void> {
     const db = getDb();
+    await db
+      .update(memoryUnits)
+      .set({ content, confidence, version: sql`${memoryUnits.version} + 1` })
+      .where(eq(memoryUnits.id, id));
+
     try {
       const embedding = await embed(content);
-      await db.update(memoryUnitsTable)
-        .set({ content, confidence, embedding, version: sql`${memoryUnitsTable.version} + 1` })
-        .where(eq(memoryUnitsTable.id, id));
+      await upsertEmbedding(id, embedding);
     } catch {
-      await db.update(memoryUnitsTable)
-        .set({ content, confidence, version: sql`${memoryUnitsTable.version} + 1` })
-        .where(eq(memoryUnitsTable.id, id));
+      /* embedding failed — content is still updated */
     }
   }
 
   async softDelete(id: string, reason: string): Promise<void> {
     const db = getDb();
-    await db.update(memoryUnitsTable)
+    await db
+      .update(memoryUnits)
       .set({ deletedAt: new Date(), deleteReason: reason })
-      .where(eq(memoryUnitsTable.id, id));
+      .where(eq(memoryUnits.id, id));
   }
 
   /**
    * Vector similarity search — returns top N most similar static memories.
-   * Uses Drizzle's native cosineDistance operator.
+   * Joins `memory_embeddings` for the vector; rows without an embedding
+   * are excluded (the inner join filters them out, matching legacy
+   * behaviour where rows whose embedding was NULL never ranked).
    */
   async searchByEmbedding(
     agentId: string,
@@ -182,26 +223,24 @@ export class PgVectorStaticStore implements StaticMemoryStore {
     limit: number = 15,
   ): Promise<Array<MemoryUnit & { similarity: number }>> {
     const db = getDb();
-    const similarity = sql<number>`1 - (${cosineDistance(memoryUnitsTable.embedding, queryEmbedding)})`;
+    const similarity = sql<number>`1 - (${cosineDistance(memoryEmbeddings.embedding, queryEmbedding)})`;
 
     const rows = await db
-      .select({
-        memoryUnit: memoryUnitsTable,
-        similarity,
-      })
-      .from(memoryUnitsTable)
+      .select({ memoryUnit: memoryUnits, similarity })
+      .from(memoryUnits)
+      .innerJoin(memoryEmbeddings, eq(memoryEmbeddings.memoryId, memoryUnits.id))
       .where(
         and(
-          eq(memoryUnitsTable.agentId, extractUuid(agentId)),
-          eq(memoryUnitsTable.memoryType, "static"),
-          isNull(memoryUnitsTable.deletedAt),
+          eq(memoryUnits.agentId, extractUuid(agentId)),
+          eq(memoryUnits.type, "static"),
+          isNull(memoryUnits.deletedAt),
         ),
       )
       .orderBy(desc(similarity))
       .limit(limit);
 
     return rows.map((row) => ({
-      ...memoryRowToUnit(row.memoryUnit),
+      ...canonicalRowToUnit(row.memoryUnit),
       similarity: row.similarity,
     }));
   }
@@ -223,54 +262,61 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
     const db = getDb();
     const rows = await db
       .select()
-      .from(memoryUnitsTable)
+      .from(memoryUnits)
       .where(
         and(
-          eq(memoryUnitsTable.agentId, extractUuid(agentId)),
-          eq(memoryUnitsTable.memoryType, "dynamic"),
-          isNull(memoryUnitsTable.deletedAt),
+          eq(memoryUnits.agentId, extractUuid(agentId)),
+          eq(memoryUnits.type, "dynamic"),
+          isNull(memoryUnits.deletedAt),
         ),
       )
       .limit(MEMORY_LIST_DEFAULT_LIMIT);
 
-    return rows.map(memoryRowToUnit);
+    return rows.map(canonicalRowToUnit);
   }
 
   async add(unit: MemoryUnit): Promise<void> {
     const db = getDb();
-    const values = buildInsertValues(unit, "dynamic");
+    const values = buildCanonicalInsertValues(unit, "dynamic");
+    const [row] = await db.insert(memoryUnits).values(values).returning({ id: memoryUnits.id });
+    if (!row) return;
+
     try {
       const embedding = await embed(unit.content);
-      await db.insert(memoryUnitsTable).values({ ...values, embedding });
+      await upsertEmbedding(row.id, embedding);
     } catch {
-      await db.insert(memoryUnitsTable).values(values);
+      /* embedding failed — search will fall back to insertion order */
     }
   }
 
   async update(id: string, content: string, confidence: number): Promise<void> {
     const db = getDb();
+    await db
+      .update(memoryUnits)
+      .set({ content, confidence, version: sql`${memoryUnits.version} + 1` })
+      .where(eq(memoryUnits.id, id));
+
     try {
       const embedding = await embed(content);
-      await db.update(memoryUnitsTable)
-        .set({ content, confidence, embedding, version: sql`${memoryUnitsTable.version} + 1` })
-        .where(eq(memoryUnitsTable.id, id));
+      await upsertEmbedding(id, embedding);
     } catch {
-      await db.update(memoryUnitsTable)
-        .set({ content, confidence, version: sql`${memoryUnitsTable.version} + 1` })
-        .where(eq(memoryUnitsTable.id, id));
+      /* embedding failed — content is still updated */
     }
   }
 
   async softDelete(id: string, reason: string): Promise<void> {
     const db = getDb();
-    await db.update(memoryUnitsTable)
+    await db
+      .update(memoryUnits)
       .set({ deletedAt: new Date(), deleteReason: reason })
-      .where(eq(memoryUnitsTable.id, id));
+      .where(eq(memoryUnits.id, id));
   }
 
   /**
    * Vector similarity search with decay scoring.
-   * decayed_score = cosine_similarity * relevance_score * 0.5^(age_days / 30)
+   * `decayed_score = cosine_similarity × relevance_score × 0.5^(age_days / half_life)`
+   * Inner-joins `memory_embeddings`; rows without an embedding never
+   * rank (matches legacy NULL-embedding behaviour).
    */
   async searchByEmbedding(
     agentId: string,
@@ -278,33 +324,29 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
     limit: number = 15,
   ): Promise<Array<MemoryUnit & { similarity: number; decayedScore: number }>> {
     const db = getDb();
-    const similarity = sql<number>`1 - (${cosineDistance(memoryUnitsTable.embedding, queryEmbedding)})`;
-    // Decay: half the score every MEMORY_DECAY_HALF_LIFE_DAYS days untouched.
+    const similarity = sql<number>`1 - (${cosineDistance(memoryEmbeddings.embedding, queryEmbedding)})`;
     const decayedScore = sql<number>`
-      (1 - (${cosineDistance(memoryUnitsTable.embedding, queryEmbedding)}))
-      * ${memoryUnitsTable.relevanceScore}
-      * POWER(0.5, EXTRACT(EPOCH FROM (now() - ${memoryUnitsTable.updatedAt})) / ${sql.raw(`${DECAY_PERIOD_SECONDS}.0`)})
+      (1 - (${cosineDistance(memoryEmbeddings.embedding, queryEmbedding)}))
+      * ${memoryUnits.relevanceScore}
+      * POWER(0.5, EXTRACT(EPOCH FROM (now() - ${memoryUnits.updatedAt})) / ${sql.raw(`${DECAY_PERIOD_SECONDS}.0`)})
     `;
 
     const rows = await db
-      .select({
-        memoryUnit: memoryUnitsTable,
-        similarity,
-        decayedScore,
-      })
-      .from(memoryUnitsTable)
+      .select({ memoryUnit: memoryUnits, similarity, decayedScore })
+      .from(memoryUnits)
+      .innerJoin(memoryEmbeddings, eq(memoryEmbeddings.memoryId, memoryUnits.id))
       .where(
         and(
-          eq(memoryUnitsTable.agentId, extractUuid(agentId)),
-          eq(memoryUnitsTable.memoryType, "dynamic"),
-          isNull(memoryUnitsTable.deletedAt),
+          eq(memoryUnits.agentId, extractUuid(agentId)),
+          eq(memoryUnits.type, "dynamic"),
+          isNull(memoryUnits.deletedAt),
         ),
       )
       .orderBy(desc(decayedScore))
       .limit(limit);
 
     return rows.map((row) => ({
-      ...memoryRowToUnit(row.memoryUnit),
+      ...canonicalRowToUnit(row.memoryUnit),
       similarity: row.similarity,
       decayedScore: row.decayedScore,
     }));
@@ -312,55 +354,56 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
 
   async gc(companyId: string): Promise<number> {
     const db = getDb();
+    const companyUuid = extractUuid(companyId);
     let deleted = 0;
 
-    // 1. Expire temporal facts
+    // 1. Expire temporal facts past their `expires_at`.
     const expired = await db
-      .update(memoryUnitsTable)
+      .update(memoryUnits)
       .set({ deletedAt: new Date(), deleteReason: "expired" })
       .where(
         and(
-          eq(memoryUnitsTable.companyId, extractUuid(companyId)),
-          isNull(memoryUnitsTable.deletedAt),
-          sql`${memoryUnitsTable.expiresAt} IS NOT NULL AND ${memoryUnitsTable.expiresAt} < now()`,
+          eq(memoryUnits.companyId, companyUuid),
+          isNull(memoryUnits.deletedAt),
+          sql`${memoryUnits.expiresAt} IS NOT NULL AND ${memoryUnits.expiresAt} < now()`,
         ),
       )
-      .returning({ id: memoryUnitsTable.id });
+      .returning({ id: memoryUnits.id });
     deleted += expired.length;
 
-    // 2. Soft-delete dynamic memories with decayed relevance below threshold
-    // Same decay formula as searchByEmbedding above — both must agree, hence
-    // the shared MEMORY_DECAY_HALF_LIFE_DAYS / RELEVANCE_DECAY_DELETE_THRESHOLD.
+    // 2. Soft-delete dynamic memories whose decayed relevance dropped
+    //    below the configured threshold. Formula must match
+    //    `searchByEmbedding` above so a row that ranks below the cut-
+    //    off in search disappears from the corpus on the next GC pass.
     const decayed = await db.execute(sql`
       UPDATE memory_units
-      SET deleted_at = now(), delete_reason = 'relevance_decay'
-      WHERE company_id = ${companyId}
-        AND memory_type = 'dynamic'
-        AND deleted_at IS NULL
-        AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / ${sql.raw(`${DECAY_PERIOD_SECONDS}.0`)}) < ${RELEVANCE_DECAY_DELETE_THRESHOLD}
+         SET deleted_at = now(), delete_reason = 'relevance_decay'
+       WHERE company_id = ${companyUuid}
+         AND type = 'dynamic'
+         AND deleted_at IS NULL
+         AND relevance_score * POWER(0.5, EXTRACT(EPOCH FROM (now() - updated_at)) / ${sql.raw(`${DECAY_PERIOD_SECONDS}.0`)}) < ${RELEVANCE_DECAY_DELETE_THRESHOLD}
     `);
     // drizzle's `db.execute(sql\`...\`)` return type varies by driver:
-    //   postgres-js  → { length: number }   (it's an Array-like)
-    //   node-postgres → { rowCount: number }
-    // Both are present at runtime; the union isn't surfaced by drizzle, so we
-    // read whichever is defined.
+    //   postgres-js   → Array-like with `length`
+    //   node-postgres → object with `rowCount`
+    // Read whichever the runtime exposes.
     const decayedResult = decayed as { length?: number; rowCount?: number };
     deleted += Number(decayedResult.length ?? decayedResult.rowCount ?? 0);
 
-    // 3. Prune stale: old, low-confidence dynamic facts
+    // 3. Prune stale: old, low-confidence dynamic facts.
     const pruned = await db
-      .update(memoryUnitsTable)
+      .update(memoryUnits)
       .set({ deletedAt: new Date(), deleteReason: "stale_prune" })
       .where(
         and(
-          eq(memoryUnitsTable.companyId, extractUuid(companyId)),
-          eq(memoryUnitsTable.memoryType, "dynamic"),
-          isNull(memoryUnitsTable.deletedAt),
-          sql`${memoryUnitsTable.createdAt} < now() - interval '30 days'`,
-          sql`${memoryUnitsTable.confidence} < 0.3`,
+          eq(memoryUnits.companyId, companyUuid),
+          eq(memoryUnits.type, "dynamic"),
+          isNull(memoryUnits.deletedAt),
+          sql`${memoryUnits.createdAt} < now() - interval '30 days'`,
+          sql`${memoryUnits.confidence} < 0.3`,
         ),
       )
-      .returning({ id: memoryUnitsTable.id });
+      .returning({ id: memoryUnits.id });
     deleted += pruned.length;
 
     return deleted;
@@ -524,13 +567,13 @@ export class PgVectorPrimingStore implements PrimingStore {
 // Set embedding on an existing memory unit
 // ---------------------------------------------------------------------------
 
-/** Set or replace the embedding vector on an existing memory unit row. */
+/**
+ * Set or replace the embedding vector for an existing memory unit.
+ * Spec 31 PR #13c — embeddings now live in their own table, so this
+ * upserts the row instead of updating an inline column.
+ */
 export async function setMemoryEmbedding(memoryId: string, embedding: number[]): Promise<void> {
-  const db = getDb();
-  await db
-    .update(memoryUnitsTable)
-    .set({ embedding })
-    .where(eq(memoryUnitsTable.id, memoryId));
+  await upsertEmbedding(memoryId, embedding);
 }
 
 // ---------------------------------------------------------------------------
