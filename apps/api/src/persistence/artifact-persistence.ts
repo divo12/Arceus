@@ -1,5 +1,7 @@
 import { desc, eq } from "drizzle-orm";
-import { artifactsTable, getDb, isDatabaseConfigured } from "@arceus/db";
+import { artifacts as artifactsTable, getDb, isDatabaseConfigured } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
+import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { uploadArtifactPayload } from "./supabase-storage.js";
 import { describePgError } from "../infra/pg-errors.js";
 
@@ -26,18 +28,23 @@ export async function persistRuntimeArtifact(companyId: string, artifact: Persis
 
   if (isDatabaseConfigured()) {
     try {
+      // Spec 31 Phase 7.B.6 — canonical artifacts table uses uuid PK +
+      // uuid FKs. Friendly ids are hashed via uuidv5; the friendly id
+      // is also stamped in `friendly_id` so the read side can return
+      // it verbatim.
       await getDb()
         .insert(artifactsTable)
         .values({
-          id: artifact.id,
-          companyId,
-          sprintId: artifact.sprintId ?? null,
-          taskId: artifact.taskId ?? null,
+          id: friendlyToUuid(artifact.id),
+          companyId: companiesRepo.toDbId(companyId),
+          sprintId: artifact.sprintId ? friendlyToUuid(artifact.sprintId) : null,
+          taskId: artifact.taskId ? friendlyToUuid(artifact.taskId) : null,
+          friendlyId: artifact.id,
           agentRole: artifact.agent,
           kind: artifact.kind,
           title: artifact.title,
           content: artifact.content,
-          fileReferences: artifact.fileReferences ?? [],
+          fileReferences: (artifact.fileReferences ?? []) as string[],
           createdAt: new Date(artifact.createdAt),
         })
         .onConflictDoUpdate({
@@ -70,13 +77,23 @@ export async function listPersistedArtifacts(companyId: string): Promise<Persist
   }
 
   try {
-    const rows = await getDb().select().from(artifactsTable).where(eq(artifactsTable.companyId, companyId)).orderBy(desc(artifactsTable.createdAt));
+    const dbCompanyId = companiesRepo.toDbId(companyId);
+    const rows = await getDb()
+      .select()
+      .from(artifactsTable)
+      .where(eq(artifactsTable.companyId, dbCompanyId))
+      .orderBy(desc(artifactsTable.createdAt));
     return rows.map((row) => ({
-      id: row.id,
-      agent: row.agentRole,
+      // Spec 31 Phase 7.B.6 — return the friendly id when stamped;
+      // fall back to the uuid for legacy rows.
+      id: row.friendlyId ?? row.id,
+      // agentRole became nullable in canonical (system-scoped artifacts);
+      // the contract requires a string.
+      agent: row.agentRole ?? "",
       kind: row.kind as PersistedRuntimeArtifact["kind"],
       title: row.title,
-      content: row.content,
+      // content became nullable too — old writers used `summary` instead.
+      content: row.content ?? row.summary ?? "",
       createdAt: row.createdAt.toISOString(),
       sprintId: row.sprintId ?? null,
       taskId: row.taskId ?? null,
@@ -99,5 +116,7 @@ export async function deletePersistedArtifacts(companyId: string) {
     return;
   }
 
-  await getDb().delete(artifactsTable).where(eq(artifactsTable.companyId, companyId));
+  await getDb()
+    .delete(artifactsTable)
+    .where(eq(artifactsTable.companyId, companiesRepo.toDbId(companyId)));
 }

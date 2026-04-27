@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { and, eq } from "drizzle-orm";
-import { getDatabaseConnectionConfig, getDb, getSupabaseClient, isDatabaseConfigured, isSupabaseConfigured, assetsTable } from "@arceus/db";
+import { getDatabaseConnectionConfig, getDb, getSupabaseClient, isDatabaseConfigured, isSupabaseConfigured, assets as assetsTable } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { persistenceConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "../infra/resilience.js";
 
@@ -31,17 +34,31 @@ async function upsertAssetRecord(params: {
   sha256: string;
   originalFilename: string | null;
   namespace: string;
+  /**
+   * Friendly agent id (e.g. `agent_developer_<uuid>`) or null. The
+   * canonical schema renames this field from the legacy free-text
+   * `created_by_agent` to a uuid FK `created_by_agent_id`.
+   */
   createdByAgent: string | null;
 }) {
   if (!isDatabaseConfigured()) {
     return null;
   }
 
+  // Spec 31 Phase 7.B.6 — canonical PK / FKs are uuids. Friendly ids
+  // map deterministically via uuidv5; the friendly form remains the
+  // public identifier returned to callers.
+  const dbId = friendlyToUuid(params.assetId);
+  const dbCompanyId = companiesRepo.toDbId(params.companyId);
+  const dbCreatedByAgentId = params.createdByAgent
+    ? agentsRepo.toDbId(params.createdByAgent)
+    : null;
+
   await getDb()
     .insert(assetsTable)
     .values({
-      id: params.assetId,
-      companyId: params.companyId,
+      id: dbId,
+      companyId: dbCompanyId,
       provider: "supabase",
       objectKey: params.objectKey,
       contentType: params.contentType,
@@ -49,7 +66,7 @@ async function upsertAssetRecord(params: {
       sha256: params.sha256,
       originalFilename: params.originalFilename,
       namespace: params.namespace,
-      createdByAgent: params.createdByAgent,
+      createdByAgentId: dbCreatedByAgentId,
       createdAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -61,7 +78,7 @@ async function upsertAssetRecord(params: {
         sha256: params.sha256,
         originalFilename: params.originalFilename,
         namespace: params.namespace,
-        createdByAgent: params.createdByAgent,
+        createdByAgentId: dbCreatedByAgentId,
       },
     });
 
@@ -257,10 +274,13 @@ export async function getAssetRecordByObjectKey(companyId: string, objectKey: st
     return null;
   }
 
+  // Spec 31 Phase 7.B.6 — company_id is a uuid FK on the canonical
+  // assets table; map the friendly id before the equality check.
+  const dbCompanyId = companiesRepo.toDbId(companyId);
   const rows = await getDb()
     .select()
     .from(assetsTable)
-    .where(and(eq(assetsTable.companyId, companyId), eq(assetsTable.objectKey, objectKey)))
+    .where(and(eq(assetsTable.companyId, dbCompanyId), eq(assetsTable.objectKey, objectKey)))
     .limit(1);
 
   return rows[0] ?? null;

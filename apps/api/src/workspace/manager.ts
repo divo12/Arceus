@@ -2,7 +2,10 @@ import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CompanySnapshot, ExportResult, SprintSnapshot, WorkspaceFileManifestEntry, WorkspaceInfo } from "@arceus/contracts";
-import { getDb, isDatabaseConfigured, sprintSnapshotsTable, workspacesTable } from "@arceus/db";
+import { getDb, isDatabaseConfigured, sprintSnapshotsTable, workspaces as workspacesTable } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
+import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
+import { eq } from "drizzle-orm";
 import { persistenceConfig } from "../config/index.js";
 import { cloneWorkspaceFromBundle, commitAllChanges, createBundleFromWorkspace, diffWorkspaceRefs, ensureGitRepository, getHeadSha, tagWorkspace } from "./git-ops.js";
 import { createSignedBucketUrl, downloadWorkspaceBundle, getAssetRecordByObjectKey, getLocalFileInfo, isStorageConfigured, uploadWorkspaceBundle } from "../persistence/supabase-storage.js";
@@ -106,10 +109,18 @@ function buildWorkspaceInfo(companyId: string, overrides: Partial<WorkspaceInfo>
   };
 }
 
-function mapWorkspaceRecord(record: typeof workspacesTable.$inferSelect): WorkspaceInfo {
+function mapWorkspaceRecord(
+  record: typeof workspacesTable.$inferSelect,
+  friendlyCompanyId: string,
+): WorkspaceInfo {
+  // Spec 31 Phase 7.B.6 — canonical PK / company_id are uuids, but the
+  // contract / consumers think in friendly ids. Surface the friendly
+  // workspace id (always derivable from the friendly companyId) and
+  // the friendly companyId (passed in by the caller from
+  // getActiveCompanyId()).
   return {
-    id: record.id,
-    companyId: record.companyId,
+    id: buildWorkspaceId(friendlyCompanyId),
+    companyId: friendlyCompanyId,
     localPath: record.localPath,
     status: record.status as WorkspaceInfo["status"],
     latestBundleKey: record.latestBundleKey,
@@ -146,11 +157,17 @@ async function persistWorkspaceInfo(workspace: WorkspaceInfo) {
     return workspace;
   }
 
+  // Spec 31 Phase 7.B.6 — canonical schema uses uuid PK / company FK.
+  // Friendly ids (`workspace_company_<uuid>`, `company_<uuid>`) are
+  // hashed via uuidv5 to land on stable canonical rows.
+  const dbId = friendlyToUuid(workspace.id);
+  const dbCompanyId = companiesRepo.toDbId(workspace.companyId);
+
   await getDb()
     .insert(workspacesTable)
     .values({
-      id: workspace.id,
-      companyId: workspace.companyId,
+      id: dbId,
+      companyId: dbCompanyId,
       localPath: workspace.localPath,
       status: workspace.status,
       latestBundleKey: workspace.latestBundleKey,
@@ -165,7 +182,7 @@ async function persistWorkspaceInfo(workspace: WorkspaceInfo) {
     .onConflictDoUpdate({
       target: workspacesTable.id,
       set: {
-        companyId: workspace.companyId,
+        companyId: dbCompanyId,
         localPath: workspace.localPath,
         status: workspace.status,
         latestBundleKey: workspace.latestBundleKey,
@@ -196,9 +213,16 @@ async function loadWorkspaceInfo(companyId: string) {
   }
 
   try {
-    const rows = await getDb().select().from(workspacesTable);
-    const record = rows.find((candidate) => candidate.id === buildWorkspaceId(companyId));
-    return record ? mapWorkspaceRecord(record) : fallbackWorkspaceState.get(companyId) ?? null;
+    // Spec 31 Phase 7.B.6 — query by company_id (uuid FK, unique index)
+    // instead of fetching all rows and filtering by friendly id. Same
+    // O(1) lookup, but goes through the canonical PK/index path.
+    const dbCompanyId = companiesRepo.toDbId(companyId);
+    const [record] = await getDb()
+      .select()
+      .from(workspacesTable)
+      .where(eq(workspacesTable.companyId, dbCompanyId))
+      .limit(1);
+    return record ? mapWorkspaceRecord(record, companyId) : fallbackWorkspaceState.get(companyId) ?? null;
   } catch {
     return fallbackWorkspaceState.get(companyId) ?? null;
   }
