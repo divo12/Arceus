@@ -36,6 +36,7 @@ import { writeRevisionAtomic } from "../../skills/revisions.js";
 import { validateSkillDefinition } from "../../skills/validate.js";
 import { gitListTagsMatching } from "../../skills/git.js";
 import { enqueueJob } from "@arceus/db/src/repos/skill_evolve_jobs.js";
+import { swallowAndAudit } from "../../observability/swallow.js";
 
 const SKILLS_BASE = "/api/internal/v1/skills";
 
@@ -417,7 +418,9 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       });
     } catch (err) {
       // roll back the artifact insert too — registration is atomic at the user level
-      await db.delete(skillArtifacts).where(eq(skillArtifacts.id, artifact.id)).catch(() => {});
+      swallowAndAudit("skill.register.rollback_artifact", () =>
+        db.delete(skillArtifacts).where(eq(skillArtifacts.id, artifact.id)).then(() => undefined),
+      { agentRole: "skills_lead", detail: { skillId: artifact.id, originalError: err instanceof Error ? err.message : String(err) } });
       reply
         .code(500)
         .send(failure(`Failed to write revision: ${err instanceof Error ? err.message : String(err)}`, "internal", "unsafe", "retry_succeeded"));
@@ -505,15 +508,16 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       return;
     }
 
-    await db
-      .update(skillArtifacts)
-      .set({
-        content: parsed.data.content,
-        version: artifact.version + 1,
-        updatedAt: new Date(),
-      })
-      .where(eq(skillArtifacts.id, artifact.id))
-      .catch(() => {});
+    await swallowAndAudit("skill.update.row", () =>
+      db.update(skillArtifacts)
+        .set({
+          content: parsed.data.content,
+          version: artifact.version + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(skillArtifacts.id, artifact.id))
+        .then(() => undefined),
+    { agentRole: "skills_lead", detail: { skillId: artifact.id, newVersion: artifact.version + 1 } });
 
     try {
       const inMem = getInMemorySkill(artifact.id);
@@ -572,11 +576,12 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       return;
     }
 
-    await db
-      .update(skillArtifacts)
-      .set({ status: "deprecated", deprecatedAt: new Date(), updatedAt: new Date() })
-      .where(eq(skillArtifacts.id, artifact.id))
-      .catch(() => {});
+    await swallowAndAudit("skill.deprecate.row", () =>
+      db.update(skillArtifacts)
+        .set({ status: "deprecated", deprecatedAt: new Date(), updatedAt: new Date() })
+        .where(eq(skillArtifacts.id, artifact.id))
+        .then(() => undefined),
+    { agentRole: "skills_lead", detail: { skillId: artifact.id, reason: parsed.data.reason } });
 
     try {
       deprecateSkillInMemory(artifact.id, parsed.data.reason);

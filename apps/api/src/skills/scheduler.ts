@@ -20,6 +20,7 @@ import {
 import { runATAPipeline, type PipelineResult } from "./orchestrator.js";
 import { runCronTriggerSweep, runRollbackMonitor } from "./triggers.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
+import { swallowAndReport } from "../observability/swallow.js";
 
 const TICK_INTERVAL_MS = 60_000;
 const SHUTDOWN_DRAIN_MS = 30_000;
@@ -126,7 +127,12 @@ async function processOnce(): Promise<void> {
       `Evolution job failed: ${job.id} — ${msg}`,
       { detail: { jobId: job.id, error: msg } },
     );
-    await failJob(db, job.id, { error: msg }).catch(() => {});
+    // failJob is itself failure-handling; if it crashes we still want
+    // a trail (the original `.catch(() => {})` lost the second-order
+    // failure entirely). awaitable swallow keeps the catch's
+    // sequencing.
+    await swallowAndReport("skill_evolve.fail_job", () => failJob(db, job.id, { error: msg }),
+      { agentRole: "skills_lead", detail: { jobId: job.id, originalError: msg } });
   }
 }
 

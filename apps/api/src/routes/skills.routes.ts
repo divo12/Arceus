@@ -14,6 +14,7 @@ import {
   getUnusedSkills, getUnderperformingSkills, analyzeSprintPatterns,
 } from "@arceus/company-runtime";
 import { runPatternPromotionSweep } from "../skills/cross-sprint.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 
 export default async function skillsRoutes(app: FastifyInstance) {
   app.get("/api/skills", async () => {
@@ -234,8 +235,10 @@ export default async function skillsRoutes(app: FastifyInstance) {
       };
     }
     const mutation = await proposeSkillFromCluster(candidate);
-    runATAPipeline(mutation.id).catch((err) => {
-      console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+    swallowAndAudit("ata.pipeline.cluster_promote", () => runATAPipeline(mutation.id), {
+      companyId,
+      agentRole: "skills_lead",
+      detail: { mutationId: mutation.id, clusterId },
     });
     return {
       mutationId: mutation.id,

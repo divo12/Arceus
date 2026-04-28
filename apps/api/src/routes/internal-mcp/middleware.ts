@@ -9,6 +9,7 @@ import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessio
 import { observability, type RoleType } from "@arceus/contracts";
 import { routeToTool } from "./route-to-tool.js";
 import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
+import { swallowAndAudit } from "../../observability/swallow.js";
 
 export interface McpRequestContext {
   companyId: string;
@@ -175,10 +176,14 @@ export const cacheSuccessfulResponse = (
     // Failed handler — drop the pending placeholder so the next retry
     // (same content-addressed key) can try fresh instead of being blocked
     // by `in_flight` for the 5-minute pending TTL.
-    void releaseIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey).catch(() => {});
+    swallowAndAudit("idempotency.release_failed", () =>
+      releaseIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey!),
+    { companyId: mcp.companyId, agentRole: mcp.role, beatId: mcp.beatId, detail: { idempotencyKey: mcp.idempotencyKey, reason: "handler_failed" } });
     return;
   }
-  void rememberIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey, req.body, response).catch(() => {});
+  swallowAndAudit("idempotency.remember", () =>
+    rememberIdempotency(mcp.companyId, mcp.beatId, mcp.idempotencyKey!, req.body, response),
+  { companyId: mcp.companyId, agentRole: mcp.role, beatId: mcp.beatId, detail: { idempotencyKey: mcp.idempotencyKey, status: response.status } });
 };
 
 // ── Spec 32 — emit tool.invoked / tool.result / tool.denied ──────────────
@@ -263,16 +268,17 @@ export const mcpEmitToolResult = async (req: FastifyRequest, reply: FastifyReply
   // ErrorCauses listed in CAUSE_TO_DENY_REASON map to a denial; everything
   // else (validation, conflict, upstream, …) is a regular error and is
   // already covered by tool.result. Recording is best-effort telemetry.
-  if (!ok && typeof cause === "string") {
+  if (!ok && typeof cause === "string" && mcp.tool) {
     const reason = CAUSE_TO_DENY_REASON[cause as ErrorCause];
     if (reason) {
-      void recordPolicyDeny({
+      const toolName = mcp.tool;
+      swallowAndAudit("policy.deny.record", () => recordPolicyDeny({
         companyId: mcp.companyId,
         role: mcp.role,
-        tool: mcp.tool,
+        tool: toolName,
         reason,
         detail: cause,
-      }).catch(() => {});
+      }), { companyId: mcp.companyId, agentRole: mcp.role, beatId: mcp.beatId, detail: { tool: toolName, reason, cause } });
     }
   }
 };

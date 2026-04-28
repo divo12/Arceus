@@ -11,6 +11,7 @@ import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
 import { persistSprint, persistTask } from "../persistence/domain-persistence.js";
 import { workspaceManager } from "../workspace/manager.js";
@@ -239,7 +240,8 @@ export async function beginSprintExecution(
     if (!eventBridgeStarted && onStartEventBridge) {
       // The bridge owns the started-flag now (C3 — F-273/274/290).
       // Don't pre-set it true — wait for the SSE handshake.
-      onStartEventBridge().catch(() => {});
+      swallowAndAudit("event_bridge.start.from_sprint", () => onStartEventBridge(),
+        { companyId, detail: { context: "sprint_proposal_execute" } });
     }
 
     emitEmployeeActivity(

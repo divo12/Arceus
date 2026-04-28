@@ -11,6 +11,7 @@ import { nowIso } from "@arceus/task-engine";
 import { getOpencode } from "../infra/opencode.js";
 import { agentSessions, type AgentSessionState } from "../orchestration/state.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 
 /**
  * Get or create an OpenCode session for an internal agent.
@@ -72,7 +73,8 @@ export async function destroyInternalAgentSessions(): Promise<void> {
 
   for (const [role, session] of agentSessions) {
     if (role.startsWith("_internal/")) {
-      destroyBeatSession(session.sessionId).catch(() => {});
+      swallowAndAudit("internal_session.destroy", () => destroyBeatSession(session.sessionId),
+        { agentRole: role, detail: { sessionId: session.sessionId } });
       agentSessions.delete(role);
     }
   }

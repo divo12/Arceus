@@ -8,6 +8,27 @@ import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { EMBEDDING_MODEL_VERSION } from "@arceus/db/src/constants/embedding.js";
 import { decodePrimingState, encodePrimingState } from "@arceus/db/src/codecs/priming-state.js";
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
+
+/**
+ * Surface embed() failures to the inspector + activity_log + pino + OTel
+ * instead of swallowing them. F-409 audit finding: rows land without
+ * embeddings and become invisible to vector search; before this hook,
+ * operators had no signal that re-embedding was needed.
+ *
+ * The error is still non-fatal — the memory row is preserved and search
+ * falls back to metadata ranking, just as before. The observable change
+ * is the trail.
+ */
+function logEmbedFailure(where: string, agentId: string, err: unknown): void {
+  observability.logEvent({
+    event: "error",
+    where: `hippocampus.embed.${where}`,
+    message: `[hippocampus/${agentId}] embed failed: ${err instanceof Error ? err.message : String(err)}`,
+    stack: err instanceof Error && err.stack ? err.stack : undefined,
+    ts: Date.now(),
+  });
+}
 import type { StaticMemoryStore, DynamicMemoryStore, ProceduralMemoryStore, PrimingStore } from "../types";
 import { embed } from "./embedding.js";
 import {
@@ -192,8 +213,11 @@ export class PgVectorStaticStore implements StaticMemoryStore {
     try {
       const embedding = await embed(unit.content);
       await upsertEmbedding(row.id, embedding);
-    } catch {
-      /* embedding failed — the row is still searchable by metadata */
+    } catch (err) {
+      // Row is preserved; metadata ranking is the fallback. We surface
+      // the failure so the inspector + activity_log show that some rows
+      // exist without embeddings (F-409 — was previously invisible).
+      logEmbedFailure("static.add", unit.agentId, err);
     }
   }
 
@@ -207,8 +231,10 @@ export class PgVectorStaticStore implements StaticMemoryStore {
     try {
       const embedding = await embed(content);
       await upsertEmbedding(id, embedding);
-    } catch {
-      /* embedding failed — content is still updated */
+    } catch (err) {
+      // Content already updated; embedding stale. Surface so the
+      // inspector can flag stale-embedding memories for re-embedding.
+      logEmbedFailure("static.update", id, err);
     }
   }
 
@@ -293,8 +319,8 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
     try {
       const embedding = await embed(unit.content);
       await upsertEmbedding(row.id, embedding);
-    } catch {
-      /* embedding failed — search will fall back to insertion order */
+    } catch (err) {
+      logEmbedFailure("dynamic.add", unit.agentId, err);
     }
   }
 
@@ -308,8 +334,8 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
     try {
       const embedding = await embed(content);
       await upsertEmbedding(id, embedding);
-    } catch {
-      /* embedding failed — content is still updated */
+    } catch (err) {
+      logEmbedFailure("dynamic.update", id, err);
     }
   }
 

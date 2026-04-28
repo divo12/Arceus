@@ -22,6 +22,7 @@ import {
   gitHeadSha,
   getRepoRoot,
 } from "./git.js";
+import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 
 export type RevisionIntent = "register" | "update" | "deprecate";
 
@@ -130,7 +131,9 @@ export async function writeRevisionAtomic(
       return { revisionId: row.id, revisionNumber, gitTag: gitTagName, gitSha: sha };
     } catch (err) {
       if (inserted) {
-        await db.delete(skillRevisions).where(eq(skillRevisions.id, inserted.id)).catch(() => {});
+        await swallowAndReport("skill.revision.rollback_db_deprecate", () =>
+          db.delete(skillRevisions).where(eq(skillRevisions.id, inserted!.id)).then(() => undefined),
+        { agentRole: "skills_lead", detail: { revisionId: inserted.id, intent: "deprecate" } });
       }
       throw err;
     }
@@ -162,9 +165,12 @@ export async function writeRevisionAtomic(
     // restore file & abort — no commit was made (or it failed mid-way)
     await restoreFile(absPath, priorContent);
     // safety: if HEAD moved unexpectedly, hard-reset
-    const head = await gitHeadSha({ cwd }).catch(() => priorHead);
+    const head = await swallowAndReport("skill.revision.head_probe", () => gitHeadSha({ cwd }),
+      { agentRole: "skills_lead", detail: { phase: "post_commit_rollback" } }) ?? priorHead;
     if (head !== priorHead) {
-      await gitResetHard({ ref: priorHead, cwd }).catch(() => {});
+      await swallowAndReport("skill.revision.reset_post_commit_fail", () =>
+        gitResetHard({ ref: priorHead, cwd }).then(() => undefined),
+      { agentRole: "skills_lead", detail: { priorHead, observedHead: head } });
     }
     throw err;
   }
@@ -188,7 +194,9 @@ export async function writeRevisionAtomic(
     revisionId = row.id;
   } catch (err) {
     // roll the commit back and restore the file
-    await gitResetHard({ ref: priorHead, cwd }).catch(() => {});
+    await swallowAndReport("skill.revision.reset_post_db_fail", () =>
+      gitResetHard({ ref: priorHead, cwd }).then(() => undefined),
+    { agentRole: "skills_lead", detail: { priorHead, phase: "post_db_insert_rollback" } });
     await restoreFile(absPath, priorContent);
     throw err;
   }
@@ -197,9 +205,15 @@ export async function writeRevisionAtomic(
   try {
     await gitTag({ tag: gitTagName, sha: commitSha, message: args.summary, cwd });
   } catch (err) {
-    await db.delete(skillRevisions).where(eq(skillRevisions.id, revisionId)).catch(() => {});
-    await gitDeleteTag({ tag: gitTagName, cwd }).catch(() => {}); // partial create
-    await gitResetHard({ ref: priorHead, cwd }).catch(() => {});
+    await swallowAndReport("skill.revision.rollback_db_post_tag_fail", () =>
+      db.delete(skillRevisions).where(eq(skillRevisions.id, revisionId)).then(() => undefined),
+    { agentRole: "skills_lead", detail: { revisionId, gitTagName } });
+    await swallowAndReport("skill.revision.delete_tag_partial", () =>
+      gitDeleteTag({ tag: gitTagName, cwd }).then(() => undefined),
+    { agentRole: "skills_lead", detail: { gitTagName } });
+    await swallowAndReport("skill.revision.reset_post_tag_fail", () =>
+      gitResetHard({ ref: priorHead, cwd }).then(() => undefined),
+    { agentRole: "skills_lead", detail: { priorHead, gitTagName } });
     await restoreFile(absPath, priorContent);
     throw err;
   }

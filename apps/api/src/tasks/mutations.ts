@@ -18,6 +18,7 @@ import {
 import { persistRuntimeArtifact } from "../persistence/artifact-persistence.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { workspaceManager } from "../workspace/manager.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import {
   processTaskOutcome,
   runATAPipeline,
@@ -54,7 +55,11 @@ export function addArtifact(agent: string, kind: Artifact["kind"], title: string
     void persistRuntimeArtifact(companyIdForPersist, artifact);
   }
   // Auto-write artifact to workspace filesystem
-  void writeArtifactToDisk(artifact).catch(() => {});
+  swallowAndAudit("artifact.disk_write", () => writeArtifactToDisk(artifact), {
+    companyId: companyIdForPersist ?? undefined,
+    agentRole: artifact.agent,
+    detail: { artifactId: artifact.id, kind: artifact.kind },
+  });
   return artifact;
 }
 
@@ -79,7 +84,10 @@ export async function addArtifactSync(
     createdAt: new Date().toISOString(),
   };
   await writeArtifactSync(artifact);
-  void writeArtifactToDisk(artifact).catch(() => {});
+  swallowAndAudit("artifact.disk_write_sync", () => writeArtifactToDisk(artifact), {
+    agentRole: artifact.agent,
+    detail: { artifactId: artifact.id, kind: artifact.kind },
+  });
   return artifact;
 }
 

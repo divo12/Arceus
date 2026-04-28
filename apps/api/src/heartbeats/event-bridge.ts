@@ -7,6 +7,7 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { auditAgent } from "../observability/audit-ledger.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { sanitizeToolArgs, truncateTelemetry, extractPreviewUrls } from "../infra/utils.js";
 import { cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "../persistence/control-plane.js";
 import {
@@ -125,7 +126,7 @@ function scheduleReconnect(): void {
       // startEventBridge owns the started-flag. We don't await here because
       // the bridge keeps the SSE socket open for the life of the connection;
       // a successful start does not "resolve". Any error is logged inside.
-      startEventBridge().catch(() => {});
+      swallowAndAudit("event_bridge.reconnect", () => startEventBridge());
     }
   }, delayMs);
 }

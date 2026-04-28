@@ -29,6 +29,7 @@ import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { getDb } from "@arceus/db";
 import { setTaskStatus } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
+import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 
 const HARD_CAP_MS = 15 * 60 * 1000;
 
@@ -114,7 +115,11 @@ export async function runBeat(input: {
     const tokensUsed = drainBeatTokenAccumulator(beatId);
     await finishHeartbeatRun({ runDbId, beatId, verdict: "pass", cause: "no-work", totalTokens: tokensUsed });
     await unbindSession(sessionId);
-    void updateTrustScore(input.role, input.companyId, "pass").catch(() => {});
+    swallowAndAudit("trust.update.no_work", () => updateTrustScore(input.role, input.companyId, "pass"), {
+      companyId: input.companyId,
+      agentRole: input.role,
+      beatId,
+    });
     observability.logEvent({
       event: "beat.completed",
       beatId,
@@ -217,13 +222,18 @@ export async function runBeat(input: {
       // rate; the event row independently captures this beat's verdict.
       const skill = getSkillById(skillId);
       if (skill) {
-        void persistSkillUsageEvent({
+        swallowAndAudit("skill_usage.persist", () => persistSkillUsageEvent({
           skill,
           companyId: input.companyId,
           role: input.role,
           beatDbId: runDbId,
           outcomeScore,
-        }).catch(() => {});
+        }), {
+          companyId: input.companyId,
+          agentRole: input.role,
+          beatId,
+          detail: { skillId },
+        });
       }
     }
 
@@ -275,7 +285,13 @@ export async function runBeat(input: {
       try {
         const released = await tasksRepo.releaseClaimsForBeat(getDb(), beatId);
         for (const tid of released) {
-          try { await setTaskStatus(tid, "planned", `claim released after beat ${beatId} failed (${cause ?? "unknown"})`); } catch { /* in-memory may not know it */ }
+          // setTaskStatus is best-effort here — the canonical claim is
+          // already released by the repo call above; this keeps any
+          // optional in-memory mirror in sync. Awaitable swallow so the
+          // loop stays sequential (matches prior try/catch semantics).
+          await swallowAndReport("task.status.release", () =>
+            setTaskStatus(tid, "planned", `claim released after beat ${beatId} failed (${cause ?? "unknown"})`),
+          { companyId: input.companyId, agentRole: input.role, beatId, detail: { taskId: tid } });
         }
         if (released.length > 0) {
           observability.logEvent({
@@ -309,7 +325,12 @@ export async function runBeat(input: {
     // Spec 31 Phase 5 — close out the run + binding, EMA-update trust.
     await finishHeartbeatRun({ runDbId, beatId, verdict, cause, totalTokens: tokensUsed });
     await unbindSession(sessionId);
-    void updateTrustScore(input.role, input.companyId, verdict).catch(() => {});
+    swallowAndAudit("trust.update.beat_end", () => updateTrustScore(input.role, input.companyId, verdict), {
+      companyId: input.companyId,
+      agentRole: input.role,
+      beatId,
+      detail: { verdict, cause },
+    });
 
     // Spec 32 — narrate beat end. OTEL sink closes the parent span and
     // attaches the verdict; pino sink writes one JSON line.

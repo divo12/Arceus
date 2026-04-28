@@ -15,6 +15,7 @@ import {
 import { getAgentByRole } from "@arceus/task-engine";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { auditAgent } from "../observability/audit-ledger.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
 } from "../observability/graph-emitter.js";
@@ -90,7 +91,7 @@ export async function executeChecklistAction(
   // started-flag — sets it true only after the SSE handshake succeeds, and
   // resets it on disconnect (C3 — F-273/274/290 fix).
   if (!eventBridgeStarted) {
-    startEventBridge().catch(() => {});
+    swallowAndAudit("event_bridge.start", () => startEventBridge());
   }
 
   emitEmployeeActivity(role, "decision", `${shortBeat(beatId)}: ${action.suggestedAction}`, {
@@ -439,8 +440,11 @@ async function executeSkillsLeadAction(
         return { summary: `Mutation for ${worst.name} refused: ${gov.reason}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
       }
 
-      runATAPipeline(mutation.id).catch((err: unknown) => {
-        console.warn(`[ATA] Skills Lead pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      swallowAndAudit("ata.pipeline.skills_lead", () => runATAPipeline(mutation.id), {
+        companyId,
+        agentRole: "skills_lead",
+        beatId,
+        detail: { mutationId: mutation.id, skillName: worst.name },
       });
       return { summary: `Proposed mutation ${mutation.id} for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
     }
@@ -489,8 +493,11 @@ async function executeSkillsLeadAction(
           });
           if (!gov.allowed) { refused++; continue; }
           proposed++;
-          runATAPipeline(mutation.id).catch((err: unknown) => {
-            console.warn(`[ATA] Skills Lead gap-fill error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+          swallowAndAudit("ata.pipeline.gap_fill", () => runATAPipeline(mutation.id), {
+            companyId,
+            agentRole: "skills_lead",
+            beatId,
+            detail: { mutationId: mutation.id, candidateClusterId: candidate.clusterId },
           });
         } catch (err) {
           console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : err}`);

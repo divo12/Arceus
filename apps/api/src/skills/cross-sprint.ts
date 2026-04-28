@@ -5,6 +5,7 @@ import {
   runATAPipeline,
 } from "@arceus/company-runtime";
 import { applyGovernanceToMutation } from "./governance.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 
 /**
  * Spec 14 Phase 6: Cross-sprint pattern transfer.
@@ -83,8 +84,10 @@ export async function runPatternPromotionSweep(companyId: string): Promise<{
     try {
       const mutation = await proposeSkillFromCluster(candidate);
       mutationsProposed++;
-      runATAPipeline(mutation.id).catch((err) => {
-        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      swallowAndAudit("ata.pipeline.emergent", () => runATAPipeline(mutation.id), {
+        companyId,
+        agentRole: "skills_lead",
+        detail: { mutationId: mutation.id, clusterId: candidate.clusterId },
       });
     } catch (err) {
       console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
