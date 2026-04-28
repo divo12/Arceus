@@ -64,21 +64,44 @@ function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: `Budget at ${usedPct}%` };
 }
 
-/** Check for blocked/failed tasks in the current sprint. */
+/**
+ * Check for a blocked task that THIS agent owns and that doesn't yet have
+ * an open "Fix blocker" follow-up. Role-targeted so only the responsible
+ * agent gets woken (no more CEO/PM looping with no-handler messages).
+ *
+ * Idempotency: if a follow-up task titled `Fix blocker for <id>` already
+ * exists in a non-terminal state, the original blocker is considered
+ * "in progress" and we return ok — preventing per-beat re-fires.
+ */
 function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
   if (!ctx.currentSprint) {
     return { status: "ok", detail: "No active sprint" };
   }
-  const blocked = ctx.tasks.filter((t) => t.status === "blocked");
-  const failed = ctx.tasks.filter((t) => t.status === "failed");
-  if (blocked.length > 0 || failed.length > 0) {
-    return {
-      status: "action_needed",
-      detail: `Sprint has ${blocked.length} blocked, ${failed.length} failed tasks`,
-      suggestedAction: "Investigate blocked/failed tasks",
-    };
+  const isOpen = (s: string) => !["completed", "cancelled", "failed"].includes(s);
+  const myBlockers = ctx.tasks.filter(
+    (t) => (t.status === "blocked" || t.status === "failed") && t.assignedRole === ctx.role,
+  );
+  if (myBlockers.length === 0) {
+    return { status: "ok", detail: "No blocked tasks owned by me" };
   }
-  return { status: "ok", detail: "Sprint healthy" };
+  // Skip blockers that already have an open follow-up
+  const pending = myBlockers.filter((t) => {
+    const followupTitle = `Fix blocker for ${t.id}`;
+    const hasOpenFollowup = ctx.tasks.some(
+      (f) => f.title === followupTitle && isOpen(f.status),
+    );
+    return !hasOpenFollowup;
+  });
+  if (pending.length === 0) {
+    return { status: "ok", detail: `${myBlockers.length} blocker(s) already being worked on` };
+  }
+  const next = pending[0];
+  // Encode taskId in the suggestedAction so the dispatcher can route by prefix.
+  return {
+    status: "action_needed",
+    detail: `Task "${next.title}" (${next.id}) is ${next.status}`,
+    suggestedAction: `task_resolve_blocker:${next.id}`,
+  };
 }
 
 /** CEO proactive check: propose next sprint when current is done or absent. */
@@ -531,13 +554,20 @@ function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
 type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
-  ceo: [checkMeetingContribution, checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
+  // CEO is woken only on real strategic triggers: pending approvals,
+  // roadmap (no/done sprint), or active meetings. Sprint health and
+  // budget alerts are handled by the role that owns the work — not CEO.
+  ceo: [checkMeetingContribution, checkPendingApprovals, checkRoadmap],
   cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
-  developer: [checkMeetingContribution, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
-  tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
-  ui_designer: [checkMeetingContribution, checkDesignQueue, checkAssignedTasks],
-  marketing: [checkMeetingContribution, checkContentQueue, checkAssignedTasks],
+  developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
+  // Tester only fires at sprint-end now. Per-task verifying is handled by
+  // the developer's self-test (bash + task_complete with evidence). The
+  // legacy checkTestQueue would have routed verifying-status tasks here;
+  // that path is intentionally retired.
+  tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkAssignedTasks],
+  ui_designer: [checkMeetingContribution, checkSprintHealth, checkDesignQueue, checkAssignedTasks],
+  marketing: [checkMeetingContribution, checkSprintHealth, checkContentQueue, checkAssignedTasks],
   skills_lead: [
     checkMeetingContribution,
     // Phase 6 proactive checks first — fire even with no assigned task

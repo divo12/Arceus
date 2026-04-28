@@ -9,7 +9,7 @@ import {
   emitGraphSprintCompleted,
   emitGraphNodeAdded,
 } from "../observability/graph-emitter.js";
-import { stopLocalPreview } from "../workspace/preview.js";
+import { stopLocalPreview, getLocalPreviewState } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { createReviewState, buildGateFailureBugFields } from "./review-helpers.js";
 import { runVerificationGate } from "./verification-gate.js";
@@ -110,6 +110,26 @@ export async function checkSprintCompletion(): Promise<boolean> {
       detail: { gateResult },
     });
     reviewState.phase = "tester_verification";
+
+    // Surface the preview URL to the user as soon as the gate passes — this
+    // is the "ship it" moment from the user's POV. Tester still needs to
+    // verify, but the user can poke at the preview now.
+    const preview = getLocalPreviewState();
+    const previewUrl = preview.url ?? preview.entryUrl ?? preview.validationUrl;
+    if (previewUrl) {
+      appendChatMessage({
+        id: `chat_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId: currentSprintId,
+        agentId: null,
+        role: "system",
+        content: `🚀 Preview ready for Sprint ${currentSprint.number}: ${previewUrl} — tester verifying now.`,
+        cardType: "status_update",
+        cardData: { previewUrl, sprintNumber: currentSprint.number, phase: "pre_review_passed" },
+        createdAt: nowIso(),
+      });
+    }
+
     emitReactive("tester", "task_assigned");
   }
 

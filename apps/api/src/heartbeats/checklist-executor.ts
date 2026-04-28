@@ -60,6 +60,7 @@ const CHECKLIST_HANDLERS: Array<{ matches: (action: { suggestedAction: string })
   { matches: (a) => a.suggestedAction.startsWith("sprint_review:"), handle: handleTesterSprintReview },
   { matches: (a) => a.suggestedAction.startsWith("skills_lead:"), handle: handleSkillsLeadDispatch },
   { matches: (a) => a.suggestedAction.startsWith("meeting_contribution:"), handle: handleMeetingContribution },
+  { matches: (a) => a.suggestedAction.startsWith("task_resolve_blocker:"), handle: handleTaskResolveBlocker },
   { matches: (a) => /\bpropose (next|new) sprint\b/i.test(a.suggestedAction) || /^plan sprint\b/i.test(a.suggestedAction), handle: handleCreateSprintPlanningTask },
 ];
 
@@ -167,6 +168,79 @@ async function handleCreateSprintPlanningTask(
   finish("completed", `Created sprint planning task: ${task.title}`, 0);
   return {
     summary: `Created governance task "${task.title}" for CEO — agent will reason and call sprint_create`,
+    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
+  };
+}
+
+/**
+ * Resolve a blocked/failed task by spawning a single, role-targeted
+ * "Fix blocker" follow-up. Idempotent: re-running for the same blocker
+ * is a no-op because checkSprintHealth suppresses suggestions once the
+ * follow-up exists. This replaces the old generic "Investigate
+ * blocked/failed tasks" suggestion that produced infinite no-handler
+ * beats and prose-only PM replies.
+ */
+async function handleTaskResolveBlocker(
+  ctx: AgentBeatContext,
+  action: { detail: string; suggestedAction: string },
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  const role = ctx.role;
+  // suggestedAction format: "task_resolve_blocker:<taskId>"
+  const taskId = action.suggestedAction.split(":", 2)[1] ?? "";
+  const blocked = ctx.tasks.find((t) => t.id === taskId);
+  if (!blocked) {
+    finish("completed", `Blocker task ${taskId} no longer present`, 0);
+    return {
+      summary: `Blocker ${taskId} not found in current snapshot — likely resolved`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
+  // Defensive dedupe: if a "Fix blocker for <id>" task already exists in
+  // a non-terminal state, do nothing. checkSprintHealth already filters
+  // these out, but a concurrent beat could race.
+  const followupTitle = `Fix blocker for ${blocked.id}`;
+  const isOpen = (s: string) => !["completed", "cancelled", "failed"].includes(s);
+  const existing = ctx.tasks.find((t) => t.title === followupTitle && isOpen(t.status));
+  if (existing) {
+    finish("completed", `Fix-blocker task already exists (${existing.id})`, 0);
+    return {
+      summary: `Fix-blocker follow-up ${existing.id} already open for ${blocked.id}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
+
+  const companyId = requireActiveCompanyId();
+  const snapshot = await buildSnapshotView(companyId);
+  const blockerReason = blocked.verifierState?.feedback?.slice(0, 400)
+    ?? blocked.executorState?.results?.slice(-1)[0]?.slice(0, 400)
+    ?? "(no reason recorded)";
+  const followup = createWorkflowTask(
+    snapshot,
+    "implementation",
+    blocked.assignedRole, // owner of the original task fixes their own blocker
+    followupTitle,
+    `Original task "${blocked.title}" (${blocked.id}) is ${blocked.status}. Reason: ${blockerReason}. Diagnose, fix, and either reopen the original task or mark this follow-up complete with a write-up of the resolution.`,
+    `Original task ${blocked.id} is ${blocked.status} and the team needs it unblocked.`,
+    `Either (a) the original task is back in a runnable state (status planned/in_progress), OR (b) a clear written rationale explaining why the original task is permanently abandoned.`,
+    [
+      `Diagnose root cause of ${blocked.id} being ${blocked.status}`,
+      `Take corrective action (fix code, reassign, split, or formally abandon)`,
+      `Update original task status or add explanatory note via task_append_result`,
+    ],
+    blocked.priority,
+    "planned",
+    blocked.sprintId ?? null,
+  );
+  upsertTask(followup);
+
+  emitEmployeeActivity(role, "transition", `${shortBeat(beatId)}: spawned "${followup.title}" (${followup.id}) for blocker ${blocked.id}`, {
+    beatId, taskId: followup.id, detail: { blockerTaskId: blocked.id, blockerStatus: blocked.status },
+  });
+  finish("completed", `Spawned fix-blocker task for ${blocked.id}`, 0);
+  return {
+    summary: `Spawned ${followup.id} ("${followup.title}") to resolve blocker ${blocked.id}`,
     tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
   };
 }
