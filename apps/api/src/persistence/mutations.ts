@@ -17,6 +17,9 @@
  * dashboard's progress widget. It's not part of the durable model;
  * losing it on restart is fine.
  */
+import {
+  createEmptyCompanySnapshot,
+} from "@arceus/company-runtime";
 import type {
   Approval,
   Artifact as ContractArtifact,
@@ -279,7 +282,7 @@ export async function hydrate(_companyId?: string): Promise<boolean> {
 export function resetCompany(): import("@arceus/contracts").CompanySnapshot {
   // Return the empty-snapshot shape so the existing return-type
   // contract is preserved for the route handler.
-  return require("@arceus/company-runtime").createEmptyCompanySnapshot();
+  return createEmptyCompanySnapshot();
 }
 
 /**

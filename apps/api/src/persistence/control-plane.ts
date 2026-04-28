@@ -10,6 +10,7 @@
  * handles all mutation types including agent_status/company_status.
  */
 
+import { readFileSync } from "node:fs";
 import type {
   CompanySnapshot,
   EventEnvelope,
@@ -889,7 +890,7 @@ export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
     // Prefer `npm run build` if it exists, otherwise `npx tsc --noEmit`
     let cmd = "npx tsc --noEmit";
     try {
-      const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf-8"));
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
       if (pkg.scripts?.build) cmd = "npm run build";
     } catch { /* use default */ }
 
