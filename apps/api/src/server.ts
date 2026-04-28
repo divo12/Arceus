@@ -220,6 +220,7 @@ const meetingPipeline = new MeetingPipeline({
   // Spec 31 Phase 7.C.c — canonical-backed snapshot.
   async collectContributions(meeting) {
     const snap = await getSnapshotForPackages();
+    console.log(`[MEETING] ${meeting.id} (${meeting.type}) collecting contributions from ${meeting.participantAgentIds.length} participant(s)`);
 
     for (const agentId of meeting.participantAgentIds) {
       const agent = snap.agents.find((a) => a.id === agentId);
@@ -258,6 +259,7 @@ const meetingPipeline = new MeetingPipeline({
           ],
         }));
         await flush();
+        console.log(`[MEETING] ${meeting.id} contribution received from ${agent.role}`);
       } catch (err) {
         console.warn(`[MEETING] Failed to collect contribution from ${agent.role}: ${err instanceof Error ? err.message : err}`);
       }

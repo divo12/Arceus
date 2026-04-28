@@ -134,6 +134,13 @@
       "when": 1777380600000,
       "tag": "0019_phase7_skill_mutations_table",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1777390000000,
+      "tag": "0020_trust_scores_table",
+      "breakpoints": true
     }
   ]
 }

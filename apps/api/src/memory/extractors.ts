@@ -85,11 +85,33 @@ export async function memoryAgentExtractFacts(
     "memory_fact_extraction",
     { temperature: 0.1 },
   );
-  return result.facts.map((f) => ({
-    ...f,
-    trigger: f.trigger ?? undefined,
-    action: f.action ?? undefined,
-  }));
+  return result.facts
+    .filter((f) => !isTrivialFact(f.content))
+    .map((f) => ({
+      ...f,
+      trigger: f.trigger ?? undefined,
+      action: f.action ?? undefined,
+    }));
+}
+
+/**
+ * Drop facts that just restate snapshot fields the system already owns
+ * (agent role, task kind, task status). The LLM happily emits these for
+ * every completed beat, which inflates Hippocampus with noise like
+ * "The agent role for the task was CEO" or "The task kind was implementation".
+ * Pattern-based so the extraction prompt can stay simple.
+ */
+const TRIVIAL_FACT_PATTERNS: RegExp[] = [
+  /^the agent role (was|is|for the task (was|is)) /i,
+  /^the task kind (was|is) /i,
+  /^the task status (was|is|is set to|was set to) /i,
+  /^the task output status (was|is) /i,
+  /^the task (was|is) (created|planned|in_progress|in progress|completed|cancelled|blocked)\.?$/i,
+];
+
+function isTrivialFact(content: string): boolean {
+  const trimmed = content.trim();
+  return TRIVIAL_FACT_PATTERNS.some((rx) => rx.test(trimmed));
 }
 
 /** Decide whether to ADD, UPDATE, DELETE, or ignore a fact against existing memories. */

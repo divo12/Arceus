@@ -2,7 +2,6 @@ import type { AgentIdentity, Sprint, Task } from "@arceus/contracts";
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { createSprintRecord } from "@arceus/task-engine";
 import {
-  upsertTask,
   updateTask,
   updateSprint,
   upsertSprint,
@@ -21,6 +20,66 @@ import {
   setActiveExecution,
 } from "../orchestration/state.js";
 import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js";
+
+/**
+ * Topologically order tasks so each task comes after its intra-batch
+ * parent and dependencies. Used to avoid 23503 FK violations when a
+ * batch of related tasks is inserted in one shot.
+ *
+ * Edges considered:
+ *   - `parentTaskId` (when it points at another task in the batch)
+ *   - `dependsOnTaskIds` (entries that point at other tasks in the batch)
+ *
+ * Tasks with FK targets outside the batch are treated as roots; cycles
+ * (which shouldn't occur but are cheap to defend against) fall back to
+ * input order so persistence still proceeds.
+ */
+function topoSortTasksByDependency(tasks: Task[]): Task[] {
+  const ids = new Set(tasks.map((t) => t.id));
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  const indegree = new Map<string, number>(tasks.map((t) => [t.id, 0]));
+  const children = new Map<string, string[]>();
+
+  for (const task of tasks) {
+    const parents = new Set<string>();
+    if (task.parentTaskId && ids.has(task.parentTaskId)) parents.add(task.parentTaskId);
+    for (const dep of task.dependsOnTaskIds ?? []) {
+      if (ids.has(dep)) parents.add(dep);
+    }
+    indegree.set(task.id, parents.size);
+    for (const p of parents) {
+      const list = children.get(p) ?? [];
+      list.push(task.id);
+      children.set(p, list);
+    }
+  }
+
+  const ready: string[] = [];
+  for (const [id, deg] of indegree) {
+    if (deg === 0) ready.push(id);
+  }
+
+  const ordered: Task[] = [];
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    const task = byId.get(id);
+    if (task) ordered.push(task);
+    for (const child of children.get(id) ?? []) {
+      const next = (indegree.get(child) ?? 0) - 1;
+      indegree.set(child, next);
+      if (next === 0) ready.push(child);
+    }
+  }
+
+  // Cycle fallback: append any tasks the topo pass missed in input order.
+  if (ordered.length < tasks.length) {
+    const seen = new Set(ordered.map((t) => t.id));
+    for (const t of tasks) {
+      if (!seen.has(t.id)) ordered.push(t);
+    }
+  }
+  return ordered;
+}
 
 /**
  * Create a sprint with tasks — called by the sprint_create MCP tool.
@@ -108,15 +167,24 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
     }
   }
 
-  // Persist all tasks
-  for (const task of createdTasks) {
-    upsertTask(task);
+  // Persist all tasks. Two ordering constraints, both critical:
+  //
+  //   1. parent_task_id (and depends_on_task_ids) FK-reference other tasks
+  //      in the SAME batch. A parallel `Promise.all(persistTask)` lets a
+  //      child INSERT race ahead of its parent and trigger pgCode 23503
+  //      (`tasks_parent_task_id_tasks_id_fk`). persistTask's retry only
+  //      heals company/sprint FKs, not task→task ones.
+  //
+  //   2. The previous unawaited `for (...) upsertTask(task)` loop fired a
+  //      duplicate write per task, generating ~4 unhandled rejections per
+  //      sprint_create. persistTask already covers the canonical write.
+  //
+  // Topo-sort by intra-batch parent/dependency edges, then await
+  // sequentially so each parent is durable before its children INSERT.
+  const sortedTasks = topoSortTasksByDependency(createdTasks);
+  for (const task of sortedTasks) {
+    await persistTask(task);
   }
-  // Barrier: ensure task rows reach Postgres before we return — downstream
-  // beats call tasksRepo.claimTask which performs a DB-only CAS and would
-  // otherwise see "not_found" if the fire-and-forget upsert from upsertTask
-  // hasn't completed.
-  await Promise.all(createdTasks.map((t) => persistTask(t)));
 
   // Graph instrumentation
   emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");

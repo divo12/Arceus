@@ -25,12 +25,14 @@ const TICK_INTERVAL_MS = 60_000;
 const SHUTDOWN_DRAIN_MS = 30_000;
 const CRON_HOUR_UTC = 3; // 03:00 UTC nightly sweep
 const MONITOR_EVERY_TICKS = 5; // run rollback monitor every ~5 minutes
+const HEARTBEAT_EVERY_N_TICKS = 5; // log "still alive" every ~5 minutes
 
 let timer: NodeJS.Timeout | null = null;
 let inFlight: Promise<unknown> | null = null;
 let workerId = "";
 let lastCronYmd: string | null = null;
 let monitorTickCounter = 0;
+let tickCount = 0;
 
 function isEnabled(): boolean {
   return process.env.ARCEUS_SKILL_EVOLVE_ORCHESTRATOR === "1";
@@ -130,6 +132,13 @@ async function processOnce(): Promise<void> {
 
 async function tick(): Promise<void> {
   if (inFlight) return; // previous tick still running
+  tickCount += 1;
+  // Heartbeat log every Nth tick so an idle scheduler is still visible
+  // without spamming logs every minute. The actual leased-job log fires
+  // separately inside processOnce when there's work.
+  if (tickCount === 1 || tickCount % HEARTBEAT_EVERY_N_TICKS === 0) {
+    console.log(`[SkillScheduler] tick #${tickCount} (worker=${workerId}, interval=${TICK_INTERVAL_MS}ms)`);
+  }
   inFlight = processOnce()
     .catch((err) => {
       console.error(`[SkillScheduler] tick error: ${err instanceof Error ? err.message : err}`);

@@ -921,13 +921,34 @@ export function cpGetLastBuildCheck() {
 /** In-memory cache for trust scores (populated from DB on first load). */
 const trustScoreCache = new Map<string, TrustScore>();
 
+/**
+ * Set to true on first 42P01 (`relation "trust_scores" does not exist`).
+ * Subsequent calls bypass the DB silently — the in-memory cache becomes the
+ * source of truth until migration 0020 is applied. Without this guard every
+ * beat would emit a noisy `[Governance] Failed to …` warning.
+ */
+let trustScoresTableMissing = false;
+
+function noteTrustTableMissing(scope: string, err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  const msg = err instanceof Error ? err.message : String(err);
+  if (code === "42P01" || /relation .*trust_scores.* does not exist/i.test(msg)) {
+    if (!trustScoresTableMissing) {
+      trustScoresTableMissing = true;
+      console.warn(`[Governance] trust_scores table missing — running with in-memory cache only (apply migration 0020). First seen during ${scope}.`);
+    }
+    return true;
+  }
+  return false;
+}
+
 /** Load trust score from cache or DB. Returns initial score if not found. */
 export async function cpLoadTrustScore(agentId: string): Promise<TrustScore> {
   if (trustScoreCache.has(agentId)) {
     return trustScoreCache.get(agentId)!;
   }
 
-  if (isDatabaseConfigured()) {
+  if (isDatabaseConfigured() && !trustScoresTableMissing) {
     try {
       const db = getDb();
       const rows = await db.select().from(trustScoresTable).where(eq(trustScoresTable.agentId, agentId)).limit(1);
@@ -943,7 +964,9 @@ export async function cpLoadTrustScore(agentId: string): Promise<TrustScore> {
         return ts;
       }
     } catch (err) {
-      console.warn(`[Governance] Failed to load trust score for ${agentId}:`, err instanceof Error ? err.message : err);
+      if (!noteTrustTableMissing(`load(${agentId})`, err)) {
+        console.warn(`[Governance] Failed to load trust score for ${agentId}:`, err instanceof Error ? err.message : err);
+      }
     }
   }
 
@@ -971,7 +994,7 @@ export async function cpUpdateTrustScore(event: TrustEvent): Promise<TrustScore>
   });
 
   // Persist to DB (non-blocking)
-  if (isDatabaseConfigured()) {
+  if (isDatabaseConfigured() && !trustScoresTableMissing) {
     try {
       const db = getDb();
       // The legacy trust_scores table in tables.ts declares `history` as a
@@ -994,7 +1017,9 @@ export async function cpUpdateTrustScore(event: TrustEvent): Promise<TrustScore>
         },
       });
     } catch (err) {
-      console.warn(`[Governance] Failed to persist trust score for ${event.agentId}:`, err instanceof Error ? err.message : err);
+      if (!noteTrustTableMissing(`persist(${event.agentId})`, err)) {
+        console.warn(`[Governance] Failed to persist trust score for ${event.agentId}:`, err instanceof Error ? err.message : err);
+      }
     }
   }
 
@@ -1125,7 +1150,9 @@ export async function cpHydrateTrustScores(): Promise<void> {
     }
     emitEmployeeActivity("system", "info", `Governance: hydrated ${rows.length} trust scores from DB`);
   } catch (err) {
-    console.warn(`[Governance] Failed to hydrate trust scores:`, err instanceof Error ? err.message : err);
+    if (!noteTrustTableMissing("hydrate", err)) {
+      console.warn(`[Governance] Failed to hydrate trust scores:`, err instanceof Error ? err.message : err);
+    }
   }
 }
 
