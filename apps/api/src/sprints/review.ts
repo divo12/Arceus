@@ -119,7 +119,9 @@ function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QARep
 const ctoEscalationDecisionSchema = z.object({
   decision: z.enum(["fix", "skip", "abort"]),
   reasoning: z.string(),
-  criticalBugs: z.array(z.string()).optional(),
+  // LLMs frequently emit `null` instead of omitting the field; accept both
+  // so the entire CTO escalation beat doesn't fail zod validation.
+  criticalBugs: z.array(z.string()).nullish(),
 });
 
 // ── Beat return type ────────────────────────────────────────────

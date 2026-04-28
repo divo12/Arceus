@@ -9,7 +9,7 @@ import {
   emitGraphSprintCompleted,
   emitGraphNodeAdded,
 } from "../observability/graph-emitter.js";
-import { stopLocalPreview, getLocalPreviewState } from "../workspace/preview.js";
+import { stopLocalPreview, getLocalPreviewState, startLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { createReviewState, buildGateFailureBugFields } from "./review-helpers.js";
 import { runVerificationGate } from "./verification-gate.js";
@@ -76,6 +76,32 @@ export async function checkSprintCompletion(): Promise<boolean> {
   }));
 
   const productDirForGate = workspaceManager.getLegacyProductDir();
+
+  // Ensure a preview is running before the gate probes it. The workspace
+  // monitor that used to auto-start previews after each developer beat is
+  // not wired in this code path, so the gate would otherwise always see
+  // "Preview not started" and the tester would force-fail every sprint.
+  const previewBeforeGate = getLocalPreviewState();
+  if (previewBeforeGate.status !== "ready" && previewBeforeGate.status !== "starting") {
+    try {
+      const started = await startLocalPreview(productDirForGate);
+      if (started.status === "ready") {
+        const url = started.url ?? started.entryUrl ?? started.validationUrl;
+        emitEmployeeActivity("system", "preview", `Preview auto-started before review gate → ${url ?? "(no url)"}`, {
+          detail: { sprintId: currentSprintId, status: started.status, url },
+        });
+      } else {
+        emitEmployeeActivity("system", "preview", `Preview auto-start before review gate did not become reachable: ${started.lastError ?? started.status}`, {
+          detail: { sprintId: currentSprintId, status: started.status, lastError: started.lastError },
+        });
+      }
+    } catch (err) {
+      emitEmployeeActivity("system", "error", `Preview auto-start before review gate threw: ${err instanceof Error ? err.message : String(err)}`, {
+        detail: { sprintId: currentSprintId },
+      });
+    }
+  }
+
   const gateResult = await runVerificationGate(productDirForGate, "pre_review");
 
   emitGraphDecision(currentSprintId, null, "gate_verdict",
