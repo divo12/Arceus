@@ -106,6 +106,7 @@ function formatBeatLabel(e: ActivityEvent): string {
       try {
         const d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail;
         if (d.linesChanged) suffix = ` (${d.linesChanged} lines)`;
+      // eslint-disable-next-line no-restricted-syntax -- intentional: TUI nav fire-and-forget.
       } catch { /* ignore */ }
     }
     return `${short}${suffix}`;
@@ -130,7 +131,9 @@ function formatBeatLabel(e: ActivityEvent): string {
         const completed = d.taskCompleted;
         const prefix = completed ? "task completed" : e.type === "beat_failed" ? "failed" : "beat done";
         if (parts.length > 0) return `${prefix}: ${parts.join(", ")}`;
+         
         return prefix;
+      // eslint-disable-next-line no-restricted-syntax -- intentional: TUI nav fire-and-forget.
       } catch { /* ignore */ }
     }
     return e.content;

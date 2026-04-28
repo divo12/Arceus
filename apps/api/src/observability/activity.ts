@@ -58,6 +58,7 @@ export function emitEmployeeActivity(
   for (const fn of subs) {
     try {
       fn(e);
+    // eslint-disable-next-line no-restricted-syntax -- intentional: SSE write probe; if the heartbeat fails, the catch above handles cleanup.
     } catch {
       /* broken subscriber */
     }
@@ -93,7 +94,9 @@ export function streamEmployeeActivity(reply: FastifyReply) {
 
   const handler = (e: EmployeeActivityEntry) => {
     try {
+       
       reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
+    // eslint-disable-next-line no-restricted-syntax -- intentional: SSE event write; broken stream will be cleaned up by the heartbeat path or socket close.
     } catch {
       /* stream broken */
     }

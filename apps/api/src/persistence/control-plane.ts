@@ -892,6 +892,7 @@ export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
       if (pkg.scripts?.build) cmd = "npm run build";
+    // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
     } catch { /* use default */ }
 
     // `shell: true` works at runtime but the @types/node overload only allows

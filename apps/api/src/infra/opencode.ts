@@ -26,6 +26,7 @@ function ensureLongFetchTimeouts() {
     }),
   );
   // Best effort cleanup on shutdown.
+  // eslint-disable-next-line no-restricted-syntax -- intentional: process is exiting, no observer left to log to; if `close()` throws we cannot do anything useful with it.
   process.once("beforeExit", () => { try { (existing as any).close?.(); } catch {} });
 }
 import { ensureDeployment, runtimeConfig } from "../config/index.js";
@@ -395,6 +396,7 @@ export async function resetOpencodeConnection() {
     try {
       const instance = await opencodePromise;
       instance.server.close();
+      // eslint-disable-next-line no-restricted-syntax -- intentional: if the OpenCode promise rejected, the instance never came up, so there's nothing to close. The error was already surfaced by the original boot path.
     } catch {
       // Instance never resolved — nothing to kill
     }
@@ -552,6 +554,7 @@ export async function destroyBeatSession(sessionId: string): Promise<void> {
   try {
     const opencode = await getOpencode();
     await fetch(`${opencode.server.url}/session/${sessionId}`, { method: "DELETE" });
+  // eslint-disable-next-line no-restricted-syntax -- intentional: cleanup probe — beat session may already be torn down.
   } catch {
     // Silently swallow — session cleanup is best-effort
   }

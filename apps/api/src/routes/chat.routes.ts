@@ -40,6 +40,7 @@ export default async function chatRoutes(app: FastifyInstance) {
           error: error instanceof Error ? error.message : "Unknown CEO stream failure",
         };
       }
+      // eslint-disable-next-line no-restricted-syntax -- intentional: SSE end on already-closed reply; finalizer.
       try { reply.raw.end(); } catch { /* already ended */ }
       return reply;
     }

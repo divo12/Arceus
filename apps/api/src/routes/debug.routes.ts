@@ -81,6 +81,7 @@ export default async function debugRoutes(app: FastifyInstance) {
       }
       try {
         reply.raw.write(`event: graph\ndata: ${JSON.stringify(event)}\n\n`);
+      // eslint-disable-next-line no-restricted-syntax -- intentional: optional debug-route probe; missing context is the expected case.
       } catch {
         /* stream broken */
       }

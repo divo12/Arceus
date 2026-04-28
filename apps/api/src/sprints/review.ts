@@ -216,6 +216,7 @@ export async function executeSprintReviewVerification(
           "Then produce your normal QA report below that line.",
         ].join("\n");
       }
+    // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
     } catch {
       // best-effort — never block verification on diff lookup
     }

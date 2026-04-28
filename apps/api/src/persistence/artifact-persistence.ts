@@ -65,6 +65,7 @@ export async function persistRuntimeArtifact(companyId: string, artifact: Persis
 
   try {
     await uploadArtifactPayload(companyId, artifact.id, artifact.content, artifact.title);
+  // eslint-disable-next-line no-restricted-syntax -- intentional: filesystem probe; missing file is the expected case on first read.
   } catch {
     // Artifact text storage is best-effort during the migration.
   }

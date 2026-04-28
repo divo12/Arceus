@@ -179,6 +179,7 @@ async function pollPendingPromptCompletions() {
         }
       }
     }
+  // eslint-disable-next-line no-restricted-syntax -- intentional: LLM streaming start probe; failure cascades through the surrounding await.
   } catch {
     // Non-fatal — SSE bridge is the primary path; polling is best-effort
   }

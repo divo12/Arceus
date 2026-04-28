@@ -316,6 +316,7 @@ async function waitForUrl(url: string, timeoutMs: number) {
     try {
       const response = await fetch(url, { method: "GET" });
       if (response.ok) return true;
+    // eslint-disable-next-line no-restricted-syntax -- intentional: preview-server probe; failure means no preview, which is expected on cold start.
     } catch {
       /* retry */
     }
@@ -612,9 +613,11 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
     const pids = execSync(`lsof -ti:${previewState.port}`, { encoding: "utf8" }).trim();
     if (pids) {
       for (const pid of pids.split("\n")) {
+        // eslint-disable-next-line no-restricted-syntax -- intentional: preview teardown; failure to kill an already-dead process is fine.
         try { process.kill(Number(pid), "SIGTERM"); } catch { /* already dead */ }
       }
     }
+    // eslint-disable-next-line no-restricted-syntax -- intentional: preview teardown probe; "no process on port" is the expected branch for fresh starts.
   } catch { /* no process on port — good */ }
 
   previewProcess = spawn(launch.command, launch.args, {

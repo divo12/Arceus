@@ -194,6 +194,7 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
           onStop?.();
           clearActivity();
           clearAudit();
+          // eslint-disable-next-line no-restricted-syntax -- intentional: TUI fire-and-forget action.
           api("/api/company", { method: "DELETE" })
             .catch(() => {})
             .finally(() => setResetting(false));

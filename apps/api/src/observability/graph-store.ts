@@ -415,6 +415,7 @@ export class ExecutionGraphStore {
     for (const listener of this.listeners) {
       try {
         listener(event);
+      // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
       } catch {
         /* broken subscriber — ignore */
       }

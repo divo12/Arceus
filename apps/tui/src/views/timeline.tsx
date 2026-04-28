@@ -322,6 +322,7 @@ export function TimelineView({ height, active, onEscape, onQuickExecute, onStop 
           clearMessages();
           clearActivity();
           clearAudit();
+          // eslint-disable-next-line no-restricted-syntax -- intentional: TUI timeline fire-and-forget. (Also slated for deletion per knip Tier 3.)
           api("/api/company", { method: "DELETE" })
             .then(() => { refreshHistory(); })
             .catch(() => {})
@@ -390,7 +391,7 @@ export function TimelineView({ height, active, onEscape, onQuickExecute, onStop 
 
   // Right panel: beat rows — window around cursor
   const beatPanelHeight = contentHeight - 1; // -1 for header
-  let beatStart = 0;
+  const beatStart = 0;
   // Count total rendered rows including expanded beats
   const renderedRows: Array<{ row: PanelRow; idx: number; expandedEvents?: ActivityEvent[] }> = [];
   for (let i = 0; i < panelRows.length; i++) {

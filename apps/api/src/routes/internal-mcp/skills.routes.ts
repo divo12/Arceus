@@ -331,6 +331,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
             .where(and(eq(skillArtifacts.companyId, mcp.companyId), eq(skillArtifacts.slug, slug)))
             .limit(1);
           if (existing.length > 0) collision = { skillId: existing[0].id, slug: existing[0].slug };
+        // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
         } catch {
           // DB schema may not be applied (dev) — treat as no-collision-known.
         }
@@ -346,7 +347,9 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
         if (existing.length === 0) {
           result.errors.push(`skillId ${parsed.data.skillId} not found for update`);
           result.valid = false;
+         
         }
+      // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
       } catch {
         // DB schema not applied — skip the FK check.
       }
@@ -447,6 +450,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
         mutationReason: null,
         resources: [],
       } as any);
+      // eslint-disable-next-line no-restricted-syntax -- intentional: in-memory registry mirror — DB is authoritative; if the in-memory registerSkill throws here, the DB row already landed and the next read rebuilds the in-memory state.
     } catch {
       // non-fatal — DB is authoritative
     }
@@ -524,6 +528,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       if (inMem) {
         registerSkillInMemory({ ...inMem, content: parsed.data.content, version: inMem.version + 1 });
       }
+      // eslint-disable-next-line no-restricted-syntax -- intentional: in-memory registry mirror — DB write already succeeded above; next read rebuilds in-memory state from canonical.
     } catch {
       // non-fatal
     }
@@ -585,6 +590,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
 
     try {
       deprecateSkillInMemory(artifact.id, parsed.data.reason);
+      // eslint-disable-next-line no-restricted-syntax -- intentional: in-memory registry mirror — DB row already marked deprecated; next read rebuilds state.
     } catch {
       // non-fatal
     }

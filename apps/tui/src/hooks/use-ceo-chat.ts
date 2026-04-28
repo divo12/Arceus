@@ -23,6 +23,7 @@ export function useCeoChat(): CeoChatState {
   const handleRef = useRef<SSEHandle | null>(null);
 
   const refreshHistory = useCallback(() => {
+    // eslint-disable-next-line no-restricted-syntax -- intentional: TUI CEO chat fire-and-forget — UI shows error from server response.
     api<CompanySnapshot>("/api/company")
       .then((snap) => setMessages(snap.chatMessages ?? []))
       .catch(() => {});

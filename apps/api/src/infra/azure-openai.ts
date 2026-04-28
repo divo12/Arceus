@@ -116,6 +116,7 @@ function auditLlmCall(
   // every structuredCompletion + chatCompletion caller (the audit log
   // already had to be uniform). Skipped for system-scoped calls where
   // ctx.companyId is missing/_system (recordLlmCost no-ops in that case).
+  // eslint-disable-next-line no-restricted-syntax -- intentional: recordLlmCost already swallows + warns internally; double-logging would spam the inspector with every LLM call.
   void recordLlmCost({
     provider: "azure",
     model: deployment,
@@ -408,6 +409,7 @@ async function watchForUsageAndRecord(
           const promptTokens = parsed.usage.prompt_tokens ?? 0;
           const completionTokens = parsed.usage.completion_tokens ?? 0;
           accumulateBeatTokens(promptTokens + completionTokens);
+          // eslint-disable-next-line no-restricted-syntax -- intentional: recordLlmCost already swallows + warns internally; double-logging would spam the inspector with every LLM call.
           void recordLlmCost({
             provider: "azure",
             model: deployment,

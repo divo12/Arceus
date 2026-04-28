@@ -228,9 +228,11 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     const errMsg = streamErr instanceof Error ? streamErr.message : "Unknown streaming error";
     try {
       sseWrite(reply, "error", { message: errMsg });
+      // eslint-disable-next-line no-restricted-syntax -- intentional: SSE stream is already broken (caller dropped the connection); writing the error is best-effort and any failure here cascades nowhere useful.
     } catch { /* stream already broken */ }
   } finally {
     reader.releaseLock();
+    // eslint-disable-next-line no-restricted-syntax -- intentional: reply.raw.end() in finally is a defensive close; if the stream is already ended (most paths above end it), throwing here would mask the original error.
     try { reply.raw.end(); } catch { /* already ended */ }
   }
 

@@ -28,6 +28,7 @@ export function App() {
   const quickExecute = useCallback(async (idea: string) => {
     try {
       await apiPost("/api/quick-execute", { idea });
+    // eslint-disable-next-line no-restricted-syntax -- intentional: TUI quick-execute is fire-and-forget; failure is non-critical for the UI.
     } catch {
       // non-critical
     }
@@ -35,7 +36,9 @@ export function App() {
 
   const approve = useCallback(async () => {
     try {
+       
       await apiPost("/api/sprint-proposal/approve");
+    // eslint-disable-next-line no-restricted-syntax -- intentional: TUI sprint approve fire-and-forget.
     } catch {
       // non-critical
     }
