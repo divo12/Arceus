@@ -20,6 +20,7 @@ import type {
   MeetingSchedule,
   MeetingScheduleConfig,
 } from "@arceus/contracts";
+import { swallowAndAudit } from "./swallow.js";
 
 // ── Dependencies ───────────────────────────────────────────
 
@@ -162,10 +163,14 @@ export class MeetingScheduler {
 
         console.log(`[MEETING-SCHEDULER] Created ${schedule.type} meeting ${meeting.id}`);
 
-        // Trigger the pipeline asynchronously (fire-and-forget from scheduler perspective)
-        this.deps.runPipeline(meeting.id).catch((err: unknown) => {
-          console.error(`[MEETING-SCHEDULER] Pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
-        });
+        // Audit C3.5 (F-283/F-360): meeting pipeline runs for minutes per
+        // meeting. Routing through swallowAndAudit means a hung LLM or DB
+        // failure surfaces to the error sink instead of becoming a console
+        // line that gets buried in scheduler tick noise.
+        swallowAndAudit("meeting_scheduler.tick_pipeline", () =>
+          this.deps.runPipeline(meeting.id),
+          { detail: { meetingId: meeting.id, type: schedule.type } },
+        );
       }
     } catch (err) {
       console.error("[MEETING-SCHEDULER] Tick error:", err instanceof Error ? err.message : err);
@@ -338,10 +343,11 @@ export class MeetingScheduler {
       `[MEETING-SCHEDULER] Escalation meeting ${meeting.id}: ${blockedAgent.role} → ${managerRole} (${blockerDetail.slice(0, 80)})`,
     );
 
-    // Fire pipeline immediately (async)
-    this.deps.runPipeline(meeting.id).catch((err: unknown) => {
-      console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
-    });
+    // Fire pipeline immediately (async). Audit-routed.
+    swallowAndAudit("meeting_scheduler.escalation_pipeline", () =>
+      this.deps.runPipeline(meeting.id),
+      { detail: { meetingId: meeting.id, blockedRole: blockedAgent.role, managerRole, kind: "escalation" } },
+    );
 
     return meeting;
   }
@@ -399,9 +405,10 @@ export class MeetingScheduler {
       `[MEETING-SCHEDULER] Escalation UP ${meeting.id}: ${prevManager.role} → ${nextManagerRole}`,
     );
 
-    this.deps.runPipeline(meeting.id).catch((err: unknown) => {
-      console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
-    });
+    swallowAndAudit("meeting_scheduler.escalation_up_pipeline", () =>
+      this.deps.runPipeline(meeting.id),
+      { detail: { meetingId: meeting.id, prevRole: prevManager.role, nextRole: nextManagerRole, kind: "escalation_up" } },
+    );
 
     return meeting;
   }

@@ -1,4 +1,5 @@
 import type { Task, Sprint, CompanySnapshot } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
 import { createSprintObject, createWorkflowTask, nowIso, getAgentByRole } from "./task-helpers";
 import type { AuditEntry } from "./task-state-machine";
 
@@ -252,13 +253,24 @@ export async function finalizeSprintCompletion(
 
   await cb.tagCurrentSprintSnapshot();
 
-  // Spec 14 Phase 6: cross-sprint pattern transfer (fire-and-forget)
-  cb.runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
+  // Spec 14 Phase 6 / Audit C3.1 (F-377): cross-sprint pattern transfer
+  // is fire-and-forget; route the failure through observability.logEvent
+  // so a clustering/embedding crash surfaces to operators instead of
+  // becoming a console.warn. task-engine can't reach apps/api's
+  // swallowAndAudit, but the contracts-level error sink is wired in
+  // production via the multi-sink (pino + activity-log + OTEL).
+  void cb.runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
     if (result.candidatesFound > 0) {
       console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
     }
   }).catch((err: unknown) => {
-    console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
+    observability.logEvent({
+      event: "error",
+      where: "cross_sprint.transfer",
+      message: `Sprint ${sprint.number} transfer failed: ${err instanceof Error ? err.message : String(err)}`,
+      ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
+      ts: Date.now(),
+    });
   });
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");

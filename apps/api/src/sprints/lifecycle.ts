@@ -15,6 +15,7 @@ import { createReviewState, buildGateFailureBugFields } from "./review-helpers.j
 import { runVerificationGate } from "./verification-gate.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import {
   sprintCompletionTriggered,
   setSprintCompletionTriggered,
@@ -208,14 +209,18 @@ export async function finalizeSprintCompletion(
 
   await tagCurrentSprintSnapshot();
 
-  // Spec 14 Phase 6: Cross-sprint pattern transfer (fire-and-forget)
-  runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
+  // Spec 14 Phase 6 / Audit C3.1 (F-377): cross-sprint pattern transfer is
+  // fire-and-forget but failures must surface to the audit trail — without
+  // this, an embedding/cluster failure means promotions silently never run
+  // and the next sprint inherits zero patterns.
+  swallowAndAudit("cross_sprint.transfer", async () => {
+    const result = await runCrossSprintTransfer(snapshot.company.id, sprintId);
     if (result.candidatesFound > 0) {
       console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
     }
-  }).catch((err: unknown) => {
-    console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
-  });
+  },
+    { companyId: snapshot.company.id, detail: { sprintId, sprintNumber: sprint.number } },
+  );
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
   await appendChatMessage({

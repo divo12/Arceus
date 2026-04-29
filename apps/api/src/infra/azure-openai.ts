@@ -4,6 +4,7 @@ import { runtimeConfig, ensureDeployment } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { audit } from "../observability/audit-ledger.js";
 import { recordLlmCost } from "../observability/cost-recorder.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 
 interface ChatMessage { role: "system" | "user" | "assistant"; content: string }
 
@@ -350,9 +351,13 @@ export async function chatCompletionStream(
       // backpressure-aware — caller's consumption rate isn't blocked
       // by ours and vice versa.
       const [forCaller, forUsageWatcher] = response.body.tee();
-      void watchForUsageAndRecord(forUsageWatcher, deployment, auditCtx).catch((err: unknown) => {
-        console.warn(`[stream-usage] watcher failed for ${deployment}:`, err);
-      });
+      // The usage watcher is best-effort cost telemetry — its failure
+      // shouldn't taint the caller's stream. Route through swallowAndAudit
+      // so the failure surfaces to operators instead of console.
+      swallowAndAudit("openai.usage_watcher", () =>
+        watchForUsageAndRecord(forUsageWatcher, deployment, auditCtx),
+        { detail: { deployment } },
+      );
       return forCaller;
     },
     { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },

@@ -464,31 +464,41 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
           );
         }
 
-        hippocampus.processTaskCompletion({
-          agentId: agent.id,
-          taskId: task.id,
-          companyId: snapshot.company.id,
-          output: memoryOutput,
-          outcome,
-          taskTitle: task.title,
-          role: task.assignedRole,
-        }).catch((err: unknown) => {
-          console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${describePgError(err)}`);
-        });
+        // Audit C2.11/C3.4 (F-409/F-375): hippocampus.processTaskCompletion
+        // is fire-and-forget on a long-running embedding pipeline. Route the
+        // failure through swallowAndAudit so DB or embedder outages surface
+        // to operators instead of becoming a console.warn line.
+        swallowAndAudit("hippocampus.task_completion", () =>
+          hippocampus.processTaskCompletion({
+            agentId: agent.id,
+            taskId: task.id,
+            companyId: snapshot.company.id,
+            output: memoryOutput,
+            outcome,
+            taskTitle: task.title,
+            role: task.assignedRole,
+          }),
+          { companyId: snapshot.company.id, agentRole: task.assignedRole, detail: { taskId: task.id } },
+        );
       }
 
       // Spec 14 Phase 2: update success rates + trigger failure attribution
       if (status === "completed" || status === "failed") {
-        processTaskOutcome({
-          taskId: task.id,
-          taskTitle: task.title,
-          taskDescription: task.description,
-          assignedRole: task.assignedRole,
-          companyId: snapshot.company.id,
-          status,
-          iterationCount: task.iterationCount,
-          executionTrace: feedback ?? undefined,
-        }).then(async (mutation) => {
+        // Audit C3.2 (F-279/F-331): the SkillMutator → ATA chain runs for
+        // tens of minutes per skill proposal. Both legs route through
+        // swallowAndAudit so failures land in the audit trail; without this
+        // the user sees "skill proposed" but nothing ever happens.
+        swallowAndAudit("skill_mutator.task_outcome", async () => {
+          const mutation = await processTaskOutcome({
+            taskId: task.id,
+            taskTitle: task.title,
+            taskDescription: task.description,
+            assignedRole: task.assignedRole,
+            companyId: snapshot.company.id,
+            status,
+            iterationCount: task.iterationCount,
+            executionTrace: feedback ?? undefined,
+          });
           if (mutation) {
             console.log(`[SkillMutator] Proposed ${mutation.originalSkillId ? "mutation" : "discovery"}: ${mutation.id} (${mutation.reason})`);
 
@@ -505,15 +515,16 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
               return;
             }
 
-            runATAPipeline(mutation.id).then((result) => {
+            swallowAndAudit("ata.pipeline_run", async () => {
+              const result = await runATAPipeline(mutation.id);
               console.log(`[ATA] ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore}, revisions=${result.revisionCycles})`);
-            }).catch((err: unknown) => {
-              console.warn(`[ATA] Pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
-            });
+            },
+              { companyId: snapshot.company.id, detail: { mutationId: mutation.id, taskId: task.id } },
+            );
           }
-        }).catch((err: unknown) => {
-          console.warn(`[SkillMutator] processTaskOutcome error for ${task.id}: ${err instanceof Error ? err.message : err}`);
-        });
+        },
+          { companyId: snapshot.company.id, agentRole: task.assignedRole, detail: { taskId: task.id } },
+        );
       }
 
       // Spec 14 Phase 5: record task trajectory as a Pattern
@@ -528,23 +539,26 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
           task.assignedRole,
           `${task.title} ${task.description}`,
         ).map((s) => s.id);
-        extractPattern({
-          taskId: task.id,
-          taskTitle: task.title,
-          taskDescription: task.description,
-          assignedRole: task.assignedRole,
-          companyId: snapshot.company.id,
-          outcome: patternOutcome,
-          trajectory: feedback ?? undefined,
-          activeSkillIds,
-          sprintId: task.sprintId ?? snapshot.company.currentSprintId ?? null,
-        }).then((pattern) => {
+        // Audit C2/C3 cleanup: route extractPattern through swallowAndAudit
+        // so embedding-side failures don't disappear into a console.warn.
+        swallowAndAudit("pattern_learner.extract", async () => {
+          const pattern = await extractPattern({
+            taskId: task.id,
+            taskTitle: task.title,
+            taskDescription: task.description,
+            assignedRole: task.assignedRole,
+            companyId: snapshot.company.id,
+            outcome: patternOutcome,
+            trajectory: feedback ?? undefined,
+            activeSkillIds,
+            sprintId: task.sprintId ?? snapshot.company.currentSprintId ?? null,
+          });
           if (pattern.usageCount === 1) {
             console.log(`[PatternLearner] New pattern ${pattern.id} for "${task.title.slice(0, 40)}"`);
           }
-        }).catch((err: unknown) => {
-          console.warn(`[PatternLearner] extractPattern error for ${task.id}: ${err instanceof Error ? err.message : err}`);
-        });
+        },
+          { companyId: snapshot.company.id, agentRole: task.assignedRole, detail: { taskId: task.id } },
+        );
       }
     }
   }

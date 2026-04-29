@@ -145,13 +145,14 @@ async function tick(): Promise<void> {
   if (tickCount === 1 || tickCount % HEARTBEAT_EVERY_N_TICKS === 0) {
     console.log(`[SkillScheduler] tick #${tickCount} (worker=${workerId}, interval=${TICK_INTERVAL_MS}ms)`);
   }
-  inFlight = processOnce()
-    .catch((err: unknown) => {
-      console.error(`[SkillScheduler] tick error: ${err instanceof Error ? err.message : err}`);
-    })
-    .finally(() => {
-      inFlight = null;
-    });
+  // Audit C2: route the tick failure through swallowAndReport so a DB
+  // outage during job leasing surfaces to operators instead of becoming
+  // a console.error. The .finally still owns the inFlight reset.
+  inFlight = swallowAndReport("skill_scheduler.tick", () => processOnce(), {
+    detail: { tick: tickCount, workerId },
+  }).finally(() => {
+    inFlight = null;
+  });
   await inFlight;
 }
 

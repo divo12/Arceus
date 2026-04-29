@@ -23,6 +23,7 @@ import type {
   BeatEventTrigger,
 } from "@arceus/contracts";
 import { runChecklist, type ChecklistResult } from "./heartbeat-checklist";
+import { swallowAndAudit } from "./swallow.js";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -299,11 +300,13 @@ export class HeartbeatEngine {
       // write doesn't break the runtime — but it should be visible in logs
       // so we notice if the beats DB is failing systematically.
       if (this.deps) {
-        this.deps.commitBeatRecord(record).catch((err: unknown) => {
-          console.warn(
-            `[heartbeat] commitBeatRecord failed for ${record.agentId}/beat ${record.id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
+        // Audit C2.3 (F-112/F-217): commitBeatRecord failure means the
+        // beat audit trail is dropping rows. Surface to the typed error
+        // sink so monitoring catches systematic DB failures.
+        swallowAndAudit("heartbeat.commit_beat_record", () =>
+          this.deps!.commitBeatRecord(record),
+          { companyId: record.companyId, beatId: record.id, detail: { agentId: record.agentId, role: record.role } },
+        );
       }
       return record;
     } finally {
@@ -330,13 +333,15 @@ export class HeartbeatEngine {
       return;
     }
 
-    // Agent is idle — trigger immediately (fire-and-forget)
-    this.triggerBeat({
-      companyId, agentId, role,
-      trigger: { type: "event", event },
-    }).catch((err: unknown) => {
-      console.error(`[HEARTBEAT] Reactive beat failed for ${role} (${event}):`, err instanceof Error ? err.message : err);
-    });
+    // Agent is idle — trigger immediately (fire-and-forget). Audit-routed
+    // so a reactive beat that crashes lands in the error sink.
+    swallowAndAudit("heartbeat.reactive_beat", () =>
+      this.triggerBeat({
+        companyId, agentId, role,
+        trigger: { type: "event", event },
+      }),
+      { companyId, detail: { agentId, role, event } },
+    );
   }
 
   /** Drain queued events for an agent after its beat completes. */
@@ -352,14 +357,15 @@ export class HeartbeatEngine {
       this.eventQueue.set(agentId, queue);
     }
 
-    this.triggerBeat({
-      companyId: next.companyId,
-      agentId,
-      role: next.role,
-      trigger: { type: "event", event: next.event },
-    }).catch((err: unknown) => {
-      console.error(`[HEARTBEAT] Queued reactive beat failed for ${next.role} (${next.event}):`, err instanceof Error ? err.message : err);
-    });
+    swallowAndAudit("heartbeat.queued_reactive_beat", () =>
+      this.triggerBeat({
+        companyId: next.companyId,
+        agentId,
+        role: next.role,
+        trigger: { type: "event", event: next.event },
+      }),
+      { companyId: next.companyId, detail: { agentId, role: next.role, event: next.event } },
+    );
   }
 
   // ── Status ───────────────────────────────────────────────
@@ -467,15 +473,17 @@ export class HeartbeatEngine {
       // Skip if at capacity
       if (this.semaphore.available <= 0) break;
 
-      // Fire and forget — triggerBeat handles lock + semaphore
-      this.triggerBeat({
-        companyId: agent.companyId,
-        agentId: agent.agentId,
-        role: agent.role,
-        trigger: { type: "interval", scheduledAt: new Date(now).toISOString() },
-      }).catch((err: unknown) => {
-        console.error(`[HEARTBEAT] Auto-schedule beat failed for ${agent.role}:`, err instanceof Error ? err.message : err);
-      });
+      // Fire and forget — triggerBeat handles lock + semaphore.
+      // Audit-routed so a scheduled beat crash lands in the error sink.
+      swallowAndAudit("heartbeat.auto_schedule_beat", () =>
+        this.triggerBeat({
+          companyId: agent.companyId,
+          agentId: agent.agentId,
+          role: agent.role,
+          trigger: { type: "interval", scheduledAt: new Date(now).toISOString() },
+        }),
+        { companyId: agent.companyId, detail: { agentId: agent.agentId, role: agent.role } },
+      );
     }
   }
 

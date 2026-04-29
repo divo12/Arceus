@@ -217,11 +217,14 @@ export async function applyMeetingEffects(
   }
 
   if (memoryModifications.length === 0) return;
-  void Promise.all(
-    memoryModifications.map((modification) =>
-      applyMemoryModification(companyId, modification).catch((err: unknown) => {
-        console.warn(`[meetings] memory modification failed (${modification.modificationType})`, err);
-      }),
-    ),
-  );
+  for (const modification of memoryModifications) {
+    // Audit C2: each modification is independently fire-and-forget;
+    // routing through swallowAndAudit means a single embed/DB failure
+    // surfaces with context (which modification) instead of being
+    // collapsed under one console.warn.
+    swallowAndAudit("meeting.memory_modification", () =>
+      applyMemoryModification(companyId, modification),
+      { companyId, detail: { modificationType: modification.modificationType, role: modification.role } },
+    );
+  }
 }

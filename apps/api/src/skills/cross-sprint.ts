@@ -57,11 +57,15 @@ export async function runCrossSprintTransfer(
         `[CrossSprintTransfer] Promoted cluster ${candidate.clusterId} → mutation ${mutation.id} ` +
         `(${candidate.memberCount} members, success=${candidate.combinedSuccessRate.toFixed(2)})`,
       );
-      runATAPipeline(mutation.id).then((result) => {
+      // Audit C3.2 (F-279): emergent ATA pipeline is fire-and-forget but
+      // failures must land in the audit trail — without this a refused
+      // mutation looks identical to a crashed pipeline at the operator level.
+      swallowAndAudit("ata.pipeline_emergent", async () => {
+        const result = await runATAPipeline(mutation.id);
         console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
-      }).catch((err: unknown) => {
-        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
-      });
+      },
+        { companyId, detail: { mutationId: mutation.id, clusterId: candidate.clusterId } },
+      );
     } catch (err) {
       console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
     }
