@@ -316,7 +316,25 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
   });
 
   return new Promise((resolve, reject) => {
+    // Audit C7 (F-066): SIGTERM the child on timeout so we don't leak an
+    // orphan `opencode serve` process that holds the port. Without this,
+    // a slow boot leaves a zombie that the next getOpencode() call
+    // detects via detectExistingOpencodeServer and reuses indefinitely.
     const timeout = setTimeout(() => {
+      try {
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill("SIGTERM");
+          // Escalate to SIGKILL after 5s grace period if SIGTERM was ignored.
+          setTimeout(() => {
+            if (proc.exitCode === null && proc.signalCode === null) {
+              proc.kill("SIGKILL");
+            }
+          }, 5000).unref();
+        }
+      } catch {
+        // silent: process may have died between exitCode check and kill;
+        // either way it's gone — fall through to reject.
+      }
       reject(new Error("Timeout waiting for OpenCode server to start after 45000ms"));
     }, 45000);
 
@@ -348,6 +366,14 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
 
     proc.on("error", (error) => {
       clearTimeout(timeout);
+      // SIGTERM the child on spawn error too — same orphan-prevention.
+      try {
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill("SIGTERM");
+        }
+      } catch {
+        // silent: see above.
+      }
       reject(error);
     });
   });

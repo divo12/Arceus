@@ -75,6 +75,7 @@ import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
 import { initSkillEvolution } from "./skills/evolution.js";
 import { startSkillScheduler, stopSkillScheduler } from "./skills/scheduler.js";
+import { sweepStrandedRunsOnBoot, startStrandedRunSweeper, stopStrandedRunSweeper } from "./orchestration/stranded-run-sweeper.js";
 import { workspaceManager } from "./workspace/manager.js";
 import { warmUpOpencode } from "./infra/opencode.js";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent, MeetingScheduler, MeetingPipeline } from "@arceus/company-runtime";
@@ -426,6 +427,11 @@ setMeetingScheduler(meetingScheduler);
       (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),
     );
     if (activeSprint) {
+      // Audit C7 (F-212/F-233): clear stranded `running` rows from the
+      // previous deploy/crash BEFORE the engine starts, so trust scoring
+      // and sprint completion gates don't observe ghost beats.
+      await sweepStrandedRunsOnBoot();
+      startStrandedRunSweeper();
       heartbeatEngine.start();
       if (heartbeatConfig.meetingsEnabled) {
         meetingScheduler.start();
@@ -560,6 +566,7 @@ async function shutdown(signal: string) {
   try {
     heartbeatEngine.stop();
     meetingScheduler.stop();
+    stopStrandedRunSweeper();
     await stopSkillScheduler();
     await drainAuditLedger();
     await teardown();
