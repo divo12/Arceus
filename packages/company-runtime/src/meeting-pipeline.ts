@@ -20,6 +20,18 @@ export interface MeetingPipelineDeps {
   getSnapshot: () => Promise<CompanySnapshot>;
   /** Spec 31 Phase 7.C.d — async to write directly to canonical. */
   updateMeeting: (id: string, updater: (m: Meeting) => Meeting) => Promise<Meeting | null>;
+  /**
+   * Spec 33 / Audit C1 Phase 3 — atomic status-guarded transition.
+   * Returns null if the meeting wasn't in `expectedFrom` (illegal
+   * transition or lost race). Use for pure status flips; for flips
+   * that also write other fields, use `updateMeeting` and assert
+   * the prior status inside the updater.
+   */
+  transitionMeetingStatus: (
+    id: string,
+    expectedFrom: Meeting["status"],
+    to: Meeting["status"],
+  ) => Promise<Meeting | null>;
   flush: () => Promise<void>;
 
   /** Phase 4: Trigger contribution collection from all participant agents. */
@@ -105,25 +117,29 @@ export class MeetingPipeline {
     this.deps.startTokenTracking?.(meetingId);
 
     // Step 1: Collect contributions
-    await this.transition(meetingId, "collecting");
+    await this.transition(meetingId, "scheduled", "collecting");
     const collectResult = await this.collect(meetingId);
 
     // Step 2: Synthesize — identify conflicts, blockers, highlights
-    await this.transition(meetingId, "synthesizing");
+    await this.transition(meetingId, "collecting", "synthesizing");
     const synthesizeResult = await this.synthesize(meetingId);
 
     // Step 3: Resolve — make decisions (skippable for daily_sync with no issues)
     const shouldSkipResolve = this.shouldSkipResolve(meeting, synthesizeResult);
     let resolveResult: ResolveResult = { decisionCount: 0, tasksCreated: 0, tasksModified: 0, escalationsCreated: 0 };
+    // Track the prior state for the next transition — `learning` follows
+    // either `resolving` (when resolve ran) or `synthesizing` (when skipped).
+    let stateBeforeLearning: Meeting["status"] = "synthesizing";
     if (!shouldSkipResolve) {
-      await this.transition(meetingId, "resolving");
+      await this.transition(meetingId, "synthesizing", "resolving");
       resolveResult = await this.resolve(meetingId);
+      stateBeforeLearning = "resolving";
     } else {
       console.log(`[MEETING-PIPELINE] Skipping resolve for ${meetingId} (no conflicts/blockers)`);
     }
 
     // Step 4: Learn — extract memories
-    await this.transition(meetingId, "learning");
+    await this.transition(meetingId, stateBeforeLearning, "learning");
     const learnResult = await this.learn(meetingId);
 
     // Step 4b: Produce daily sync brief (for daily_sync meetings)
@@ -140,25 +156,36 @@ export class MeetingPipeline {
       : null;
     const skippedBefore = schedule?.skipCount ?? 0;
 
-    await this.deps.updateMeeting(meetingId, (m) => ({
-      ...m,
-      status: "completed",
-      completedAt: new Date().toISOString(),
-      healthSnapshot: {
-        meetingId: m.id,
-        scheduleId: m.scheduleId,
-        pipelineDurationMs: durationMs,
-        contributionCount: collectResult.contributionCount,
-        conflictCount: synthesizeResult.conflictCount,
-        blockerCount: synthesizeResult.blockerCount,
-        decisionsCount: resolveResult.decisionCount,
-        tasksCreated: resolveResult.tasksCreated,
-        tasksModified: resolveResult.tasksModified,
-        escalationsCreated: resolveResult.escalationsCreated,
-        totalTokensUsed,
-        skippedBefore,
-      },
-    }));
+    // Spec 33 / Audit C1 Phase 3 — completion writes status + completedAt
+    // + healthSnapshot in one updater. The Pattern A row lock (held by
+    // updateMeeting) prevents concurrent writers; the inline assertion
+    // catches an illegal completion from any state other than `learning`.
+    await this.deps.updateMeeting(meetingId, (m) => {
+      if (m.status !== "learning") {
+        throw new Error(
+          `Meeting ${meetingId} cannot complete from status '${m.status}' (expected 'learning')`,
+        );
+      }
+      return {
+        ...m,
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        healthSnapshot: {
+          meetingId: m.id,
+          scheduleId: m.scheduleId,
+          pipelineDurationMs: durationMs,
+          contributionCount: collectResult.contributionCount,
+          conflictCount: synthesizeResult.conflictCount,
+          blockerCount: synthesizeResult.blockerCount,
+          decisionsCount: resolveResult.decisionCount,
+          tasksCreated: resolveResult.tasksCreated,
+          tasksModified: resolveResult.tasksModified,
+          escalationsCreated: resolveResult.escalationsCreated,
+          totalTokensUsed,
+          skippedBefore,
+        },
+      };
+    });
 
     await this.deps.flush();
 
@@ -259,8 +286,23 @@ export class MeetingPipeline {
     return snap.meetings.find((m) => m.id === meetingId);
   }
 
-  private async transition(meetingId: string, status: Meeting["status"]): Promise<void> {
-    await this.deps.updateMeeting(meetingId, (m) => ({ ...m, status }));
+  /**
+   * Spec 33 / Audit C1 Phase 3 — status-guarded transition. Throws on
+   * illegal prior state so a misbehaving caller (double-fire,
+   * orchestrator restart mid-pipeline) fails loudly instead of silently
+   * advancing the state machine past an already-completed meeting.
+   */
+  private async transition(
+    meetingId: string,
+    expectedFrom: Meeting["status"],
+    to: Meeting["status"],
+  ): Promise<void> {
+    const result = await this.deps.transitionMeetingStatus(meetingId, expectedFrom, to);
+    if (!result) {
+      throw new Error(
+        `Meeting ${meetingId} not in '${expectedFrom}' for transition to '${to}' (lost race or illegal transition)`,
+      );
+    }
   }
 
   /**

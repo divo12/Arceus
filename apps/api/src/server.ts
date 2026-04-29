@@ -49,9 +49,11 @@ import {
   flush,
   teardown,
   updateMeeting,
+  transitionMeetingStatus,
   upsertMeeting,
   upsertMeetingSchedule,
   updateMeetingSchedule,
+  recordScheduleSkip,
   commitScheduledMeeting,
   upsertTask,
   updateTask,
@@ -215,6 +217,7 @@ const getSnapshotForPackages = async () => {
 const meetingPipeline = new MeetingPipeline({
   getSnapshot: getSnapshotForPackages,
   updateMeeting,
+  transitionMeetingStatus,
   flush,
 
   // Phase 8: Token tracking for meeting pipeline
@@ -404,6 +407,7 @@ const meetingScheduler = new MeetingScheduler(
     upsertMeeting,
     upsertMeetingSchedule,
     updateMeetingSchedule,
+    recordScheduleSkip,
     commitScheduledMeeting,
     flush,
     runPipeline: (meetingId) => meetingPipeline.run(meetingId),

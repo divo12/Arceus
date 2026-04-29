@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Sprint as ContractSprint, SprintReviewState } from "@arceus/contracts";
 import { sprints } from "../schema/sprints.js";
 import type { DbClient } from "./_helpers.js";
@@ -44,6 +44,17 @@ export async function updateSprint(
 ): Promise<Sprint | null> {
   const [row] = await db.update(sprints).set(patch).where(eq(sprints.id, toDbId(id))).returning();
   return row ?? null;
+}
+
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// `SELECT id … FOR UPDATE` row lock so a surrounding transaction's
+// read-modify-write serializes concurrent callers on this sprint
+// row. Must be called inside `db.transaction()`.
+export async function lockForUpdate(tx: DbClient, sprintId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT id FROM ${sprints} WHERE id = ${toDbId(sprintId)} FOR UPDATE`,
+  );
 }
 
 // ── Hydration: DB row ↔ contracts.Sprint (Phase 4B) ──────────────

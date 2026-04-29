@@ -56,16 +56,19 @@ export async function upsertTask(task: Task): Promise<Task> {
  * if the task doesn't exist.
  *
  * Audit C8 (F-104/F-256): wrapped in `db.transaction()` so the read +
- * write commit atomically. A crash between findByIdHydrated and
- * upsertTask now rolls back instead of leaving the row half-updated.
- * Concurrent writers still race (lost-update is C1's CAS territory),
- * but per-call atomicity is now crash-safe.
+ * write commit atomically.
+ *
+ * Spec 33 / Audit C1: `tasksRepo.lockForUpdate` takes a row lock at
+ * the top of the transaction, so two concurrent writers serialize on
+ * this row instead of both reading the same baseline and producing
+ * conflicting writes (last-write-wins lost update).
  */
 export async function updateTask(
   taskId: string,
   updater: (task: Task) => Task,
 ): Promise<Task | null> {
   return await getDb().transaction(async (tx) => {
+    await tasksRepo.lockForUpdate(tx, taskId);
     const current = await tasksRepo.findByIdHydrated(tx, taskId);
     if (!current) return null;
     const next = updater(current);
@@ -83,12 +86,15 @@ export async function upsertSprint(sprint: Sprint): Promise<Sprint> {
 
 /**
  * Read-modify-write for a sprint. Audit C8 — atomic via `db.transaction`.
+ * Spec 33 / Audit C1 — row lock prevents lost-update races on
+ * `reviewState` and other multi-step state machines.
  */
 export async function updateSprint(
   sprintId: string,
   updater: (sprint: Sprint) => Sprint,
 ): Promise<Sprint | null> {
   return await getDb().transaction(async (tx) => {
+    await sprintsRepo.lockForUpdate(tx, sprintId);
     const current = await sprintsRepo.findByIdHydrated(tx, sprintId);
     if (!current) return null;
     const next = updater(current);
@@ -110,6 +116,7 @@ export async function updateCompanySprint(
   sprintNumber: number | null,
 ): Promise<void> {
   await getDb().transaction(async (tx) => {
+    await companiesRepo.lockForUpdate(tx, companyId);
     const company = await companiesRepo.findByIdHydrated(tx, companyId);
     if (!company) return;
     await companiesRepo.upsertCompany(tx, {
@@ -130,15 +137,21 @@ export async function upsertMeeting(meeting: Meeting): Promise<Meeting> {
 /**
  * Read-modify-write for a meeting. Audit C8 (F-277): atomic via
  * `db.transaction` so an update never leaves the meeting row half-
- * written. Two parallel contributions still race (full-object spread
- * → last-write-wins), but the audit-cited "crash mid-write leaves
- * inconsistent state" is closed.
+ * written.
+ *
+ * Spec 33 / Audit C1: `meetingsRepo.lockForUpdate` serializes
+ * concurrent contributors so two contributions don't both read the
+ * same baseline and overwrite each other. For status-machine
+ * transitions specifically (e.g. scheduled → in_progress), prefer
+ * `meetingsRepo.transitionStatus` (Phase 3) which adds a status
+ * guard on the UPDATE itself.
  */
 export async function updateMeeting(
   meetingId: string,
   updater: (meeting: Meeting) => Meeting,
 ): Promise<Meeting | null> {
   return await getDb().transaction(async (tx) => {
+    await meetingsRepo.lockForUpdate(tx, meetingId);
     const current = await meetingsRepo.findByIdHydrated(tx, meetingId);
     if (!current) return null;
     const next = updater(current);
@@ -158,6 +171,24 @@ export async function writeMeetingSync(meeting: Meeting): Promise<Meeting> {
 }
 
 /**
+ * Spec 33 / Audit C1 Phase 3 — atomic, status-guarded meeting
+ * transition. Returns the new hydrated meeting on success, null if
+ * the meeting wasn't in `expectedFrom` (lost race or illegal
+ * transition). Caller decides what to do with null.
+ *
+ * This is single-statement atomic; the WHERE-clause guard *is* the
+ * lock. No `db.transaction()` wrapper needed.
+ */
+export async function transitionMeetingStatus(
+  meetingId: string,
+  expectedFrom: Meeting["status"],
+  to: Meeting["status"],
+): Promise<Meeting | null> {
+  const row = await meetingsRepo.transitionStatus(getDb(), meetingId, expectedFrom, to);
+  return row ? meetingsRepo.rowToMeeting(row) : null;
+}
+
+/**
  * Audit C8 (F-361) — atomic meeting fire. Persists the meeting AND
  * advances its schedule (`lastMeetingId`, `skipCount`, `nextCheckAt`,
  * `totalRuns`) in a single transaction. Used by the scheduler tick
@@ -174,6 +205,7 @@ export async function commitScheduledMeeting(
   scheduleUpdater: (s: MeetingSchedule) => MeetingSchedule,
 ): Promise<Meeting | null> {
   return await getDb().transaction(async (tx) => {
+    await meetingSchedulesRepo.lockForUpdate(tx, scheduleId);
     const row = await meetingSchedulesRepo.findById(tx, scheduleId);
     if (!row) return null;
     const current = meetingSchedulesRepo.rowToSchedule(row);
@@ -193,12 +225,19 @@ export async function upsertMeetingSchedule(
   return schedule;
 }
 
-/** Read-modify-write for a meeting schedule. Audit C8 — atomic. */
+/**
+ * Read-modify-write for a meeting schedule. Audit C8 — atomic.
+ * Spec 33 / Audit C1 — row lock prevents lost-update on the schedule.
+ * For pure counter increments (skipCount, totalRuns), prefer
+ * `meetingSchedulesRepo.incrementCounter` (Phase 4) — atomic SQL
+ * with no read-modify-write contention.
+ */
 export async function updateMeetingSchedule(
   scheduleId: string,
   updater: (s: MeetingSchedule) => MeetingSchedule,
 ): Promise<MeetingSchedule | null> {
   return await getDb().transaction(async (tx) => {
+    await meetingSchedulesRepo.lockForUpdate(tx, scheduleId);
     const row = await meetingSchedulesRepo.findById(tx, scheduleId);
     if (!row) return null;
     const current = meetingSchedulesRepo.rowToSchedule(row);
@@ -208,6 +247,29 @@ export async function updateMeetingSchedule(
   });
 }
 
+/**
+ * Spec 33 / Audit C1 Phase 4 — atomic "tick was a skip" record.
+ * Single SQL UPDATE that increments `skipCount` and writes the
+ * `lastCheckedAt` / `nextCheckAt` timestamps. Use this from the
+ * scheduler skip path instead of `updateMeetingSchedule(s => ({...,
+ * skipCount: s.skipCount + 1}))` — atomic SQL avoids the read-
+ * modify-write window where concurrent skips could lose increments.
+ *
+ * Returns false if the schedule row doesn't exist.
+ */
+export async function recordScheduleSkip(
+  scheduleId: string,
+  lastCheckedAt: Date,
+  nextCheckAt: Date,
+): Promise<boolean> {
+  return await meetingSchedulesRepo.markSkipped(
+    getDb(),
+    scheduleId,
+    lastCheckedAt,
+    nextCheckAt,
+  );
+}
+
 // ─── Approvals ────────────────────────────────────────────────────
 
 export async function upsertApproval(approval: Approval): Promise<Approval> {
@@ -215,12 +277,16 @@ export async function upsertApproval(approval: Approval): Promise<Approval> {
   return approval;
 }
 
-/** Read-modify-write for an approval. Audit C8 — atomic. */
+/**
+ * Read-modify-write for an approval. Audit C8 — atomic.
+ * Spec 33 / Audit C1 — row lock prevents lost-update.
+ */
 export async function updateApproval(
   approvalId: string,
   updater: (approval: Approval) => Approval,
 ): Promise<Approval | null> {
   return await getDb().transaction(async (tx) => {
+    await approvalsRepo.lockForUpdate(tx, approvalId);
     const current = await approvalsRepo.findByIdHydrated(tx, approvalId);
     if (!current) return null;
     const next = updater(current);
@@ -238,13 +304,18 @@ export async function appendChatMessage(message: ChatMessage): Promise<ChatMessa
 
 // ─── Agents ───────────────────────────────────────────────────────
 
-/** Read-modify-write for an agent's memory summary. Audit C8 — atomic. */
+/**
+ * Read-modify-write for an agent's memory summary. Audit C8 — atomic.
+ * Spec 33 / Audit C1 — `lockByAgent` (PK is `agent_id`, not `id`)
+ * serializes concurrent writers so concurrent learnings don't clobber.
+ */
 export async function updateAgentMemory(
   agentId: string,
   companyId: string,
   updater: (memory: MemorySummary) => MemorySummary,
 ): Promise<MemorySummary | null> {
   return await getDb().transaction(async (tx) => {
+    await memorySummariesRepo.lockByAgent(tx, agentId);
     const current = await memorySummariesRepo.findByAgentHydrated(tx, agentId);
     if (!current) return null;
     const next = updater(current);

@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type {
   Meeting as ContractMeeting,
   MeetingContribution as ContractMeetingContribution,
@@ -45,6 +45,46 @@ export async function createMeeting(db: DbClient, data: NewMeeting): Promise<Mee
 
 export async function findMeetingById(db: DbClient, id: string): Promise<Meeting | null> {
   const [row] = await db.select().from(meetings).where(eq(meetings.id, toDbId(id))).limit(1);
+  return row ?? null;
+}
+
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// `SELECT id … FOR UPDATE` row lock so a surrounding transaction's
+// read-modify-write serializes concurrent callers on this meeting
+// row. Must be called inside `db.transaction()`.
+export async function lockForUpdate(tx: DbClient, meetingId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT id FROM ${meetings} WHERE id = ${toDbId(meetingId)} FOR UPDATE`,
+  );
+}
+
+// ── Status transition (Spec 33 — C1 Pattern B) ─────────────────
+//
+// Atomic, status-guarded transition. The compound `WHERE id = ?
+// AND status = expectedFrom` makes the UPDATE itself reject illegal
+// transitions: if the row was already past `expectedFrom`, zero rows
+// match and we return null. Caller decides whether to throw, skip,
+// or log.
+//
+// Use this for pure status flips. For transitions that also write
+// other fields (e.g. completedAt, healthSnapshot), use
+// `mutations.updateMeeting` (which holds a Pattern A row lock) and
+// assert `m.status === expectedFrom` inside the updater closure.
+//
+// Reference: Paperclip services/issues.ts:1356 — same conditional
+// UPDATE idiom for "release execution lock if I still own it".
+export async function transitionStatus(
+  db: DbClient,
+  meetingId: string,
+  expectedFrom: ContractMeeting["status"],
+  to: ContractMeeting["status"],
+): Promise<Meeting | null> {
+  const [row] = await db
+    .update(meetings)
+    .set({ status: to })
+    .where(and(eq(meetings.id, toDbId(meetingId)), eq(meetings.status, expectedFrom)))
+    .returning();
   return row ?? null;
 }
 

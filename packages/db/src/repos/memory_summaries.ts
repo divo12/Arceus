@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { MemorySummary as ContractMemorySummary } from "@arceus/contracts";
 import { memorySummaries } from "../schema/memory_summaries.js";
 import type { DbClient } from "./_helpers.js";
@@ -47,6 +47,17 @@ export async function findByAgent(db: DbClient, agentId: string): Promise<Memory
     .where(eq(memorySummaries.agentId, toDbId(agentId)))
     .limit(1);
   return row ?? null;
+}
+
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// `SELECT agent_id … FOR UPDATE` row lock keyed on agentId (the PK).
+// Serializes concurrent read-modify-write on this agent's memory
+// summary inside a `db.transaction()`.
+export async function lockByAgent(tx: DbClient, agentId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT agent_id FROM ${memorySummaries} WHERE agent_id = ${toDbId(agentId)} FOR UPDATE`,
+  );
 }
 
 export async function findByAgentHydrated(db: DbClient, agentId: string): Promise<ContractMemorySummary | null> {

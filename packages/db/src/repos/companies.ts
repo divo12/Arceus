@@ -30,6 +30,17 @@ export async function findCompanyById(db: DbClient, id: string): Promise<Company
   return row ?? null;
 }
 
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// `SELECT id … FOR UPDATE` row lock so a surrounding transaction's
+// read-modify-write serializes concurrent callers on this company
+// row. Must be called inside `db.transaction()`.
+export async function lockForUpdate(tx: DbClient, companyId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT id FROM ${companies} WHERE id = ${toDbId(companyId)} FOR UPDATE`,
+  );
+}
+
 export async function findCompanyBySlug(db: DbClient, slug: string): Promise<Company | null> {
   const [row] = await db.select().from(companies).where(eq(companies.slug, slug)).limit(1);
   return row ?? null;

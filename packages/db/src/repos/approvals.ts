@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Approval as ContractApproval } from "@arceus/contracts";
 import { approvals } from "../schema/approvals.js";
 import type { DbClient } from "./_helpers.js";
@@ -21,6 +21,17 @@ export async function createApproval(db: DbClient, data: NewApproval): Promise<A
 export async function findApprovalById(db: DbClient, id: string): Promise<Approval | null> {
   const [row] = await db.select().from(approvals).where(eq(approvals.id, toDbId(id))).limit(1);
   return row ?? null;
+}
+
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// `SELECT id … FOR UPDATE` row lock so a surrounding transaction's
+// read-modify-write serializes concurrent callers on this approval
+// row. Must be called inside `db.transaction()`.
+export async function lockForUpdate(tx: DbClient, approvalId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT id FROM ${approvals} WHERE id = ${toDbId(approvalId)} FOR UPDATE`,
+  );
 }
 
 export async function listApprovalsByCompany(

@@ -1,4 +1,4 @@
-import { and, asc, eq, lte } from "drizzle-orm";
+import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { MeetingSchedule as ContractSchedule, MeetingScheduleConfig } from "@arceus/contracts";
 import { meetingSchedules } from "../schema/meeting_schedules.js";
 import type { DbClient } from "./_helpers.js";
@@ -62,6 +62,75 @@ export async function listByCompany(db: DbClient, companyId: string): Promise<Me
 export async function findById(db: DbClient, id: string): Promise<MeetingSchedule | null> {
   const [row] = await db.select().from(meetingSchedules).where(eq(meetingSchedules.id, toDbId(id))).limit(1);
   return row ?? null;
+}
+
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// `SELECT id … FOR UPDATE` row lock so a surrounding transaction's
+// read-modify-write serializes concurrent callers on this schedule
+// row. Must be called inside `db.transaction()`.
+export async function lockForUpdate(tx: DbClient, scheduleId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT id FROM ${meetingSchedules} WHERE id = ${toDbId(scheduleId)} FOR UPDATE`,
+  );
+}
+
+// ── Atomic counter increments (Spec 33 — C1 Pattern: atomic SQL) ─
+//
+// One-statement UPDATE with `field = field + delta`. Postgres takes
+// the row-level write lock for the duration of the statement, so
+// concurrent callers serialize automatically — no explicit lock,
+// no read-modify-write window where a lost increment could occur.
+//
+// Use this in preference to `updateMeetingSchedule(s => ({...s,
+// skipCount: s.skipCount + 1}))` for pure counter mutations.
+//
+// Reference: companies.ts already uses this pattern for
+// `incrementSpentCents` (see comment block there for the full
+// rationale on why read-modify-write under JS is unsafe even with
+// a transaction wrapper).
+export async function incrementCounter(
+  db: DbClient,
+  scheduleId: string,
+  field: "skipCount" | "totalRuns",
+  by = 1,
+): Promise<void> {
+  const column = field === "skipCount" ? meetingSchedules.skipCount : meetingSchedules.totalRuns;
+  await db
+    .update(meetingSchedules)
+    .set({
+      [field]: sql`${column} + ${by}`,
+      updatedAt: new Date(),
+    })
+    .where(eq(meetingSchedules.id, toDbId(scheduleId)));
+}
+
+/**
+ * Spec 33 / Audit C1 Phase 4 — atomic "tick was a skip" record.
+ * Single SQL statement that increments `skip_count` AND writes the
+ * `last_checked_at` / `next_check_at` timestamps. Replaces the
+ * scheduler's previous read-modify-write `updateMeetingSchedule`
+ * call so 10 concurrent skips can't lose any increments.
+ *
+ * Returns false if the schedule row doesn't exist.
+ */
+export async function markSkipped(
+  db: DbClient,
+  scheduleId: string,
+  lastCheckedAt: Date,
+  nextCheckAt: Date,
+): Promise<boolean> {
+  const result = await db
+    .update(meetingSchedules)
+    .set({
+      skipCount: sql`${meetingSchedules.skipCount} + 1`,
+      lastCheckedAt,
+      nextCheckAt,
+      updatedAt: new Date(),
+    })
+    .where(eq(meetingSchedules.id, toDbId(scheduleId)))
+    .returning({ id: meetingSchedules.id });
+  return result.length === 1;
 }
 
 /**

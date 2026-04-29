@@ -46,6 +46,18 @@ export interface MeetingSchedulerDeps {
     scheduleId: string,
     scheduleUpdater: (s: MeetingSchedule) => MeetingSchedule,
   ) => Promise<Meeting | null>;
+  /**
+   * Spec 33 / Audit C1 Phase 4 — atomic "tick was a skip" record.
+   * Single-statement UPDATE that increments `skipCount` and writes
+   * the timestamps in one transaction. Replaces the previous read-
+   * modify-write `updateMeetingSchedule` call so concurrent skips
+   * can't lose increments.
+   */
+  recordScheduleSkip: (
+    scheduleId: string,
+    lastCheckedAt: Date,
+    nextCheckAt: Date,
+  ) => Promise<boolean>;
   flush: () => Promise<void>;
   runPipeline: (meetingId: string) => Promise<void>;
 }
@@ -151,13 +163,15 @@ export class MeetingScheduler {
         const nextCheckIso = new Date(now + schedule.intervalMs).toISOString();
 
         if (!needsMeeting) {
-          // Skip — increment skip counter, advance nextCheckAt
-          await this.deps.updateMeetingSchedule(schedule.id, (s) => ({
-            ...s,
-            lastCheckedAt: nowIso,
-            nextCheckAt: nextCheckIso,
-            skipCount: s.skipCount + 1,
-          }));
+          // Spec 33 / Audit C1 Phase 4 — atomic "tick was a skip" UPDATE
+          // (`skip_count = skip_count + 1` + timestamps in one statement).
+          // Replaces the previous read-modify-write so 10 concurrent
+          // skips on the same schedule can't lose any increments.
+          await this.deps.recordScheduleSkip(
+            schedule.id,
+            new Date(nowIso),
+            new Date(nextCheckIso),
+          );
           console.log(`[MEETING-SCHEDULER] Skipped ${schedule.type} (skipCount=${schedule.skipCount + 1})`);
           continue;
         }

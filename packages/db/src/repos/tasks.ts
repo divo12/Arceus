@@ -256,6 +256,25 @@ export async function releaseClaimsForBeat(
   });
 }
 
+// ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
+//
+// Take a `SELECT id FROM tasks WHERE id = ? FOR UPDATE` row lock so a
+// surrounding `db.transaction()` serializes concurrent read-modify-
+// write callers on this task. Without this, two transactions both
+// read the same baseline row and produce conflicting writes (last-
+// write-wins lost update).
+//
+// Must be called inside a transaction — calling on `db` directly
+// releases the lock at statement end and provides no protection.
+//
+// Reference: Paperclip services/issues.ts:1329 — same pattern for
+// `clearExecutionRunIfTerminal`'s read-validate-write closure.
+export async function lockForUpdate(tx: DbClient, taskId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT id FROM ${tasks} WHERE id = ${toDbId(taskId)} FOR UPDATE`,
+  );
+}
+
 // ── Terminal transitions ────────────────────────────────────
 
 export async function completeTask(
