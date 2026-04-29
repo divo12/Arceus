@@ -153,9 +153,9 @@ export async function executeMeetingDecisions(
           deliverable: ta.title ?? decision.decision,
           definitionOfDone: ["Resolve the identified issue"],
           status: "planned",
-          priority: (ta.newPriority as Task["priority"]) ?? "medium",
+          priority: ta.newPriority ?? "medium",
           sequence: null,
-          assignedRole: (ta.assigneeRole as Task["assignedRole"]) ?? "developer",
+          assignedRole: ta.assigneeRole ?? "developer",
           assignedAgentId: null,
           parentTaskId: null,
           dependsOnTaskIds: [],
@@ -186,9 +186,9 @@ export async function executeMeetingDecisions(
           ...t,
           ...(ta.title ? { title: ta.title } : {}),
           ...(ta.description ? { description: ta.description } : {}),
-          ...(ta.newStatus ? { status: ta.newStatus as Task["status"] } : {}),
-          ...(ta.newPriority ? { priority: ta.newPriority as Task["priority"] } : {}),
-          ...(ta.assigneeRole ? { assignedRole: ta.assigneeRole as Task["assignedRole"] } : {}),
+          ...(ta.newStatus ? { status: ta.newStatus } : {}),
+          ...(ta.newPriority ? { priority: ta.newPriority } : {}),
+          ...(ta.assigneeRole ? { assignedRole: ta.assigneeRole } : {}),
         }));
         tasksModified++;
         break;

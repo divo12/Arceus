@@ -3,6 +3,7 @@
  * Routes for governance — trust scores, policy violations, sprint budgets, and mutation checks.
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { cpGetAllTrustScores, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpHydrateTrustScores } from "../persistence/control-plane.js";
 import { BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
@@ -39,16 +40,30 @@ export default async function governanceRoutes(app: FastifyInstance) {
     return { ...score, tier: getTrustTier(score.score) };
   });
 
-  app.post("/api/governance/trust-scores/:agentId/adjust", async (request) => {
-    const { agentId } = request.params as { agentId: string };
-    const body = request.body as { kind: string; reason: string; delta?: number };
-    if (!body.kind || !body.reason) return { error: "kind and reason are required" };
+  // Audit C12 (F-426/F-433): Zod-validate the body at the boundary.
+  // Replaces `request.body as { ... }` + `body.kind as any` — typos
+  // / wrong enums now reject with 422 instead of being smuggled into
+  // buildTrustEvent.
+  const adjustTrustBody = z.object({
+    kind: z.enum(["task_completed", "task_failed", "violation", "escalation_resolved", "manual_adjustment"]),
+    reason: z.string().min(1).max(500),
+    delta: z.number().optional(),
+  });
+  const adjustParams = z.object({ agentId: z.string().min(1) });
+
+  app.post("/api/governance/trust-scores/:agentId/adjust", async (request, reply) => {
+    const params = adjustParams.safeParse(request.params);
+    const body = adjustTrustBody.safeParse(request.body);
+    if (!params.success || !body.success) {
+      reply.code(422);
+      return { error: "Invalid trust adjustment payload.", details: !params.success ? params.error.issues : body.success ? null : body.error.issues };
+    }
     const event = buildTrustEvent(
-      agentId,
-      body.kind as Parameters<typeof buildTrustEvent>[1],
-      `Manual: ${body.reason}`,
+      params.data.agentId,
+      body.data.kind,
+      `Manual: ${body.data.reason}`,
       new Date().toISOString(),
-      body.delta,
+      body.data.delta,
     );
     const updated = await cpUpdateTrustScore(event);
     return { ...updated, tier: getTrustTier(updated.score) };
@@ -147,19 +162,29 @@ export default async function governanceRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/api/governance/check", async (request) => {
-    const body = request.body as {
-      proposerAgentId: string | null;
-      proposerRole: string;
-      targetSkillRole: string;
-      sprintId: string;
-      skillContent: string;
-      estimatedCostCents?: number;
-    };
+  // Audit C12 (F-426): Zod-validate the body. proposerRole now narrows
+  // to the agent role enum at parse time, eliminating the `as` cast
+  // into canProposeMutation.
+  const governanceCheckBody = z.object({
+    proposerAgentId: z.string().nullable(),
+    proposerRole: z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]),
+    targetSkillRole: z.string().min(1),
+    sprintId: z.string().nullable().optional(),
+    skillContent: z.string().min(1),
+    estimatedCostCents: z.number().nonnegative().optional(),
+  });
+
+  app.post("/api/governance/check", async (request, reply) => {
+    const parsed = governanceCheckBody.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(422);
+      return { error: "Invalid governance check payload.", details: parsed.error.issues };
+    }
+    const body = parsed.data;
     const companyId = getActiveCompanyId() ?? "";
     const decision = await canProposeMutation({
       proposerAgentId: body.proposerAgentId,
-      proposerRole: body.proposerRole as Parameters<typeof canProposeMutation>[0]["proposerRole"],
+      proposerRole: body.proposerRole,
       targetSkillRole: body.targetSkillRole,
       companyId,
       sprintId: body.sprintId ?? null,

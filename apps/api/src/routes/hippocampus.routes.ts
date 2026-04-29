@@ -3,6 +3,7 @@
  * Routes for the hippocampus memory system — seeding, test extraction, and context retrieval.
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
@@ -12,8 +13,17 @@ import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { hippocampus } from "../memory/index.js";
 
 export default async function hippocampusRoutes(app: FastifyInstance) {
+  // Audit C12 (F-426): Zod parse for both seed and test-extraction.
+  const seedBody = z.object({ taskId: z.string().optional() });
+  const testExtractionBody = z.object({
+    role: z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]).optional(),
+    taskTitle: z.string().max(500).optional(),
+    output: z.string().max(20000).optional(),
+  });
+
   app.post("/api/hippocampus/seed", async (request) => {
-    const { taskId } = (request.body as { taskId?: string }) ?? {};
+    const parsed = seedBody.safeParse(request.body ?? {});
+    const taskId = parsed.success ? parsed.data.taskId : undefined;
     const companyId = getActiveCompanyId();
     if (!companyId) return { status: "error", seeded: 0, message: "No active company." };
     const db = getDb();
@@ -53,8 +63,13 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
     return { status: "success", seeded, message: `Seeded ${seeded} task completions into hippocampus` };
   });
 
-  app.post("/api/hippocampus/test-extraction", async (request) => {
-    const { role, taskTitle, output } = request.body as { role?: string; taskTitle?: string; output?: string };
+  app.post("/api/hippocampus/test-extraction", async (request, reply) => {
+    const parsed = testExtractionBody.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(422);
+      return { error: "Invalid test-extraction payload.", details: parsed.error.issues };
+    }
+    const { role, taskTitle, output } = parsed.data;
     const companyId = getActiveCompanyId();
     if (!companyId) return { status: "error", message: "No active company." };
     const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role ?? "developer");

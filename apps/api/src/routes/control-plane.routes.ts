@@ -22,6 +22,10 @@ export default async function controlPlaneRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/control-plane/mutations", async (request, reply) => {
+    // Body is already Zod-parsed below; we pre-extract companyId for the
+    // sanitize context via a tiny safe-parse so a parse failure doesn't
+    // re-cast the body to `any` for the audit row.
+    const peekedCompanyId = z.object({ companyId: z.string() }).safeParse(request.body).data?.companyId;
     try {
       const body = z.object({
         companyId: z.string(),
@@ -33,7 +37,7 @@ export default async function controlPlaneRoutes(app: FastifyInstance) {
       reply.code(400);
       return sanitizeError(error, "Invalid mutation payload.", {
         route: "POST /api/control-plane/mutations",
-        companyId: (request.body as { companyId?: string } | null)?.companyId,
+        companyId: peekedCompanyId,
       });
     }
   });

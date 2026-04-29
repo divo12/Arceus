@@ -305,7 +305,7 @@ export class HeartbeatEngine {
         // sink so monitoring catches systematic DB failures.
         swallowAndAudit("heartbeat.commit_beat_record", () =>
           this.deps!.commitBeatRecord(record),
-          { companyId: record.companyId, beatId: record.id, detail: { agentId: record.agentId, role: record.role } },
+          { companyId: record.companyId, beatId: record.id, detail: { agentId: record.agentId } },
         );
       }
       return record;

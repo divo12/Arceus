@@ -3,6 +3,7 @@
  * Routes for the orchestrator — execution control, board review, approvals, and transitions.
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { flush } from "../persistence/mutations.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
@@ -83,12 +84,24 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     }
   });
 
+  // Audit C12 (F-426): Zod parse for the resolve body.
+  const approvalResolveBody = z.object({
+    action: z.enum(["approved", "rejected"]).optional(),
+    summary: z.string().max(2000).optional(),
+  });
+  const approvalResolveParams = z.object({ id: z.string().min(1) });
+
   app.post("/api/approvals/:id/resolve", async (request, reply) => {
     try {
-      const { id } = request.params as { id: string };
-      const body = (request.body as { action?: string; summary?: string }) ?? {};
-      const action = body.action ?? "approved";
-      const summary = body.summary ?? `Board ${action} at ${new Date().toISOString()}`;
+      const params = approvalResolveParams.safeParse(request.params);
+      const body = approvalResolveBody.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        reply.code(422);
+        return { error: "Invalid approval resolution payload." };
+      }
+      const { id } = params.data;
+      const action = body.data.action ?? "approved";
+      const summary = body.data.summary ?? `Board ${action} at ${new Date().toISOString()}`;
       const updated = await updateApproval(id, (a) => ({
         ...a,
         status: action === "rejected" ? "rejected" : "approved",

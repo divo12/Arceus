@@ -182,6 +182,7 @@ export interface ExecutionGraph {
 export type GraphEvent =
   | { type: "sprint_started"; sprintId: string; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: "node_added"; sprintId: string; node: GraphNode; edges: GraphEdge[] }
+  | { type: "edge_added"; sprintId: string; edge: GraphEdge }
   | { type: "status_changed"; sprintId: string; nodeId: string; transition: StatusTransition }
   | { type: "beat_started"; sprintId: string; nodeId: string; beat: BeatNode }
   | { type: "beat_completed"; sprintId: string; nodeId: string; beatId: string; patch: Partial<BeatNode> }
@@ -363,8 +364,10 @@ export class ExecutionGraphStore {
     if (!graph) return;
     if (graph.edges.some((e) => e.id === edge.id)) return;
     graph.edges.push(edge);
-    // Re-use node_added event with null node to push edges via SSE
-    this.notify({ type: "node_added", sprintId, node: null as unknown as GraphNode, edges: [edge] });
+    // F-397 fix: dedicated edge_added variant. Used to be a `node_added`
+    // with `null as unknown as GraphNode` which masked an invariant
+    // violation (an edge_added event was claiming to add a node).
+    this.notify({ type: "edge_added", sprintId, edge });
   }
 
   // ── Queries ──

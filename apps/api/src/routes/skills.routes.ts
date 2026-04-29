@@ -3,6 +3,7 @@
  * Routes for the skill registry — CRUD, mutations, ATA pipeline, pattern learning, and cross-sprint promotion.
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import {
   getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory,
@@ -93,17 +94,25 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/api/skills/simulate-task-outcome", async (request) => {
-    const body = request.body as {
-      taskId: string;
-      taskTitle: string;
-      taskDescription: string;
-      assignedRole: string;
-      status: "completed" | "failed";
-      iterationCount: number;
-      executionTrace?: string;
-      sprintId?: string;
-    };
+  // Audit C12 (F-426): Zod parse for the simulate-task-outcome body.
+  const simulateTaskOutcomeBody = z.object({
+    taskId: z.string().min(1),
+    taskTitle: z.string().min(1),
+    taskDescription: z.string(),
+    assignedRole: z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]),
+    status: z.enum(["completed", "failed"]),
+    iterationCount: z.number().int().nonnegative(),
+    executionTrace: z.string().optional(),
+    sprintId: z.string().optional(),
+  });
+
+  app.post("/api/skills/simulate-task-outcome", async (request, reply) => {
+    const parsed = simulateTaskOutcomeBody.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(422);
+      return { error: "Invalid simulate-task-outcome payload.", details: parsed.error.issues };
+    }
+    const body = parsed.data;
     const companyId = getActiveCompanyId() ?? "";
     if (companyId && companyId !== "company_empty") {
       seedExistingSkills(companyId);
