@@ -21,7 +21,7 @@
 | **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | 🟡 partial | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
 | **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | 🔴 open | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
 | **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | 🔴 open | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
-| **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | 🔴 open | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
+| **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | 🟡 partial | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
 | **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | 🟡 partial | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
 | **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | 🟡 partial | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
 | **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | 🔴 open | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
@@ -53,6 +53,7 @@
 | `13c282b` | **C12** | F-397 `edge_added` GraphEvent variant; F-365/386 taskAction enums; F-426 Zod `request.body`; F-031 `cardData` discriminated union |
 | `0520084` | C9 | F-045 artifacts ring buffer + F-391/F-392 pendingFlush cap + transitions/feedback log caps |
 | `6259403` | **C8** | 6 read-modify-write helpers wrapped in `db.transaction()` (F-104/F-256/F-277); F-361 `commitScheduledMeeting` transactional dep; F-347 sprint tag-before-flip guard |
+| `701ccc5` | **C7** | F-066 `proc.kill()` on opencode spawn timeout; F-212/F-233 stranded-run sweeper (boot + 5-min periodic) |
 
 ### Cluster-by-cluster status
 
@@ -67,6 +68,11 @@
 **C4 (security — governance off + no auth) — 🟡 partial**
 - ✅ Closed: F-424 admin bearer token on every mutating `/api/*` route; F-428 debug routes 404 in prod; F-438 approvals gated; F-450 CORS allow-list; F-429 `sanitizeError()` for client error responses.
 - 🔴 Open: F-255/F-257 `GOVERNANCE_ENABLED = false` flip (deliberate deferral per user); web frontend Next.js Route Handler proxy still needs to inject admin token for `ARCEUS_REQUIRE_AUTH=1`.
+
+**C7 (no AbortSignal / crash recovery) — 🟡 partial**
+- ✅ Closed: F-066 opencode child SIGTERM/SIGKILL on spawn timeout + spawn error (no more orphan processes across deploys); F-212/F-233 stranded-run sweeper (boot pass with 0ms threshold + periodic 5-min sweep at 30-min stall threshold; uses pre-existing `findStrandedRuns` / `markStranded` repo helpers and the partial index that was already in the schema); F-302 reconnect backoff already in place (exponential + jitter + reset-on-success).
+- 🟡 Partial: F-395/F-348 `runPromptText` / `structuredCompletion` have request-level `AbortSignal.timeout(REQUEST_TIMEOUT)`, but no caller-passed signal — SIGTERM can't cancel a 5-min LLM call mid-flight; F-292 `detectExistingOpencodeServer` has a 2s AbortController, `startEventBridge` fetch does not.
+- 🔴 Open: F-247/F-262/F-307 (no AbortSignal threaded through checklist → executor → execution-cycle chain); F-293 (SSE `reader.read()` infinite loop has no `reader.cancel()` on shutdown).
 
 **C8 (non-atomic multi-step writes) — 🟡 partial**
 - ✅ Closed: F-104/F-256 read-modify-write atomicity (6 `updateX` helpers wrapped in `db.transaction()`); F-277 meeting contributions atomic on the persistence side; F-347 sprint completion blocks status flip until tagSprint succeeds; F-361 scheduler fires meeting + advances schedule via single `commitScheduledMeeting` transaction.
