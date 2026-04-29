@@ -403,7 +403,7 @@ async function watchForUsageAndRecord(
 
         let parsed: { usage?: AzureOpenAIUsage } | undefined;
         try {
-          parsed = JSON.parse(payload);
+          parsed = JSON.parse(payload) as { usage?: AzureOpenAIUsage };
         } catch {
           continue; // partial chunk or malformed — skip
         }

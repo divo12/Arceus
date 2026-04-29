@@ -249,7 +249,9 @@ export async function releaseClaimsForBeat(
     .where(and(eq(tasks.checkoutRunId, dbRunId), eq(tasks.status, "in_progress")))
     .returning({ id: tasks.id, body: tasks.body });
   return released.map((r) => {
-    const fid = (r.body as any)?.friendlyIds?.id;
+    // tasks.body is jsonb; narrow to the friendlyIds shape we wrote.
+    const body = r.body as { friendlyIds?: { id?: unknown } } | null;
+    const fid = body?.friendlyIds?.id;
     return typeof fid === "string" ? fid : r.id;
   });
 }

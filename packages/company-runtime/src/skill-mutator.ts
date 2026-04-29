@@ -158,7 +158,7 @@ async function createSkillMutation(
     : null;
 
   if (!original) {
-    throw new Error(`[SkillMutator] Skill ${attribution.attributedSkillId} not found for mutation`);
+    throw new Error(`[SkillMutator] Skill ${attribution.attributedSkillId ?? "(unknown)"} not found for mutation`);
   }
 
   const result = await deps!.proposeSkillMutation(original, attribution);

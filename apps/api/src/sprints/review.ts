@@ -174,7 +174,7 @@ export async function executeSprintReviewVerification(
   const previewUrl = getLocalPreviewState().validationUrl ?? getLocalPreviewState().entryUrl ?? getLocalPreviewState().url;
 
   if (!previewProbe.reachable) {
-    emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error}) — auto-failing sprint verification`, { beatId });
+    emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error ?? "unknown"}) — auto-failing sprint verification`, { beatId });
   }
 
   const sprintEntryCheck = checkEntryPointImports();
@@ -231,9 +231,9 @@ export async function executeSprintReviewVerification(
     `Preview status: ${previewProbe.reachable ? "REACHABLE" : "UNREACHABLE"}`,
     `Preview URL: ${previewUrl ?? "none"}`,
     previewProbe.reachable
-      ? `HTTP status: ${previewProbe.statusCode}`
+      ? `HTTP status: ${previewProbe.statusCode ?? "?"}`
       : `Error: ${previewProbe.error ?? "unknown"}`,
-    previewProbe.reachable ? `Content length: ${previewProbe.contentLength} bytes` : "",
+    previewProbe.reachable ? `Content length: ${previewProbe.contentLength ?? 0} bytes` : "",
     previewProbe.reachable ? `Has product content: ${previewProbe.hasProductContent}` : "",
     previewProbe.bodySnippet ? `Page text snippet: ${previewProbe.bodySnippet}` : "",
     "",
@@ -346,7 +346,7 @@ export async function executeSprintReviewVerification(
 
     } else if (effectiveVerdict === "fail") {
       const failReason = !previewProbe.reachable
-        ? `Preview unreachable: ${previewProbe.error}`
+        ? `Preview unreachable: ${previewProbe.error ?? "unknown"}`
         : !sprintEntryCheck.pass
           ? `Entry-point disconnected: ${sprintEntryCheck.reason}`
           : "Tester QA report verdict: FAIL";

@@ -41,9 +41,11 @@ interface ShellResult {
 function runShell(cmd: string, args: string[], cwd: string, timeoutMs: number): Promise<ShellResult> {
   return new Promise((resolve) => {
     execFile(cmd, args, { cwd, timeout: timeoutMs, shell: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-      const exitCode = err ? (err as any).code ?? 1 : 0;
+      // execFile error has an optional `code` field — narrow to a typed view.
+      const errCode = err ? (err as { code?: number | string }).code : undefined;
+      const exitCode = typeof errCode === "number" ? errCode : (err ? 1 : 0);
       resolve({
-        exitCode: typeof exitCode === "number" ? exitCode : 1,
+        exitCode,
         stdout: (stdout ?? "").slice(0, 4096),
         stderr: (stderr ?? "").slice(0, 4096),
       });
@@ -54,7 +56,8 @@ function runShell(cmd: string, args: string[], cwd: string, timeoutMs: number): 
 function readPkgScripts(productDir: string): Record<string, string> {
   try {
     const raw = readFileSync(join(productDir, "package.json"), "utf-8");
-    return JSON.parse(raw).scripts ?? {};
+    const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
+    return pkg.scripts ?? {};
   } catch {
     return {};
   }

@@ -28,8 +28,8 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
         ? getArtifacts()
         : await listPersistedArtifacts(companyId);
       const taskArtifacts = task.artifactIds
-        .map((id: string) => allArtifacts.find((a: any) => a.id === id))
-        .filter(Boolean);
+        .map((id: string) => allArtifacts.find((a) => a.id === id))
+        .filter((a): a is NonNullable<typeof a> => Boolean(a));
       const outputParts = [
         `Task: ${task.title}`,
         `Role: ${task.assignedRole}`,
@@ -38,7 +38,7 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
         task.executorState?.results?.filter((r: string) => r.startsWith("edited:")).length > 0
           ? `Files edited: ${task.executorState.results.filter((r: string) => r.replace("edited:", "")).join(", ")}`
           : null,
-        ...taskArtifacts.map((a: any) => `\n--- Artifact: ${a.title} ---\n${a.content.slice(0, 2000)}`),
+        ...taskArtifacts.map((a) => `\n--- Artifact: ${a.title} ---\n${a.content.slice(0, 2000)}`),
       ].filter(Boolean);
 
       await hippocampus.processTaskCompletion({

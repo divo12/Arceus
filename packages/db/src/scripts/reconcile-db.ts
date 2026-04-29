@@ -362,7 +362,8 @@ try {
       }
     });
     const rows = await sql`SELECT count(*)::int FROM drizzle.__drizzle_migrations`;
-    console.log(`[reconcile] journal now has ${rows[0].count} entries (expected ${entries.length})`);
+    const count = (rows[0] as { count?: number } | undefined)?.count ?? 0;
+    console.log(`[reconcile] journal now has ${count} entries (expected ${entries.length})`);
   });
 
   console.log("[reconcile] DONE");

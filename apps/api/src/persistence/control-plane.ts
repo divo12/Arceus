@@ -890,7 +890,7 @@ export function cpRunBuildCheck(productDir: string): typeof lastBuildCheck {
     // Prefer `npm run build` if it exists, otherwise `npx tsc --noEmit`
     let cmd = "npx tsc --noEmit";
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { scripts?: Record<string, string> };
       if (pkg.scripts?.build) cmd = "npm run build";
     } catch { /* use default */ }
 

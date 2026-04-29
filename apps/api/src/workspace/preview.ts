@@ -280,7 +280,7 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
         devDependencies?: Record<string, string>;
       };
       try {
-        parsed = JSON.parse(raw);
+        parsed = JSON.parse(raw) as typeof parsed;
       } catch {
         // Malformed package.json (e.g. developer wrote comments) — skip this candidate
         continue;
@@ -633,7 +633,7 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
   previewProcess.on("exit", (code) => {
     if (previewState.status !== "ready") {
       previewState.status = "error";
-      previewState.lastError = `Preview process exited with code ${code}`;
+      previewState.lastError = `Preview process exited with code ${code ?? "null"}`;
     }
   });
 

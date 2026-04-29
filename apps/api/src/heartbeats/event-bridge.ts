@@ -2,6 +2,40 @@
 import type { AgentIdentity, PolicyEvalContext } from "@arceus/contracts";
 import { buildTrustEvent, evaluatePolicy, BASE_POLICY_RULES, ROLE_CAPABILITIES } from "@arceus/company-runtime";
 import { nowIso } from "@arceus/task-engine";
+
+/**
+ * Audit C12 — typed shapes for OpenCode SSE events. Previously this
+ * file received `Record<string, any>` and lit up ~45 no-unsafe-* lints
+ * for every property access. The shapes below mirror what OpenCode's
+ * `/event` stream actually sends; everything is optional because
+ * OpenCode evolves its payload and the bridge defends with `??`
+ * fallbacks rather than crashing.
+ */
+interface OpenCodePart {
+  type: string;
+  // Text-part shapes
+  text?: string;
+  content?: string;
+  delta?: string;
+  // Tool-part shapes (older + newer forms coexist in the wire format)
+  toolInvocation?: { toolName?: string; args?: Record<string, unknown> };
+  tool?: string;
+  name?: string;
+  state?: { status?: string; input?: Record<string, unknown> };
+  sessionID?: string;
+}
+
+interface OpenCodeEventProperties {
+  sessionID?: string;
+  info?: { sessionID?: string };
+  part?: OpenCodePart;
+  error?: { message?: string; data?: { message?: string } };
+}
+
+interface OpenCodeEvent {
+  type: string;
+  properties?: OpenCodeEventProperties;
+}
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
@@ -54,7 +88,10 @@ export async function startEventBridge(): Promise<void> {
     // Mark started ONLY after the handshake succeeds.
     setEventBridgeStarted(true);
 
-    const reader = response.body.getReader();
+    // Type the reader explicitly — fetch's getReader() returns a generic
+    // any-typed reader that lights up two no-unsafe-* lints. The wire is
+    // bytes; OpenCode emits NDJSON over UTF-8.
+    const reader: ReadableStreamDefaultReader<Uint8Array> = response.body.getReader();
     let buffer = "";
 
     while (true) {
@@ -84,7 +121,7 @@ export async function startEventBridge(): Promise<void> {
         }
         // processEvent is async; surface any rejection rather than swallowing
         // (was `void processEvent(...)` — F-289 / C3 sweep extra).
-        processEvent(parsed as { type: string; properties?: Record<string, any> }).catch((err: unknown) => {
+        processEvent(parsed as OpenCodeEvent).catch((err: unknown) => {
           emitEmployeeActivity("system", "error", `event-bridge processEvent failed: ${err instanceof Error ? err.message : String(err)}`);
         });
       }
@@ -132,7 +169,7 @@ function scheduleReconnect(): void {
 }
 
 /** Dispatch a single SSE event to the appropriate agent state / governance handler. */
-async function processEvent(event: { type: string; properties?: Record<string, any> }) {
+async function processEvent(event: OpenCodeEvent) {
   const props = event.properties;
   if (!props) return;
 
@@ -190,7 +227,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
 
     if (part.type === "tool-invocation" || part.type === "tool-result" || part.type === "tool") {
       const toolName: string = part.toolInvocation?.toolName ?? part.tool ?? part.name ?? "";
-      const args: Record<string, any> = part.toolInvocation?.args ?? part.state?.input ?? {};
+      const args: Record<string, unknown> = part.toolInvocation?.args ?? part.state?.input ?? {};
       const toolStatus: string = part.state?.status ?? "";
       const isInvocation = part.type === "tool-invocation";
 
@@ -270,12 +307,11 @@ async function processEvent(event: { type: string; properties?: Record<string, a
         : agentSessions.get(role)?.activeTaskId ?? null;
 
       if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {
-        const filePath = args.filePath || args.file_path || "unknown file";
-        // Estimate lines changed from tool args
-        const newContent = args.newString || args.new_str || args.content || args.patch || "";
-        const linesChanged = typeof newContent === "string" && newContent.length > 0
-          ? newContent.split("\n").length
-          : undefined;
+        // args is `Record<string, unknown>` — coerce to string with explicit fallbacks.
+        const asString = (v: unknown): string => typeof v === "string" ? v : "";
+        const filePath = asString(args.filePath) || asString(args.file_path) || "unknown file";
+        const newContent = asString(args.newString) || asString(args.new_str) || asString(args.content) || asString(args.patch);
+        const linesChanged = newContent.length > 0 ? newContent.split("\n").length : undefined;
         updateAgentSessionState(role, {
           fileEditCount: (agentSessions.get(role)?.fileEditCount ?? 0) + 1,
           lastEventSummary: `Edited ${filePath}`,
@@ -290,7 +326,7 @@ async function processEvent(event: { type: string; properties?: Record<string, a
           appendTaskResult(resolvedTaskId, `edited:${filePath}`);
         }
       } else if (isInvocation && toolName === "bash") {
-        const cmd = String(args.command || "").slice(0, 180);
+        const cmd = (typeof args.command === "string" ? args.command : "").slice(0, 180);
         updateAgentSessionState(role, {
           shellCommandCount: (agentSessions.get(role)?.shellCommandCount ?? 0) + 1,
           lastEventSummary: `$ ${cmd}`,

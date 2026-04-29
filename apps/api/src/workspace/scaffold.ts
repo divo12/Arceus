@@ -346,7 +346,10 @@ export async function scaffoldProductWorkspace(
     // Skip if workspace already has a functioning project
     const pkgPath = resolve(workspaceDir, "package.json");
     if (existsSync(pkgPath)) {
-      const existing = JSON.parse(await readFile(pkgPath, "utf-8"));
+      const existing = JSON.parse(await readFile(pkgPath, "utf-8")) as {
+        devDependencies?: Record<string, string>;
+        dependencies?: Record<string, string>;
+      };
       const hasTailwind = existing.devDependencies?.tailwindcss;
       const hasReact = existing.dependencies?.react;
       const hasTailwindConfig = existsSync(resolve(workspaceDir, "tailwind.config.js"))

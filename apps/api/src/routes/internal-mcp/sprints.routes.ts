@@ -33,7 +33,7 @@ const parseOrFail = <S extends ZodTypeAny>(schema: S, body: unknown, reply: Fast
     sendValidation(reply, parsed.error);
     return null;
   }
-  return parsed.data;
+  return parsed.data as z.output<S>;
 };
 
 const cacheAndSend = (

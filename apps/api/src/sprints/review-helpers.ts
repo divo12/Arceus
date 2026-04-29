@@ -177,7 +177,7 @@ export function parseQAReport(raw: string): QAReport | null {
   if (!jsonMatch) return null;
 
   try {
-    const parsed: RawQAReport = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonMatch[0]) as RawQAReport;
     // Minimal validation
     if (!parsed.verdict || !Array.isArray(parsed.tasks)) return null;
     const tasks = parsed.tasks as RawQATask[];

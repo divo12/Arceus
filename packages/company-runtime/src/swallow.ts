@@ -25,15 +25,19 @@ export interface SwallowContext {
 function emitErrorEvent(where: string, err: unknown, ctx: SwallowContext): void {
   const message = err instanceof Error ? err.message : String(err);
   const stack = err instanceof Error ? err.stack : undefined;
-  const event: ArceusEvent = {
-    event: "error",
+  // Build the error variant. `Extract` of a Zod-inferred discriminated
+  // union doesn't always narrow cleanly through the inferred shape, so
+  // we widen via the union itself — the explicit `event: "error"`
+  // discriminator picks the right schema branch at the sink.
+  const errorEvent = {
+    event: "error" as const,
     where,
     message: ctx.detail ? `${message} | ctx=${JSON.stringify(ctx.detail)}` : message,
     ...(stack ? { stack } : {}),
     ...(ctx.beatId ? { beatId: ctx.beatId } : {}),
     ts: Date.now(),
-  };
-  observability.logEvent(event);
+  } satisfies Pick<Extract<ArceusEvent, { event: "error" }>, "event" | "where" | "message" | "ts">;
+  observability.logEvent(errorEvent);
 }
 
 /**

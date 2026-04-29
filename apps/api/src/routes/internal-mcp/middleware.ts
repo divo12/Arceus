@@ -309,7 +309,7 @@ export const mcpCapturePayloadCause = async (
   const mcp = req.mcp;
   if (!mcp || reply.statusCode < 400) return payload;
   try {
-    const obj = typeof payload === "string" ? JSON.parse(payload) : payload;
+    const obj: unknown = typeof payload === "string" ? JSON.parse(payload) : payload;
     const err = (obj as { error?: { cause?: string; stopWhen?: string; details?: Record<string, unknown> } } | null)?.error;
     if (err?.cause) mcp.failureCause = err.cause;
     if (err?.stopWhen) mcp.failureStopWhen = err.stopWhen;

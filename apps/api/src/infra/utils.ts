@@ -5,7 +5,7 @@
 import { uniqueStrings } from "@arceus/task-engine";
 
 /** Sanitize tool arguments for audit logging — scrub potential secrets. */
-export function sanitizeToolArgs(args: Record<string, any>): Record<string, unknown> {
+export function sanitizeToolArgs(args: Record<string, unknown>): Record<string, unknown> {
   const SECRET_KEYS = /key|secret|token|password|auth|credential|api.?key/i;
   const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args)) {

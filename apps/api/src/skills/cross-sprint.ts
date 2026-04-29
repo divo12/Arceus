@@ -67,7 +67,7 @@ export async function runCrossSprintTransfer(
         { companyId, detail: { mutationId: mutation.id, clusterId: candidate.clusterId } },
       );
     } catch (err) {
-      console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -94,7 +94,7 @@ export async function runPatternPromotionSweep(companyId: string): Promise<{
         detail: { mutationId: mutation.id, clusterId: candidate.clusterId },
       });
     } catch (err) {
-      console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return { candidatesFound: candidates.length, mutationsProposed };

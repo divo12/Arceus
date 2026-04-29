@@ -290,7 +290,7 @@ function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
   if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
-  const reviewState = (sprint as any).reviewState;
+  const reviewState = sprint.reviewState;
   if (!reviewState) return { status: "ok", detail: "No review state" };
 
   if (reviewState.phase === "tester_verification") {
@@ -321,7 +321,7 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
   if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
-  const reviewState = (sprint as any).reviewState;
+  const reviewState = sprint.reviewState;
   if (reviewState?.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
 
   const bugTaskIds: string[] = reviewState.bugTaskIds ?? [];
@@ -380,10 +380,10 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
   if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
-  const reviewState = (sprint as any).reviewState;
+  const reviewState = sprint.reviewState;
   if (!reviewState) return { status: "ok", detail: "No review state" };
 
-  if (reviewState.escalatedToCto === true && reviewState.ctoDecision === null) {
+  if (reviewState.escalatedToCto && reviewState.ctoDecision === null) {
     // Safety valve — if escalation has been pending for too long without a
     // decision, force-complete rather than looping the CTO indefinitely.
     const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
@@ -408,7 +408,7 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   // happens when the developer beat has no dispatchable handler for build
   // errors during review, or the rework cycle fails to advance.
   if (
-    reviewState.escalatedToCto === true &&
+    reviewState.escalatedToCto &&
     reviewState.ctoDecision === "fix" &&
     ["tester_verification", "rework"].includes(reviewState.phase)
   ) {

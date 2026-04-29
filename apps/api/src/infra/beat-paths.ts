@@ -22,7 +22,10 @@ export const productWorkspaceSkillsSymlink = (): string =>
 
 export async function swapSkillsSymlink(targetDir: string): Promise<void> {
   const link = productWorkspaceSkillsSymlink();
-  try { await fs.unlink(link); } catch (e: any) { if (e.code !== "ENOENT") throw e; }
+  try { await fs.unlink(link); } catch (e: unknown) {
+    const code = (e as { code?: string }).code;
+    if (code !== "ENOENT") throw e;
+  }
   await fs.mkdir(path.dirname(link), { recursive: true });
   await fs.symlink(targetDir, link);
 }

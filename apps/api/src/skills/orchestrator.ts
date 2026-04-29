@@ -469,7 +469,7 @@ async function runRollbackShortCircuit(job: SkillEvolveJob): Promise<PipelineRes
   } catch (err) {
     return {
       status: "skipped",
-      reason: `git show failed for ${fromTag}: ${err instanceof Error ? err.message : err}`,
+      reason: `git show failed for ${fromTag}: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 

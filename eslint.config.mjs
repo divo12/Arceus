@@ -33,6 +33,7 @@ export default tseslint.config(
       // Test files have different swallow / type semantics.
       "**/*.test.ts",
       "**/*.e2e-test.ts",
+      ".opencode/test/**",
       // The helper itself defines the patterns being banned elsewhere.
       "apps/api/src/observability/swallow.ts",
       // Config / build / one-off CLI files outside any tsconfig project.

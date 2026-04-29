@@ -136,7 +136,7 @@ export async function llmHabitMatcher(
   taskDescription: string,
   habits: { id: string; trigger: string; action: string }[],
 ): Promise<string[]> {
-  const userPrompt = buildHabitMatcherUserPrompt(taskDescription, habits as any);
+  const userPrompt = buildHabitMatcherUserPrompt(taskDescription, habits as Parameters<typeof buildHabitMatcherUserPrompt>[1]);
   const result = await structuredCompletion(
     "workerDeployment",
     [

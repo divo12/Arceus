@@ -613,7 +613,7 @@ export class HeartbeatEngine {
           // No task but checklist says action_needed — dispatch to role-specific handler
           deps.audit.auditAgent(
             request.companyId, request.role,
-            "beat_checklist_action", `Checklist action: ${checklist.primaryAction.suggestedAction}`,
+            "beat_checklist_action", `Checklist action: ${checklist.primaryAction.suggestedAction ?? "(none)"}`,
             { beatId, detail: { action: checklist.primaryAction } }
           );
 

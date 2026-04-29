@@ -117,7 +117,7 @@ export class HippocampusService implements HippocampusGateway {
         console.log(`[Hippocampus] LLM habit match: ${habits.length}/${allHabits.length} habits relevant`);
       } catch (err) {
         // Fallback to naive token matching if LLM fails
-        console.warn(`[Hippocampus] LLM habit match failed, falling back to token match: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] LLM habit match failed, falling back to token match: ${err instanceof Error ? err.message : String(err)}`);
         habits = await this.proceduralStore.findMatching(agentId, taskDescription);
       }
     } else {
@@ -212,7 +212,7 @@ export class HippocampusService implements HippocampusGateway {
     try {
       facts = await this.extractFacts!(input.output, input.taskTitle ?? input.taskId, input.role ?? "unknown");
     } catch (err) {
-      console.warn(`[Hippocampus] LLM extraction failed, falling back to raw: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[Hippocampus] LLM extraction failed, falling back to raw: ${err instanceof Error ? err.message : String(err)}`);
       await this.processRawDump(input);
       return;
     }
@@ -272,7 +272,7 @@ export class HippocampusService implements HippocampusGateway {
             break;
         }
       } catch (err) {
-        console.warn(`[Hippocampus] Habit action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] Habit action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
         // Fall through to ADD
       }
     }
@@ -321,7 +321,7 @@ export class HippocampusService implements HippocampusGateway {
         decision = await this.decideAction(fact.content, similar);
       } catch (err) {
         // Action decision failed — default to ADD (spec: worst case is slight duplication, GC cleans up)
-        console.warn(`[Hippocampus] Action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] Action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -493,7 +493,7 @@ export class HippocampusService implements HippocampusGateway {
         }
         // ADD falls through
       } catch (err) {
-        console.warn(`[Hippocampus] Action decision failed in addMemory, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] Action decision failed in addMemory, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -578,7 +578,7 @@ export class HippocampusService implements HippocampusGateway {
             continue;
           }
         } catch (err) {
-          console.warn(`[Hippocampus] Action decision failed for storeMemories, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+          console.warn(`[Hippocampus] Action decision failed for storeMemories, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 

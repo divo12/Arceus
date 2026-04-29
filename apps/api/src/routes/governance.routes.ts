@@ -45,7 +45,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     if (!body.kind || !body.reason) return { error: "kind and reason are required" };
     const event = buildTrustEvent(
       agentId,
-      body.kind as any,
+      body.kind as Parameters<typeof buildTrustEvent>[1],
       `Manual: ${body.reason}`,
       new Date().toISOString(),
       body.delta,
@@ -159,7 +159,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     const companyId = getActiveCompanyId() ?? "";
     const decision = await canProposeMutation({
       proposerAgentId: body.proposerAgentId,
-      proposerRole: body.proposerRole as any,
+      proposerRole: body.proposerRole as Parameters<typeof canProposeMutation>[0]["proposerRole"],
       targetSkillRole: body.targetSkillRole,
       companyId,
       sprintId: body.sprintId ?? null,

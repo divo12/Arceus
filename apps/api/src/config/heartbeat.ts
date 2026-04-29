@@ -4,10 +4,26 @@
  */
 import type { AgentIdentity } from "@arceus/contracts";
 import { readOptionalEnv, readNumberEnv, readListEnv } from "./env";
-import { createRequire } from "node:module";
+import defaultsRaw from "./heartbeat.json" with { type: "json" };
 
-const require = createRequire(import.meta.url);
-const defaults = require("./heartbeat.json");
+// `resolveJsonModule` + import-attributes give us a typed defaults object
+// in place of the legacy `createRequire("./heartbeat.json")` which
+// returned `any` and lit up ~35 no-unsafe-member-access errors. The
+// shape is fixed by the JSON file at build time.
+interface HeartbeatDefaults {
+  executionMode: "orchestrator" | "heartbeat";
+  schedulerIntervalMs: number;
+  maxConcurrentBeats: number;
+  roleIntervals: Record<AgentIdentity["role"], number>;
+  beatTimeoutMs: number;
+  beatTokenBudget: number;
+  beatCostCeilingCents: number;
+  idleThresholdTokens: number;
+  pauseWhenNoActiveSprint: boolean;
+  pauseWhenBudgetExhausted: boolean;
+  pauseRoles: AgentIdentity["role"][];
+}
+const defaults = defaultsRaw as HeartbeatDefaults;
 
 export const heartbeatConfig = {
   /** Execution mode: "orchestrator" (legacy loop) | "heartbeat" (spec 12). */

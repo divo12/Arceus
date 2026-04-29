@@ -500,7 +500,7 @@ async function executeSkillsLeadAction(
             detail: { mutationId: mutation.id, candidateClusterId: candidate.clusterId },
           });
         } catch (err) {
-          console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : err}`);
+          console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       return { summary: `Proposed ${proposed} emergent skills, ${refused} refused by governance`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: proposed, toolCalls: proposed + refused };

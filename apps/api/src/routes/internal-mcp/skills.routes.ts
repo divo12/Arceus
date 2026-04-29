@@ -447,7 +447,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
         sourceMutationId: null,
         mutationReason: null,
         resources: [],
-      } as any);
+      } as unknown as Parameters<typeof registerSkillInMemory>[0]);
     } catch {
       // non-fatal — DB is authoritative
     }
@@ -480,7 +480,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     const mcp = req.mcp!;
     const db = getDb();
     const [artifact] = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
-    if (!artifact || artifact.companyId !== mcp.companyId) {
+    if (artifact?.companyId !== mcp.companyId) {
       return reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }
@@ -551,7 +551,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     const mcp = req.mcp!;
     const db = getDb();
     const [artifact] = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
-    if (!artifact || artifact.companyId !== mcp.companyId) {
+    if (artifact?.companyId !== mcp.companyId) {
       return reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }

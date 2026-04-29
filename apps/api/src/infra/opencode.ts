@@ -25,8 +25,17 @@ function ensureLongFetchTimeouts() {
       keepAliveMaxTimeout: 10 * 60_000,
     }),
   );
-  // Best effort cleanup on shutdown.
-  process.once("beforeExit", () => { try { (existing as any).close?.(); } catch {} });
+  // Best effort cleanup on shutdown. The existing dispatcher is typed as
+  // `unknown` from undici's symbol indexing — narrow to a `close`-having
+  // object before calling.
+  process.once("beforeExit", () => {
+    try {
+      const closeable = existing as { close?: () => void };
+      closeable.close?.();
+    } catch {
+      // silent: process is exiting, no observer left to log to.
+    }
+  });
 }
 import { ensureDeployment, runtimeConfig } from "../config/index.js";
 import { serverConfig } from "../config/index.js";
@@ -84,7 +93,7 @@ function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, 
   const configPath = resolve(projectRoot, "opencode.json");
   try {
     const raw = readFileSync(configPath, "utf8");
-    const base = JSON.parse(raw);
+    const base = JSON.parse(raw) as Record<string, unknown>;
     return { ...base, ...overrides };
   } catch {
     // If opencode.json is missing, pass overrides only (OpenCode falls back to defaults)
@@ -334,7 +343,7 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
 
     proc.on("exit", (code) => {
       clearTimeout(timeout);
-      reject(new Error(`OpenCode server exited with code ${code}\n${output}`));
+      reject(new Error(`OpenCode server exited with code ${code ?? "null"}\n${output}`));
     });
 
     proc.on("error", (error) => {

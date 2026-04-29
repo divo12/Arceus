@@ -144,7 +144,7 @@ const beatDeps: BeatDependencies = {
     cpLoadAgentContext(agentId, beatId, beatNumber, trigger, config),
   getSnapshotVersion: () => cpGetSnapshotVersion(),
   applyMutations: async (companyId, mutations, causation, expectedVersion) =>
-    cpApplyMutations(companyId, mutations as any, causation, expectedVersion),
+    cpApplyMutations(companyId, mutations as Parameters<typeof cpApplyMutations>[1], causation, expectedVersion),
   commitBeatRecord: (record) => cpCommitBeatRecord(record),
   flushStore: () => flush(),
   audit: {
@@ -244,8 +244,12 @@ const meetingPipeline = new MeetingPipeline({
 
         const output = await runPromptText(agent.role, session.sessionId, soul.systemPrompt, prompt);
         const jsonMatch = /\{[\s\S]*\}/.exec(output);
-        const contribution = jsonMatch
-          ? JSON.parse(jsonMatch[0])
+        // The agent emits a JSON contribution; fall back to a default
+        // shape if no JSON object is found. Cast at the boundary so
+        // updateMeeting's Contribution type is satisfied without `any`.
+        interface Contribution { whatIDid: string; whatImDoing: string; blockers: string; learnings: string; questionsForTeam: string }
+        const contribution: Contribution = jsonMatch
+          ? (JSON.parse(jsonMatch[0]) as Contribution)
           : { whatIDid: output, whatImDoing: "", blockers: "", learnings: "", questionsForTeam: "" };
 
         await updateMeeting(meeting.id, (m) => ({
@@ -264,7 +268,7 @@ const meetingPipeline = new MeetingPipeline({
         await flush();
         console.log(`[MEETING] ${meeting.id} contribution received from ${agent.role}`);
       } catch (err) {
-        console.warn(`[MEETING] Failed to collect contribution from ${agent.role}: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[MEETING] Failed to collect contribution from ${agent.role}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -361,7 +365,7 @@ const meetingPipeline = new MeetingPipeline({
       try {
         totalStored += await hippocampus.storeMemories(memories);
       } catch (err) {
-        console.warn(`[MEETING-MEMORY] Failed to store memories: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[MEETING-MEMORY] Failed to store memories: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -437,7 +441,10 @@ onBeatEvent((event) => {
   // Skip non-lifecycle events (board_message, etc.) — they aren't real beats
   if (!BEAT_LIFECYCLE_TYPES.has(event.type)) return;
   const type = event.type as "beat_started" | "beat_completed" | "beat_failed" | "beat_idle";
-  emitEmployeeActivity(event.role, type, `${shortBeat(event.beatId)}: ${event.data?.summary || event.type}`, {
+  // event.data is a discriminated union; the summary may be missing on
+  // some variants. Use a typed accessor instead of `||` over an unknown.
+  const summary = (event.data as { summary?: string } | undefined)?.summary ?? event.type;
+  emitEmployeeActivity(event.role, type, `${shortBeat(event.beatId)}: ${summary}`, {
     beatId: event.beatId,
     detail: event.data ?? null,
   });

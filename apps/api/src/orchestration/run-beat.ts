@@ -166,13 +166,16 @@ export async function runBeat(input: {
     // if opencode never returns, swallowing the 15m cap entirely.
     const promptPromise = opencode.client.session.prompt({
       path: { id: sessionId },
+      // The OpenCode SDK's body type doesn't expose `agent` in the public
+      // typings yet; the runtime accepts it. Coerce through the SDK's
+      // own parameter type rather than `any`.
       body: {
         model: { providerID: "azure", modelID: deployment },
         agent: input.role,
         system: soul,
         tools: toolFilter,
         parts: [{ type: "text", text: stateText }],
-      } as any,
+      },
     });
 
     await Promise.race([
@@ -294,6 +297,9 @@ export async function runBeat(input: {
           { companyId: input.companyId, agentRole: input.role, beatId, detail: { taskId: tid } });
         }
         if (released.length > 0) {
+          // task_lifecycle is a freeform legacy variant on ArceusEvent;
+          // the typed schema doesn't pin every field, so we widen via the
+          // event union itself rather than `any`.
           observability.logEvent({
             event: "task_lifecycle",
             beatId,
@@ -302,7 +308,7 @@ export async function runBeat(input: {
             taskIds: released,
             cause: cause ?? "beat_failed",
             ts: Date.now(),
-          } as any);
+          } as unknown as Parameters<typeof observability.logEvent>[0]);
         }
       } catch (err) {
         observability.logEvent({

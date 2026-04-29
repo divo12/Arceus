@@ -54,7 +54,7 @@ async function runTriggerSweeps(): Promise<void> {
         console.log(`[SkillScheduler] cron sweep → enqueued=${r.enqueued} skipped=${r.skipped}`);
         lastCronYmd = ymd;
       } catch (err) {
-        console.warn(`[SkillScheduler] cron sweep failed: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[SkillScheduler] cron sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -68,7 +68,7 @@ async function runTriggerSweeps(): Promise<void> {
           console.log(`[SkillScheduler] rollback monitor → proposed=${r.proposed} skipped=${r.skipped} protected=${r.protected}`);
         }
       } catch (err) {
-        console.warn(`[SkillScheduler] rollback monitor failed: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[SkillScheduler] rollback monitor failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -87,7 +87,7 @@ async function processOnce(): Promise<void> {
   try {
     job = await leaseOne(db, workerId, 3);
   } catch (err) {
-    console.warn(`[SkillScheduler] leaseOne failed: ${err instanceof Error ? err.message : err}`);
+    console.warn(`[SkillScheduler] leaseOne failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
   if (!job) return;
@@ -115,8 +115,8 @@ async function processOnce(): Promise<void> {
     emitEmployeeActivity(
       "skills_lead",
       severity,
-      `Evolution job ${result.status}: ${job.id}${result.status === "rejected" && (result as any).reason ? ` — ${(result as any).reason}` : ""}`,
-      { detail: { jobId: job.id, status: result.status, audit: (result as any).audit, taskId: (result as any).taskId } },
+      `Evolution job ${result.status}: ${job.id}${result.status === "rejected" && result.reason ? ` — ${result.reason}` : ""}`,
+      { detail: { jobId: job.id, status: result.status, audit: result.audit, taskId: result.taskId } },
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -28,7 +28,7 @@ export default async function controlPlaneRoutes(app: FastifyInstance) {
         mutations: z.array(z.record(z.string(), z.unknown())),
         causation: z.object({ eventId: z.string().optional(), summary: z.string().optional() }).optional(),
       }).parse(request.body);
-      return cpApplyMutations(body.companyId, body.mutations as any, body.causation);
+      return cpApplyMutations(body.companyId, body.mutations as Parameters<typeof cpApplyMutations>[1], body.causation);
     } catch (error) {
       reply.code(400);
       return sanitizeError(error, "Invalid mutation payload.", {
