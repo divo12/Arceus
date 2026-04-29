@@ -109,7 +109,29 @@ export const productDir = existsSync(resolve(workspaceRoot, "workspace")) || !pr
 
 // ─── Mutable state ────────────────────────────────────────────────
 export const agentSessions = new Map<string, AgentSessionState>();
+
+/**
+ * Audit C9 (F-045) — in-memory ring of recent artifacts.
+ *
+ * Durable storage is `addArtifactSync` → canonical `artifacts` table.
+ * This array is the hot-path read cache used by route handlers and
+ * beat tooling that need synchronous access (`getArtifacts()`).
+ *
+ * Capped at MAX_RECENT_ARTIFACTS to prevent unbounded growth on a
+ * long-running deployment — every cold read for a missed entry can
+ * fall through to the canonical store via `listPersistedArtifacts`
+ * (already wired in `hippocampus.routes.ts` for that exact purpose).
+ */
+export const MAX_RECENT_ARTIFACTS = 500;
 export const artifacts: Artifact[] = [];
+
+/** Capped push. Drops the oldest artifact when over MAX_RECENT_ARTIFACTS. */
+export function pushArtifact(artifact: Artifact): void {
+  artifacts.push(artifact);
+  if (artifacts.length > MAX_RECENT_ARTIFACTS) {
+    artifacts.splice(0, artifacts.length - MAX_RECENT_ARTIFACTS);
+  }
+}
 export let executionStatus: ExecutionStatus = "idle";
 export let eventBridgeStarted = false;
 export const pendingPromptCompletions = new Map<string, { resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>();
@@ -186,18 +208,31 @@ export function getActiveExecution() { return activeExecution; }
  * 7.A.2 routes them through `activity_log` once that decision lands
  * (the canonical schema already exists). Until then this is the
  * single owner of both append + read.
+ *
+ * Audit C9: ring-buffered to prevent unbounded growth. The route
+ * handlers `/api/transitions` + `/api/feedback-rounds` return the
+ * trailing window — older entries flow into `activity_log` when that
+ * pipeline lands.
  */
+const MAX_TRANSITIONS_LOG = 500;
+const MAX_FEEDBACK_ROUNDS_LOG = 500;
 const transitionsLog: Transition[] = [];
 const feedbackRoundsLog: FeedbackRound[] = [];
 
-/** Append a state transition to the in-memory log. */
+/** Append a state transition to the in-memory log (capped). */
 export function recordTransition(transition: Transition): void {
   transitionsLog.push(transition);
+  if (transitionsLog.length > MAX_TRANSITIONS_LOG) {
+    transitionsLog.splice(0, transitionsLog.length - MAX_TRANSITIONS_LOG);
+  }
 }
 
-/** Append a feedback round to the in-memory log. */
+/** Append a feedback round to the in-memory log (capped). */
 export function recordFeedbackRound(round: FeedbackRound): void {
   feedbackRoundsLog.push(round);
+  if (feedbackRoundsLog.length > MAX_FEEDBACK_ROUNDS_LOG) {
+    feedbackRoundsLog.splice(0, feedbackRoundsLog.length - MAX_FEEDBACK_ROUNDS_LOG);
+  }
 }
 
 /** Get task state transitions (read-only view of the log). */

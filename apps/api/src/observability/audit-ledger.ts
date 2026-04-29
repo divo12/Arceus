@@ -56,7 +56,19 @@ function broadcast(event: AuditEvent) {
 
 // ── Flush queue → observability sink ───────────────────────
 
+/**
+ * Audit C9 (F-391/F-392) — bounded queue with drop-oldest backpressure.
+ *
+ * The flush timer drains `pendingFlush` in batches of
+ * `auditConfig.dbFlushBatchSize` per `auditConfig.dbFlushIntervalMs`.
+ * If audits arrive faster than the timer can drain (slow sink, paused
+ * flush, or audit storm during a sprint failure), we cap the queue at
+ * MAX_PENDING_FLUSH and drop oldest with a counter so backpressure is
+ * visible at `/api/audit/status` instead of growing the heap silently.
+ */
+const MAX_PENDING_FLUSH = 10_000;
 const pendingFlush: AuditEvent[] = [];
+let pendingFlushDropped = 0;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -149,7 +161,12 @@ export function audit(input: AuditAppendInput): AuditEvent {
   }
   buffer.push(event);
 
-  // Queue for DB
+  // Queue for DB (capped — drops oldest with a counter so /api/audit/status
+  // reflects the dropped events instead of the heap growing unbounded).
+  if (pendingFlush.length >= MAX_PENDING_FLUSH) {
+    pendingFlush.shift();
+    pendingFlushDropped++;
+  }
   pendingFlush.push(event);
 
   // Broadcast to SSE viewers
@@ -271,6 +288,8 @@ export function getAuditStats() {
     bufferSize: buffer.length,
     bufferCapacity: maxBuffer,
     pendingFlush: pendingFlush.length,
+    pendingFlushCapacity: MAX_PENDING_FLUSH,
+    pendingFlushDropped,
     sseSubscribers: subscribers.size,
     sequenceCounters: Object.fromEntries(sequenceCounters),
   };

@@ -28,7 +28,7 @@ import {
 import { applyGovernanceToMutation } from "../skills/governance.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { triggerEscalationMeeting } from "../orchestration/reactive.js";
-import { artifacts, productDir, type Artifact } from "../orchestration/state.js";
+import { artifacts, pushArtifact, productDir, type Artifact } from "../orchestration/state.js";
 import { hippocampus } from "../memory/extractors.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ export function addArtifact(agent: string, kind: Artifact["kind"], title: string
     content,
     createdAt: new Date().toISOString(),
   };
-  artifacts.push(artifact);
+  pushArtifact(artifact);
   // Spec 31 Phase 7.C.c — companyId via the seam helper. addArtifact stays
   // sync because callers from inside synchronous paths (workflow renderers,
   // beat tooling) rely on the immediate in-memory append. The persist call
