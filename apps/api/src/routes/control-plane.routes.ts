@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } from "../persistence/control-plane.js";
+import { sanitizeError } from "../observability/sanitize.js";
 
 export default async function controlPlaneRoutes(app: FastifyInstance) {
   app.get("/api/control-plane/status", async () => {
@@ -30,7 +31,10 @@ export default async function controlPlaneRoutes(app: FastifyInstance) {
       return cpApplyMutations(body.companyId, body.mutations as any, body.causation);
     } catch (error) {
       reply.code(400);
-      return { error: error instanceof Error ? error.message : "Invalid mutation payload" };
+      return sanitizeError(error, "Invalid mutation payload.", {
+        route: "POST /api/control-plane/mutations",
+        companyId: (request.body as { companyId?: string } | null)?.companyId,
+      });
     }
   });
 }

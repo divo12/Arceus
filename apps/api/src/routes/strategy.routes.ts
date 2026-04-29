@@ -11,6 +11,7 @@ import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitActivity } from "../observability/activity.js";
+import { sanitizeError } from "../observability/sanitize.js";
 import { strategyOutputSchema, generateStrategy } from "../agents/ceo.js";
 import { bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
@@ -34,9 +35,10 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
-      return {
-        error: error instanceof Error ? error.message : "Unknown strategy generation failure",
-      };
+      return sanitizeError(error, "Strategy generation failed.", {
+        route: "POST /api/strategy",
+        companyId: getActiveCompanyId() ?? undefined,
+      });
     }
   });
 
@@ -56,9 +58,10 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
     } catch (error) {
       request.log?.error?.(error);
       reply.code(400);
-      return {
-        error: error instanceof Error ? error.message : "Invalid strategy payload",
-      };
+      return sanitizeError(error, "Strategy payload rejected.", {
+        route: "POST /api/strategy/approve",
+        companyId: getActiveCompanyId() ?? undefined,
+      });
     }
   });
 
@@ -80,9 +83,10 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
     } catch (error) {
       request.log?.error?.(error);
       reply.code(400);
-      return {
-        error: error instanceof Error ? error.message : "Invalid strategy payload",
-      };
+      return sanitizeError(error, "Strategy payload rejected.", {
+        route: "POST /api/strategy/execute",
+        companyId: getActiveCompanyId() ?? undefined,
+      });
     }
   });
 
@@ -128,9 +132,10 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       request.log?.error?.(error);
       emitActivity("system", "error", `Quick-execute failed: ${error instanceof Error ? error.message : "Unknown error"}`);
       reply.code(400);
-      return {
-        error: error instanceof Error ? error.message : "Quick execute failed.",
-      };
+      return sanitizeError(error, "Quick execute failed.", {
+        route: "POST /api/quick-execute",
+        companyId: getActiveCompanyId() ?? undefined,
+      });
     }
   });
 }

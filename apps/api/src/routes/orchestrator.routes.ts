@@ -10,6 +10,7 @@ import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orches
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { approveBoardReview } from "../orchestration/execution-cycle.js";
 import { updateApproval } from "../persistence/mutations.js";
+import { sanitizeError } from "../observability/sanitize.js";
 import { heartbeatConfig } from "../config/heartbeat.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
@@ -64,9 +65,9 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     } catch (error) {
       request.log?.error?.(error);
       reply.code(400);
-      return {
-        error: error instanceof Error ? error.message : "Execution stop failed.",
-      };
+      return sanitizeError(error, "Execution stop failed.", {
+        route: "POST /api/orchestrator/stop",
+      });
     }
   });
 
@@ -76,9 +77,9 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     } catch (error) {
       request.log?.error?.(error);
       reply.code(400);
-      return {
-        error: error instanceof Error ? error.message : "Board review approval failed.",
-      };
+      return sanitizeError(error, "Board review approval failed.", {
+        route: "POST /api/board-review/approve",
+      });
     }
   });
 
@@ -101,7 +102,9 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
-      return { error: error instanceof Error ? error.message : "Approval resolution failed." };
+      return sanitizeError(error, "Approval resolution failed.", {
+        route: "POST /api/approvals/:id/resolve",
+      });
     }
   });
 

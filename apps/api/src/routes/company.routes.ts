@@ -12,6 +12,7 @@ import { bootstrapCompanyWithWorkspace } from "../orchestration/bootstrap.js";
 import { resetOrchestratorState } from "../orchestration/state.js";
 import { clearAllSessionContexts } from "../orchestration/session-context.js";
 import { audit } from "../observability/audit-ledger.js";
+import { sanitizeError } from "../observability/sanitize.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
@@ -101,9 +102,9 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
-      return {
-        error: error instanceof Error ? error.message : "Reset failed.",
-      };
+      return sanitizeError(error, "Company reset failed.", {
+        route: "DELETE /api/company",
+      });
     }
   });
 

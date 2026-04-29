@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { audit } from "../observability/audit-ledger.js";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "../agents/chat.js";
+import { sanitizeError } from "../observability/sanitize.js";
 
 const chatSchema = z.object({
   message: z.string().min(1),
@@ -21,9 +22,10 @@ export default async function chatRoutes(app: FastifyInstance) {
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
-      return {
-        error: error instanceof Error ? error.message : "Unknown CEO chat failure",
-      };
+      return sanitizeError(error, "CEO chat failed.", {
+        route: "POST /api/chat/ceo",
+        companyId: getActiveCompanyId() ?? undefined,
+      });
     }
   });
 
@@ -36,9 +38,10 @@ export default async function chatRoutes(app: FastifyInstance) {
       request.log?.error?.(error);
       if (!reply.raw.headersSent && !reply.sent) {
         reply.code(500);
-        return {
-          error: error instanceof Error ? error.message : "Unknown CEO stream failure",
-        };
+        return sanitizeError(error, "CEO stream failed.", {
+          route: "GET /api/chat/ceo/stream",
+          companyId: getActiveCompanyId() ?? undefined,
+        });
       }
       try { reply.raw.end(); } catch { /* already ended */ }
       return reply;
