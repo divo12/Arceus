@@ -10,6 +10,18 @@ export function getBaseUrl(): string {
   return BASE_URL;
 }
 
+/**
+ * Audit C4: TUI is a Node process, so it reads the admin token from
+ * the environment and attaches it on every call. The API gate is
+ * no-op in dev unless `ARCEUS_REQUIRE_AUTH=1`, so forgetting to set
+ * the env var locally still works.
+ */
+function getAdminToken(): string {
+  return process.env.ARCEUS_ADMIN_TOKEN
+    ?? process.env.ARCEUS_TOKEN
+    ?? "arceus-dev-token";
+}
+
 export async function api<T = unknown>(
   path: string,
   opts: RequestInit = {},
@@ -19,6 +31,7 @@ export async function api<T = unknown>(
     ...opts,
     headers: {
       "Content-Type": "application/json",
+      Authorization: `Bearer ${getAdminToken()}`,
       ...opts.headers,
     },
   });

@@ -79,6 +79,9 @@ import { warmUpOpencode } from "./infra/opencode.js";
 import { HeartbeatEngine, emitBeatEvent, onBeatEvent, MeetingScheduler, MeetingPipeline } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
 
+// Auth — Audit C4
+import { requireAdminAuth, shouldDisableDebugRoutes, isDebugPath } from "./auth/admin.js";
+
 // Route plugins
 import {
   healthRoutes,
@@ -441,8 +444,51 @@ onBeatEvent((event) => {
 });
 
 // ── CORS + Route plugin registration ───────────────────────
+//
+// Audit C4 (F-450): replace `origin: true` (echoes any origin) with an
+// explicit allow-list driven by ARCEUS_ALLOWED_ORIGINS. Without an
+// allow-list, browsers from arbitrary origins can read SSE streams /
+// agent activity even when the API itself is behind admin auth.
+const allowedOriginsRaw = process.env.ARCEUS_ALLOWED_ORIGINS
+  ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:3000,http://localhost:4000");
+const allowedOrigins = allowedOriginsRaw
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-await app.register(cors, { origin: true });
+await app.register(cors, {
+  origin: (origin, cb) => {
+    // No origin (curl, server-to-server, native Node clients) — allow.
+    // The admin auth gate is the second layer that catches mutations
+    // from these clients.
+    if (!origin) {
+      cb(null, true);
+      return;
+    }
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error(`CORS: origin '${origin}' not in ARCEUS_ALLOWED_ORIGINS`), false);
+  },
+  credentials: true,
+});
+
+// Audit C4 (F-428): in production, debug/seed/simulate/check paths
+// 404 unconditionally. Path-level filter (not plugin-level) so other
+// non-debug routes in the same file (e.g. read-only /api/hippocampus/
+// context, the rest of /api/governance/*) keep working in prod.
+app.addHook("preHandler", async (req, reply) => {
+  if (shouldDisableDebugRoutes() && isDebugPath(req.url)) {
+    await reply.code(404).send();
+  }
+});
+
+// Audit C4 (F-424): global preHandler that requires admin bearer token
+// on every mutating /api/* route. Internal MCP routes have their own
+// auth and are excluded by the helper. Dev mode (NODE_ENV !== "production")
+// is no-op unless ARCEUS_REQUIRE_AUTH=1 forces it on.
+app.addHook("preHandler", requireAdminAuth);
 
 const routeDeps = { heartbeatEngine, meetingScheduler };
 
@@ -462,9 +508,19 @@ await app.register(auditRoutes);
 await app.register(workspaceRoutes);
 await app.register(previewRoutes);
 await app.register(artifactsRoutes);
-await app.register(debugRoutes);
-await app.register(inspectorRoutes);
+
+// Audit C4 (F-428): debugRoutes is a pure debug plugin — entirely
+// dev-only. Other plugins (hippocampus, governance, skills) contain a
+// MIX of read-only and debug endpoints; those are filtered path-by-path
+// by the `isDebugPath` preHandler above so the non-debug routes keep
+// working in prod.
+if (!shouldDisableDebugRoutes()) {
+  await app.register(debugRoutes);
+} else {
+  console.log("[ARCEUS] Skipping pure-debug routes in production (NODE_ENV=production)");
+}
 await app.register(hippocampusRoutes);
+await app.register(inspectorRoutes);
 await app.register(skillsRoutes);
 await app.register(internalMcpRoutes);
 await app.register(internalTelemetryRoutes);
