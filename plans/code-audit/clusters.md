@@ -15,7 +15,7 @@
 
 | P | Cluster | Status | What breaks today | Scope |
 |---|---|---|---|---|
-| **P0** | [C1 · CAS disabled, silent lost writes](#c1--cas-disabled--silent-lost-writes) | 🔴 open | Concurrent beats, two-writers races, lost mutations | Persistence + task + meeting + trust |
+| **P0** | [C1 · CAS disabled, silent lost writes](#c1--cas-disabled--silent-lost-writes) | 🟡 partial | Concurrent beats, two-writers races, lost mutations | Persistence + task + meeting + trust |
 | **P0** | [C2 · Silent error swallowing](#c2--silent-error-swallowing) | 🟡 partial | State drifts from DB for minutes before detection | Persistence, heartbeats, audit, event-bridge |
 | **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | 🟡 partial | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
 | **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | 🟡 partial | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
@@ -123,7 +123,22 @@
 
 **Why it matters:** two heartbeats for the same task both flip to `in_progress`; two agents contributing to a meeting lose a write; review phase oscillates because handlers race. This is the single biggest class of bug in the codebase.
 
-**Fix pattern:** compound `UPDATE … WHERE version = ?` returning the new row (Paperclip's `issues.ts:1779-1851` is the reference). On miss → 409, never retry in place. Wrap dependent writes in the same transaction as the owning status flip.
+**Fix pattern (revised, see [Spec 33](../specs/33-cas-concurrency-protection.md)):** Paperclip uses **zero version columns**. Three primitives instead:
+
+- **Pattern A — `SELECT … FOR UPDATE` row lock** at the top of read-modify-write transactions
+- **Pattern B — `UPDATE … WHERE id = ? AND status = expectedFrom`** for status transitions (illegal prior state ⇒ zero rows ⇒ caller decides)
+- **Atomic SQL counters** — `SET col = col + 1` with no read-modify-write window
+
+The audit's original "use Paperclip's `issues.ts:1779-1851`" reference was a misread — that range is a child-issue lister, not a CAS site. Paperclip's actual pattern lives at `services/issues.ts:1202` (`syncBlockedByIssueIds`) and `:1329` (`clearExecutionRunIfTerminal`).
+
+**Status:**
+- ✅ **Phase 1** — task claim CAS — already shipped pre-audit (`packages/db/src/repos/tasks.ts:claimTask`).
+- ✅ **Phase 2** — Pattern A row locks across 7 repos (`tasks`, `sprints`, `meetings`, `meeting_schedules`, `approvals`, `companies`, `memory_summaries`); wired into all `update*` helpers in `apps/api/src/persistence/mutations.ts`. Closes F-104, F-256, F-215, F-216, F-345, F-346, F-277, F-359 lost-update gaps.
+- ✅ **Phase 3** — `meetingsRepo.transitionStatus` + `meeting-pipeline.ts` swap. 5 status flips now atomic with prior-state guard; completion flip keeps Phase 2 lock + inline assertion.
+- ✅ **Phase 4** — `meetingSchedulesRepo.incrementCounter` + `markSkipped` (atomic skip+timestamps); scheduler skip path swapped.
+- 🟡 **Open:** `proposals.ts approveSprintProposal` task-creation loop (F-350) and `lifecycle.ts finalizeSprintCompletion` (F-347) still need transaction-boundary review (these are multi-table, not single-row, so Pattern A doesn't directly apply).
+
+Tests: `packages/db/src/repos/locks.test.ts` — 10 concurrency tests (Pattern A serialization, Pattern B status guard, atomic counters), all passing against live Postgres.
 
 ---
 
