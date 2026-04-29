@@ -147,7 +147,14 @@ export async function scoreBeatVerdict(beatId: string): Promise<"pass" | "fail">
   }
 
   if (hadError) return finishScore("fail", "error");
-  if (realFailure && !productiveOk) return finishScore("fail", "real_failure");
+  // A real (non-benign) tool failure dominates the verdict. Previously we
+  // suppressed this when *any* productive event (e.g. task.updated emitted
+  // earlier in the beat) was present, which produced contradictory
+  // `verdict:"pass"` + `realFailure:true` records. Real failures should
+  // always score as a fail unless the agent explicitly closed out the
+  // task (task_complete / task_block) — those signal the failure was
+  // recovered.
+  if (realFailure && !completedOrBlocked) return finishScore("fail", "real_failure");
   // Claimed a task but never completed/blocked it — the task stays open and
   // downstream roles stall. This is the "create artifact, walk away" pattern.
   if (claimedOk && !completedOrBlocked) return finishScore("fail", "claimed_without_complete");

@@ -17,9 +17,9 @@ const cacheAndSend = (
   reply: FastifyReply,
   status: number,
   body: unknown,
-): void => {
+): FastifyReply => {
   cacheSuccessfulResponse(req, { status, body, locationHeader: null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 export default async function internalMcpExecutionRoutes(app: FastifyInstance): Promise<void> {
@@ -29,7 +29,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     const company = snapshot.company;
     const activeSprint = snapshot.sprints.find((s) => s.id === company.currentSprintId);
 
-    cacheAndSend(req, reply, 200, success("Execution status.", {
+    return cacheAndSend(req, reply, 200, success("Execution status.", {
       status: company.status,
       currentCycle: {
         sprintId: activeSprint?.id ?? null,
@@ -43,19 +43,19 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
   // POST /execution/complete-cycle — CEO marks current cycle done → planning next
   app.post(`${EXEC_BASE}/complete-cycle`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
-      reply.code(403).send(failure("Only CEO can complete execution cycles.", "governance", "never", "role_is_ceo"));
+      return reply.code(403).send(failure("Only CEO can complete execution cycles.", "governance", "never", "role_is_ceo"));
       return;
     }
 
     const snapshot = await buildSnapshotView(req.mcp.companyId);
     const sprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
     if (!sprint) {
-      reply.code(404).send(failure("No active sprint to complete.", "not_found", "never", "sprint_exists"));
+      return reply.code(404).send(failure("No active sprint to complete.", "not_found", "never", "sprint_exists"));
       return;
     }
 
     if (sprint.status !== "completed") {
-      reply.code(409).send(failure(
+      return reply.code(409).send(failure(
         `Sprint ${sprint.number} is "${sprint.status}" — finalize before completing cycle.`,
         "sprint_not_executing", "never", "sprint_finalized",
       ));
@@ -66,7 +66,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     await updateCompanyStatus(req.mcp.companyId, "active");
     const now = new Date().toISOString();
 
-    cacheAndSend(req, reply, 200, success(`Cycle complete. Ready for next sprint.`, {
+    return cacheAndSend(req, reply, 200, success(`Cycle complete. Ready for next sprint.`, {
       completedSprintId: sprint.id,
       completedSprintNumber: sprint.number,
       newStatus: "active",
@@ -77,7 +77,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
   // POST /execution/pause — CEO pauses execution for review
   app.post(`${EXEC_BASE}/pause`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
-      reply.code(403).send(failure("Only CEO can pause execution.", "governance", "never", "role_is_ceo"));
+      return reply.code(403).send(failure("Only CEO can pause execution.", "governance", "never", "role_is_ceo"));
       return;
     }
 
@@ -89,7 +89,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
 
     await updateCompanyStatus(req.mcp.companyId, "paused");
 
-    cacheAndSend(req, reply, 200, success("Execution paused.", {
+    return cacheAndSend(req, reply, 200, success("Execution paused.", {
       status: "paused",
       reason: reason ?? null,
       pausedAt: new Date().toISOString(),
@@ -99,7 +99,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
   // POST /execution/reconcile — CEO reconciles state after human review
   app.post(`${EXEC_BASE}/reconcile`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
-      reply.code(403).send(failure("Only CEO can reconcile.", "governance", "never", "role_is_ceo"));
+      return reply.code(403).send(failure("Only CEO can reconcile.", "governance", "never", "role_is_ceo"));
       return;
     }
 
@@ -109,7 +109,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     });
     const parsed = reconcileBody.safeParse(req.body);
     if (!parsed.success) {
-      reply.code(422).send(failure("Invalid reconcile body.", "validation", "never", "payload_fixed"));
+      return reply.code(422).send(failure("Invalid reconcile body.", "validation", "never", "payload_fixed"));
       return;
     }
 
@@ -118,7 +118,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     }
     const snapshot = await buildSnapshotView(req.mcp.companyId);
 
-    cacheAndSend(req, reply, 200, success("Post-review reconciliation done.", {
+    return cacheAndSend(req, reply, 200, success("Post-review reconciliation done.", {
       status: snapshot.company.status,
       resumed: parsed.data.resumeExecution,
       notes: parsed.data.notes ?? null,
@@ -129,13 +129,13 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
   // POST /execution/stop — CEO halts the company entirely
   app.post(`${EXEC_BASE}/stop`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
-      reply.code(403).send(failure("Only CEO can stop execution.", "governance", "never", "role_is_ceo"));
+      return reply.code(403).send(failure("Only CEO can stop execution.", "governance", "never", "role_is_ceo"));
       return;
     }
 
     await updateCompanyStatus(req.mcp.companyId, "archived");
 
-    cacheAndSend(req, reply, 200, success("Execution stopped.", {
+    return cacheAndSend(req, reply, 200, success("Execution stopped.", {
       status: "archived",
       stoppedAt: new Date().toISOString(),
     }));

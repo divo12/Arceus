@@ -19,8 +19,8 @@ const zodDetails = (err: ZodError) =>
     code: issue.code,
   }));
 
-const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -46,10 +46,10 @@ const cacheAndSend = (
   status: number,
   body: unknown,
   locationHeader?: string | null,
-): void => {
+): FastifyReply => {
   if (locationHeader) void reply.header("location", locationHeader);
   cacheSuccessfulResponse(req, { status, body, locationHeader: locationHeader ?? null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 // ── Schemas ──────────────────────────────────────────────
@@ -89,7 +89,7 @@ const createApprovalBody = z.object({
 export default async function internalMcpApprovalsRoutes(app: FastifyInstance): Promise<void> {
   app.post(APPROVALS_BASE, async (req, reply) => {
     const body = parseOrFail(createApprovalBody, req.body, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const approval = await requestApproval(req.mcp!.companyId, {
       type: body.type as "strategy" | "hire" | "meeting_blocker" | "external_action" | "tool_governance",
@@ -104,7 +104,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       // Cache the 409 so a retry with the same Idempotency-Key returns the
       // same response instead of re-executing requestApproval (which would
       // still fail but would advertise as a fresh call to the agent).
-      cacheAndSend(
+      return cacheAndSend(
         req,
         reply,
         409,
@@ -127,7 +127,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     });
 
     const location = `${APPROVALS_BASE}/${approval.id}`;
-    cacheAndSend(
+    return cacheAndSend(
       req,
       reply,
       201,
@@ -148,10 +148,10 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
-        reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
+        return reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
         return;
       }
-      cacheAndSend(req, reply, 200, success(`Approval ${approvalId}.`, { approval }));
+      return cacheAndSend(req, reply, 200, success(`Approval ${approvalId}.`, { approval }));
     },
   );
 
@@ -195,7 +195,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       }
 
       const results = approvals.slice(-limit);
-      cacheAndSend(req, reply, 200, success(`${results.length} approval(s).`, {
+      return cacheAndSend(req, reply, 200, success(`${results.length} approval(s).`, {
         approvals: results,
         total: results.length,
       }));
@@ -218,19 +218,19 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
-        reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
+        return reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
         return;
       }
       if (approval.status !== "pending") {
-        reply.code(409).send(failure(
+        return reply.code(409).send(failure(
           `Approval ${approvalId} is "${approval.status}" — cannot amend after decision.`,
           "approval_not_pending", "never", "approval_pending",
         ));
         return;
       }
       const filer = role ? getAgentByRole(snapshot, role as Parameters<typeof getAgentByRole>[1]) : null;
-      if (filer?.id !== approval.requestedByAgentId) {
-        reply.code(403).send(failure(
+      if (!filer || filer.id !== approval.requestedByAgentId) {
+        return reply.code(403).send(failure(
           `Only the filer may amend approval ${approvalId}.`,
           "governance", "never", "role_is_filer",
         ));
@@ -238,7 +238,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       }
 
       const body = parseOrFail(updateApprovalBody, req.body, reply);
-      if (!body) return;
+      if (!body) return reply;
 
       const updated = updateApproval(approvalId, (current) => ({
         ...current,
@@ -248,7 +248,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
         ...(body.agendaItemId !== undefined ? { agendaItemId: body.agendaItemId } : {}),
       }));
 
-      cacheAndSend(req, reply, 200, success(`Approval ${approvalId} updated.`, { approval: updated }));
+      return cacheAndSend(req, reply, 200, success(`Approval ${approvalId} updated.`, { approval: updated }));
     },
   );
 
@@ -257,7 +257,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     `${APPROVALS_BASE}/:approvalId/decide`,
     async (req, reply) => {
       if (req.mcp?.role !== "ceo") {
-        reply.code(403).send(failure("Only CEO can decide approvals.", "governance", "never", "role_is_ceo"));
+        return reply.code(403).send(failure("Only CEO can decide approvals.", "governance", "never", "role_is_ceo"));
         return;
       }
 
@@ -266,18 +266,18 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
         reason: z.string().max(2000).optional(),
       });
       const body = parseOrFail(decideBody, req.body, reply);
-      if (!body) return;
+      if (!body) return reply;
 
       const { approvalId } = req.params;
       const snapshot = await buildSnapshotView(req.mcp.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
-        reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
+        return reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
         return;
       }
 
       if (approval.status !== "pending") {
-        reply.code(409).send(failure(
+        return reply.code(409).send(failure(
           `Approval ${approvalId} is "${approval.status}" — not pending.`,
           "approval_not_pending", "never", "approval_pending",
         ));
@@ -287,7 +287,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       // Type-gated: CEO cannot decide board-only types
       const boardOnlyTypes = ["strategy", "hire", "external_action"];
       if (boardOnlyTypes.includes(approval.type)) {
-        reply.code(403).send(failure(
+        return reply.code(403).send(failure(
           `Approval type "${approval.type}" requires board decision, not CEO.`,
           "type_not_allowed", "never", "board_decides",
         ));
@@ -305,7 +305,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
         ts: Date.now(),
       });
 
-      cacheAndSend(req, reply, 200, success(`Approval ${approvalId} ${body.decision}.`, {
+      return cacheAndSend(req, reply, 200, success(`Approval ${approvalId} ${body.decision}.`, {
         approvalId,
         decision: body.decision,
       }));

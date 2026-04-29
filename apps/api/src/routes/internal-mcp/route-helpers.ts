@@ -14,8 +14,8 @@ export const zodDetails = (err: ZodError) =>
     code: issue.code,
   }));
 
-export const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+export const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -26,16 +26,16 @@ export const sendValidation = (reply: FastifyReply, err: ZodError): void => {
   });
 };
 
-export const sendNotFound = (reply: FastifyReply, resource: string): void => {
-  reply.code(404).send(failure(`${resource} not found.`, "not_found", "never", "resource_created"));
+export const sendNotFound = (reply: FastifyReply, resource: string): FastifyReply => {
+  return reply.code(404).send(failure(`${resource} not found.`, "not_found", "never", "resource_created"));
 };
 
-export const sendConflict = (reply: FastifyReply, summary: string): void => {
-  reply.code(409).send(failure(summary, "conflict", "never", "state_reset"));
+export const sendConflict = (reply: FastifyReply, summary: string): FastifyReply => {
+  return reply.code(409).send(failure(summary, "conflict", "never", "state_reset"));
 };
 
-export const sendGone = (reply: FastifyReply, tool: string, replacement: string): void => {
-  reply.code(410).send(failure(
+export const sendGone = (reply: FastifyReply, tool: string, replacement: string): FastifyReply => {
+  return reply.code(410).send(failure(
     `Tool "${tool}" is retired. Use "${replacement}" instead.`,
     "tool_retired",
     "never",
@@ -58,8 +58,8 @@ export const cacheAndSend = (
   status: number,
   body: unknown,
   locationHeader?: string | null,
-): void => {
+): FastifyReply => {
   if (locationHeader) void reply.header("location", locationHeader);
   cacheSuccessfulResponse(req, { status, body, locationHeader: locationHeader ?? null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };

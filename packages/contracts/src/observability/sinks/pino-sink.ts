@@ -19,13 +19,22 @@ export function pinoSink(options: PinoSinkOptions = {}): EventSink {
     pino({
       level: options.level ?? "info",
       base: { service: "arceus" },
-      timestamp: pino.stdTimeFunctions.isoTime,
+      // Each event carries its own `ts` (millis-since-epoch). Disable
+      // pino's automatic `time` field so log records reflect when the
+      // event actually occurred, not when the (possibly batched) sink
+      // flushed it. Audit-ledger flushes are buffered up to 5s; without
+      // this, every audit row's `time` was off by up to that interval.
+      timestamp: false,
     });
 
   return {
     write(e: ArceusEvent): void {
-      // Use `event` field as the pino "msg" for grep-ability
-      logger.info({ ...e, msg: e.event });
+      // Use `event` field as the pino "msg" for grep-ability. Promote
+      // the event's `ts` to a top-level `time` (ISO) so log aggregators
+      // that key on `time` see the event's own clock.
+      const ts = (e as { ts?: number }).ts;
+      const time = typeof ts === "number" ? new Date(ts).toISOString() : new Date().toISOString();
+      logger.info({ time, ...e, msg: e.event });
     },
   };
 }

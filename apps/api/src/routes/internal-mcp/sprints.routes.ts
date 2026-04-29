@@ -15,8 +15,8 @@ const zodDetails = (err: ZodError) =>
     code: issue.code,
   }));
 
-const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -41,9 +41,9 @@ const cacheAndSend = (
   reply: FastifyReply,
   status: number,
   body: unknown,
-): void => {
+): FastifyReply => {
   cacheSuccessfulResponse(req, { status, body, locationHeader: null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 // ── Schemas ──────────────────────────────────────────────
@@ -69,7 +69,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
   // POST /sprints/create — CEO creates a sprint with tasks (synchronous, agentic)
   app.post(`${SPRINTS_BASE}/create`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
-      reply.code(403).send(
+      return reply.code(403).send(
         failure(
           "Only the CEO role may create sprints.",
           "governance",
@@ -98,7 +98,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     if (invalid.length > 0) {
       const validList = Array.from(hiredRoles).sort().join(", ");
       const detail = invalid.map((t) => `task[${t.idx}] "${t.title}" → "${t.role}"`).join("; ");
-      reply.code(422).send({
+      return reply.code(422).send({
         ...failure(
           `Unknown assigned_role on ${invalid.length} task(s). Valid roles for this company: [${validList}]. Offending: ${detail}`,
           "validation",
@@ -131,10 +131,10 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         goal: parsed.goal,
         ts: Date.now(),
       });
-      cacheAndSend(req, reply, 201, success("Sprint created.", result));
+      return cacheAndSend(req, reply, 201, success("Sprint created.", result));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Sprint creation failed.";
-      reply.code(400).send(failure(msg, "validation", "never", "payload_fixed"));
+      return reply.code(400).send(failure(msg, "validation", "never", "payload_fixed"));
     }
   });
 
@@ -145,7 +145,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     const activeSprint = snapshot.sprints.find((s) => s.id === company.currentSprintId);
 
     if (!activeSprint) {
-      reply.code(404).send(failure("No active sprint.", "not_found", "never", "sprint_created"));
+      return reply.code(404).send(failure("No active sprint.", "not_found", "never", "sprint_created"));
       return;
     }
 
@@ -161,7 +161,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       failed: sprintTasks.filter((t) => t.status === "failed").length,
     };
 
-    cacheAndSend(req, reply, 200, success(`Sprint ${activeSprint.number} active.`, {
+    return cacheAndSend(req, reply, 200, success(`Sprint ${activeSprint.number} active.`, {
       sprint: activeSprint,
       taskCounts,
     }));
@@ -175,7 +175,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
-        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
         return;
       }
 
@@ -188,7 +188,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       const remaining = total - completed - failed;
       const readyToFinalize = remaining === 0 && blocked === 0;
 
-      cacheAndSend(req, reply, 200, success(`Sprint ${sprintId} completion check.`, {
+      return cacheAndSend(req, reply, 200, success(`Sprint ${sprintId} completion check.`, {
         sprintId,
         total,
         completed,
@@ -207,14 +207,14 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     async (req, reply) => {
       const role = req.mcp?.role;
       if (role !== "tester" && role !== "cto") {
-        reply.code(403).send(failure("QA gate requires tester or cto role.", "governance", "never", "role_is_qa_or_cto"));
+        return reply.code(403).send(failure("QA gate requires tester or cto role.", "governance", "never", "role_is_qa_or_cto"));
         return;
       }
       const { sprintId } = req.params;
       const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
-        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
         return;
       }
 
@@ -225,7 +225,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       const failedTasks = sprintTasks.filter((t) => t.status === "failed");
       const passed = completedNotVerified.length === 0 && failedTasks.length === 0;
 
-      cacheAndSend(req, reply, 200, success(`QA gate ${passed ? "passed" : "failed"}.`, {
+      return cacheAndSend(req, reply, 200, success(`QA gate ${passed ? "passed" : "failed"}.`, {
         sprintId,
         passed,
         unverifiedTasks: completedNotVerified.map((t) => ({ id: t.id, title: t.title })),
@@ -239,14 +239,14 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     `${SPRINTS_BASE}/:sprintId/final-gate`,
     async (req, reply) => {
       if (req.mcp?.role !== "cto") {
-        reply.code(403).send(failure("Final gate requires CTO role.", "governance", "never", "role_is_cto"));
+        return reply.code(403).send(failure("Final gate requires CTO role.", "governance", "never", "role_is_cto"));
         return;
       }
       const { sprintId } = req.params;
       const snapshot = await buildSnapshotView(req.mcp.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
-        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
         return;
       }
 
@@ -256,7 +256,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       );
       const blockedCount = sprintTasks.filter((t) => t.status === "blocked").length;
 
-      cacheAndSend(req, reply, 200, success(`Final gate check.`, {
+      return cacheAndSend(req, reply, 200, success(`Final gate check.`, {
         sprintId,
         allVerified,
         blockedCount,
@@ -276,18 +276,18 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     `${SPRINTS_BASE}/:sprintId/finalize`,
     async (req, reply) => {
       if (req.mcp?.role !== "ceo") {
-        reply.code(403).send(failure("Only CEO can finalize sprints.", "governance", "never", "role_is_ceo"));
+        return reply.code(403).send(failure("Only CEO can finalize sprints.", "governance", "never", "role_is_ceo"));
         return;
       }
       const { sprintId } = req.params;
       const snapshot = await buildSnapshotView(req.mcp.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
-        reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
+        return reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
         return;
       }
       if (sprint.status === "completed") {
-        reply.code(409).send(failure(`Sprint ${sprintId} already finalized.`, "conflict", "never", "state_reset"));
+        return reply.code(409).send(failure(`Sprint ${sprintId} already finalized.`, "conflict", "never", "state_reset"));
         return;
       }
 
@@ -300,7 +300,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         ["completed", "verified"].includes(t.status),
       ).length;
 
-      cacheAndSend(req, reply, 200, success(`Sprint ${sprint.number} finalized.`, {
+      return cacheAndSend(req, reply, 200, success(`Sprint ${sprint.number} finalized.`, {
         sprintId,
         sprintNumber: sprint.number,
         completedTasks: completedCount,

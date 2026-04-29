@@ -24,8 +24,8 @@ const zodDetails = (err: ZodError) =>
     code: issue.code,
   }));
 
-const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -51,10 +51,10 @@ const cacheAndSend = (
   status: number,
   body: unknown,
   locationHeader?: string | null,
-): void => {
+): FastifyReply => {
   if (locationHeader) void reply.header("location", locationHeader);
   cacheSuccessfulResponse(req, { status, body, locationHeader: locationHeader ?? null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 // ── Schemas ──────────────────────────────────────────────
@@ -135,13 +135,13 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
   // POST /workspaces/checkpoints — git commit + bundle sync
   app.post(`${WORKSPACE_BASE}/checkpoints`, async (req, reply) => {
     const body = parseOrFail(checkpointBody, req.body, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const mcp = req.mcp!;
     const companyId = mcp.companyId;
 
     if (!companyId) {
-      reply.code(409).send(
+      return reply.code(409).send(
         failure(
           "Company workspace not provisioned yet.",
           "conflict",
@@ -164,7 +164,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       commitSha = result.commitSha;
       warnings = result.warnings;
     } catch (error) {
-      reply.code(503).send(
+      return reply.code(503).send(
         failure(
           `Workspace commit failed: ${error instanceof Error ? error.message : "unknown error"}`,
           "upstream",
@@ -175,7 +175,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       return;
     }
 
-    cacheAndSend(
+    return cacheAndSend(
       req,
       reply,
       201,
@@ -192,11 +192,11 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
   // POST /workspaces/preview-probes — HTTP probe of the local preview URL
   app.post(`${WORKSPACE_BASE}/preview-probes`, async (req, reply) => {
     const body = parseOrFail(previewProbeBody, req.body ?? {}, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const probe = await probePreviewHealth(body.timeoutMs);
 
-    cacheAndSend(
+    return cacheAndSend(
       req,
       reply,
       200,
@@ -226,12 +226,12 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
         // Spec 31 Phase 7.B.5 — read task from canonical via repo.
         const task = await tasksRepo.findByIdHydrated(getDb(), taskId);
         if (!task) {
-          reply.code(404).send(failure(`Task ${taskId} not found.`, "not_found", "never", "resource_created"));
+          return reply.code(404).send(failure(`Task ${taskId} not found.`, "not_found", "never", "resource_created"));
           return;
         }
         previewUrl = task.localPreviewUrl ?? null;
       }
-      cacheAndSend(req, reply, 200, success(
+      return cacheAndSend(req, reply, 200, success(
         previewUrl ? `Preview URL resolved.` : `No preview URL recorded.`,
         { taskId: taskId ?? null, previewUrl },
       ));
@@ -241,18 +241,18 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
   // GET /workspaces/build-health — return the cached build health snapshot
   app.get(`${WORKSPACE_BASE}/build-health`, async (req, reply) => {
     const health = getHealth();
-    cacheAndSend(req, reply, 200, success("Build health snapshot.", health));
+    return cacheAndSend(req, reply, 200, success("Build health snapshot.", health));
   });
 
   // POST /workspaces/check-exports — verify a module exports the expected names
   app.post(`${WORKSPACE_BASE}/check-exports`, async (req, reply) => {
     const body = parseOrFail(checkExportsBody, req.body, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const root = workspaceManager.getLegacyProductDir();
     const abs = resolvePath(root, body.modulePath);
     if (!abs.startsWith(root)) {
-      reply.code(422).send(failure("modulePath must stay inside the workspace.", "validation", "never", "payload_fixed"));
+      return reply.code(422).send(failure("modulePath must stay inside the workspace.", "validation", "never", "payload_fixed"));
       return;
     }
 
@@ -260,7 +260,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     try {
       source = await readFile(abs, "utf8");
     } catch (err) {
-      reply.code(404).send(failure(
+      return reply.code(404).send(failure(
         `Could not read module ${body.modulePath}: ${err instanceof Error ? err.message : "unknown error"}`,
         "not_found", "never", "resource_created",
       ));
@@ -271,7 +271,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const foundSet = new Set(found);
     const missing = body.expectedExports.filter((name) => !foundSet.has(name));
 
-    cacheAndSend(req, reply, 200, success(
+    return cacheAndSend(req, reply, 200, success(
       missing.length === 0 ? "All expected exports found." : `Missing ${missing.length} export(s).`,
       { modulePath: body.modulePath, found, missing, ok: missing.length === 0 },
     ));
@@ -300,7 +300,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     }
 
     const ok = failures.length === 0;
-    cacheAndSend(req, reply, 200, success(
+    return cacheAndSend(req, reply, 200, success(
       ok ? "Baseline verified." : `Baseline failed (${failures.length} category).`,
       { ok, failures, ranAt: new Date().toISOString() },
     ));

@@ -94,8 +94,8 @@ export function __resetBeatSkillUsageForTest(): void {
 
 // ── Validation helpers ───────────────────────────────────
 
-const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -144,15 +144,15 @@ export default async function internalTelemetryRoutes(app: FastifyInstance): Pro
   app.post(`${TELEMETRY_BASE}/skills/:skillId/usage`, async (req, reply) => {
     const params = z.object({ skillId: z.string().min(1) }).safeParse(req.params);
     if (!params.success) {
-      sendValidation(reply, params.error);
+      return sendValidation(reply, params.error);
       return;
     }
     const body = parseOrFail(usageBodySchema, req.body, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const artifact = getSkillById(params.data.skillId);
     if (!artifact) {
-      reply.code(404).send(
+      return reply.code(404).send(
         failure(
           `Skill ${params.data.skillId} not found.`,
           "not_found",
@@ -166,7 +166,7 @@ export default async function internalTelemetryRoutes(app: FastifyInstance): Pro
     recordSkillUsage(params.data.skillId);
     recordBeatSkillUsage(body.beatId, params.data.skillId);
 
-    reply.code(202).send(
+    return reply.code(202).send(
       success(`Recorded usage for skill ${artifact.name}.`, {
         skillId: artifact.id,
         name: artifact.name,
@@ -185,13 +185,13 @@ export default async function internalTelemetryRoutes(app: FastifyInstance): Pro
   app.get(`${TELEMETRY_BASE}/session-context/:sessionId`, async (req, reply) => {
     const params = z.object({ sessionId: z.string().min(1) }).safeParse(req.params);
     if (!params.success) {
-      sendValidation(reply, params.error);
+      return sendValidation(reply, params.error);
       return;
     }
 
     const ctx = getSessionContext(params.data.sessionId);
     if (!ctx) {
-      reply.code(404).send(
+      return reply.code(404).send(
         failure(
           `No context for session ${params.data.sessionId}.`,
           "not_found",
@@ -202,6 +202,6 @@ export default async function internalTelemetryRoutes(app: FastifyInstance): Pro
       return;
     }
 
-    reply.code(200).send(ctx);
+    return reply.code(200).send(ctx);
   });
 }

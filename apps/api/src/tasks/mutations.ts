@@ -336,6 +336,9 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
   // Spec 31 Phase 7.B.4.2 — capture prev via updater callback closure
   // instead of a separate snapshot.tasks.find() pre-read. Wrap in an object
   // so TS doesn't narrow the binding to its initial null value.
+  // NOTE: updateTask is async — the updater callback only runs after the
+  // DB read resolves. Without `await`, captured.prev would still be null
+  // when read below, producing audit emits with previousStatus:"unknown".
   const captured: { prev: Task | null } = { prev: null };
   await updateTask(taskId, (task) => {
     captured.prev = task;

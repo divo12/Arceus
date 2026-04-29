@@ -18,9 +18,9 @@ const cacheAndSend = (
   reply: FastifyReply,
   status: number,
   body: unknown,
-): void => {
+): FastifyReply => {
   cacheSuccessfulResponse(req, { status, body, locationHeader: null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 export default async function internalMcpCompanyRoutes(app: FastifyInstance): Promise<void> {
@@ -30,7 +30,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
     const c = snapshot.company;
     const activeSprint = snapshot.sprints.find((s) => s.id === c.currentSprintId);
 
-    cacheAndSend(req, reply, 200, success("Company summary.", {
+    return cacheAndSend(req, reply, 200, success("Company summary.", {
       name: c.name,
       goal: c.goal,
       status: c.status,
@@ -52,7 +52,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
       status: a.status ?? "idle",
     }));
 
-    cacheAndSend(req, reply, 200, success(`${agents.length} agents.`, {
+    return cacheAndSend(req, reply, 200, success(`${agents.length} agents.`, {
       agents,
       totalActive: agents.filter((a) => a.status === "active" || a.status === "running").length,
     }));
@@ -61,7 +61,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
   // POST /company/status — CEO updates free-form status string
   app.post(`${COMPANY_BASE}/status`, async (req, reply) => {
     if (req.mcp?.role !== "ceo") {
-      reply.code(403).send(failure("Only CEO can update company status.", "governance", "never", "role_is_ceo"));
+      return reply.code(403).send(failure("Only CEO can update company status.", "governance", "never", "role_is_ceo"));
       return;
     }
     const statusBody = z.object({
@@ -69,7 +69,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
     });
     const parsed = statusBody.safeParse(req.body);
     if (!parsed.success) {
-      reply.code(422).send(failure("Invalid status.", "validation", "never", "payload_fixed"));
+      return reply.code(422).send(failure("Invalid status.", "validation", "never", "payload_fixed"));
       return;
     }
 
@@ -77,7 +77,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
     // companyId from the MCP middleware.
     await updateCompanyStatus(req.mcp.companyId, parsed.data.status);
 
-    cacheAndSend(req, reply, 200, success("Company status updated.", {
+    return cacheAndSend(req, reply, 200, success("Company status updated.", {
       status: parsed.data.status,
     }));
   });
@@ -109,7 +109,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
 
       const results = messages.slice(-limit);
 
-      cacheAndSend(req, reply, 200, success(`${results.length} board message(s).`, {
+      return cacheAndSend(req, reply, 200, success(`${results.length} board message(s).`, {
         messages: results,
         total: results.length,
       }));

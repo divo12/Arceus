@@ -144,8 +144,8 @@ const trendOf = (current: number, baseline: number): "rising" | "flat" | "fallin
 export default async function internalMcpSkillsRoutes(app: FastifyInstance): Promise<void> {
   // ── B.1 health-report ──────────────────────────────────────
   app.post(`${SKILLS_BASE}/health-report`, async (req, reply) => {
-    if (!enforceRole(req, reply, READ_ROLES)) return;
-    if (!requireDb(reply)) return;
+    if (!enforceRole(req, reply, READ_ROLES)) return reply;
+    if (!requireDb(reply)) return reply;
     const parsed = healthReportSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
@@ -160,7 +160,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (skillRows.length === 0) {
       const body = success("No matching skills found.", { skills: [] });
       cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-      reply.code(200).send(body);
+      return reply.code(200).send(body);
       return;
     }
 
@@ -207,13 +207,13 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
 
     const body = success(`Health report for ${data.length} skill(s).`, { windowDays: parsed.data.windowDays, skills: data });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ── B.2 audit-unused ───────────────────────────────────────
   app.post(`${SKILLS_BASE}/audit-unused`, async (req, reply) => {
-    if (!enforceRole(req, reply, READ_ROLES)) return;
-    if (!requireDb(reply)) return;
+    if (!enforceRole(req, reply, READ_ROLES)) return reply;
+    if (!requireDb(reply)) return reply;
     const parsed = auditUnusedSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
@@ -228,7 +228,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     const candidates = await db.select().from(skillArtifacts).where(and(...conds));
 
     if (candidates.length === 0) {
-      reply.code(200).send(success("No active skills to audit.", { stale: [] }));
+      return reply.code(200).send(success("No active skills to audit.", { stale: [] }));
       return;
     }
 
@@ -256,13 +256,13 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       stale,
     });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ── B.3 inspect-history ────────────────────────────────────
   app.post(`${SKILLS_BASE}/inspect-history`, async (req, reply) => {
-    if (!enforceRole(req, reply, READ_ROLES)) return;
-    if (!requireDb(reply)) return;
+    if (!enforceRole(req, reply, READ_ROLES)) return reply;
+    if (!requireDb(reply)) return reply;
     const parsed = inspectHistorySchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
@@ -270,7 +270,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     const db = getDb();
     const skill = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
     if (skill.length === 0 || skill[0].companyId !== mcp.companyId) {
-      reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
+      return reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }
 
@@ -308,12 +308,12 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       revisions: data,
     });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ── B.4 validate-definition ────────────────────────────────
   app.post(`${SKILLS_BASE}/validate-definition`, async (req, reply) => {
-    if (!enforceRole(req, reply, READ_ROLES)) return;
+    if (!enforceRole(req, reply, READ_ROLES)) return reply;
     const parsed = validateDefinitionSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
@@ -361,19 +361,19 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       collision,
     });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ── C.1 register ───────────────────────────────────────────
   app.post(`${SKILLS_BASE}/register`, async (req, reply) => {
-    if (!enforceRole(req, reply, WRITE_ROLES)) return;
-    if (!requireDb(reply)) return;
+    if (!enforceRole(req, reply, WRITE_ROLES)) return reply;
+    if (!requireDb(reply)) return reply;
     const parsed = registerSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const validation = validateSkillDefinition(parsed.data.content);
     if (!validation.valid) {
-      reply.code(422).send(failure(`SKILL.md invalid: ${validation.errors.join("; ")}`, "validation", "never", "payload_fixed"));
+      return reply.code(422).send(failure(`SKILL.md invalid: ${validation.errors.join("; ")}`, "validation", "never", "payload_fixed"));
       return;
     }
 
@@ -466,26 +466,26 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
 
   // ── C.2 update ─────────────────────────────────────────────
   app.post(`${SKILLS_BASE}/update`, async (req, reply) => {
-    if (!enforceRole(req, reply, WRITE_ROLES)) return;
-    if (!requireDb(reply)) return;
+    if (!enforceRole(req, reply, WRITE_ROLES)) return reply;
+    if (!requireDb(reply)) return reply;
     const parsed = updateSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const validation = validateSkillDefinition(parsed.data.content);
     if (!validation.valid) {
-      reply.code(422).send(failure(`SKILL.md invalid: ${validation.errors.join("; ")}`, "validation", "never", "payload_fixed"));
+      return reply.code(422).send(failure(`SKILL.md invalid: ${validation.errors.join("; ")}`, "validation", "never", "payload_fixed"));
       return;
     }
 
     const mcp = req.mcp!;
     const db = getDb();
     const [artifact] = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
-    if (artifact?.companyId !== mcp.companyId) {
-      reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
+    if (!artifact || artifact.companyId !== mcp.companyId) {
+      return reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }
     if (artifact.status === "deprecated") {
-      reply.code(409).send(failure(`Skill ${artifact.slug} is deprecated.`, "conflict", "never", "skill_active"));
+      return reply.code(409).send(failure(`Skill ${artifact.slug} is deprecated.`, "conflict", "never", "skill_active"));
       return;
     }
 
@@ -538,25 +538,25 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       gitSha: revision.gitSha,
     });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ── C.3 deprecate ──────────────────────────────────────────
   app.post(`${SKILLS_BASE}/deprecate`, async (req, reply) => {
-    if (!enforceRole(req, reply, WRITE_ROLES)) return;
-    if (!requireDb(reply)) return;
+    if (!enforceRole(req, reply, WRITE_ROLES)) return reply;
+    if (!requireDb(reply)) return reply;
     const parsed = deprecateSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const db = getDb();
     const [artifact] = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
-    if (artifact?.companyId !== mcp.companyId) {
-      reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
+    if (!artifact || artifact.companyId !== mcp.companyId) {
+      return reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }
     if (artifact.status === "deprecated") {
-      reply.code(409).send(failure(`Skill ${artifact.slug} is already deprecated.`, "conflict", "never", "skill_active"));
+      return reply.code(409).send(failure(`Skill ${artifact.slug} is already deprecated.`, "conflict", "never", "skill_active"));
       return;
     }
 
@@ -598,7 +598,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       reason: parsed.data.reason,
     });
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ── G.1 candidate-submit ───────────────────────────────────
@@ -612,7 +612,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
         .send(failure("skill_candidate_submit is disabled (set ARCEUS_SKILL_EVOLVE_TRIGGER_CANDIDATE=1).", "upstream", "never", "trigger_enabled"));
       return;
     }
-    if (!requireDb(reply)) return;
+    if (!requireDb(reply)) return reply;
     const parsed = candidateSubmitSchema.safeParse(req.body ?? {});
     if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
@@ -634,6 +634,6 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       trigger: job.trigger,
       status: job.status,
     });
-    reply.code(202).send(body);
+    return reply.code(202).send(body);
   });
 }

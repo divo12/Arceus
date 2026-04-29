@@ -39,8 +39,8 @@ const MEMORY_BASE = "/api/internal/v1/memory";
 
 const MAX_HANDOFF_BYTES = 10_240; // 10 KB serialized payload cap
 
-const sendValidation = (reply: FastifyReply, _err: ZodError): void => {
-  reply.code(422).send(
+const sendValidation = (reply: FastifyReply, _err: ZodError): FastifyReply => {
+  return reply.code(422).send(
     failure("Request validation failed.", "validation", "never", "payload_fixed"),
   );
 };
@@ -82,15 +82,15 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
   app.post(`${MEMORY_BASE}/search`, async (req, reply) => {
     const parsed = memorySearchInputSchema.safeParse(req.body);
     if (!parsed.success) {
-      sendValidation(reply, parsed.error);
-      return;
+      return sendValidation(reply, parsed.error);
+      return reply;
     }
 
     const mcp = req.mcp!;
     // Spec 31 Phase 7.B.5 — read agent from canonical via repo, not snapshot.
     const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role);
     if (!agent) {
-      reply.code(404).send(
+      return reply.code(404).send(
         failure(
           `No agent provisioned for role '${mcp.role}'.`,
           "not_found",
@@ -119,7 +119,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
         : isStoreError(err)
           ? "store_unavailable"
           : "internal";
-      reply.code(cause === "embed_failed" || cause === "store_unavailable" ? 503 : 500).send(
+      return reply.code(cause === "embed_failed" || cause === "store_unavailable" ? 503 : 500).send(
         failure(
           `Memory search failed: ${err instanceof Error ? err.message : String(err)}`,
           cause,
@@ -153,21 +153,21 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     const body = success(`Found ${memories.length} memories.`, data);
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ─── POST /memory/learnings — explicit write of a fact/pattern ───────
   app.post(`${MEMORY_BASE}/learnings`, async (req, reply) => {
     const parsed = memoryAddLearningInputSchema.safeParse(req.body);
     if (!parsed.success) {
-      sendValidation(reply, parsed.error);
-      return;
+      return sendValidation(reply, parsed.error);
+      return reply;
     }
 
     const mcp = req.mcp!;
     const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role);
     if (!agent) {
-      reply.code(404).send(
+      return reply.code(404).send(
         failure(
           `No agent provisioned for role '${mcp.role}'.`,
           "not_found",
@@ -216,7 +216,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
         : isStoreError(err)
           ? "store_unavailable"
           : "internal";
-      reply.code(cause === "embed_failed" || cause === "store_unavailable" ? 503 : 500).send(
+      return reply.code(cause === "embed_failed" || cause === "store_unavailable" ? 503 : 500).send(
         failure(
           `Memory add failed: ${err instanceof Error ? err.message : String(err)}`,
           cause,
@@ -242,7 +242,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     const body = success(`Learning recorded (${result.action}).`, data);
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 
   // ─── POST /memory/handoff — route typed facts to other roles ─────────
@@ -250,7 +250,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     // Size guard before Zod — prevent DoS on huge bodies
     const bodyBytes = Buffer.byteLength(JSON.stringify(req.body ?? {}), "utf8");
     if (bodyBytes > MAX_HANDOFF_BYTES) {
-      reply.code(413).send(
+      return reply.code(413).send(
         failure(
           `Handoff payload exceeds ${MAX_HANDOFF_BYTES} bytes.`,
           "handoff_too_large",
@@ -263,8 +263,8 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     const parsed = memoryHandoffInputSchema.safeParse(req.body);
     if (!parsed.success) {
-      sendValidation(reply, parsed.error);
-      return;
+      return sendValidation(reply, parsed.error);
+      return reply;
     }
 
     const mcp = req.mcp!;
@@ -273,7 +273,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     // Self-handoff rejection (targets is validated as Role[] already)
     if (input.targets.includes(callerRole)) {
-      reply.code(422).send(
+      return reply.code(422).send(
         failure(
           "Cannot hand off to yourself.",
           "self_target_not_allowed",
@@ -295,7 +295,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     );
     const missing = targetAgents.filter((t) => !t.agent);
     if (missing.length > 0) {
-      reply.code(422).send(
+      return reply.code(422).send(
         failure(
           `No agent provisioned for role(s): ${missing.map((m) => m.role).join(", ")}.`,
           "target_role_unknown",
@@ -365,7 +365,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
         memoryIds.push(unit.id);
       } catch (err) {
         const cause: ErrorCause = isStoreError(err) ? "store_unavailable" : "internal";
-        reply.code(cause === "store_unavailable" ? 503 : 500).send(
+        return reply.code(cause === "store_unavailable" ? 503 : 500).send(
           failure(
             `Handoff write to '${targetRole}' failed: ${err instanceof Error ? err.message : String(err)}`,
             cause,
@@ -391,6 +391,6 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     const body = success(`Handoff delivered to ${input.targets.length} role(s).`, data);
     cacheSuccessfulResponse(req, { status: 200, body, locationHeader: null });
-    reply.code(200).send(body);
+    return reply.code(200).send(body);
   });
 }

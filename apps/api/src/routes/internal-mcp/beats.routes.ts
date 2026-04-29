@@ -18,10 +18,9 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
    * Role + companyId resolved from session context by middleware.
    */
   app.get(`${BEATS_BASE}/recent`, async (req: FastifyRequest, reply: FastifyReply) => {
-    const { role, companyId } = (req as any).mcpContext ?? {};
+    const { role, companyId } = req.mcp ?? {};
     if (!role || !companyId) {
-      reply.code(400).send(failure("Missing role or companyId in request context.", "session_required", "never", "session_provided"));
-      return;
+      return reply.code(400).send(failure("Missing role or companyId in request context.", "session_required", "never", "session_provided"));
     }
 
     const query = (req.query ?? {}) as Record<string, string>;
@@ -30,8 +29,7 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
     // Spec 31 Phase 7.B.5 — read agent from canonical via repo, not snapshot.
     const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
     if (!agent) {
-      reply.code(404).send(failure(`No agent found for role "${role}".`, "not_found", "never", "agent_exists"));
-      return;
+      return reply.code(404).send(failure(`No agent found for role "${role}".`, "not_found", "never", "agent_exists"));
     }
 
     const beats = await cpGetBeatHistory(companyId, { agentId: agent.id, limit: n });
@@ -47,7 +45,7 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
       totalTokens: beat.totalTokens,
     }));
 
-    reply.code(200).send(success(`Last ${progressNotes.length} beat(s) for ${role}.`, { notes: progressNotes }));
+    return reply.code(200).send(success(`Last ${progressNotes.length} beat(s) for ${role}.`, { notes: progressNotes }));
   });
 
   /**
@@ -64,11 +62,11 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
     async (req, reply) => {
       const { beatId } = req.params;
       if (!beatId) {
-        reply.code(400).send(failure("beatId is required.", "validation", "never", "payload_fixed"));
+        return reply.code(400).send(failure("beatId is required.", "validation", "never", "payload_fixed"));
         return;
       }
       const ts = recordBeatActivity(beatId);
-      reply.code(200).send(success("Watchdog reset.", {
+      return reply.code(200).send(success("Watchdog reset.", {
         beatId,
         lastActivityAt: new Date(ts).toISOString(),
       }));

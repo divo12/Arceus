@@ -28,6 +28,7 @@ import type { ArceusEvent } from "../events.js";
 import { Langfuse, type LangfuseTraceClient, type LangfuseSpanClient } from "langfuse";
 
 let client: Langfuse | null = null;
+let warnedMissingCreds = false;
 
 const beatTraces = new Map<string, LangfuseTraceClient>();
 const toolStacks = new Map<string, LangfuseSpanClient[]>();
@@ -46,8 +47,11 @@ function ensureClient(opts: LangfuseSinkOptions): Langfuse | null {
   const secretKey = opts.secretKey ?? process.env.LANGFUSE_SECRET_KEY;
   const baseUrl = opts.baseUrl ?? process.env.LANGFUSE_BASE_URL;
   if (!publicKey || !secretKey || !baseUrl) {
-     
-    console.warn("[langfuseSink] Missing LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL — sink disabled.");
+    if (!warnedMissingCreds) {
+      warnedMissingCreds = true;
+      // eslint-disable-next-line no-console
+      console.warn("[langfuseSink] Missing LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL — sink disabled.");
+    }
     return null;
   }
   client = new Langfuse({ publicKey, secretKey, baseUrl, flushAt: opts.flushAt ?? 1 });

@@ -16,8 +16,8 @@ const zodDetails = (err: ZodError) =>
     code: issue.code,
   }));
 
-const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -28,8 +28,8 @@ const sendValidation = (reply: FastifyReply, err: ZodError): void => {
   });
 };
 
-const sendNotFound = (reply: FastifyReply, resource: string): void => {
-  reply.code(404).send(failure(`${resource} not found.`, "not_found", "never", "resource_created"));
+const sendNotFound = (reply: FastifyReply, resource: string): FastifyReply => {
+  return reply.code(404).send(failure(`${resource} not found.`, "not_found", "never", "resource_created"));
 };
 
 const parseOrFail = <T>(schema: ZodSchema<T>, body: unknown, reply: FastifyReply): T | null => {
@@ -50,10 +50,10 @@ const cacheAndSend = (
   status: number,
   body: unknown,
   locationHeader?: string | null,
-): void => {
+): FastifyReply => {
   if (locationHeader) void reply.header("location", locationHeader);
   cacheSuccessfulResponse(req, { status, body, locationHeader: locationHeader ?? null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 // ── Schemas ──────────────────────────────────────────────
@@ -85,7 +85,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
   // POST /artifacts — create + optionally attach to a task
   app.post(ARTIFACT_BASE, async (req, reply) => {
     const body = parseOrFail(createArtifactBody, req.body, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const agent = body.agent || req.mcp?.role || "unknown";
     // Spec 28 Phase B.1 — durable write before returning success.
@@ -114,7 +114,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     });
 
     const location = `${ARTIFACT_BASE}/${artifact.id}`;
-    cacheAndSend(
+    return cacheAndSend(
       req,
       reply,
       201,
@@ -132,19 +132,19 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     `${ARTIFACT_BASE}/:artifactId/workspace-writes`,
     async (req, reply) => {
       const body = parseOrFail(workspaceWriteBody, req.body, reply);
-      if (!body) return;
+      if (!body) return reply;
       const { artifactId } = req.params;
 
       const artifact = findArtifact(artifactId);
       if (!artifact) {
-        sendNotFound(reply, `Artifact ${artifactId}`);
+        return sendNotFound(reply, `Artifact ${artifactId}`);
         return;
       }
 
       try {
         await writeArtifactToWorkspace(body.taskId, body.role, body.slug, artifact.content);
       } catch (error) {
-        reply.code(503).send(
+        return reply.code(503).send(
           failure(
             `Failed to write artifact to workspace: ${error instanceof Error ? error.message : "unknown error"}`,
             "upstream",
@@ -155,7 +155,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
         return;
       }
 
-      cacheAndSend(
+      return cacheAndSend(
         req,
         reply,
         200,
@@ -174,7 +174,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
   app.post<{ Params: { artifactId: string } }>(
     `${ARTIFACT_BASE}/:artifactId/persistence`,
     async (_req, reply) => {
-      reply.code(410).send({
+      return reply.code(410).send({
         ...failure(
           "artifact_persist is retired. Artifacts are persisted automatically on creation.",
           "tool_retired",
@@ -193,10 +193,10 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
       const { artifactId } = req.params;
       const artifact = findArtifact(artifactId);
       if (!artifact) {
-        sendNotFound(reply, `Artifact ${artifactId}`);
+        return sendNotFound(reply, `Artifact ${artifactId}`);
         return;
       }
-      cacheAndSend(req, reply, 200, success(`Artifact ${artifactId}.`, { artifact }));
+      return cacheAndSend(req, reply, 200, success(`Artifact ${artifactId}.`, { artifact }));
     },
   );
 
@@ -228,7 +228,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
 
       const results = filtered.slice(-limit);
 
-      cacheAndSend(req, reply, 200, success(
+      return cacheAndSend(req, reply, 200, success(
         `${results.length} artifact(s) found.`,
         { artifacts: results, total: results.length },
       ));

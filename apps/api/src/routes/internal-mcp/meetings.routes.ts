@@ -18,8 +18,8 @@ const zodDetails = (err: ZodError) =>
     code: issue.code,
   }));
 
-const sendValidation = (reply: FastifyReply, err: ZodError): void => {
-  reply.code(422).send({
+const sendValidation = (reply: FastifyReply, err: ZodError): FastifyReply => {
+  return reply.code(422).send({
     ...failure("Request validation failed.", "validation", "never", "payload_fixed"),
     error: {
       cause: "validation" as ErrorCause,
@@ -45,10 +45,10 @@ const cacheAndSend = (
   status: number,
   body: unknown,
   locationHeader?: string | null,
-): void => {
+): FastifyReply => {
   if (locationHeader) void reply.header("location", locationHeader);
   cacheSuccessfulResponse(req, { status, body, locationHeader: locationHeader ?? null });
-  reply.code(status).send(body);
+  return reply.code(status).send(body);
 };
 
 // ── Schemas ──────────────────────────────────────────────
@@ -137,7 +137,7 @@ const createMeetingBody = z.object({
 export default async function internalMcpMeetingsRoutes(app: FastifyInstance): Promise<void> {
   app.post(MEETINGS_BASE, async (req, reply) => {
     const body = parseOrFail(createMeetingBody, req.body, reply);
-    if (!body) return;
+    if (!body) return reply;
 
     const recorded: Meeting = await recordMeeting({
       type: body.type,
@@ -189,7 +189,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
     });
 
     const location = `${MEETINGS_BASE}/${meeting.id}`;
-    cacheAndSend(
+    return cacheAndSend(
       req,
       reply,
       201,
@@ -210,10 +210,10 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const meeting = snapshot.meetings?.find((m) => m.id === meetingId);
       if (!meeting) {
-        reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
+        return reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
         return;
       }
-      cacheAndSend(req, reply, 200, success(`Meeting ${meetingId}.`, { meeting }));
+      return cacheAndSend(req, reply, 200, success(`Meeting ${meetingId}.`, { meeting }));
     },
   );
 
@@ -228,7 +228,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
         deadline: z.string().optional(),
       });
       const body = parseOrFail(requestDecisionBody, req.body, reply);
-      if (!body) return;
+      if (!body) return reply;
 
       const mcp = req.mcp!;
       const meetingId = `mtg_${randomUUID().slice(0, 12)}`;
@@ -256,7 +256,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       // Spec 28 Phase B.1 — flush snapshot to DB before returning.
       const meeting = await writeMeetingSync(recordedDecision);
 
-      cacheAndSend(
+      return cacheAndSend(
         req,
         reply,
         201,
@@ -280,13 +280,13 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
         position: z.string().max(2000).optional(),
       });
       const body = parseOrFail(contributeBody, req.body, reply);
-      if (!body) return;
+      if (!body) return reply;
 
       const { meetingId } = req.params;
       const snapshot = await buildSnapshotView(req.mcp!.companyId);
       const meeting = snapshot.meetings?.find((m) => m.id === meetingId);
       if (!meeting) {
-        reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
+        return reply.code(404).send(failure(`Meeting ${meetingId} not found.`, "not_found", "never", "meeting_exists"));
         return;
       }
 
@@ -316,7 +316,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       // Spec 28 Phase B.1 — durable upsert + flush.
       await writeMeetingSync(updated);
 
-      cacheAndSend(req, reply, 200, success(`Contribution added to meeting ${meetingId}.`, {
+      return cacheAndSend(req, reply, 200, success(`Contribution added to meeting ${meetingId}.`, {
         meetingId,
         artifactId: body.artifactId,
         contributedBy: mcp.role,

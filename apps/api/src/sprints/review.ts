@@ -3,9 +3,9 @@ import type { AgentIdentity, AgentBeatContext, SprintReviewState, SprintReviewPh
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import {
-  upsertTask,
   updateSprint,
 } from "../persistence/mutations.js";
+import { persistTask } from "../persistence/domain-persistence.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import {
   persistRuntimeArtifact,
@@ -373,7 +373,7 @@ export async function executeSprintReviewVerification(
           ["Preview URL responds with HTTP 200", "App renders without connection errors"],
           "critical", "planned", sprintId,
         );
-        await upsertTask(bugTask);
+        await persistTask(bugTask);
         newBugTaskIds.push(bugTask.id);
         rolesWithBugs.add("developer");
         emitGraphNodeAdded(sprintId, bugTask);
@@ -419,7 +419,7 @@ export async function executeSprintReviewVerification(
           ],
           "critical", "planned", sprintId,
         );
-        await upsertTask(entryBug);
+        await persistTask(entryBug);
         newBugTaskIds.push(entryBug.id);
         rolesWithBugs.add("developer");
         emitGraphNodeAdded(sprintId, entryBug);
@@ -453,7 +453,11 @@ export async function executeSprintReviewVerification(
             bugFields.sprintId,
           );
           bugTask.parentTaskId = bugFields.parentTaskId;
-          await upsertTask(bugTask);
+          // persistTask wraps the upsert in try/catch + 23503 backfill so
+          // an unresolvable parent_task_id FK only logs a `[persist:tasks]
+          // skip` rather than producing an unhandled rejection that the
+          // top-level handler keeps the process alive for.
+          await persistTask(bugTask);
           newBugTaskIds.push(bugTask.id);
           rolesWithBugs.add(bugFields.assignedRole);
           emitGraphNodeAdded(sprintId, bugTask);
@@ -625,7 +629,7 @@ export async function executeSprintFinalGate(
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
       );
-      await upsertTask(bugTask);
+      await persistTask(bugTask);
       newBugIds.push(bugTask.id);
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
