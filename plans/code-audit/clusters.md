@@ -20,7 +20,7 @@
 | **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | 🟡 partial | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
 | **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | 🟡 partial | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
 | **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | 🔴 open | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
-| **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | 🔴 open | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
+| **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | 🟡 partial | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
 | **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | 🟡 partial | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
 | **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | 🟡 partial | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
 | **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | 🟡 partial | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
@@ -54,6 +54,7 @@
 | `0520084` | C9 | F-045 artifacts ring buffer + F-391/F-392 pendingFlush cap + transitions/feedback log caps |
 | `6259403` | **C8** | 6 read-modify-write helpers wrapped in `db.transaction()` (F-104/F-256/F-277); F-361 `commitScheduledMeeting` transactional dep; F-347 sprint tag-before-flip guard |
 | `701ccc5` | **C7** | F-066 `proc.kill()` on opencode spawn timeout; F-212/F-233 stranded-run sweeper (boot + 5-min periodic) |
+| `0c30f55` | **C6** | New `infra/gates.ts` (`TryRunGate` + `OncePromise`); F-273/F-274/F-290 `eventBridgeOnce` dedups concurrent SSE starts; F-043/F-315 `sprintCompletionGate` atomic re-entry guard; dead `ceoProposal*` triplet deleted |
 
 ### Cluster-by-cluster status
 
@@ -68,6 +69,10 @@
 **C4 (security — governance off + no auth) — 🟡 partial**
 - ✅ Closed: F-424 admin bearer token on every mutating `/api/*` route; F-428 debug routes 404 in prod; F-438 approvals gated; F-450 CORS allow-list; F-429 `sanitizeError()` for client error responses.
 - 🔴 Open: F-255/F-257 `GOVERNANCE_ENABLED = false` flip (deliberate deferral per user); web frontend Next.js Route Handler proxy still needs to inject admin token for `ARCEUS_REQUIRE_AUTH=1`.
+
+**C6 (module-level mutable state TOCTOUs) — 🟡 partial**
+- ✅ Closed: F-273/F-274/F-290 `eventBridgeStarted` race (replaced with `OncePromise` — first caller starts the SSE bridge, concurrent callers share the same promise, auto-clears on settle so failed starts retry); F-043/F-315 `sprintCompletionTriggered` race (`checkSprintCompletion` body now runs inside `TryRunGate.runExclusive`, atomic claim+release); F-315/F-319 `ceoProposalInFlight` (was dead state — three vars + setters + resets deleted, no callers existed). New `apps/api/src/infra/gates.ts` with 6 unit tests.
+- 🔴 Open: F-305/F-306 `activeExecution` cleared before async work finishes (not a flag race — needs a context-passing refactor where downstream awaits receive `ExecutionContext` as a parameter instead of reading the global); F-204 `beatCounter` two-beats-same-id race (needs `Counter.incrementAndGet()` primitive); F-328 `agentSessions` Map mutated in place via `Object.assign` (pattern fix — "always replace, never mutate" — not a TOCTOU primitive).
 
 **C7 (no AbortSignal / crash recovery) — 🟡 partial**
 - ✅ Closed: F-066 opencode child SIGTERM/SIGKILL on spawn timeout + spawn error (no more orphan processes across deploys); F-212/F-233 stranded-run sweeper (boot pass with 0ms threshold + periodic 5-min sweep at 30-min stall threshold; uses pre-existing `findStrandedRuns` / `markStranded` repo helpers and the partial index that was already in the schema); F-302 reconnect backoff already in place (exponential + jitter + reset-on-success).
