@@ -47,8 +47,7 @@ import { cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from ".
 import {
   agentSessions,
   activeExecution,
-  eventBridgeStarted,
-  setEventBridgeStarted,
+  eventBridgeOnce,
   pendingPromptCompletions,
   developerStepLoopActive,
   executionStatus,
@@ -63,17 +62,17 @@ import { recordMeeting } from "../meetings/recording.js";
 import { setTaskStatus, setTaskPreviewUrl, appendTaskResult, appendTaskCommand } from "../tasks/mutations.js";
 
 /**
- * Start the SSE event bridge that streams events from OpenCode
- * into agent state, governance audit, and prompt completion tracking.
+ * Start the SSE event bridge that streams events from OpenCode into
+ * agent state, governance audit, and prompt completion tracking.
  *
- * The `eventBridgeStarted` flag is owned by this function — set true
- * AFTER the SSE handshake succeeds, reset to false on disconnect or
- * connect failure (cluster C3 — F-273/274/290). Callers either:
- *   - `await startEventBridge()` and let throws propagate, or
- *   - `await startEventBridge().catch(...)` to absorb startup failures.
- *
- * Either way, the flag never lies about whether the bridge is actually
- * connected. Auto-reconnects on disconnect via exponential backoff.
+ * Audit C6 (F-273/F-274/F-290): the previous `eventBridgeStarted`
+ * boolean had a check-then-set race — two callers both observed
+ * `false` and started parallel bridges. Now `eventBridgeOnce`
+ * (`OncePromise`) dedups concurrent starts: the first caller's
+ * promise is shared; the promise auto-clears on settle so a failed
+ * start is retryable. Use `eventBridgeOnce.run(() => startEventBridge())`
+ * from callers; the flag-style "is it running?" check becomes
+ * `eventBridgeOnce.isInFlight`.
  */
 export async function startEventBridge(): Promise<void> {
   try {
@@ -84,9 +83,6 @@ export async function startEventBridge(): Promise<void> {
       emitEmployeeActivity("system", "error", "Failed to connect to OpenCode event stream");
       throw new Error(`OpenCode /event responded ${response.status}`);
     }
-
-    // Mark started ONLY after the handshake succeeds.
-    setEventBridgeStarted(true);
 
     // Type the reader explicitly — fetch's getReader() returns a generic
     // any-typed reader that lights up two no-unsafe-* lints. The wire is
@@ -128,7 +124,7 @@ export async function startEventBridge(): Promise<void> {
     }
   } catch (err) {
     emitEmployeeActivity("system", "info", `Event bridge disconnected — will reconnect (${err instanceof Error ? err.message : String(err)})`);
-    setEventBridgeStarted(false);
+    // OncePromise auto-clears on reject; nothing to flip here.
     await resetOpencodeConnection();
     scheduleReconnect();
     // Re-throw so a caller doing `await startEventBridge()` knows the
@@ -159,12 +155,13 @@ function scheduleReconnect(): void {
   lastReconnectAt = Date.now();
 
   setTimeout(() => {
-    if (!eventBridgeStarted) {
-      // startEventBridge owns the started-flag. We don't await here because
-      // the bridge keeps the SSE socket open for the life of the connection;
-      // a successful start does not "resolve". Any error is logged inside.
-      swallowAndAudit("event_bridge.reconnect", () => startEventBridge());
-    }
+    // OncePromise dedups concurrent starts — if a parallel caller
+    // already kicked off a reconnect we share their promise. Errors
+    // routed through swallowAndAudit; the bridge's own catch resets
+    // the OncePromise so the next reconnect can re-enter cleanly.
+    swallowAndAudit("event_bridge.reconnect", () =>
+      eventBridgeOnce.run(() => startEventBridge()),
+    );
   }, delayMs);
 }
 

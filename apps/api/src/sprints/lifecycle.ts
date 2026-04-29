@@ -17,8 +17,7 @@ import { emitReactive } from "../orchestration/reactive.js";
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import {
-  sprintCompletionTriggered,
-  setSprintCompletionTriggered,
+  sprintCompletionGate,
   setExecutionStatus,
   activeExecution,
 } from "../orchestration/state.js";
@@ -26,14 +25,21 @@ import {
 /**
  * Checks if all employee tasks in the current sprint have reached terminal status.
  * If so, enters the "reviewing" phase (Spec 21) instead of immediately completing.
- * Guard flag prevents double-firing.
+ *
+ * Audit C6 (F-043/F-315): the previous `sprintCompletionTriggered`
+ * boolean had a check-then-set race — a second task-completion event
+ * could observe `false` between the check at the top and the
+ * `setSprintCompletionTriggered(true)` assignment 30 lines down (every
+ * intervening `await` is an interleave point). Now `sprintCompletionGate`
+ * (`TryRunGate.runExclusive`) does the check-and-claim atomically; a
+ * concurrent caller gets `null` and the outer function maps that to
+ * `false` (same observable behaviour as the old early-return).
  */
 export async function checkSprintCompletion(): Promise<boolean> {
-  if (sprintCompletionTriggered) return false;
-
-  // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
-  const companyId = requireActiveCompanyId();
-  const snapshot = await buildSnapshotView(companyId);
+  const result = await sprintCompletionGate.runExclusive(async () => {
+    // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
+    const companyId = requireActiveCompanyId();
+    const snapshot = await buildSnapshotView(companyId);
   const currentSprintId = snapshot.company.currentSprintId;
   if (!currentSprintId) return false;
 
@@ -56,8 +62,6 @@ export async function checkSprintCompletion(): Promise<boolean> {
     });
     return false;
   }
-
-  setSprintCompletionTriggered(true);
 
   emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → REVIEWING (all implementation tasks terminal)`, {
     detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId },
@@ -165,8 +169,11 @@ export async function checkSprintCompletion(): Promise<boolean> {
     reviewState,
   }));
 
-  setSprintCompletionTriggered(false);
-  return true;
+    return true;
+  });
+  // `runExclusive` returns `null` if a concurrent caller is already
+  // running the body — same semantics as the old early-return `false`.
+  return result ?? false;
 }
 
 /**

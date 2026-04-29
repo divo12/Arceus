@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { isInternalAgentRole } from "@arceus/company-runtime";
 import { orchestratorConfig } from "../config/index.js";
+import { TryRunGate, OncePromise } from "../infra/gates.js";
 
 // ─── Types ────────────────────────────────────────────────────────
 export interface AgentSessionState {
@@ -133,7 +134,6 @@ export function pushArtifact(artifact: Artifact): void {
   }
 }
 export let executionStatus: ExecutionStatus = "idle";
-export let eventBridgeStarted = false;
 export const pendingPromptCompletions = new Map<string, { resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>();
 export let promptCompletionPollerHandle: NodeJS.Timeout | null = null;
 export let activeExecution: ExecutionContext | null = null;
@@ -141,16 +141,30 @@ export let developerWatchdog: NodeJS.Timeout | null = null;
 export let developerWorkspaceMonitor: NodeJS.Timeout | null = null;
 export let developerWorkspaceSnapshot = new Map<string, number>();
 export let developerStepLoopActive = false;
-export let ceoProposalInFlight = false;
-export let ceoProposalFailureCount = 0;
-export let ceoProposalCooldownUntilMs = 0;
-export let sprintCompletionTriggered = false;
+
+// ─── Concurrency gates (Audit C6 — F-273/274/290, F-315/319, F-043) ───
+//
+// `let` flags + check-then-set patterns were replaced with single
+// gate instances whose `runExclusive` / `run` methods are atomic. See
+// `apps/api/src/infra/gates.ts` for the rationale.
+
+/**
+ * F-273/F-274/F-290 — dedup concurrent calls to `startEventBridge()`.
+ * First caller starts the bridge; concurrent callers share the same
+ * promise. Auto-clears on settle so a failed start is retryable.
+ */
+export const eventBridgeOnce = new OncePromise();
+
+/**
+ * F-043/F-315 — re-entry guard for `checkSprintCompletion`. Body of
+ * the function runs inside `runExclusive`; concurrent task-completion
+ * events get `null` and skip without duplicating finalize work.
+ */
+export const sprintCompletionGate = new TryRunGate();
 
 // ─── State setters (for `let` exports that can't be reassigned from outside) ──
 /** Set the current execution status. */
 export function setExecutionStatus(s: ExecutionStatus) { executionStatus = s; }
-/** Set whether the event bridge has been started. */
-export function setEventBridgeStarted(v: boolean) { eventBridgeStarted = v; }
 /** Set the prompt completion poller interval handle. */
 export function setPromptCompletionPollerHandle(h: NodeJS.Timeout | null) { promptCompletionPollerHandle = h; }
 /** Set the active execution context (or null to clear). */
@@ -163,14 +177,6 @@ export function setDeveloperWorkspaceMonitor(t: NodeJS.Timeout | null) { develop
 export function setDeveloperWorkspaceSnapshot(m: Map<string, number>) { developerWorkspaceSnapshot = m; }
 /** Set whether the developer step loop is currently active. */
 export function setDeveloperStepLoopActive(v: boolean) { developerStepLoopActive = v; }
-/** Set whether a CEO proposal LLM call is in flight. */
-export function setCeoProposalInFlight(v: boolean) { ceoProposalInFlight = v; }
-/** Set the CEO proposal consecutive failure count. */
-export function setCeoProposalFailureCount(n: number) { ceoProposalFailureCount = n; }
-/** Set the CEO proposal cooldown expiry timestamp (epoch ms). */
-export function setCeoProposalCooldownUntilMs(ms: number) { ceoProposalCooldownUntilMs = ms; }
-/** Set whether sprint completion has already been triggered this cycle. */
-export function setSprintCompletionTriggered(v: boolean) { sprintCompletionTriggered = v; }
 
 // ─── Reactive event emitter (wired by server.ts) ─────────────────
 let reactiveEventEmitter: ((companyId: string, agentId: string, role: AgentIdentity["role"], event: BeatEventTrigger) => void) | null = null;
@@ -247,7 +253,6 @@ export function resetOrchestratorState() {
   agentSessions.clear();
   artifacts.length = 0;
   executionStatus = "idle";
-  eventBridgeStarted = false;
   pendingPromptCompletions.clear();
   if (promptCompletionPollerHandle) { clearInterval(promptCompletionPollerHandle); promptCompletionPollerHandle = null; }
   activeExecution = null;
@@ -255,10 +260,9 @@ export function resetOrchestratorState() {
   if (developerWorkspaceMonitor) { clearInterval(developerWorkspaceMonitor); developerWorkspaceMonitor = null; }
   developerWorkspaceSnapshot = new Map();
   developerStepLoopActive = false;
-  ceoProposalInFlight = false;
-  ceoProposalFailureCount = 0;
-  ceoProposalCooldownUntilMs = 0;
-  sprintCompletionTriggered = false;
+  // Gates auto-clear on settle; nothing to reset here. The `eventBridgeOnce`
+  // and `sprintCompletionGate` instances stay in place across resets so any
+  // in-flight work observes a consistent gate.
   reactiveEventEmitter = null;
   meetingSchedulerRef = null;
 }

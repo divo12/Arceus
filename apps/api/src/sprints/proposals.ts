@@ -17,7 +17,7 @@ import { persistSprint, persistTask } from "../persistence/domain-persistence.js
 import { workspaceManager } from "../workspace/manager.js";
 import {
   setExecutionStatus,
-  eventBridgeStarted,
+  eventBridgeOnce,
   setActiveExecution,
 } from "../orchestration/state.js";
 import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js";
@@ -237,10 +237,12 @@ export async function beginSprintExecution(
   try {
     await workspaceManager.ensureLocal(companyId);
 
-    if (!eventBridgeStarted && onStartEventBridge) {
-      // The bridge owns the started-flag now (C3 — F-273/274/290).
-      // Don't pre-set it true — wait for the SSE handshake.
-      swallowAndAudit("event_bridge.start.from_sprint", () => onStartEventBridge(),
+    if (onStartEventBridge) {
+      // C6 — `eventBridgeOnce` dedups concurrent starts so this is safe
+      // to call unconditionally. The previous `if (!eventBridgeStarted)`
+      // had a check-then-act race against checklist-executor.
+      swallowAndAudit("event_bridge.start.from_sprint", () =>
+        eventBridgeOnce.run(() => onStartEventBridge()),
         { companyId, detail: { context: "sprint_proposal_execute" } });
     }
 

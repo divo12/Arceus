@@ -29,7 +29,7 @@ import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
 import { isCeoStreaming } from "../agents/chat.js";
 import { applyGovernanceToMutation } from "../skills/governance.js";
-import { eventBridgeStarted } from "../orchestration/state.js";
+import { eventBridgeOnce } from "../orchestration/state.js";
 import { createWorkflowTask } from "@arceus/task-engine";
 import { upsertTask } from "../persistence/mutations.js";
 import { checkSprintCompletion } from "../sprints/lifecycle.js";
@@ -87,12 +87,12 @@ export async function executeChecklistAction(
     if (clSprintId) emitGraphBeatCompleted(clSprintId, clSprintId, clBeatId, status, summary, toolCalls, Date.now() - clBeatStart);
   };
 
-  // Ensure the SSE event bridge is running. startEventBridge owns the
-  // started-flag — sets it true only after the SSE handshake succeeds, and
-  // resets it on disconnect (C3 — F-273/274/290 fix).
-  if (!eventBridgeStarted) {
-    swallowAndAudit("event_bridge.start", () => startEventBridge());
-  }
+  // Ensure the SSE event bridge is running. `eventBridgeOnce` dedups
+  // concurrent starts (C6 — F-273/274/290 fix); fire-and-forget here
+  // because the bridge promise resolves only on disconnect.
+  swallowAndAudit("event_bridge.start", () =>
+    eventBridgeOnce.run(() => startEventBridge()),
+  );
 
   emitEmployeeActivity(role, "decision", `${shortBeat(beatId)}: ${action.suggestedAction}`, {
     beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
