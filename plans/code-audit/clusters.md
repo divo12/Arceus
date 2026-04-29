@@ -5,30 +5,92 @@
 
 ---
 
+## Status legend
+
+- ✅ **closed** — all cited findings remediated, verified by gates
+- 🟡 **partial** — most findings closed; specific deferrals listed inline
+- 🔴 **open** — no remediation landed yet
+
 ## Priority board
 
-| P | Cluster | What breaks today | Scope |
-|---|---|---|---|
-| **P0** | [C1 · CAS disabled, silent lost writes](#c1--cas-disabled--silent-lost-writes) | Concurrent beats, two-writers races, lost mutations | Persistence + task + meeting + trust |
-| **P0** | [C2 · Silent error swallowing](#c2--silent-error-swallowing) | State drifts from DB for minutes before detection | Persistence, heartbeats, audit, event-bridge |
-| **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
-| **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
-| **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
-| **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
-| **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
-| **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
-| **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
-| **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
-| **P1** | [C18 · Database layer (packages/db)](#c18--database-layer--packagesdb) | jsonb blob schema, missing FKs + indexes, migration races, pool discipline | `packages/db/*` |
-| **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
-| **P2** | [C12 · Type-safety leaks (`as any`, `z.unknown()`)](#c12--type-safety-leaks) | Runtime-only guarantees; schema drift | `request.body as {…}`, contracts events, roleTools |
-| **P2** | [C13 · REST anti-patterns](#c13--rest-anti-patterns) | Client SDKs cannot generically parse, no versioning, SSE buffer-overrun | routes/* surface |
-| **P2** | [C14 · God files & god functions](#c14--god-files--god-functions) | Hard to test, hard to refactor, hidden coupling | server, ceo, heartbeat, review, executor |
-| **P2** | [C15 · Observability gaps](#c15--observability-gaps) | Debugging blind spots: truncations, console.log, no decision trail | All |
-| **P3** | [C16 · Dead code / deprecated exports](#c16--dead-code--deprecated-exports) | Confuses readers, blocks refactors | ~15 sites |
-| **P3** | [C17 · Magic constants](#c17--magic-constants) | Tuning requires multi-site edits | ~40+ sites |
+| P | Cluster | Status | What breaks today | Scope |
+|---|---|---|---|---|
+| **P0** | [C1 · CAS disabled, silent lost writes](#c1--cas-disabled--silent-lost-writes) | 🔴 open | Concurrent beats, two-writers races, lost mutations | Persistence + task + meeting + trust |
+| **P0** | [C2 · Silent error swallowing](#c2--silent-error-swallowing) | 🟡 partial | State drifts from DB for minutes before detection | Persistence, heartbeats, audit, event-bridge |
+| **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | 🟡 partial | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
+| **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | 🟡 partial | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
+| **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | 🔴 open | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
+| **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | 🔴 open | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
+| **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | 🔴 open | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
+| **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | 🟡 partial | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
+| **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | 🟡 partial | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
+| **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | 🔴 open | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
+| **P1** | [C18 · Database layer (packages/db)](#c18--database-layer--packagesdb) | 🟡 partial | jsonb blob schema, missing FKs + indexes, migration races, pool discipline | `packages/db/*` |
+| **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | 🔴 open | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
+| **P2** | [C12 · Type-safety leaks (`as any`, `z.unknown()`)](#c12--type-safety-leaks) | ✅ closed | Runtime-only guarantees; schema drift | `request.body as {…}`, contracts events, roleTools |
+| **P2** | [C13 · REST anti-patterns](#c13--rest-anti-patterns) | 🔴 open | Client SDKs cannot generically parse, no versioning, SSE buffer-overrun | routes/* surface |
+| **P2** | [C14 · God files & god functions](#c14--god-files--god-functions) | 🔴 open | Hard to test, hard to refactor, hidden coupling | server, ceo, heartbeat, review, executor |
+| **P2** | [C15 · Observability gaps](#c15--observability-gaps) | 🟡 partial | Debugging blind spots: truncations, console.log, no decision trail | All |
+| **P3** | [C16 · Dead code / deprecated exports](#c16--dead-code--deprecated-exports) | 🟡 partial | Confuses readers, blocks refactors | ~15 sites |
+| **P3** | [C17 · Magic constants](#c17--magic-constants) | 🔴 open | Tuning requires multi-site edits | ~40+ sites |
 
 **Recommended fix sequence:** C2 → C1 → C4 → C5 → C3 (one-sprint P0 sweep), then C8 + C6 + C7 + C9 (one-sprint P1 sweep), then C11/C12 as umbrella refactors during normal feature work.
+
+---
+
+## Remediation log (chronological)
+
+| Commit | Cluster | What landed |
+|---|---|---|
+| `26b43f3` | C2 | `swallowAndAudit` helper + 31 silent-catch sites migrated |
+| `12199b1` | infra | mandatory ESLint + lint-staged + husky pre-commit + 2 CI jobs |
+| `63d69cf` | C12 (prep) | auto-fix 198 stylistic violations across 142 files |
+| `5f7afa6` | C2/C3/C16 | 70 floating/misused-promise sites + 29 catch-typing + most C16 cleared |
+| `a0213ee` | C2/C3 | 14 bare `.catch(console.X)` → `swallowAndAudit` / `observability.logEvent` |
+| `224f243` | **C4** | admin bearer-token gate on `/api/*` mutations + CORS allow-list + debug-route prod 404 |
+| `99df907` | **C4** | `sanitizeError()` helper for `err.message` leaks (F-429) |
+| `978de53` | **C12** | 286 `no-unsafe-*` sites → 0 in non-TUI/web (event-bridge typed, `(sprint as any)` removed, JSON imports) |
+| `13c282b` | **C12** | F-397 `edge_added` GraphEvent variant; F-365/386 taskAction enums; F-426 Zod `request.body`; F-031 `cardData` discriminated union |
+| `0520084` | C9 | F-045 artifacts ring buffer + F-391/F-392 pendingFlush cap + transitions/feedback log caps |
+| `6259403` | **C8** | 6 read-modify-write helpers wrapped in `db.transaction()` (F-104/F-256/F-277); F-361 `commitScheduledMeeting` transactional dep; F-347 sprint tag-before-flip guard |
+
+### Cluster-by-cluster status
+
+**C2 (silent error swallowing) — 🟡 partial**
+- ✅ Closed: 31 sites via `swallowAndAudit` migration, 14 bare `.catch(console.X)` chains routed through observability error sink, ESLint `no-restricted-syntax` gate live, `scripts/check-no-silent-catch.ts` enforced in pre-commit.
+- 🔴 Open: F-391/F-392 audit-ledger overflow handling beyond pendingFlush cap (full DB-failure recovery story); F-349 QA-parse fallback semantics; F-394 SSE subscriber cleanup audit pass; ~15 audit-cited `.catch(console.warn)` sites in deeper async chains.
+
+**C3 (fire-and-forget critical paths) — 🟡 partial**
+- ✅ Closed: 81 `no-floating-promises` + `no-misused-promises` sites across 18 files; ATA pipeline routed through `swallowAndAudit`; `recordCeoCardMeeting` awaited (F-319); `attachArtifactToTask` made async with real bug fix.
+- 🔴 Open: no persistent job queue / DLQ infrastructure exists yet; F-273/F-274/F-290 `setEventBridgeStarted(true)` race; failures are now observable but not retryable.
+
+**C4 (security — governance off + no auth) — 🟡 partial**
+- ✅ Closed: F-424 admin bearer token on every mutating `/api/*` route; F-428 debug routes 404 in prod; F-438 approvals gated; F-450 CORS allow-list; F-429 `sanitizeError()` for client error responses.
+- 🔴 Open: F-255/F-257 `GOVERNANCE_ENABLED = false` flip (deliberate deferral per user); web frontend Next.js Route Handler proxy still needs to inject admin token for `ARCEUS_REQUIRE_AUTH=1`.
+
+**C8 (non-atomic multi-step writes) — 🟡 partial**
+- ✅ Closed: F-104/F-256 read-modify-write atomicity (6 `updateX` helpers wrapped in `db.transaction()`); F-277 meeting contributions atomic on the persistence side; F-347 sprint completion blocks status flip until tagSprint succeeds; F-361 scheduler fires meeting + advances schedule via single `commitScheduledMeeting` transaction.
+- 🔴 Open: F-305 `setActiveExecution(null)` TOCTOU (re-classified as C6 — module-level state, not a DB write); F-364 ensure-daily-sync race (needs unique constraint `(company_id, type, date)` + INSERT…ON CONFLICT — separate migration); F-350 sprint approval (createSprint + N×createTask + updateSprint atomicity needs persistSprint/persistTask refactor to accept tx parameter).
+
+**C9 (unbounded memory growth) — 🟡 partial**
+- ✅ Closed: F-045 `artifacts[]` ring buffer (`MAX_RECENT_ARTIFACTS=500`); F-391/F-392 `pendingFlush` cap (`MAX_PENDING_FLUSH=10_000`) with drop-oldest counter; transitionsLog/feedbackRoundsLog capped at 500; F-394/F-398 already capped pre-audit (activity log 2000 + SSE close cleanup); F-361 priming `recentEvents` already capped (slice(0, 5)).
+- 🔴 Open: F-393 graph store retention + 11 node-collection caps; F-417 pgvector `list()` cursor pagination (3 store impls + 4 service callers).
+
+**C12 (type-safety leaks) — ✅ closed**
+- All cited findings remediated: F-426 `request.body as { ... }` Zod-parsed in 7 routes; F-257 `(roleTools as any)` cleared; F-433/F-453 `body.role/kind as any` subsumed by F-426; F-031 `cardData` discriminated union (other freeform `z.record` uses documented as intentional); F-397 `edge_added` GraphEvent variant; F-365/F-386 taskAction enums; F-296/F-297 OpenCodeEvent typed.
+- Net: 286 `no-unsafe-*` sites → 0 in non-TUI/web. ESLint surface 1016 → 737.
+
+**C15 (observability gaps) — 🟡 partial**
+- ✅ Closed: pendingFlush counter exposed via `/api/audit/status`; `sanitizeError()` includes `correlationId` for client/server log joining.
+- 🔴 Open: ~30 `console.log/warn/error` sites in prod paths (F-037/F-237/F-323/F-343/F-402); truncations without `…` markers (F-094 family); checklist decision audit trail (F-248); SSE keepalive heartbeats; `X-Request-Id` on every error response.
+
+**C16 (dead code / deprecated) — 🟡 partial**
+- ✅ Closed: 37/49 deprecated callsites; 33 pgTable schemas migrated to array form; `runPatternPromotionSweep` route migrated to `runCrossSprintTransfer`; `z.string().url()` → `z.url()`.
+- 🔴 Open: 12 `trustScoresTable` callsites (intentional — Spec 31b deferred migration; legacy text-PK score model coexists with canonical role_trust band model).
+
+**C18 (database layer) — 🟡 partial**
+- ✅ Closed: drift test gates schema vs canonical agreement (5/5 pass); migration runner via canonical schema definitions; pgTable signature migrated.
+- 🔴 Open: F-174 jsonb-blob extraction (the big one — `company_states.snapshot_data` still holds tasks/sprints/meetings inline); FK + index pass; `pg_advisory_lock` migration discipline; atomic counter updates.
 
 ---
 
