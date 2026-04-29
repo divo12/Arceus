@@ -31,6 +31,21 @@ export interface MeetingSchedulerDeps {
   upsertMeeting: (meeting: Meeting) => Promise<Meeting>;
   upsertMeetingSchedule: (schedule: MeetingSchedule) => Promise<MeetingSchedule>;
   updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => Promise<MeetingSchedule | null>;
+  /**
+   * Audit C8 (F-361): atomic "fire a scheduled meeting" — creates the
+   * meeting row AND advances the schedule's lastMeetingId / skipCount /
+   * nextCheckAt in a single DB transaction. If the process dies mid-
+   * write the whole pair rolls back, so the schedule never claims to
+   * have fired a meeting that doesn't exist (and vice versa).
+   *
+   * Returns the persisted meeting, or `null` if the schedule row
+   * disappeared between the snapshot read and the commit.
+   */
+  commitScheduledMeeting: (
+    meeting: Meeting,
+    scheduleId: string,
+    scheduleUpdater: (s: MeetingSchedule) => MeetingSchedule,
+  ) => Promise<Meeting | null>;
   flush: () => Promise<void>;
   runPipeline: (meetingId: string) => Promise<void>;
 }
@@ -147,19 +162,27 @@ export class MeetingScheduler {
           continue;
         }
 
-        // Create scheduled meeting
+        // Audit C8 (F-361): meeting INSERT + schedule UPDATE commit
+        // atomically. Previously two sequential awaits — a crash
+        // between left the schedule pointing at a meeting that didn't
+        // exist (or vice versa). Now both land or neither.
         const meeting = this.createScheduledMeeting(snap, schedule);
-        await this.deps.upsertMeeting(meeting);
-
-        // Update schedule — link meeting, reset skip count, advance
-        await this.deps.updateMeetingSchedule(schedule.id, (s) => ({
-          ...s,
-          lastCheckedAt: nowIso,
-          lastMeetingId: meeting.id,
-          nextCheckAt: nextCheckIso,
-          skipCount: 0,
-          totalRuns: s.totalRuns + 1,
-        }));
+        const persisted = await this.deps.commitScheduledMeeting(
+          meeting,
+          schedule.id,
+          (s) => ({
+            ...s,
+            lastCheckedAt: nowIso,
+            lastMeetingId: meeting.id,
+            nextCheckAt: nextCheckIso,
+            skipCount: 0,
+            totalRuns: s.totalRuns + 1,
+          }),
+        );
+        if (!persisted) {
+          console.warn(`[MEETING-SCHEDULER] Schedule ${schedule.id} vanished during commit — meeting not created`);
+          continue;
+        }
 
         console.log(`[MEETING-SCHEDULER] Created ${schedule.type} meeting ${meeting.id}`);
 

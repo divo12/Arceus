@@ -197,6 +197,21 @@ export async function finalizeSprintCompletion(
     detail: { sprintNumber: sprint.number, sprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
   });
 
+  // Audit C8 (F-347): tag the snapshot BEFORE flipping sprint status.
+  // Previously we flipped to "completed" then awaited tagSprint, and if
+  // the tag throw landed in the inner catch the sprint row stayed
+  // `completed` while the canonical snapshot row was missing — operators
+  // had no way to retry without a manual DB edit. Now tag-first means a
+  // git/Supabase failure leaves the sprint in `reviewing` and an
+  // operator (or the next finalize call) can retry cleanly.
+  const tagResult = await tagCurrentSprintSnapshot();
+  if (!tagResult.ok) {
+    emitEmployeeActivity("system", "error", `Sprint ${sprint.number} completion HELD — snapshot tag failed: ${tagResult.error}`, {
+      detail: { sprintId, sprintNumber: sprint.number, error: tagResult.error },
+    });
+    return;
+  }
+
   await updateSprint(sprintId, (s) => ({
     ...s,
     status: "completed",
@@ -206,8 +221,6 @@ export async function finalizeSprintCompletion(
   }));
 
   emitGraphSprintCompleted(sprintId, "completed");
-
-  await tagCurrentSprintSnapshot();
 
   // Spec 14 Phase 6 / Audit C3.1 (F-377): cross-sprint pattern transfer is
   // fire-and-forget but failures must surface to the audit trail — without
@@ -238,12 +251,15 @@ export async function finalizeSprintCompletion(
   setExecutionStatus("done");
 }
 
-async function tagCurrentSprintSnapshot() {
-  // Spec 31 Phase 7.B.4 — read via canonical-backed view.
-  // workspaceManager.tagSprint persists the full snapshot as a git
-  // tag payload, so we still build the full view here.
-  // requireActiveCompanyId throws when no company; the dead "company_pending"
-  // string-equality guard from 7.B was retired by 7.C.1.
+type TagSprintResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Audit C8 (F-347): returns success/failure instead of swallowing the
+ * tag error to a log-only side-channel. The caller checks `ok` before
+ * flipping sprint status — a tag failure leaves the sprint recoverable
+ * in `reviewing` instead of stranded in `completed` with no bundle.
+ */
+async function tagCurrentSprintSnapshot(): Promise<TagSprintResult> {
   const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
 
@@ -254,9 +270,12 @@ async function tagCurrentSprintSnapshot() {
         taskId: activeExecution?.reviewTaskId ?? null,
       });
     }
+    return { ok: true };
   } catch (error) {
-    emitEmployeeActivity("system", "error", error instanceof Error ? error.message : "Sprint snapshot failed.", {
+    const message = error instanceof Error ? error.message : "Sprint snapshot failed.";
+    emitEmployeeActivity("system", "error", message, {
       taskId: activeExecution?.reviewTaskId ?? null,
     });
+    return { ok: false, error: message };
   }
 }

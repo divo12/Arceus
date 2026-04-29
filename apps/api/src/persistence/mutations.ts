@@ -54,16 +54,24 @@ export async function upsertTask(task: Task): Promise<Task> {
 /**
  * Read-modify-write for a task. Returns the new task on success, null
  * if the task doesn't exist.
+ *
+ * Audit C8 (F-104/F-256): wrapped in `db.transaction()` so the read +
+ * write commit atomically. A crash between findByIdHydrated and
+ * upsertTask now rolls back instead of leaving the row half-updated.
+ * Concurrent writers still race (lost-update is C1's CAS territory),
+ * but per-call atomicity is now crash-safe.
  */
 export async function updateTask(
   taskId: string,
   updater: (task: Task) => Task,
 ): Promise<Task | null> {
-  const current = await tasksRepo.findByIdHydrated(getDb(), taskId);
-  if (!current) return null;
-  const next = updater(current);
-  await tasksRepo.upsertTask(getDb(), next);
-  return next;
+  return await getDb().transaction(async (tx) => {
+    const current = await tasksRepo.findByIdHydrated(tx, taskId);
+    if (!current) return null;
+    const next = updater(current);
+    await tasksRepo.upsertTask(tx, next);
+    return next;
+  });
 }
 
 // ─── Sprints ──────────────────────────────────────────────────────
@@ -73,33 +81,42 @@ export async function upsertSprint(sprint: Sprint): Promise<Sprint> {
   return sprint;
 }
 
+/**
+ * Read-modify-write for a sprint. Audit C8 — atomic via `db.transaction`.
+ */
 export async function updateSprint(
   sprintId: string,
   updater: (sprint: Sprint) => Sprint,
 ): Promise<Sprint | null> {
-  const current = await sprintsRepo.findByIdHydrated(getDb(), sprintId);
-  if (!current) return null;
-  const next = updater(current);
-  await sprintsRepo.upsertSprint(getDb(), next);
-  return next;
+  return await getDb().transaction(async (tx) => {
+    const current = await sprintsRepo.findByIdHydrated(tx, sprintId);
+    if (!current) return null;
+    const next = updater(current);
+    await sprintsRepo.upsertSprint(tx, next);
+    return next;
+  });
 }
 
 /**
  * Update the company's currentSprintId / currentSprintNumber pointer.
  * Pulled out of the company row updater so callers don't have to
  * read-modify-write the whole company.
+ *
+ * Audit C8 — atomic via `db.transaction`.
  */
 export async function updateCompanySprint(
   companyId: string,
   sprintId: string | null,
   sprintNumber: number | null,
 ): Promise<void> {
-  const company = await companiesRepo.findByIdHydrated(getDb(), companyId);
-  if (!company) return;
-  await companiesRepo.upsertCompany(getDb(), {
-    ...company,
-    currentSprintId: sprintId,
-    currentSprintNumber: sprintNumber,
+  await getDb().transaction(async (tx) => {
+    const company = await companiesRepo.findByIdHydrated(tx, companyId);
+    if (!company) return;
+    await companiesRepo.upsertCompany(tx, {
+      ...company,
+      currentSprintId: sprintId,
+      currentSprintNumber: sprintNumber,
+    });
   });
 }
 
@@ -110,15 +127,24 @@ export async function upsertMeeting(meeting: Meeting): Promise<Meeting> {
   return meeting;
 }
 
+/**
+ * Read-modify-write for a meeting. Audit C8 (F-277): atomic via
+ * `db.transaction` so an update never leaves the meeting row half-
+ * written. Two parallel contributions still race (full-object spread
+ * → last-write-wins), but the audit-cited "crash mid-write leaves
+ * inconsistent state" is closed.
+ */
 export async function updateMeeting(
   meetingId: string,
   updater: (meeting: Meeting) => Meeting,
 ): Promise<Meeting | null> {
-  const current = await meetingsRepo.findByIdHydrated(getDb(), meetingId);
-  if (!current) return null;
-  const next = updater(current);
-  await meetingsRepo.upsertMeeting(getDb(), next);
-  return next;
+  return await getDb().transaction(async (tx) => {
+    const current = await meetingsRepo.findByIdHydrated(tx, meetingId);
+    if (!current) return null;
+    const next = updater(current);
+    await meetingsRepo.upsertMeeting(tx, next);
+    return next;
+  });
 }
 
 /**
@@ -131,6 +157,33 @@ export async function writeMeetingSync(meeting: Meeting): Promise<Meeting> {
   return meeting;
 }
 
+/**
+ * Audit C8 (F-361) — atomic meeting fire. Persists the meeting AND
+ * advances its schedule (`lastMeetingId`, `skipCount`, `nextCheckAt`,
+ * `totalRuns`) in a single transaction. Used by the scheduler tick
+ * loop so a crash mid-fire doesn't leave the schedule pointing at a
+ * meeting that doesn't exist (or vice versa).
+ *
+ * Returns the persisted meeting on success, `null` if the schedule
+ * row disappeared between the caller's snapshot read and the commit
+ * (extremely rare but cheap to defend against).
+ */
+export async function commitScheduledMeeting(
+  meeting: Meeting,
+  scheduleId: string,
+  scheduleUpdater: (s: MeetingSchedule) => MeetingSchedule,
+): Promise<Meeting | null> {
+  return await getDb().transaction(async (tx) => {
+    const row = await meetingSchedulesRepo.findById(tx, scheduleId);
+    if (!row) return null;
+    const current = meetingSchedulesRepo.rowToSchedule(row);
+    const next = scheduleUpdater(current);
+    await meetingsRepo.upsertMeeting(tx, meeting);
+    await meetingSchedulesRepo.upsertSchedule(tx, next);
+    return meeting;
+  });
+}
+
 // ─── Meeting schedules ────────────────────────────────────────────
 
 export async function upsertMeetingSchedule(
@@ -140,16 +193,19 @@ export async function upsertMeetingSchedule(
   return schedule;
 }
 
+/** Read-modify-write for a meeting schedule. Audit C8 — atomic. */
 export async function updateMeetingSchedule(
   scheduleId: string,
   updater: (s: MeetingSchedule) => MeetingSchedule,
 ): Promise<MeetingSchedule | null> {
-  const row = await meetingSchedulesRepo.findById(getDb(), scheduleId);
-  if (!row) return null;
-  const current = meetingSchedulesRepo.rowToSchedule(row);
-  const next = updater(current);
-  await meetingSchedulesRepo.upsertSchedule(getDb(), next);
-  return next;
+  return await getDb().transaction(async (tx) => {
+    const row = await meetingSchedulesRepo.findById(tx, scheduleId);
+    if (!row) return null;
+    const current = meetingSchedulesRepo.rowToSchedule(row);
+    const next = updater(current);
+    await meetingSchedulesRepo.upsertSchedule(tx, next);
+    return next;
+  });
 }
 
 // ─── Approvals ────────────────────────────────────────────────────
@@ -159,15 +215,18 @@ export async function upsertApproval(approval: Approval): Promise<Approval> {
   return approval;
 }
 
+/** Read-modify-write for an approval. Audit C8 — atomic. */
 export async function updateApproval(
   approvalId: string,
   updater: (approval: Approval) => Approval,
 ): Promise<Approval | null> {
-  const current = await approvalsRepo.findByIdHydrated(getDb(), approvalId);
-  if (!current) return null;
-  const next = updater(current);
-  await approvalsRepo.upsertApproval(getDb(), next);
-  return next;
+  return await getDb().transaction(async (tx) => {
+    const current = await approvalsRepo.findByIdHydrated(tx, approvalId);
+    if (!current) return null;
+    const next = updater(current);
+    await approvalsRepo.upsertApproval(tx, next);
+    return next;
+  });
 }
 
 // ─── Board chat ───────────────────────────────────────────────────
@@ -179,16 +238,19 @@ export async function appendChatMessage(message: ChatMessage): Promise<ChatMessa
 
 // ─── Agents ───────────────────────────────────────────────────────
 
+/** Read-modify-write for an agent's memory summary. Audit C8 — atomic. */
 export async function updateAgentMemory(
   agentId: string,
   companyId: string,
   updater: (memory: MemorySummary) => MemorySummary,
 ): Promise<MemorySummary | null> {
-  const current = await memorySummariesRepo.findByAgentHydrated(getDb(), agentId);
-  if (!current) return null;
-  const next = updater(current);
-  await memorySummariesRepo.upsertSummary(getDb(), next, companyId);
-  return next;
+  return await getDb().transaction(async (tx) => {
+    const current = await memorySummariesRepo.findByAgentHydrated(tx, agentId);
+    if (!current) return null;
+    const next = updater(current);
+    await memorySummariesRepo.upsertSummary(tx, next, companyId);
+    return next;
+  });
 }
 
 export async function updateAgentStatus(
