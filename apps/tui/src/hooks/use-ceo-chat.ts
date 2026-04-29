@@ -25,7 +25,7 @@ export function useCeoChat(): CeoChatState {
   const refreshHistory = useCallback(() => {
     // eslint-disable-next-line no-restricted-syntax -- intentional: TUI CEO chat fire-and-forget — UI shows error from server response.
     api<CompanySnapshot>("/api/company")
-      .then((snap) => setMessages(snap.chatMessages ?? []))
+      .then((snap) => { setMessages(snap.chatMessages ?? []); })
       .catch(() => {});
   }, []);
 
@@ -76,7 +76,7 @@ export function useCeoChat(): CeoChatState {
     };
   }, []);
 
-  const clearMessages = () => setMessages([]);
+  const clearMessages = () => { setMessages([]); };
 
   return { messages, streaming, streamText, error, send, refreshHistory, clearMessages };
 }

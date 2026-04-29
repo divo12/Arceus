@@ -2,7 +2,7 @@ import type { AgentIdentity, CompanySnapshot } from "@arceus/contracts";
 import type { Message, Part, SessionPromptData } from "@opencode-ai/sdk";
 
 /** Element shape of `client.session.messages({...}).data` per OpenCode SDK. */
-type SessionMessage = { info: Message; parts: Part[] };
+interface SessionMessage { info: Message; parts: Part[] }
 
 /** The `body` we send to `client.session.prompt()`. Required = SessionPromptData["body"]. */
 type SessionPromptBody = NonNullable<SessionPromptData["body"]>;
@@ -29,7 +29,7 @@ import { hippocampus } from "../memory/extractors.js";
 
 /** Create a new OpenCode session for an agent and register it in the session map. */
 export async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
-  const soul = getRoleSoul(agent.role as AgentIdentity["role"]);
+  const soul = getRoleSoul(agent.role);
   if (!soul) throw new Error(`No SOUL policy for role: ${agent.role}`);
 
   const opencode = await getOpencode();
@@ -161,13 +161,13 @@ async function pollPendingPromptCompletions() {
 
     for (const [sessionId, _entry] of pendingPromptCompletions) {
       const sessionStatus = statusMap[sessionId];
-      if (sessionStatus && sessionStatus.type === "idle") {
+      if (sessionStatus?.type === "idle") {
         emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… is idle — resolving completion`);
         resolvePromptCompletion(sessionId);
       } else if (!sessionStatus) {
         try {
           const messagesResult = await opencode.client.session.messages({ path: { id: sessionId } });
-          const messages = messagesResult.data as SessionMessage[] | undefined;
+          const messages = messagesResult.data;
           const hasAssistant = messages?.some((m) => m.info?.role === "assistant");
           if (hasAssistant) {
             emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… not in status but has assistant response — resolving`);
@@ -280,7 +280,7 @@ export async function runPromptText(
         path: { id: currentSessionId },
       });
 
-      const messages = messagesResult.data as SessionMessage[] | undefined;
+      const messages = messagesResult.data;
       if (!messages || messages.length === 0) {
         return "";
       }

@@ -283,7 +283,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     if (body === null) return;
     const { skipPreview, timeoutMs } = body ?? {};
 
-    const failures: Array<{ category: string; errors: string[] }> = [];
+    const failures: { category: string; errors: string[] }[] = [];
 
     // Typecheck
     const tsc = await runTsc(workspaceManager.getLegacyProductDir(), timeoutMs ?? 60_000);

@@ -6,17 +6,17 @@
  * 31 redesign retired — drizzle queries against `schema/*` are the
  * only persistence path now.
  */
-export type DatabaseHealth = {
+export interface DatabaseHealth {
   ok: boolean;
   kind: string;
   details?: string;
-};
+}
 
 export type DatabaseRuntimeMode = "disabled" | "direct" | "fallback";
 
-export type DatabaseConnectionConfig = {
+export interface DatabaseConnectionConfig {
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
   databaseUrl: string;
   mode: DatabaseRuntimeMode;
-};
+}

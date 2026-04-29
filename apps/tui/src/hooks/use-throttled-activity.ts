@@ -50,7 +50,7 @@ export function useThrottledActivity() {
         };
         bufferRef.current.push(evt);
       },
-      () => setConnected(false),
+      () => { setConnected(false); },
     );
     setConnected(true);
 

@@ -50,12 +50,12 @@ interface QAFinding {
 
 interface QAReport {
   verdict: "pass" | "fail";
-  tasks: Array<{
+  tasks: {
     taskId: string;
     verdict: "pass" | "fail";
     findings: QAFinding[];
-    dodChecklist: Array<{ item: string; status: "pass" | "fail"; evidence: string }>;
-  }>;
+    dodChecklist: { item: string; status: "pass" | "fail"; evidence: string }[];
+  }[];
   testFilesWritten: string[];
   buildStatus: "pass" | "fail" | "skipped";
   testSuiteStatus: "pass" | "fail" | "skipped" | "no_tests";
@@ -94,8 +94,8 @@ function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QARep
       verdict: t.verdict,
       findings: t.findings.map((f) => ({
         taskId: t.taskId,
-        defectArea: f.defect_area as DefectArea,
-        severity: f.severity as Task["priority"],
+        defectArea: f.defect_area,
+        severity: f.severity,
         description: f.description,
         expected: f.expected,
         actual: f.actual,
@@ -126,7 +126,7 @@ const ctoEscalationDecisionSchema = z.object({
 
 // ── Beat return type ────────────────────────────────────────────
 
-type BeatResult = { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number };
+interface BeatResult { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }
 
 // ── Sprint Review Verification (Spec 21) ────────────────────────
 
@@ -144,7 +144,7 @@ export async function executeSprintReviewVerification(
   // Spec 31 Phase 7.B.4.2 — task-engine call sites use canonical view.
   const snapshot = await buildSnapshotView(ctx.company.id);
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") {
+  if (sprint?.status !== "reviewing") {
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
@@ -279,7 +279,7 @@ export async function executeSprintReviewVerification(
 
     // Emit CYCLE_DIFF line (Fix #5)
     if (output && reviewState.reworkCycleCount > 0) {
-      const diffMatch = output.match(/CYCLE_DIFF:\s*resolved=(\d+)\s+recurring=(\d+)\s+new=(\d+)/i);
+      const diffMatch = /CYCLE_DIFF:\s*resolved=(\d+)\s+recurring=(\d+)\s+new=(\d+)/i.exec(output);
       if (diffMatch) {
         emitEmployeeActivity(
           "tester",
@@ -355,7 +355,7 @@ export async function executeSprintReviewVerification(
       emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: FAIL`, failReason, "tester", 0);
 
       const updatedReviewState: SprintReviewState = {
-        ...(reviewState as SprintReviewState),
+        ...(reviewState),
         testerVerdict: "fail",
         phase: "rework",
         reworkCycleCount: reviewState.reworkCycleCount + 1,
@@ -432,7 +432,7 @@ export async function executeSprintReviewVerification(
       for (const taskReport of taskReports) {
         if (taskReport.verdict !== "fail") continue;
         const hiredRoles = new Set(
-          snapshot.agents.map((a) => a.role as AgentIdentity["role"]),
+          snapshot.agents.map((a) => a.role),
         );
         const actionableFindings = taskReport.findings
           .filter((f) => f.severity === "critical" || f.severity === "high")
@@ -579,7 +579,7 @@ export async function executeSprintFinalGate(
   }
 
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
-  if (!sprint || sprint.status !== "reviewing") {
+  if (sprint?.status !== "reviewing") {
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
@@ -708,7 +708,7 @@ export async function executeCtoBeatEscalationReview(
 
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   const reviewState = sprint?.reviewState;
-  if (!sprint || !reviewState || !reviewState.escalatedToCto) {
+  if (!sprint || !reviewState?.escalatedToCto) {
     return { summary: "No escalation pending", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 

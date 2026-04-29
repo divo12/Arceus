@@ -74,12 +74,12 @@ interface SprintBudgetRecord {
   sprintId: string;
   mutationCount: number;
   budgetCentsSpent: number;
-  proposals: Array<{
+  proposals: {
     mutationId: string;
     proposedBy: string;
     costCents: number;
     at: string;
-  }>;
+  }[];
 }
 
 const sprintBudgets = new Map<string, SprintBudgetRecord>();

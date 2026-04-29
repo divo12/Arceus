@@ -387,7 +387,7 @@ export function checkSkillCandidates(companyId: string): SkillCandidate[] {
 export function analyzeSprintPatterns(
   companyId: string,
   sprintId: string,
-  minFrequency: number = 3,
+  minFrequency = 3,
 ): SkillCandidate[] {
   // Sprint-scoped patterns with sufficient frequency
   const sprintPatterns = getPatternsForCompany(companyId).filter(
@@ -433,7 +433,7 @@ export function analyzeSprintPatterns(
     // Path B: cross-sprint recurrence — same pattern seen in ≥2 sprints with
     // usageCount ≥ minFrequency. Single pattern repeated across sprint boundaries
     // is the strongest possible signal that a skill is needed.
-    const leadMember = raw.members[0]!;
+    const leadMember = raw.members[0];
     const isCrossSprintRecurrence =
       (leadMember.sprintIds ?? []).length >= 2 &&
       leadMember.usageCount >= minFrequency;

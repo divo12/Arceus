@@ -40,7 +40,7 @@ import {
 } from "../sprints/review.js";
 import { startEventBridge } from "./event-bridge.js";
 
-type HandlerResult = { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number };
+interface HandlerResult { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }
 type FinishFn = (status: "completed" | "failed", summary: string, toolCalls: number) => void;
 type ChecklistHandler = (
   ctx: AgentBeatContext,
@@ -55,7 +55,7 @@ type ChecklistHandler = (
  * The orchestrator is now role-neutral: it routes by what the checklist asked for,
  * not by who the agent is. See plans/agent-redesign/00-vision.md blocker #3.
  */
-const CHECKLIST_HANDLERS: Array<{ matches: (action: { suggestedAction: string }) => boolean; handle: ChecklistHandler }> = [
+const CHECKLIST_HANDLERS: { matches: (action: { suggestedAction: string }) => boolean; handle: ChecklistHandler }[] = [
   { matches: (a) => a.suggestedAction === "sprint_review:cto_escalation_review", handle: handleCtoEscalationReview },
   { matches: (a) => a.suggestedAction === "sprint_review:cto_escalation_force_complete", handle: handleCtoEscalationForceComplete },
   { matches: (a) => a.suggestedAction.startsWith("sprint_review:"), handle: handleTesterSprintReview },
@@ -273,7 +273,7 @@ async function handleCtoEscalationForceComplete(
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
-  if (!sprint || sprint.status !== "reviewing") {
+  if (sprint?.status !== "reviewing") {
     finish("completed", "Sprint not in reviewing state", 0);
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
@@ -411,14 +411,14 @@ async function executeSkillsLeadAction(
         emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: no underperformers`, { beatId });
         return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
       }
-      const worst = underperformers[0]!;
+      const worst = underperformers[0];
       emitEmployeeActivity("skills_lead", "working", `${shortBeat(beatId)}: mutating ${worst.name}`, { beatId });
 
       const mutation = await processTaskOutcome({
         taskId: `skills_lead_mutation_${worst.id}_${Date.now()}`,
         taskTitle: `Improve underperforming skill: ${worst.name}`,
         taskDescription: `Skill ${worst.name} has a ${(worst.successRate * 100).toFixed(0)}% success rate over ${worst.usageCount} uses. Identify root cause and propose an improved version.`,
-        assignedRole: worst.role as AgentIdentity["role"],
+        assignedRole: worst.role,
         companyId,
         status: "failed",
         iterationCount: 3,

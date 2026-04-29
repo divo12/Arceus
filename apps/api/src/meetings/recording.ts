@@ -74,11 +74,11 @@ export async function recordMeeting(params: {
             conflictId: null,
             blockerId: null,
             decision: tm.details,
-            action: (tm.modificationType === "cancel" ? "modify_task"
-                   : tm.modificationType === "assign" ? "create_task"
-                   : "modify_task") as "create_task" | "modify_task",
+            action: (tm.modificationType === "cancel" ? "modify_task" as const
+                   : tm.modificationType === "assign" ? "create_task" as const
+                   : "modify_task" as const),
             taskAction: {
-              type: (tm.modificationType === "assign" ? "create" : "update") as "create" | "update",
+              type: (tm.modificationType === "assign" ? "create" as const : "update" as const),
               issueId: tm.taskId,
               assigneeRole: tm.assignedRole ?? undefined,
               newStatus: tm.resultingStatus ?? undefined,

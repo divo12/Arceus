@@ -46,7 +46,7 @@ function ensureClient(opts: LangfuseSinkOptions): Langfuse | null {
   const secretKey = opts.secretKey ?? process.env.LANGFUSE_SECRET_KEY;
   const baseUrl = opts.baseUrl ?? process.env.LANGFUSE_BASE_URL;
   if (!publicKey || !secretKey || !baseUrl) {
-    // eslint-disable-next-line no-console
+     
     console.warn("[langfuseSink] Missing LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL — sink disabled.");
     return null;
   }
@@ -215,11 +215,11 @@ export function langfuseSink(opts: LangfuseSinkOptions = {}): EventSink {
           const beatId = "beatId" in e ? (e as { beatId: string }).beatId : undefined;
           const trace = activeTrace(beatId);
           if (trace) {
-            trace.event({ name: e.event, metadata: e as unknown as Record<string, unknown> });
+            trace.event({ name: e.event, metadata: e });
           } else {
             lf.trace({
               name: e.event,
-              input: e as unknown as Record<string, unknown>,
+              input: e,
               timestamp: new Date(e.ts),
             });
           }
@@ -230,7 +230,7 @@ export function langfuseSink(opts: LangfuseSinkOptions = {}): EventSink {
         case "permission.replied": {
           activeTrace(e.beatId)?.event({
             name: e.event,
-            metadata: e as unknown as Record<string, unknown>,
+            metadata: e,
           });
           return;
         }

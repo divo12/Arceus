@@ -14,7 +14,7 @@ export default tool({
   execute: async (args) =>
     run(async () => {
       const ctx = loadContext();
-      const res = await arceusRequest<ToolResult<unknown>>(ctx, {
+      const res = await arceusRequest<ToolResult>(ctx, {
         method: "PATCH",
         path: `/api/internal/v1/tasks/${ctx.taskId}/progress`,
         body: args,

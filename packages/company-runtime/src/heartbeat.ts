@@ -67,7 +67,7 @@ export interface BeatDependencies {
   /** Spec 31 Phase 7.C.d-cp — async to write through canonical mutators. */
   applyMutations: (
     companyId: string,
-    mutations: Array<{ type: string; [key: string]: unknown }>,
+    mutations: { type: string; [key: string]: unknown }[],
     causation?: { eventId?: string; summary?: string },
     expectedVersion?: number
   ) => Promise<{ version: number; applied: number; errors: string[] }>;
@@ -97,7 +97,7 @@ export interface BeatDependencies {
 
   /** Return list of agents for the scheduler to iterate. */
   /** Spec 31 Phase 7.C.c — async to read from canonical via repos. */
-  getAgentRoster?: () => Promise<Array<{ agentId: string; role: AgentIdentity["role"]; companyId: string }>>;
+  getAgentRoster?: () => Promise<{ agentId: string; role: AgentIdentity["role"]; companyId: string }[]>;
 
   /** Emit beat lifecycle events for SSE streaming. */
   emitBeatEvent?: (event: { type: string; beatId: string; agentId: string; role: string; data?: Record<string, unknown> }) => void;
@@ -176,12 +176,12 @@ export class HeartbeatEngine {
 
   // ── Reactive event queue (Spec 12 Phase 3) ───────────────
   // Events queued while an agent is locked (mid-beat). Drained after beat completion.
-  private readonly eventQueue = new Map<string, Array<{ companyId: string; role: AgentIdentity["role"]; event: BeatEventTrigger }>>();
+  private readonly eventQueue = new Map<string, { companyId: string; role: AgentIdentity["role"]; event: BeatEventTrigger }[]>();
 
   // ── Staged mutations (P4.3) ──────────────────────────────
   // Beats stage mutations during Phase 3 (Execute) and flush
   // them atomically in Phase 4 (Serialize).
-  private stagedMutations: Array<{ type: string; [key: string]: unknown }> = [];
+  private stagedMutations: { type: string; [key: string]: unknown }[] = [];
 
   /** Stage a mutation to be flushed at the end of the current beat. */
   stageMutation(mutation: { type: string; [key: string]: unknown }) {

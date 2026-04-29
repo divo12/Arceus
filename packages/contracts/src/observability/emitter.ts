@@ -39,14 +39,14 @@ export function getSink(): EventSink {
 export function logEvent(event: ArceusEvent): void {
   try {
     const result = currentSink.write(event);
-    if (result && typeof (result as Promise<void>).catch === "function") {
-      (result as Promise<void>).catch((err) => {
-        // eslint-disable-next-line no-console
+    if (result && typeof (result).catch === "function") {
+      (result).catch((err) => {
+         
         console.error("[logEvent] sink write failed:", err);
       });
     }
   } catch (err) {
-    // eslint-disable-next-line no-console
+     
     console.error("[logEvent] sink write threw:", err);
   }
 }

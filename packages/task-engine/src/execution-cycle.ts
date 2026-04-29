@@ -15,9 +15,9 @@ export interface ExecutionCycleCallbacks {
     facilitatorRole: string;
     participantRoles: string[];
     summary: string;
-    agenda: Array<{ topic: string; type: string; content: string; raisedByRole: string; relatedTaskId: string | null }>;
-    decisions: Array<{ description: string; decidedByRoles: string[]; impactIds: string[] }>;
-    learnings?: Array<{ role: string; content: string }>;
+    agenda: { topic: string; type: string; content: string; raisedByRole: string; relatedTaskId: string | null }[];
+    decisions: { description: string; decidedByRoles: string[]; impactIds: string[] }[];
+    learnings?: { role: string; content: string }[];
   }) => void;
   checkSprintCompletion: () => Promise<boolean>;
 }

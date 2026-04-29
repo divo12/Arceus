@@ -23,7 +23,7 @@ export const registerWorkspaceTools = (
     },
     async ({ taskId, message }) => {
       const body = { taskId, agentRole: ctx.role, message };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${WORKSPACES}/checkpoints`,
         body,
@@ -43,7 +43,7 @@ export const registerWorkspaceTools = (
     },
     async ({ timeoutMs }) => {
       const body = { timeoutMs };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${WORKSPACES}/preview-probes`,
         body,
@@ -63,7 +63,7 @@ export const registerWorkspaceTools = (
     },
     async ({ taskId }) => {
       const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${WORKSPACES}/preview-url${query}`,
       });
@@ -78,7 +78,7 @@ export const registerWorkspaceTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${WORKSPACES}/build-health`,
       });
@@ -97,7 +97,7 @@ export const registerWorkspaceTools = (
     },
     async ({ modulePath, expectedExports }) => {
       const body = { modulePath, expectedExports };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${WORKSPACES}/check-exports`,
         body,
@@ -118,7 +118,7 @@ export const registerWorkspaceTools = (
     },
     async ({ skipPreview, timeoutMs }) => {
       const body = { skipPreview, timeoutMs };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${WORKSPACES}/verify-baseline`,
         body,

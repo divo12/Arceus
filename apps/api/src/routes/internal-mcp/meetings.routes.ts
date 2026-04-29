@@ -167,8 +167,8 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
         modificationType: m.modificationType,
         details: m.details,
         assignedRole: (m.assignedRole ?? null) as AgentIdentity["role"] | null,
-        priority: (m.priority ?? null) as Task["priority"] | null,
-        resultingStatus: (m.resultingStatus ?? null) as Task["status"] | null,
+        priority: (m.priority ?? null),
+        resultingStatus: (m.resultingStatus ?? null),
       })),
       memoryModifications: body.memoryModifications?.map((m) => ({
         role: m.role as AgentIdentity["role"],

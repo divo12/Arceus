@@ -140,7 +140,7 @@ export async function executeMeetingDecisions(
   for (const decision of resolutions.decisions) {
     switch (decision.action) {
       case "create_task": {
-        if (!decision.taskAction || decision.taskAction.type !== "create") break;
+        if (decision.taskAction?.type !== "create") break;
         const ta = decision.taskAction;
         const task: Task = {
           id: `task_${crypto.randomUUID()}`,

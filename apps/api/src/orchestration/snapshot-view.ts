@@ -150,7 +150,7 @@ export async function buildSnapshotView(companyId: string): Promise<CompanySnaps
     sprints,
     hierarchy,
     memories,
-    tasks: tasks as Task[],
+    tasks: tasks,
     approvals,
     meetings,
     meetingSchedules,

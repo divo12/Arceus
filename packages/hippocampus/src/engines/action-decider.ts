@@ -33,7 +33,7 @@ Rules:
  */
 export function buildActionDecisionUserPrompt(
   newFact: string,
-  existingMemories: Array<{ id: string; content: string; type: string; confidence: number }>,
+  existingMemories: { id: string; content: string; type: string; confidence: number }[],
 ): string {
   const memoryList = existingMemories.length === 0
     ? "(No existing memories found)"

@@ -147,7 +147,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (!enforceRole(req, reply, READ_ROLES)) return;
     if (!requireDb(reply)) return;
     const parsed = healthReportSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const db = getDb();
@@ -172,7 +172,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
        WHERE skill_id IN ${sql.raw(`(${ids.map((id) => `'${id}'`).join(",")})`)}
          AND occurred_at >= ${since.toISOString()}
        GROUP BY skill_id
-    `)) as unknown as Array<{ skill_id: string; invocations: number; pass_rate: number | null }>;
+    `)) as unknown as { skill_id: string; invocations: number; pass_rate: number | null }[];
 
     const usage = new Map<string, { invocations: number; passRate: number }>();
     for (const r of usageRows) {
@@ -186,7 +186,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
          AND created_at >= ${new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()}
          AND skill_id IN ${sql.raw(`(${ids.map((id) => `'${id}'`).join(",")})`)}
        GROUP BY skill_id
-    `)) as unknown as Array<{ skill_id: string; rollback_count: number }>;
+    `)) as unknown as { skill_id: string; rollback_count: number }[];
     const rollback = new Map(rollbackRows.map((r) => [r.skill_id, r.rollback_count]));
 
     const data = skillRows.map((s) => {
@@ -215,7 +215,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (!enforceRole(req, reply, READ_ROLES)) return;
     if (!requireDb(reply)) return;
     const parsed = auditUnusedSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const db = getDb();
@@ -237,7 +237,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
       SELECT DISTINCT skill_id FROM skill_usage_events
        WHERE skill_id IN ${sql.raw(`(${ids.map((id) => `'${id}'`).join(",")})`)}
          AND occurred_at >= ${cutoff.toISOString()}
-    `)) as unknown as Array<{ skill_id: string }>;
+    `)) as unknown as { skill_id: string }[];
     const recentlyUsed = new Set(recentRows.map((r) => r.skill_id));
 
     const stale = candidates
@@ -264,7 +264,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (!enforceRole(req, reply, READ_ROLES)) return;
     if (!requireDb(reply)) return;
     const parsed = inspectHistorySchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const db = getDb();
@@ -315,7 +315,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
   app.post(`${SKILLS_BASE}/validate-definition`, async (req, reply) => {
     if (!enforceRole(req, reply, READ_ROLES)) return;
     const parsed = validateDefinitionSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const result = validateSkillDefinition(parsed.data.content);
@@ -371,7 +371,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (!enforceRole(req, reply, WRITE_ROLES)) return;
     if (!requireDb(reply)) return;
     const parsed = registerSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const validation = validateSkillDefinition(parsed.data.content);
     if (!validation.valid) {
@@ -472,7 +472,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (!enforceRole(req, reply, WRITE_ROLES)) return;
     if (!requireDb(reply)) return;
     const parsed = updateSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const validation = validateSkillDefinition(parsed.data.content);
     if (!validation.valid) {
@@ -483,7 +483,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     const mcp = req.mcp!;
     const db = getDb();
     const [artifact] = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
-    if (!artifact || artifact.companyId !== mcp.companyId) {
+    if (artifact?.companyId !== mcp.companyId) {
       reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }
@@ -550,12 +550,12 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     if (!enforceRole(req, reply, WRITE_ROLES)) return;
     if (!requireDb(reply)) return;
     const parsed = deprecateSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const db = getDb();
     const [artifact] = await db.select().from(skillArtifacts).where(eq(skillArtifacts.id, parsed.data.skillId)).limit(1);
-    if (!artifact || artifact.companyId !== mcp.companyId) {
+    if (artifact?.companyId !== mcp.companyId) {
       reply.code(404).send(failure(`Skill ${parsed.data.skillId} not found.`, "not_found", "never", "skill_exists"));
       return;
     }
@@ -619,7 +619,7 @@ export default async function internalMcpSkillsRoutes(app: FastifyInstance): Pro
     }
     if (!requireDb(reply)) return;
     const parsed = candidateSubmitSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return sendValidation(reply, parsed.error);
+    if (!parsed.success) { sendValidation(reply, parsed.error); return; }
 
     const mcp = req.mcp!;
     const db = getDb();

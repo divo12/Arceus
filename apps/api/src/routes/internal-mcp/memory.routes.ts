@@ -88,7 +88,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     const mcp = req.mcp!;
     // Spec 31 Phase 7.B.5 — read agent from canonical via repo, not snapshot.
-    const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role as Role);
+    const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role);
     if (!agent) {
       reply.code(404).send(
         failure(
@@ -165,7 +165,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     }
 
     const mcp = req.mcp!;
-    const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role as Role);
+    const agent = await agentsRepo.findAgentByRole(getDb(), mcp.companyId, mcp.role);
     if (!agent) {
       reply.code(404).send(
         failure(
@@ -228,7 +228,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
     }
 
     emitEmployeeActivity(
-      mcp.role as Role,
+      mcp.role,
       "info",
       `Added learning (${result.action}): ${input.content.slice(0, 120)}${input.content.length > 120 ? "…" : ""}`,
     );

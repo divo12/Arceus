@@ -22,7 +22,7 @@ import { ensureInternalAgentSession } from "../agents/internal-sessions.js";
 import { registerPromptCompletion } from "./llm.js";
 
 /** Element shape of `client.session.messages({...}).data` per OpenCode SDK. */
-type SessionMessage = { info: Message; parts: Part[] };
+interface SessionMessage { info: Message; parts: Part[] }
 
 /** The `body` we send to `client.session.prompt()`. */
 type SessionPromptBody = NonNullable<SessionPromptData["body"]>;
@@ -81,7 +81,7 @@ export async function runInternalAgentPrompt(
         path: { id: currentSessionId },
       });
 
-      const messages = messagesResult.data as SessionMessage[] | undefined;
+      const messages = messagesResult.data;
       if (!messages || messages.length === 0) return "";
 
       const assistantMessages = messages.filter(

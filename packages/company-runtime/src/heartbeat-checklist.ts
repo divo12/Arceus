@@ -288,7 +288,7 @@ function checkTestQueue(ctx: AgentBeatContext): CheckResult {
  */
 function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
   const reviewState = (sprint as any).reviewState;
   if (!reviewState) return { status: "ok", detail: "No review state" };
@@ -319,10 +319,10 @@ function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
  */
 function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
   const reviewState = (sprint as any).reviewState;
-  if (!reviewState || reviewState.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
+  if (reviewState?.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
 
   const bugTaskIds: string[] = reviewState.bugTaskIds ?? [];
   if (bugTaskIds.length === 0) {
@@ -378,7 +378,7 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
  */
 function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
   const reviewState = (sprint as any).reviewState;
   if (!reviewState) return { status: "ok", detail: "No review state" };

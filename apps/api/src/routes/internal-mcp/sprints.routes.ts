@@ -90,7 +90,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     // dependents stay blocked forever. Reject up front and let the CEO
     // re-reason with a payload_fixed validation failure.
     // Spec 31 Phase 7.B.5 — agents from canonical view.
-    const snapshot = await buildSnapshotView(req.mcp!.companyId);
+    const snapshot = await buildSnapshotView(req.mcp.companyId);
     const hiredRoles = new Set(snapshot.agents.map((a) => a.role));
     const invalid = parsed.tasks
       .map((t, i) => ({ idx: i, role: t.assigned_role, title: t.title }))
@@ -127,7 +127,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       observability.logEvent({
         event: "sprint.created",
         sprintId,
-        companyId: req.mcp!.companyId,
+        companyId: req.mcp.companyId,
         goal: parsed.goal,
         ts: Date.now(),
       });
@@ -243,7 +243,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         return;
       }
       const { sprintId } = req.params;
-      const snapshot = await buildSnapshotView(req.mcp!.companyId);
+      const snapshot = await buildSnapshotView(req.mcp.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
         reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));
@@ -280,7 +280,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         return;
       }
       const { sprintId } = req.params;
-      const snapshot = await buildSnapshotView(req.mcp!.companyId);
+      const snapshot = await buildSnapshotView(req.mcp.companyId);
       const sprint = snapshot.sprints.find((s) => s.id === sprintId);
       if (!sprint) {
         reply.code(404).send(failure(`Sprint ${sprintId} not found.`, "not_found", "never", "sprint_exists"));

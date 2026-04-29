@@ -66,7 +66,7 @@ export function triggerEscalationMeeting(taskId: string, blockerDetail: string):
 
   void (async () => {
     const task = await tasksRepo.findByIdHydrated(getDb(), taskId);
-    if (!task || !task.assignedRole) return;
+    if (!task?.assignedRole) return;
 
     const agent = await agentsRepo.findAgentByRole(getDb(), companyId, task.assignedRole);
     if (!agent) return;

@@ -31,13 +31,13 @@ export async function spendByProvider(
   db: DbClient,
   companyId: string,
   since: Date,
-): Promise<Array<{ provider: string; costCents: number }>> {
+): Promise<{ provider: string; costCents: number }[]> {
   const rows = await db.execute<{ provider: string; total: string }>(sql`
     SELECT provider, SUM(cost_cents)::text AS total
       FROM cost_events
      WHERE company_id = ${companyId} AND occurred_at >= ${since}
      GROUP BY provider
      ORDER BY SUM(cost_cents) DESC
-  `) as unknown as Array<{ provider: string; total: string }>;
+  `) as unknown as { provider: string; total: string }[];
   return rows.map((r) => ({ provider: r.provider, costCents: Number(r.total) }));
 }

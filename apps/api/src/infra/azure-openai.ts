@@ -5,10 +5,10 @@ import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { audit } from "../observability/audit-ledger.js";
 import { recordLlmCost } from "../observability/cost-recorder.js";
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+interface ChatMessage { role: "system" | "user" | "assistant"; content: string }
 
 /** Optional context for audit logging LLM calls. */
-export type LlmAuditContext = {
+export interface LlmAuditContext {
   companyId: string;
   agentRole?: string;
   correlationId?: string;
@@ -23,7 +23,7 @@ export type LlmAuditContext = {
    */
   runId?: string;
   taskId?: string;
-};
+}
 
 /** Build the Azure OpenAI chat completions URL for a given deployment. */
 function deploymentUrl(deployment: string) {
@@ -31,7 +31,7 @@ function deploymentUrl(deployment: string) {
   return `${base}/openai/deployments/${deployment}/chat/completions?api-version=${runtimeConfig.azureApiVersion}`;
 }
 
-type AzureOpenAIUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+interface AzureOpenAIUsage { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 
 // ── Per-beat token accumulator ─────────────────────────────
 // Tracks total tokens consumed during a beat window so the heartbeat
@@ -157,7 +157,7 @@ export async function chatCompletion(
       }
 
       const json = (await response.json()) as {
-        choices: Array<{ message: { content: string } }>;
+        choices: { message: { content: string } }[];
         usage?: AzureOpenAIUsage;
       };
       const latencyMs = Math.round(performance.now() - start);
@@ -264,7 +264,7 @@ export async function structuredCompletion<T>(
       }
 
       const json = (await response.json()) as {
-        choices: Array<{ message: { content: string }; finish_reason?: string }>;
+        choices: { message: { content: string }; finish_reason?: string }[];
         usage?: AzureOpenAIUsage;
       };
       const latencyMs = Math.round(performance.now() - start);

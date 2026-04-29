@@ -60,7 +60,7 @@ export function startObservability(options: ObservabilityBootstrapOptions = {}):
   const secretKey = options.secretKey ?? process.env.LANGFUSE_SECRET_KEY;
 
   if (!baseUrl || !publicKey || !secretKey) {
-    // eslint-disable-next-line no-console
+     
     console.warn(
       "[observability] LANGFUSE_BASE_URL / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY missing — OTEL exporter disabled. Spans will be dropped.",
     );
@@ -92,7 +92,7 @@ export function startObservability(options: ObservabilityBootstrapOptions = {}):
   sdk.start();
   started = true;
 
-  // eslint-disable-next-line no-console
+   
   console.info(`[observability] OTEL exporter started → ${langfuseOtlpUrl(baseUrl)}`);
 
   // Best-effort flush on shutdown so we don't lose the last batch.
@@ -100,7 +100,7 @@ export function startObservability(options: ObservabilityBootstrapOptions = {}):
     try {
       await sdk?.shutdown();
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.error("[observability] shutdown error:", err);
     }
   };

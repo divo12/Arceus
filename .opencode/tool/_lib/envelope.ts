@@ -27,7 +27,7 @@ export interface ToolResult<T = unknown> {
   data?: T;
   error?: ToolError;
   nextActions?: string[];
-  artifacts?: Array<{ id: string; kind: string; uri?: string }>;
+  artifacts?: { id: string; kind: string; uri?: string }[];
 }
 
 export const success = <T>(summary: string, data?: T, nextActions?: string[]): ToolResult<T> => ({

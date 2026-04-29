@@ -395,7 +395,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
         }
         updateTask(task.id, (t) => ({
           ...t,
-          status: "planned" as Task["status"],
+          status: "planned",
           incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...upstreamArtifactIds], MAX_INCOMING_ARTIFACT_IDS),
         }));
         if (task.assignedRole) {

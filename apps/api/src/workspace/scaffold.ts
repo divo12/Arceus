@@ -340,7 +340,7 @@ import { cn } from "../lib/utils";
  */
 export async function scaffoldProductWorkspace(
   workspaceDir: string,
-  projectName: string = "product-app",
+  projectName = "product-app",
 ): Promise<{ scaffolded: boolean; error?: string }> {
   try {
     // Skip if workspace already has a functioning project

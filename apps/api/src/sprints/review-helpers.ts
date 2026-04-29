@@ -104,12 +104,12 @@ export interface QAFinding {
 
 export interface QAReport {
   verdict: "pass" | "fail";
-  tasks: Array<{
+  tasks: {
     taskId: string;
     verdict: "pass" | "fail";
     findings: QAFinding[];
-    dodChecklist: Array<{ item: string; status: "pass" | "fail"; evidence: string }>;
-  }>;
+    dodChecklist: { item: string; status: "pass" | "fail"; evidence: string }[];
+  }[];
   testFilesWritten: string[];
   buildStatus: "pass" | "fail" | "skipped";
   testSuiteStatus: "pass" | "fail" | "skipped" | "no_tests";
@@ -173,7 +173,7 @@ const asTestSuiteStatus = (v: unknown): "pass" | "fail" | "skipped" | "no_tests"
 /** Try to extract a structured QA report from tester LLM output. */
 export function parseQAReport(raw: string): QAReport | null {
   // Look for JSON block in the tester output
-  const jsonMatch = raw.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
+  const jsonMatch = /\{[\s\S]*"verdict"[\s\S]*\}/.exec(raw);
   if (!jsonMatch) return null;
 
   try {

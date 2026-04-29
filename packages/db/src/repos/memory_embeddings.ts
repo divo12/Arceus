@@ -24,14 +24,14 @@ export async function nearestNeighbours(
   db: DbClient,
   query: number[],
   limit = 10,
-): Promise<Array<{ memoryId: string; distance: number }>> {
+): Promise<{ memoryId: string; distance: number }[]> {
   const vec = `[${query.join(",")}]`;
   const rows = await db.execute<{ memory_id: string; distance: string }>(sql`
     SELECT memory_id, embedding <=> ${vec}::vector AS distance
       FROM memory_embeddings
      ORDER BY embedding <=> ${vec}::vector
      LIMIT ${limit}
-  `) as unknown as Array<{ memory_id: string; distance: string }>;
+  `) as unknown as { memory_id: string; distance: string }[];
   return rows.map((r) => ({ memoryId: r.memory_id, distance: Number(r.distance) }));
 }
 

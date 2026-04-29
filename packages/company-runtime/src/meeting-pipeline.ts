@@ -233,7 +233,7 @@ export class MeetingPipeline {
   /** Produce daily sync brief for daily_sync meetings. */
   private async produceBrief(meetingId: string): Promise<void> {
     const meeting = await this.getMeeting(meetingId);
-    if (!meeting || meeting.type !== "daily_sync") return;
+    if (meeting?.type !== "daily_sync") return;
     if (!this.deps.produceBrief) return;
 
     await this.deps.produceBrief(meeting);

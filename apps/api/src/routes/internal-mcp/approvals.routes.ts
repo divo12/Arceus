@@ -229,7 +229,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
         return;
       }
       const filer = role ? getAgentByRole(snapshot, role as Parameters<typeof getAgentByRole>[1]) : null;
-      if (!filer || filer.id !== approval.requestedByAgentId) {
+      if (filer?.id !== approval.requestedByAgentId) {
         reply.code(403).send(failure(
           `Only the filer may amend approval ${approvalId}.`,
           "governance", "never", "role_is_filer",
@@ -269,7 +269,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       if (!body) return;
 
       const { approvalId } = req.params;
-      const snapshot = await buildSnapshotView(req.mcp!.companyId);
+      const snapshot = await buildSnapshotView(req.mcp.companyId);
       const approval = snapshot.approvals?.find((a) => a.id === approvalId);
       if (!approval) {
         reply.code(404).send(failure(`Approval ${approvalId} not found.`, "not_found", "never", "approval_exists"));
@@ -300,7 +300,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
       observability.logEvent({
         event: "approval.resolved",
         approvalId,
-        companyId: req.mcp!.companyId,
+        companyId: req.mcp.companyId,
         outcome: body.decision,
         ts: Date.now(),
       });

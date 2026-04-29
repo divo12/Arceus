@@ -119,7 +119,7 @@ export function canManageRole(managerRole: RoleSoul["role"], childRole: RoleSoul
 }
 
 /** Roles that must always be present in every company org chart. */
-export const MANDATORY_ROLES: ReadonlyArray<string> = ["tester", "skills_lead"];
+export const MANDATORY_ROLES: readonly string[] = ["tester", "skills_lead"];
 
 // ── Typed role tables ─────────────────────────────────────────────────────
 // Replace scattered `if (role === "...")` chains with typed Record lookups.
@@ -201,7 +201,7 @@ export const ROLE_INITIAL_AGENT_STATUS: Record<Role, "running" | "active"> = {
  * Throws on unsupported roles, duplicates, illegal reporting lines,
  * or missing mandatory roles (tester, skills_lead).
  */
-export function assertRoleHierarchy(roles: Array<{ role: string; parent_role: string | null }>) {
+export function assertRoleHierarchy(roles: { role: string; parent_role: string | null }[]) {
   const seen = new Set<string>();
 
   for (const entry of roles) {

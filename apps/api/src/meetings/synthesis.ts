@@ -30,7 +30,7 @@ const contributionResponseSchema = z.object({
 export function buildContributionPrompt(
   meeting: Meeting,
   agent: { id: string; name: string; role: AgentIdentity["role"]; title: string },
-  tasks: Array<{ id: string; title: string; status: string }>,
+  tasks: { id: string; title: string; status: string }[],
 ): { system: string; user: string } {
   const taskSummary = tasks.length > 0
     ? tasks.map((t) => `- [${t.status}] ${t.title}`).join("\n")
@@ -65,7 +65,7 @@ export function buildContributionPrompt(
 export async function generateContribution(
   meeting: Meeting,
   agent: { id: string; name: string; role: AgentIdentity["role"]; title: string },
-  tasks: Array<{ id: string; title: string; status: string }>,
+  tasks: { id: string; title: string; status: string }[],
   auditCtx?: LlmAuditContext,
 ): Promise<z.infer<typeof contributionResponseSchema>> {
   const { system, user } = buildContributionPrompt(meeting, agent, tasks);

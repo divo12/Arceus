@@ -51,7 +51,7 @@ export function useThrottledAudit() {
         };
         bufferRef.current.push(evt);
       },
-      () => setConnected(false),
+      () => { setConnected(false); },
     );
     setConnected(true);
 

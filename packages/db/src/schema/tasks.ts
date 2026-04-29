@@ -21,12 +21,12 @@ import { heartbeatRuns } from "./heartbeat_runs.js";
 const inLiteral = (values: readonly string[]) =>
   sql.raw(values.map((v) => `'${v.replace(/'/g, "''")}'`).join(", "));
 
-export type PlanStep = {
+export interface PlanStep {
   stepNumber: number;
   description: string;
   status: "pending" | "done" | "skipped";
   note?: string;
-};
+}
 
 export const tasks = pgTable(
   "tasks",

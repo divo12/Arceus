@@ -65,7 +65,7 @@ export const registerMeetingTools = (
       },
     },
     async (args) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: MEETINGS,
         body: args,
@@ -86,7 +86,7 @@ export const registerMeetingTools = (
       },
     },
     async ({ meetingId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${MEETINGS}/${encodeURIComponent(meetingId)}`,
       });
@@ -109,7 +109,7 @@ export const registerMeetingTools = (
       },
     },
     async (args) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${MEETINGS}/request-decision`,
         body: args,
@@ -133,7 +133,7 @@ export const registerMeetingTools = (
     },
     async ({ meetingId, artifactId, position }) => {
       const body = { artifactId, position };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${MEETINGS}/${encodeURIComponent(meetingId)}/contribute`,
         body,

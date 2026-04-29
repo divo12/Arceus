@@ -28,7 +28,7 @@ const cache = new Map<string, string>();
 
 function extractSystemPrompt(raw: string): string {
   // Agent files have YAML frontmatter between --- markers, then the system prompt
-  const match = raw.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+  const match = /^---\n[\s\S]*?\n---\n([\s\S]*)$/.exec(raw);
   return match ? match[1].trim() : raw.trim();
 }
 

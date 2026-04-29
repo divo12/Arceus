@@ -18,7 +18,7 @@ export async function recentOutcomes(
   db: DbClient,
   skillId: string,
   limit = 50,
-): Promise<Array<{ outcomeScore: number; occurredAt: Date }>> {
+): Promise<{ outcomeScore: number; occurredAt: Date }[]> {
   const rows = await db
     .select({ outcomeScore: skillUsageEvents.outcomeScore, occurredAt: skillUsageEvents.occurredAt })
     .from(skillUsageEvents)
@@ -37,7 +37,7 @@ export async function averagePassRate(db: DbClient, skillId: string, window = 50
        ORDER BY occurred_at DESC
        LIMIT ${window}
     ) s
-  `) as unknown as Array<{ avg: string | null }>;
+  `) as unknown as { avg: string | null }[];
   if (!row?.avg) return null;
   return Number(row.avg);
 }

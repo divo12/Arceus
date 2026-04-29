@@ -15,12 +15,12 @@ import {
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
-export type VerdictSignals = {
+export interface VerdictSignals {
   taskTransitions?: { completed: number; blocked: number };
   previewProbe?: { ok: boolean; latencyMs?: number };
   testSignal?: { passed: number; failed: number; total: number };
   artifactCount?: number;
-};
+}
 
 export const heartbeatRuns = pgTable(
   "heartbeat_runs",

@@ -235,7 +235,7 @@ export function dbPersistSkill(skill: SkillArtifact): void {
             mutatedByAgentId: null,
             mutatedByLabel: mutation.mutatedBy,
             mutationReason: mutation.mutationReason,
-            testCases: (mutation.testCases as Array<Record<string, unknown>>),
+            testCases: (mutation.testCases as Record<string, unknown>[]),
             approvedAt: mutation.approvedAt
               ? new Date(mutation.approvedAt)
               : null,

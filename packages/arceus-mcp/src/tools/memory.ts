@@ -64,7 +64,7 @@ export const registerMemoryTools = (
     },
     async (args) => {
       const body = args;
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${MEMORY}/search`,
         body,
@@ -120,7 +120,7 @@ export const registerMemoryTools = (
     },
     async (args) => {
       const body = args;
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${MEMORY}/learnings`,
         body,
@@ -171,7 +171,7 @@ export const registerMemoryTools = (
     },
     async (args) => {
       const body = args;
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${MEMORY}/handoff`,
         body,

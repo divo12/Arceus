@@ -179,7 +179,7 @@ export async function runBeat(input: {
       Promise.all([promptPromise, completionPromise]),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () => reject(new Error(`Beat ${beatId} timed out after ${HARD_CAP_MS}ms (hard cap)`)),
+          () => { reject(new Error(`Beat ${beatId} timed out after ${HARD_CAP_MS}ms (hard cap)`)); },
           HARD_CAP_MS,
         ).unref(),
       ),

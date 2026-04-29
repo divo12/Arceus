@@ -38,10 +38,10 @@ const record = (category: keyof BuildHealth, ok: boolean, errors: string[]): voi
   };
 };
 
-export const recordTypecheck = (ok: boolean, errors: string[] = []): void => record("typecheck", ok, errors);
-export const recordBuild = (ok: boolean, errors: string[] = []): void => record("build", ok, errors);
-export const recordTest = (ok: boolean, errors: string[] = []): void => record("test", ok, errors);
-export const recordPreview = (ok: boolean, errors: string[] = []): void => record("preview", ok, errors);
+export const recordTypecheck = (ok: boolean, errors: string[] = []): void => { record("typecheck", ok, errors); };
+export const recordBuild = (ok: boolean, errors: string[] = []): void => { record("build", ok, errors); };
+export const recordTest = (ok: boolean, errors: string[] = []): void => { record("test", ok, errors); };
+export const recordPreview = (ok: boolean, errors: string[] = []): void => { record("preview", ok, errors); };
 
 export const getHealth = (): BuildHealth => ({
   typecheck: { ...cache.typecheck },

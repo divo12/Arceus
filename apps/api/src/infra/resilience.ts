@@ -280,7 +280,7 @@ export function isRetryableError(error: unknown): boolean {
       return true;
     }
     // Azure OpenAI rate limit or transient server error
-    const statusMatch = msg.match(/error (\d{3})/);
+    const statusMatch = /error (\d{3})/.exec(msg);
     if (statusMatch) {
       return isRetryableHttpStatus(Number(statusMatch[1]));
     }

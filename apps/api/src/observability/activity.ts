@@ -5,7 +5,7 @@
 
 import type { FastifyReply } from "fastify";
 
-export type EmployeeActivityEntry = {
+export interface EmployeeActivityEntry {
   id: string;
   timestamp: string;
   employee: string;
@@ -16,7 +16,7 @@ export type EmployeeActivityEntry = {
   taskId?: string | null;
   beatId?: string | null;
   detail?: Record<string, unknown> | null;
-};
+}
 
 export type ActivityEvent = EmployeeActivityEntry;
 
@@ -25,7 +25,7 @@ const subs = new Set<(e: EmployeeActivityEntry) => void>();
 
 /** Shorten a beat ID for display: beat_5_1776878895056 → beat_5 */
 export function shortBeat(beatId: string): string {
-  const m = beatId.match(/^(beat_\d+)/);
+  const m = /^(beat_\d+)/.exec(beatId);
   return m ? m[1] : beatId;
 }
 

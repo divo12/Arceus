@@ -75,7 +75,7 @@ export function checkEntryPointImports(): EntryPointCheckResult {
   function walkProduct(dir: string, depth = 0) {
     if (depth > 4) return;
     let entries: import("node:fs").Dirent[];
-    try { entries = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[]; } catch { return; }
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       if (ignoreNames.has(entry.name)) continue;
       const fullPath = join(dir, entry.name);
@@ -119,7 +119,7 @@ export function checkEntryPointImports(): EntryPointCheckResult {
   }
 
   const referencedFiles = new Set<string>();
-  const queue: Array<{ path: string; content: string }> = [{ path: entryFile, content: entryContent }];
+  const queue: { path: string; content: string }[] = [{ path: entryFile, content: entryContent }];
   const visited = new Set<string>([entryFile]);
 
   while (queue.length > 0) {
@@ -175,9 +175,9 @@ export function generateOrphanWiringPrescription(orphans: string[], entryFile: s
     } catch { continue; }
 
     const defaultExportMatch =
-      content.match(/export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)/) ||
-      content.match(/export\s+default\s+class\s+([A-Z][A-Za-z0-9_]*)/) ||
-      content.match(/export\s+default\s+([A-Z][A-Za-z0-9_]*)\s*;?/);
+      (/export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)/.exec(content)) ||
+      (/export\s+default\s+class\s+([A-Z][A-Za-z0-9_]*)/.exec(content)) ||
+      (/export\s+default\s+([A-Z][A-Za-z0-9_]*)\s*;?/.exec(content));
     const hasUnnamedDefault = /export\s+default\s+(\(|function\s*\(|{|\[)/.test(content);
 
     const namedExports = new Set<string>();

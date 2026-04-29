@@ -120,7 +120,7 @@ export interface BindSessionInput {
   companyId: string;
   role: string;
   trustBand: string;
-  allowedTools: ReadonlyArray<string>;
+  allowedTools: readonly string[];
 }
 
 /**

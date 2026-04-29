@@ -227,7 +227,7 @@ export class MeetingScheduler {
     if (activeAgents.length < 2) return;
 
     const ceo = activeAgents.find((a) => a.role === "ceo");
-    const facilitatorId = ceo?.id ?? activeAgents[0]!.id;
+    const facilitatorId = ceo?.id ?? activeAgents[0].id;
 
     const schedule: MeetingSchedule = {
       id: `msched_daily_sync_${snap.company.id}`,

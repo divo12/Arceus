@@ -117,7 +117,7 @@ function isTrivialFact(content: string): boolean {
 /** Decide whether to ADD, UPDATE, DELETE, or ignore a fact against existing memories. */
 export async function memoryAgentDecideAction(
   newFact: string,
-  existingMemories: Array<{ id: string; content: string; type: string; confidence: number }>,
+  existingMemories: { id: string; content: string; type: string; confidence: number }[],
 ): Promise<MemoryAction> {
   return structuredCompletion(
     "workerDeployment",
@@ -134,7 +134,7 @@ export async function memoryAgentDecideAction(
 /** Match a task description against known habits and return matching habit IDs. */
 export async function llmHabitMatcher(
   taskDescription: string,
-  habits: Array<{ id: string; trigger: string; action: string }>,
+  habits: { id: string; trigger: string; action: string }[],
 ): Promise<string[]> {
   const userPrompt = buildHabitMatcherUserPrompt(taskDescription, habits as any);
   const result = await structuredCompletion(

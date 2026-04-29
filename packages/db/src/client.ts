@@ -34,7 +34,7 @@ function getDatabaseRuntimeMode(databaseUrl: string): DatabaseConnectionConfig["
   return process.env.SUPABASE_DB_URL?.trim() ? "direct" : "fallback";
 }
 
-export type DbClient = PostgresJsDatabase<Record<string, never>>;
+export type DbClient = PostgresJsDatabase;
 
 let dbClient: DbClient | null = null;
 let sqlClient: postgres.Sql | null = null;

@@ -31,7 +31,7 @@ function formatContributions(meeting: Meeting): string {
 }
 
 function extractJson(output: string): string | null {
-  const match = output.match(/\{[\s\S]*\}/);
+  const match = /\{[\s\S]*\}/.exec(output);
   return match?.[0] ?? null;
 }
 

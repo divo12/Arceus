@@ -33,7 +33,7 @@ export interface ValidateResult {
 
 /** Lift the parser used by the seed-loader so we own a single source of truth. */
 export function parseSkillFrontmatter(content: string): ParsedSkill {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(content);
   if (!match) return { frontmatter: {}, body: content };
   const lines = match[1].split("\n");
   const frontmatter: Record<string, string> = {};

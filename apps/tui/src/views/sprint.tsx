@@ -17,13 +17,13 @@ interface CompanyResponse {
     status?: string;
     goalStatement?: string;
   };
-  tasks?: Array<{
+  tasks?: {
     id: string;
     title: string;
     status: string;
     assignedRole?: string;
     priority?: string;
-  }>;
+  }[];
 }
 
 const TODO_STATUSES = new Set(["todo", "pending", "open", "ready"]);

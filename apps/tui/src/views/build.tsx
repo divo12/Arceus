@@ -26,7 +26,7 @@ interface CompanyResponse {
   company?: { id?: string; name?: string; status?: string; goal?: string };
   currentSprint?: { number?: number; title?: string; status?: string; goalStatement?: string };
   strategy?: { title?: string; summary?: string; firstRelease?: string; status?: string };
-  tasks?: Array<{ id: string; title: string; status: string; assignedRole?: string }>;
+  tasks?: { id: string; title: string; status: string; assignedRole?: string }[];
 }
 
 // ---------- Helpers ----------
@@ -171,8 +171,8 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
 
   // Blink cursor
   useEffect(() => {
-    const iv = setInterval(() => setCursorVisible((v) => !v), 530);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => { setCursorVisible((v) => !v); }, 530);
+    return () => { clearInterval(iv); };
   }, []);
 
   useInput(
@@ -197,7 +197,7 @@ export function BuildView({ height, active, onEscape, onQuickExecute, onStop }: 
           // eslint-disable-next-line no-restricted-syntax -- intentional: TUI fire-and-forget action.
           api("/api/company", { method: "DELETE" })
             .catch(() => {})
-            .finally(() => setResetting(false));
+            .finally(() => { setResetting(false); });
           return;
         }
 

@@ -183,14 +183,14 @@ const beatDeps: BeatDependencies = {
       companyId,
     }));
   },
-  emitBeatEvent: (event) => emitBeatEvent(event),
+  emitBeatEvent: (event) => { emitBeatEvent(event); },
 };
 
 const heartbeatEngine = new HeartbeatEngine(heartbeatConfig, beatDeps);
 
 // Wire reactive events: orchestrator mutations → heartbeat engine event-triggered beats
 setReactiveEventEmitter((companyId, agentId, role, event) =>
-  heartbeatEngine.emitEvent(companyId, agentId, role, event)
+  { heartbeatEngine.emitEvent(companyId, agentId, role, event); }
 );
 
 // ── Meeting Pipeline & Scheduler (Spec 18) ─────────────────
@@ -213,7 +213,7 @@ const meetingPipeline = new MeetingPipeline({
   flush,
 
   // Phase 8: Token tracking for meeting pipeline
-  startTokenTracking: (meetingId) => startMeetingTokenAccumulator(meetingId),
+  startTokenTracking: (meetingId) => { startMeetingTokenAccumulator(meetingId); },
   drainTokens: (meetingId) => drainMeetingTokenAccumulator(meetingId),
 
   // Phase 4a (Spec 24): Collect contributions by directly prompting each agent's session.
@@ -240,7 +240,7 @@ const meetingPipeline = new MeetingPipeline({
         const prompt = buildContributionPrompt(meeting, taskSummary);
 
         const output = await runPromptText(agent.role, session.sessionId, soul.systemPrompt, prompt);
-        const jsonMatch = output.match(/\{[\s\S]*\}/);
+        const jsonMatch = /\{[\s\S]*\}/.exec(output);
         const contribution = jsonMatch
           ? JSON.parse(jsonMatch[0])
           : { whatIDid: output, whatImDoing: "", blockers: "", learnings: "", questionsForTeam: "" };
@@ -369,13 +369,13 @@ const meetingPipeline = new MeetingPipeline({
   // Spec 31 Phase 7.C.c — async; canonical-backed snapshot.
   async onEscalationComplete(meeting) {
     // Extract related task ID from title format: "Escalation: ... [taskId]"
-    const taskIdMatch = meeting.title.match(/\[([^\]]+)\]$/);
+    const taskIdMatch = /\[([^\]]+)\]$/.exec(meeting.title);
     const relatedTaskId = taskIdMatch?.[1] ?? null;
 
     if (relatedTaskId && relatedTaskId !== "general") {
       const snap = await getSnapshotForPackages();
       const task = snap.tasks.find((t) => t.id === relatedTaskId);
-      if (task && task.status === "blocked") {
+      if (task?.status === "blocked") {
         console.log(`[ESCALATION] Task ${relatedTaskId} still blocked after escalation meeting ${meeting.id} — escalating up`);
         meetingScheduler.escalateUp(
           snap,

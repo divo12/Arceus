@@ -47,7 +47,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    const snapshot = await buildSnapshotView(req.mcp!.companyId);
+    const snapshot = await buildSnapshotView(req.mcp.companyId);
     const sprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
     if (!sprint) {
       reply.code(404).send(failure("No active sprint to complete.", "not_found", "never", "sprint_exists"));
@@ -63,7 +63,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     }
 
     // Spec 31 Phase 7.C.d — direct canonical write keyed by request companyId.
-    await updateCompanyStatus(req.mcp!.companyId, "active");
+    await updateCompanyStatus(req.mcp.companyId, "active");
     const now = new Date().toISOString();
 
     cacheAndSend(req, reply, 200, success(`Cycle complete. Ready for next sprint.`, {
@@ -87,7 +87,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     const parsed = pauseBody.safeParse(req.body);
     const reason = parsed.success ? parsed.data.reason : undefined;
 
-    await updateCompanyStatus(req.mcp!.companyId, "paused");
+    await updateCompanyStatus(req.mcp.companyId, "paused");
 
     cacheAndSend(req, reply, 200, success("Execution paused.", {
       status: "paused",
@@ -114,9 +114,9 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
     }
 
     if (parsed.data.resumeExecution) {
-      await updateCompanyStatus(req.mcp!.companyId, "active");
+      await updateCompanyStatus(req.mcp.companyId, "active");
     }
-    const snapshot = await buildSnapshotView(req.mcp!.companyId);
+    const snapshot = await buildSnapshotView(req.mcp.companyId);
 
     cacheAndSend(req, reply, 200, success("Post-review reconciliation done.", {
       status: snapshot.company.status,
@@ -133,7 +133,7 @@ export default async function internalMcpExecutionRoutes(app: FastifyInstance): 
       return;
     }
 
-    await updateCompanyStatus(req.mcp!.companyId, "archived");
+    await updateCompanyStatus(req.mcp.companyId, "archived");
 
     cacheAndSend(req, reply, 200, success("Execution stopped.", {
       status: "archived",

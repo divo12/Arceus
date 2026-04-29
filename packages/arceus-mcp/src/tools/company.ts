@@ -23,7 +23,7 @@ export const registerCompanyTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${COMPANY}/summary`,
       });
@@ -40,7 +40,7 @@ export const registerCompanyTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${AGENTS}/sessions`,
       });
@@ -59,7 +59,7 @@ export const registerCompanyTools = (
     },
     async ({ status }) => {
       const body = { status };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${COMPANY}/status`,
         body,
@@ -88,7 +88,7 @@ export const registerCompanyTools = (
       if (cardType) qs.set("cardType", cardType);
       if (limit !== undefined) qs.set("limit", String(limit));
       const suffix = qs.toString();
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${BOARD}/messages${suffix ? `?${suffix}` : ""}`,
       });

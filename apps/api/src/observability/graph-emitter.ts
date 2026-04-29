@@ -281,7 +281,7 @@ const GRAPH_FILE_IGNORE = new Set([
 export function emitGraphFileChanges(
   sprintId: string,
   nodeId: string,
-  files: Array<{ path: string; action?: "created" | "modified" | "deleted"; linesChanged?: number | null }>,
+  files: { path: string; action?: "created" | "modified" | "deleted"; linesChanged?: number | null }[],
 ): void {
   const filtered: FileChange[] = files
     .filter((f) => {

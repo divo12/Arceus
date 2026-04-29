@@ -62,8 +62,8 @@ export function CeoChatView({ height, active }: CeoChatViewProps) {
 
   // Blink cursor
   useEffect(() => {
-    const iv = setInterval(() => setCursorVisible((v) => !v), 530);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => { setCursorVisible((v) => !v); }, 530);
+    return () => { clearInterval(iv); };
   }, []);
 
   useInput(

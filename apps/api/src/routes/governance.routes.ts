@@ -19,7 +19,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     const agents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
     const agentById = new Map(agents.map((a) => [a.id, a]));
     const roleFromId = (id: string): string | null => {
-      const m = id.match(/^agent_(.+?)_[0-9a-f-]{36}$/);
+      const m = /^agent_(.+?)_[0-9a-f-]{36}$/.exec(id);
       return m ? m[1] : null;
     };
     return scores.map((s) => {

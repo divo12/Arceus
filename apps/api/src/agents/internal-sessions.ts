@@ -61,7 +61,7 @@ export async function ensureInternalAgentSession(
   };
 
   agentSessions.set(role, state);
-  emitEmployeeActivity(role as any, "info", `Internal agent session created for ${def.name}`);
+  emitEmployeeActivity(role, "info", `Internal agent session created for ${def.name}`);
   return state;
 }
 

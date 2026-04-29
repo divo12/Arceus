@@ -65,7 +65,7 @@ export interface RecordLlmCostInput {
  * `gpt-4.1-mini-2024-04-09` still resolve). Update when models change
  * tier; the `_default` row covers unmatched models without crashing.
  */
-const PRICING_USD_PER_1M_TOKENS: ReadonlyArray<readonly [string, { input: number; output: number }]> = [
+const PRICING_USD_PER_1M_TOKENS: readonly (readonly [string, { input: number; output: number }])[] = [
   // OpenAI / Azure GPT-4 family
   ["gpt-4.1-mini", { input: 0.40, output: 1.60 }],
   ["gpt-4.1", { input: 2.00, output: 8.00 }],

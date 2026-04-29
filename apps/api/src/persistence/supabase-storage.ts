@@ -9,12 +9,12 @@ import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { persistenceConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "../infra/resilience.js";
 
-type UploadResult = {
+interface UploadResult {
   assetId: string | null;
   objectKey: string;
   sha256: string;
   byteSize: number;
-};
+}
 
 async function sha256ForBuffer(buffer: Buffer) {
   return createHash("sha256").update(buffer).digest("hex");

@@ -53,7 +53,7 @@ import { computeTrustBand } from "../governance/trust.js";
  * Excludes terminal states (`completed`, `failed`, `cancelled`) and
  * `verifying` (work is done, awaiting QA — agent shouldn't redo it).
  */
-const OPEN_TASK_STATUSES: ReadonlyArray<Task["status"]> = [
+const OPEN_TASK_STATUSES: readonly Task["status"][] = [
   "created",
   "planned",
   "in_progress",
@@ -99,7 +99,7 @@ interface BeatMemoryUnitSlice {
 
 export interface BeatRenderContext {
   company: Company | null;
-  agents: ReadonlyArray<BeatAgentSlice>;
+  agents: readonly BeatAgentSlice[];
   sprints: Sprint[];
   tasks: Task[];
   /** Recent first; bounded by `RECENT_ARTIFACT_LIMIT`. */
@@ -249,7 +249,7 @@ function renderCompanyState(ctx: BeatRenderContext): string {
   const c = ctx.company;
   const sprint = ctx.sprints.find((s) => s.id === c.currentSprintId);
   const roster = ctx.agents
-    .map((a) => `${a.role}`)
+    .map((a) => a.role)
     .sort()
     .join(", ");
   const lines = [
@@ -280,7 +280,7 @@ export function countOpenTasks(ctx: BeatRenderContext, role: Role): number {
 export function summarizeShownTasks(
   ctx: BeatRenderContext,
   role: Role,
-): Array<{ id: string; title: string; status: string; claimable: boolean }> {
+): { id: string; title: string; status: string; claimable: boolean }[] {
   return ctx.tasks
     .filter((t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status))
     .map((t) => {

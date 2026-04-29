@@ -24,7 +24,7 @@ export const registerBeatTools = (
       },
     },
     async ({ n }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${BEATS}/recent?n=${n}`,
       });

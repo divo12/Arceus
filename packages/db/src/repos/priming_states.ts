@@ -19,7 +19,7 @@ export async function upsertPriming(
     agentId: string;
     companyId: string;
     state: Record<string, unknown>;
-    recentOutcomes: Array<{ beatId: string; score: number }>;
+    recentOutcomes: { beatId: string; score: number }[];
   },
 ): Promise<PrimingState> {
   const [row] = await db

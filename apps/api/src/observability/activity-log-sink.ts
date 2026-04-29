@@ -53,7 +53,7 @@ const REAL_ROLES = new Set([
 // resolver doesn't grow unbounded over a long-running process.
 
 const BEAT_TTL_MS = 5 * 60 * 1000;
-type BeatBinding = { companyId: string; expiresAt: number };
+interface BeatBinding { companyId: string; expiresAt: number }
 const beatCompanyMap = new Map<string, BeatBinding>();
 
 function setBeatCompany(beatId: string, companyId: string, persistent = true): void {
@@ -480,6 +480,6 @@ export const _internal = {
   mapEventToRow,
   setBeatCompany,
   lookupBeatCompany,
-  resetBeatMap: () => beatCompanyMap.clear(),
-  resetAgentCache: () => agentCache.clear(),
+  resetBeatMap: () => { beatCompanyMap.clear(); },
+  resetAgentCache: () => { agentCache.clear(); },
 };

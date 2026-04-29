@@ -56,7 +56,7 @@ function broadcast(event: AuditEvent) {
 
 // ── Flush queue → observability sink ───────────────────────
 
-let pendingFlush: AuditEvent[] = [];
+const pendingFlush: AuditEvent[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -101,7 +101,7 @@ function flushToObservability(): void {
 
 function startFlushTimer() {
   if (flushTimer || auditConfig.dbFlushIntervalMs <= 0) return;
-  flushTimer = setInterval(() => flushToObservability(), auditConfig.dbFlushIntervalMs);
+  flushTimer = setInterval(() => { flushToObservability(); }, auditConfig.dbFlushIntervalMs);
 }
 
 function stopFlushTimer() {

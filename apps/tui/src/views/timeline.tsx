@@ -253,8 +253,8 @@ export function TimelineView({ height, active, onEscape, onQuickExecute, onStop 
 
   // Blink cursor
   useEffect(() => {
-    const iv = setInterval(() => setCursorVisible((v) => !v), 530);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => { setCursorVisible((v) => !v); }, 530);
+    return () => { clearInterval(iv); };
   }, []);
 
   // Keep cursor in bounds
@@ -393,13 +393,13 @@ export function TimelineView({ height, active, onEscape, onQuickExecute, onStop 
   const beatPanelHeight = contentHeight - 1; // -1 for header
   const beatStart = 0;
   // Count total rendered rows including expanded beats
-  const renderedRows: Array<{ row: PanelRow; idx: number; expandedEvents?: ActivityEvent[] }> = [];
+  const renderedRows: { row: PanelRow; idx: number; expandedEvents?: ActivityEvent[] }[] = [];
   for (let i = 0; i < panelRows.length; i++) {
     const row = panelRows[i];
     renderedRows.push({ row, idx: i });
     if (row.kind === "beat" && row.beat && expanded.has(row.beat.beatId)) {
       renderedRows.push(...row.beat.events.map((e) => ({
-        row: { kind: "detail" as any, role: row.role } as PanelRow,
+        row: { kind: "detail" as any, role: row.role },
         idx: i,
         expandedEvents: [e],
       })));

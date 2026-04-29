@@ -15,9 +15,9 @@ export function nowIso(): string {
 }
 
 /** Deduplicate and trim a list of nullable strings, capped at `limit`. */
-export function uniqueStrings(values: Array<string | null | undefined>, limit = 8): string[] {
+export function uniqueStrings(values: (string | null | undefined)[], limit = 8): string[] {
   return Array.from(
-    new Set(values.filter((value): value is string => Boolean(value && value.trim()))),
+    new Set(values.filter((value): value is string => Boolean(value?.trim()))),
   ).slice(0, limit);
 }
 

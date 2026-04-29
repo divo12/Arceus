@@ -5,15 +5,15 @@ import { MeetingRow, type MeetingInfo } from "../components/meeting-row.js";
 import { usePoll } from "../hooks/use-poll.js";
 
 interface MeetingsResponse {
-  meetings?: Array<{
+  meetings?: {
     id: string;
     type: string;
     status: string;
     summary?: string;
     participants?: string[];
-    decisions?: Array<{ decision?: string } | string>;
+    decisions?: ({ decision?: string } | string)[];
     scheduledAt?: string;
-  }>;
+  }[];
 }
 
 export function MeetingsView() {

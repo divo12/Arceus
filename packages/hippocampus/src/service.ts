@@ -35,7 +35,7 @@ function buildCompletionMemoryUnit(input: ProcessTaskCompletionInput): MemoryUni
   };
 }
 
-export type HippocampusDependencies = {
+export interface HippocampusDependencies {
   staticStore?: StaticMemoryStore;
   dynamicStore?: DynamicMemoryStore;
   proceduralStore?: ProceduralMemoryStore;
@@ -46,7 +46,7 @@ export type HippocampusDependencies = {
   decideAction?: ActionDecider;
   /** LLM-powered habit matcher. If not provided, falls back to naive token matching. */
   matchHabits?: HabitMatcher;
-};
+}
 
 /**
  * Core memory service orchestrating all four tiers (static, dynamic, procedural, priming).
@@ -305,7 +305,7 @@ export class HippocampusService implements HippocampusGateway {
     if (this.decideAction) {
       try {
         // Embed the fact and search for similar existing memories
-        let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+        let similar: { id: string; content: string; type: string; confidence: number }[] = [];
         try {
           const factEmbedding = await embed(fact.content);
           if (store.searchByEmbedding) {
@@ -465,7 +465,7 @@ export class HippocampusService implements HippocampusGateway {
 
     if (this.decideAction) {
       try {
-        let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+        let similar: { id: string; content: string; type: string; confidence: number }[] = [];
         try {
           const factEmbedding = await embed(unit.content);
           if (store.searchByEmbedding) {
@@ -534,7 +534,7 @@ export class HippocampusService implements HippocampusGateway {
       return results.map((r) => ({
         ...r,
         tier: "dynamic" as const,
-        decayedScore: (r as MemoryUnit & { similarity: number; decayedScore: number }).decayedScore,
+        decayedScore: (r).decayedScore,
       }));
     }
     const memories = await this.dynamicStore.list(agentId);
@@ -554,7 +554,7 @@ export class HippocampusService implements HippocampusGateway {
       // Run action decider to avoid duplicates if available
       if (this.decideAction) {
         try {
-          let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+          let similar: { id: string; content: string; type: string; confidence: number }[] = [];
           try {
             const factEmbedding = await embed(unit.content);
             if (store.searchByEmbedding) {

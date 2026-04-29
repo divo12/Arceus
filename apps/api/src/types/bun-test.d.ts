@@ -14,8 +14,8 @@ declare module "bun:test" {
   export interface BunMockFn<F extends AnyFn = AnyFn> {
     (...args: Parameters<F>): ReturnType<F>;
     mock: {
-      calls: Array<Parameters<F>>;
-      results: Array<{ type: "return" | "throw"; value: unknown }>;
+      calls: Parameters<F>[];
+      results: { type: "return" | "throw"; value: unknown }[];
     };
   }
 
@@ -28,7 +28,7 @@ declare module "bun:test" {
   export function describe(name: string, fn: () => void): void;
   export function it(name: string, fn: () => void | Promise<void>): void;
 
-  type Matchers = {
+  interface Matchers {
     toBe(expected: unknown): void;
     toEqual(expected: unknown): void;
     toBeNull(): void;
@@ -41,12 +41,12 @@ declare module "bun:test" {
     toHaveBeenCalledTimes(n: number): void;
     toHaveLength(n: number): void;
     not: Omit<Matchers, "not">;
-  };
+  }
 
   /** Surface for `expect(asyncFn()).rejects.toThrow(/pattern/)`. */
-  type AsyncMatchers = {
+  interface AsyncMatchers {
     toThrow(pattern?: string | RegExp): Promise<void>;
-  };
+  }
 
   type ExpectResult = Matchers & {
     rejects: AsyncMatchers;

@@ -71,7 +71,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
 
   updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
-    status: "reviewing" as Sprint["status"],
+    status: "reviewing",
     reviewState,
   }));
 
@@ -198,7 +198,7 @@ export async function finalizeSprintCompletion(
 
   updateSprint(sprintId, (s) => ({
     ...s,
-    status: "completed" as Sprint["status"],
+    status: "completed",
     completedAt: nowIso(),
     summary: `Sprint ${s.number} completed — ${completedCount}/${sprintTasks.length} tasks delivered.`,
     reviewState: s.reviewState ? { ...s.reviewState, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,

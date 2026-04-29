@@ -55,7 +55,7 @@ export async function recordTransition(
     fromBand: TrustBand;
     toBand: TrustBand;
     reason: string;
-    verdictWindow?: Array<{ beatId: string; score: number; outcome: string }>;
+    verdictWindow?: { beatId: string; score: number; outcome: string }[];
   },
 ): Promise<RoleTrustEvent> {
   const [row] = await db.insert(roleTrustEvents).values(data).returning();

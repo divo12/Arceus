@@ -18,23 +18,23 @@ export interface StatusTransition {
 }
 
 export interface StateDiff {
-  taskChanges: Array<{
+  taskChanges: {
     taskId: string;
     field: string;
     before: string | null;
     after: string | null;
-  }>;
-  sprintChanges: Array<{
+  }[];
+  sprintChanges: {
     field: string;
     before: string | null;
     after: string | null;
-  }>;
-  memoryChanges: Array<{
+  }[];
+  memoryChanges: {
     agentRole: string;
     field: string;
     action: "added" | "removed" | "updated";
     value: string;
-  }>;
+  }[];
 }
 
 export interface FileChange {
@@ -91,14 +91,14 @@ export interface BeatNode {
 
 export interface ReworkGroup {
   taskId: string;
-  iterations: Array<{
+  iterations: {
     cycle: number;
     beatIds: string[];
     verdict: "pass" | "fail" | "error";
     reason: string;
     startedAt: string;
     completedAt: string | null;
-  }>;
+  }[];
   maxCycles: number;
   escalated: boolean;
 }
@@ -318,7 +318,7 @@ export class ExecutionGraphStore {
   /** Append a rework iteration to an existing rework group. */
   addReworkIteration(sprintId: string, nodeId: string, cycle: number, verdict: string, reason: string): void {
     const node = this.findNode(sprintId, nodeId);
-    if (!node || !node.reworkGroup) return;
+    if (!node?.reworkGroup) return;
     node.reworkGroup.iterations.push({
       cycle,
       beatIds: [],
@@ -375,7 +375,7 @@ export class ExecutionGraphStore {
   }
 
   /** List all tracked sprints with id, number, and status. */
-  listSprints(): Array<{ sprintId: string; number: number; status: string }> {
+  listSprints(): { sprintId: string; number: number; status: string }[] {
     return Array.from(this.graphs.values()).map((g) => ({
       sprintId: g.sprintId,
       number: g.sprintNumber,

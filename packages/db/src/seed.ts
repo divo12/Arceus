@@ -153,10 +153,10 @@ async function seedTasks(): Promise<number> {
   // 10 tasks spread across all 8 valid Zod statuses + variety. Status
   // and kind both come from contracts source-of-truth so the seed
   // doesn't drift from the CHECK constraints in 0010.
-  const tasks: Array<{
+  const tasks: {
     suffix: string; status: "created" | "planned" | "in_progress" | "verifying" | "blocked" | "completed" | "failed" | "cancelled";
     kind: string; role: Role;
-  }> = [
+  }[] = [
     { suffix: "01", status: "created",     kind: "implementation",     role: "developer" },
     { suffix: "02", status: "planned",     kind: "technical_plan",     role: "cto" },
     { suffix: "03", status: "in_progress", kind: "implementation",     role: "developer" },
@@ -236,7 +236,7 @@ async function seedMeetings(): Promise<number> {
       scheduleId: null,
       type: m.type as never,
       title: `Seed ${m.type}`,
-      status: m.status as never,
+      status: m.status,
       facilitatorAgentId: "agent_ceo_seed",
       participantAgentIds: ["agent_ceo_seed", "agent_cto_seed"],
       contributions: [],

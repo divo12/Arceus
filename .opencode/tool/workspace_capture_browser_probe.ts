@@ -32,7 +32,7 @@ const captureWithPlaywright = async (
   timeoutMs: number,
 ): Promise<ProbeBundle> => {
   // Dynamic import so the tool loads even if @playwright/test is absent.
-  const { chromium } = (await import("@playwright/test")) as typeof import("@playwright/test");
+  const { chromium } = (await import("@playwright/test"));
 
   const consoleEntries: ConsoleEntry[] = [];
   const networkEntries: NetworkEntry[] = [];

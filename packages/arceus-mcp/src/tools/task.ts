@@ -19,7 +19,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string() },
     },
     async ({ taskId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/completion`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_complete", { taskId }),
@@ -35,7 +35,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string(), reason: z.string().max(1000) },
     },
     async ({ taskId, reason }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/block`,
         body: { reason },
@@ -52,7 +52,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string(), verifiedBy: z.string().min(1) },
     },
     async ({ taskId, verifiedBy }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/verification`,
         body: { verifiedBy },
@@ -69,7 +69,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string(), entry: z.string().max(4000) },
     },
     async ({ taskId, entry }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/results`,
         body: { entry },
@@ -86,7 +86,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string(), url: z.string().url().nullable() },
     },
     async ({ taskId, url }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "PUT",
         path: `${TASKS}/${taskId}/preview-url`,
         body: { url },
@@ -113,7 +113,7 @@ export const registerTaskTools = (
       },
     },
     async (args) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: TASKS,
         body: args,
@@ -138,7 +138,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, ...patch }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "PATCH",
         path: `${TASKS}/${taskId}`,
         body: patch,
@@ -163,7 +163,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, ...spec }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/hydration`,
         body: spec,
@@ -190,7 +190,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, reason }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/claim`,
         body: { reason },
@@ -215,7 +215,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, ...progress }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "PATCH",
         path: `${TASKS}/${taskId}/progress`,
         body: progress,
@@ -236,7 +236,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, step }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/plan-steps`,
         body: { step },
@@ -258,7 +258,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, command, exitCode }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/commands`,
         body: { command, exitCode },
@@ -280,7 +280,7 @@ export const registerTaskTools = (
     },
     async ({ taskId, includeProgress }) => {
       const query = includeProgress ? "?includeProgress=true" : "";
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${TASKS}/${taskId}${query}`,
       });
@@ -303,7 +303,7 @@ export const registerTaskTools = (
       },
     },
     async ({ taskId, ...body }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/report-bug`,
         body,
@@ -321,7 +321,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string() },
     },
     async ({ taskId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${TASKS}/${taskId}/preview-path`,
       });
@@ -337,7 +337,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string() },
     },
     async ({ taskId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${TASKS}/${taskId}/progress`,
       });
@@ -353,7 +353,7 @@ export const registerTaskTools = (
       inputSchema: { taskId: z.string() },
     },
     async ({ taskId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "DELETE",
         path: `${TASKS}/${taskId}/progress`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_clear_progress", { taskId }),

@@ -54,7 +54,7 @@ const ceoMeetingIntentSchema = z.object({
 type StrategyRole = z.infer<typeof strategyRoleSchema>;
 
 function validateStrategyRoles(
-  roles: Array<{ role: StrategyRole; parent_role: StrategyRole | null }>,
+  roles: { role: StrategyRole; parent_role: StrategyRole | null }[],
   ctx: z.RefinementCtx,
 ) {
   const seen = new Set<string>();
@@ -631,12 +631,12 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
 }
 
 /** Extract Zod issues from a thrown error, whether direct ZodError or wrapped. */
-function extractZodIssues(err: unknown): Array<{ path: Array<string | number>; message: string }> {
+function extractZodIssues(err: unknown): { path: (string | number)[]; message: string }[] {
   if (err && typeof err === "object") {
     const anyErr = err as { issues?: unknown; cause?: { issues?: unknown } };
-    const issues = (anyErr.issues ?? anyErr.cause?.issues) as unknown;
+    const issues = (anyErr.issues ?? anyErr.cause?.issues);
     if (Array.isArray(issues)) {
-      return issues as Array<{ path: Array<string | number>; message: string }>;
+      return issues as { path: (string | number)[]; message: string }[];
     }
   }
   return [];

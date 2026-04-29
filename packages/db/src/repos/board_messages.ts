@@ -51,7 +51,7 @@ export function rowToChatMessage(row: BoardMessage): ContractChatMessage {
     role: (row.role ?? "system") as ContractChatMessage["role"],
     content: row.content,
     cardType: row.cardType as ContractChatMessage["cardType"],
-    cardData: (row.cardData as Record<string, unknown> | null) ?? null,
+    cardData: (row.cardData) ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }

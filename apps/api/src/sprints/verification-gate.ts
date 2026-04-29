@@ -100,7 +100,7 @@ export async function runVerificationGate(
   }
 
   // ── Build gate ────────────────────────────────────────────
-  if (config.enableBuildGate && scripts["build"]) {
+  if (config.enableBuildGate && scripts.build) {
     const buildRes = await runShell("npm", ["run", "build"], productDir, config.gateTimeoutMs);
     result.buildResult = { exitCode: buildRes.exitCode, stdout: buildRes.stdout, stderr: buildRes.stderr };
     if (buildRes.exitCode !== 0) {
@@ -110,7 +110,7 @@ export async function runVerificationGate(
   }
 
   // ── Test gate (final phase only, or if explicitly enabled) ─
-  if (phase === "final" && config.enableTestGate && scripts["test"]) {
+  if (phase === "final" && config.enableTestGate && scripts.test) {
     const testRes = await runShell("npm", ["run", "test"], productDir, config.gateTimeoutMs);
     result.testResult = {
       exitCode: testRes.exitCode,

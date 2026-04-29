@@ -10,7 +10,7 @@ export function Spinner() {
     const timer = setInterval(() => {
       setFrame((f) => (f + 1) % DOTS.length);
     }, 80);
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); };
   }, []);
 
   return <Text>{DOTS[frame]}</Text>;

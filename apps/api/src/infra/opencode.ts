@@ -35,10 +35,10 @@ import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../../.opencode/agent/config.js";
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
 
-type OpencodeInstance = {
+interface OpencodeInstance {
   server: { url: string; close(): void };
   client: ReturnType<typeof createOpencodeClient>;
-};
+}
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
 let ceoSessionPromise: Promise<Session> | null = null;
@@ -171,7 +171,7 @@ function ensureAzureRuntimeEnvironment() {
 /** Probe whether an OpenCode server is already listening at the given URL. */
 async function detectExistingOpencodeServer(url: string) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
+  const timeout = setTimeout(() => { controller.abort(); }, 2000);
 
   try {
     const response = await fetch(`${url}/event`, {
@@ -319,7 +319,7 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
       const lines = output.split("\n");
       for (const line of lines) {
         if (line.startsWith("opencode server listening")) {
-          const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
+          const match = /on\s+(https?:\/\/[^\s]+)/.exec(line);
           if (match) {
             clearTimeout(timeout);
             resolve({ url: match[1], proc });

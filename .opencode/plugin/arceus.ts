@@ -23,7 +23,7 @@ interface CircuitKey {
   cause: string;
 }
 
-type SkillManifestEntry = { skillId: string; version: number };
+interface SkillManifestEntry { skillId: string; version: number }
 type SkillManifest = Record<string, SkillManifestEntry>;
 
 const CIRCUIT_THRESHOLD = 3;
@@ -318,7 +318,7 @@ export const ArceusPlugin: Plugin = async () => {
       const fromOutput = (output as { part?: { type?: string; text?: string } } | undefined)?.part;
       const fromInput = (input as unknown as { part?: { type?: string; text?: string } }).part;
       const part = fromOutput ?? fromInput;
-      if (!part || part.type !== "reasoning") return;
+      if (part?.type !== "reasoning") return;
       const text = part.text ?? "";
       if (!text) return;
       const ctx = await ensureCtx(input.sessionID);

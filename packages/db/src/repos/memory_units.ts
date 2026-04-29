@@ -24,7 +24,7 @@ export async function findMemoryUnitById(
 export async function listMemoryUnitsByAgent(
   db: DbClient,
   agentId: string,
-  types?: Array<"static" | "dynamic" | "procedural" | "priming" | "delegation">,
+  types?: ("static" | "dynamic" | "procedural" | "priming" | "delegation")[],
   limit = 100,
 ): Promise<MemoryUnit[]> {
   const conditions = [eq(memoryUnits.agentId, agentId)];

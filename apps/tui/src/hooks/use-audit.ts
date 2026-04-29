@@ -40,7 +40,7 @@ export function useAudit() {
         };
         setEvents((prev) => [...prev.slice(-(MAX_EVENTS - 1)), evt]);
       },
-      () => setConnected(false),
+      () => { setConnected(false); },
     );
     setConnected(true);
 
@@ -49,7 +49,7 @@ export function useAudit() {
     };
   }, []);
 
-  const clear = () => setEvents([]);
+  const clear = () => { setEvents([]); };
 
   return { events, connected, clear };
 }

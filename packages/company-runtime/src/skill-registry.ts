@@ -242,7 +242,7 @@ export function getSkillHealth(companyId: string): SkillHealthReport {
  */
 export function getUnusedSkills(
   companyId: string,
-  staleDays: number = 30,
+  staleDays = 30,
 ): SkillArtifact[] {
   const cutoffMs = Date.now() - staleDays * 24 * 60 * 60 * 1000;
   const active = getAllSkills(companyId).filter((s) => s.status === "active");
@@ -262,7 +262,7 @@ export function getUnusedSkills(
  */
 export function getUnderperformingSkills(
   companyId: string,
-  threshold: number = 0.6,
+  threshold = 0.6,
 ): SkillArtifact[] {
   return getAllSkills(companyId)
     .filter((s) => s.status === "active" && s.successRate < threshold && s.usageCount > 0)
@@ -446,7 +446,7 @@ function readSkillResources(skillDir: string): SkillResource[] {
  * Returns { frontmatter, body }.
  */
 function parseSkillFrontmatter(content: string): { frontmatter: Record<string, string>; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(content);
   if (!match) return { frontmatter: {}, body: content };
   const lines = match[1].split("\n");
   const frontmatter: Record<string, string> = {};

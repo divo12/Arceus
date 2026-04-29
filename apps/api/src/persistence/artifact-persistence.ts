@@ -5,7 +5,7 @@ import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
 import { uploadArtifactPayload } from "./supabase-storage.js";
 import { describePgError } from "../infra/pg-errors.js";
 
-export type PersistedRuntimeArtifact = {
+export interface PersistedRuntimeArtifact {
   id: string;
   agent: string;
   kind: "plan" | "code" | "output" | "specification" | "qa_report" | "handoff";
@@ -18,7 +18,7 @@ export type PersistedRuntimeArtifact = {
   taskId?: string | null;
   /** Optional file references (e.g. tester-written test files) — defaults to []. */
   fileReferences?: unknown[];
-};
+}
 
 /** Persist a runtime artifact to the DB and upload its content to Supabase storage. */
 export async function persistRuntimeArtifact(companyId: string, artifact: PersistedRuntimeArtifact) {

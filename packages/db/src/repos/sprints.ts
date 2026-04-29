@@ -79,7 +79,7 @@ export function sprintToInsert(sprint: ContractSprint): NewSprint {
     summary: sprint.summary,
     strategyId: sprint.strategyId,
     plannedByAgentId: sprint.plannedByAgentId,
-    reviewState: (sprint.reviewState as Record<string, unknown> | null) ?? null,
+    reviewState: (sprint.reviewState) ?? null,
     status: sprint.status,
     startedAt: sprint.startedAt ? new Date(sprint.startedAt) : null,
     endedAt: sprint.completedAt ? new Date(sprint.completedAt) : null,

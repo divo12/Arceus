@@ -19,7 +19,7 @@ export function multiSink(sinks: readonly EventSink[]): EventSink {
             new Promise<void>((resolve, reject) => {
               try {
                 const r = s.write(e);
-                Promise.resolve(r).then(() => resolve(), reject);
+                Promise.resolve(r).then(() => { resolve(); }, reject);
               } catch (err) {
                 reject(err);
               }
@@ -28,7 +28,7 @@ export function multiSink(sinks: readonly EventSink[]): EventSink {
       );
       for (const r of results) {
         if (r.status === "rejected") {
-          // eslint-disable-next-line no-console
+           
           console.error("[multiSink] inner sink rejected:", r.reason);
         }
       }

@@ -7,14 +7,14 @@
  * triggers (e.g. task assignment → wake agent).
  */
 
-export type BeatEvent = {
+export interface BeatEvent {
   type: string;
   beatId: string;
   agentId: string;
   role: string;
   timestamp: string;
   data?: Record<string, unknown>;
-};
+}
 
 export type BeatEventHandler = (event: BeatEvent) => void;
 

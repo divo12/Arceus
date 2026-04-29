@@ -94,7 +94,7 @@ export async function applyStrategyTx(
     roleToAgentId.set(role.role, agentId);
     return {
       id: nodeId,
-      role: role.role as HierarchyNode["role"],
+      role: role.role,
       title: role.title,
       level: 0,
       parentNodeId: null,
@@ -106,9 +106,9 @@ export async function applyStrategyTx(
 
   const nodeByRole = new Map(hierarchy.map((node) => [node.role, node]));
   for (const role of output.roles) {
-    const node = nodeByRole.get(role.role as HierarchyNode["role"]);
+    const node = nodeByRole.get(role.role);
     if (!node || !role.parent_role) continue;
-    const parent = nodeByRole.get(role.parent_role as HierarchyNode["role"]);
+    const parent = nodeByRole.get(role.parent_role);
     node.parentNodeId = parent?.id ?? null;
     if (parent) parent.directReportNodeIds.push(node.id);
   }
@@ -129,7 +129,7 @@ export async function applyStrategyTx(
   hierarchy.forEach((n) => { n.level = computeLevel(n); });
 
   const agents: AgentIdentity[] = output.roles.map((role) => {
-    const node = nodeByRole.get(role.role as HierarchyNode["role"])!;
+    const node = nodeByRole.get(role.role)!;
     const managerAgentId = role.parent_role
       ? roleToAgentId.get(role.parent_role) ?? null
       : null;
@@ -142,14 +142,14 @@ export async function applyStrategyTx(
       companyId,
       nodeId: node.id,
       name: buildAgentName(role.role),
-      role: role.role as AgentIdentity["role"],
+      role: role.role,
       title: role.title,
       managerAgentId,
       reportAgentIds,
       capabilities: role.capabilities,
       profile: `${role.title} for ${currentCompany.name}`,
-      soul: getRoleSoul(role.role as AgentIdentity["role"]),
-      status: ROLE_INITIAL_AGENT_STATUS[role.role as AgentIdentity["role"]] ?? "active",
+      soul: getRoleSoul(role.role),
+      status: ROLE_INITIAL_AGENT_STATUS[role.role] ?? "active",
       sessionBindingId: `session_${crypto.randomUUID()}`,
       memorySummaryId: `memory_${crypto.randomUUID()}`,
       lastHeartbeatAt: null,

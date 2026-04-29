@@ -20,7 +20,7 @@ export default async function internalEventsRoutes(app: FastifyInstance): Promis
     // Bearer auth — match the existing internal-mcp scheme so the plugin
     // can reuse ARCEUS_TOKEN it already has.
     const expected = resolveBearerToken();
-    const auth = req.headers["authorization"];
+    const auth = req.headers.authorization;
     const token = typeof auth === "string" && auth.startsWith("Bearer ")
       ? auth.slice("Bearer ".length)
       : null;

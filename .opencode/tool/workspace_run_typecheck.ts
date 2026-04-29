@@ -37,7 +37,7 @@ const runTsc = (cwd: string, project: string | undefined): Promise<{ exitCode: n
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.on("error", reject);
-    child.on("close", (code) => resolve({ exitCode: code ?? 1, stdout }));
+    child.on("close", (code) => { resolve({ exitCode: code ?? 1, stdout }); });
   });
 
 export default tool({

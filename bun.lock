@@ -27,6 +27,7 @@
         "uuid": "^13.0.0",
       },
       "devDependencies": {
+        "@eslint/js": "^10.0.1",
         "@playwright/test": "^1.59.1",
         "@types/node": "^22.19.17",
         "@typescript-eslint/eslint-plugin": "^8.59.1",
@@ -40,6 +41,7 @@
         "typedoc-plugin-markdown": "^4.11.0",
         "typedoc-vitepress-theme": "^1.1.2",
         "typescript": "^5.9.3",
+        "typescript-eslint": "^8.59.1",
         "vite": "^8.0.4",
         "vitepress": "^1.6.4",
       },
@@ -330,6 +332,8 @@
     "@eslint/config-helpers": ["@eslint/config-helpers@0.5.5", "", { "dependencies": { "@eslint/core": "^1.2.1" } }, "sha512-eIJYKTCECbP/nsKaaruF6LW967mtbQbsw4JTtSVkUQc9MneSkbrgPJAbKl9nWr0ZeowV8BfsarBmPpBzGelA2w=="],
 
     "@eslint/core": ["@eslint/core@1.2.1", "", { "dependencies": { "@types/json-schema": "^7.0.15" } }, "sha512-MwcE1P+AZ4C6DWlpin/OmOA54mmIZ/+xZuJiQd4SyB29oAJjN30UW9wkKNptW2ctp4cEsvhlLY/CsQ1uoHDloQ=="],
+
+    "@eslint/js": ["@eslint/js@10.0.1", "", { "peerDependencies": { "eslint": "^10.0.0" }, "optionalPeers": ["eslint"] }, "sha512-zeR9k5pd4gxjZ0abRoIaxdc7I3nDktoXZk2qOv9gCNWx3mVwEn32VRhyLaRsDiJjTs0xq/T8mfPtyuXu7GWBcA=="],
 
     "@eslint/object-schema": ["@eslint/object-schema@3.0.5", "", {}, "sha512-vqTaUEgxzm+YDSdElad6PiRoX4t8VGDjCtt05zn4nU810UIx/uNEV7/lZJ6KwFThKZOzOxzXy48da+No7HZaMw=="],
 
@@ -1780,6 +1784,8 @@
     "typedoc-vitepress-theme": ["typedoc-vitepress-theme@1.1.2", "", { "peerDependencies": { "typedoc-plugin-markdown": ">=4.4.0" } }, "sha512-hQvCZRr5uKDqY1bRuY1+eNTNn6d4TE4OP5pnw65Y7WGgajkJW9X1/lVJK2UJpcwCmwkdjw1QIO49H9JQlxWhhw=="],
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "typescript-eslint": ["typescript-eslint@8.59.1", "", { "dependencies": { "@typescript-eslint/eslint-plugin": "8.59.1", "@typescript-eslint/parser": "8.59.1", "@typescript-eslint/typescript-estree": "8.59.1", "@typescript-eslint/utils": "8.59.1" }, "peerDependencies": { "eslint": "^8.57.0 || ^9.0.0 || ^10.0.0", "typescript": ">=4.8.4 <6.1.0" } }, "sha512-xqDcFVBmlrltH64lklOVp1wYxgJr6LVdg3NamBgH2OOQDLFdTKfIZXF5PfghrnXQKXZGTQs8tr1vL7fJvq8CTQ=="],
 
     "uc.micro": ["uc.micro@2.1.0", "", {}, "sha512-ARDJmphmdvUk6Glw7y9DQ2bFkKBHwQHLi2lsaH6PPmz/Ka9sFOBsBluozhDltWmnv9u/cF6Rt87znRTPV+yp/A=="],
 

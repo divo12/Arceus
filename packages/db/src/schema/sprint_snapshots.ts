@@ -22,7 +22,7 @@ export const sprintSnapshots = pgTable(
      * @arceus/contracts dependency in @arceus/db.
      */
     snapshotData: jsonb("snapshot_data").$type<Record<string, unknown>>().notNull().default({}),
-    fileManifest: jsonb("file_manifest").$type<Array<{ path: string; sha256: string; bytes: number }>>().notNull().default([]),
+    fileManifest: jsonb("file_manifest").$type<{ path: string; sha256: string; bytes: number }[]>().notNull().default([]),
     status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

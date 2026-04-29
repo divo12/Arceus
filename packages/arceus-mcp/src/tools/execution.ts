@@ -21,7 +21,7 @@ export const registerExecutionTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: EXEC,
       });
@@ -38,7 +38,7 @@ export const registerExecutionTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${EXEC}/complete-cycle`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "execution_complete_cycle", {}),
@@ -58,7 +58,7 @@ export const registerExecutionTools = (
     },
     async ({ reason }) => {
       const body = { reason };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${EXEC}/pause`,
         body,
@@ -80,7 +80,7 @@ export const registerExecutionTools = (
     },
     async ({ notes, resumeExecution }) => {
       const body = { notes, resumeExecution };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${EXEC}/reconcile`,
         body,
@@ -98,7 +98,7 @@ export const registerExecutionTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${EXEC}/stop`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "execution_stop", {}),

@@ -75,7 +75,7 @@ export default async function internalMcpCompanyRoutes(app: FastifyInstance): Pr
 
     // Spec 31 Phase 7.C.d — direct canonical write keyed by the request's
     // companyId from the MCP middleware.
-    await updateCompanyStatus(req.mcp!.companyId, parsed.data.status);
+    await updateCompanyStatus(req.mcp.companyId, parsed.data.status);
 
     cacheAndSend(req, reply, 200, success("Company status updated.", {
       status: parsed.data.status,

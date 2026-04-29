@@ -5,18 +5,18 @@ import { AgentCard, type AgentInfo } from "../components/agent-card.js";
 import { usePoll } from "../hooks/use-poll.js";
 
 interface EmployeeResponse {
-  employees?: Array<{
+  employees?: {
     id: string;
     role: string;
     name: string;
     title: string;
     status: string;
     soul?: { purpose?: string };
-    sessions?: Array<{ runtimeStatus?: string }>;
+    sessions?: { runtimeStatus?: string }[];
     trustScore?: number;
     currentTaskTitle?: string;
     lastHeartbeatAt?: string;
-  }>;
+  }[];
 }
 
 export function AgentsView() {

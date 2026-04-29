@@ -25,7 +25,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/health-report`,
         body: input,
@@ -46,7 +46,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/audit-unused`,
         body: input,
@@ -67,7 +67,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/inspect-history`,
         body: input,
@@ -90,7 +90,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/validate-definition`,
         body: input,
@@ -117,7 +117,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/register`,
         body: input,
@@ -142,7 +142,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/update`,
         body: input,
@@ -164,7 +164,7 @@ export const registerSkillTools = (
       },
     },
     async (input) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SKILLS}/deprecate`,
         body: input,

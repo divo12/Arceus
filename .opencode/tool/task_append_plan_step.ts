@@ -19,7 +19,7 @@ export default tool({
     run(async () => {
       const ctx = loadContext();
       const body = { step };
-      const res = await arceusRequest<ToolResult<unknown>>(ctx, {
+      const res = await arceusRequest<ToolResult>(ctx, {
         method: "POST",
         path: `/api/internal/v1/tasks/${ctx.taskId}/plan-steps`,
         body,

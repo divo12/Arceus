@@ -11,7 +11,7 @@ export const roleTrustEvents = pgTable(
     fromBand: text("from_band").notNull(),
     toBand: text("to_band").notNull(),
     reason: text("reason").notNull(),
-    verdictWindow: jsonb("verdict_window").$type<Array<{ beatId: string; score: number; outcome: string }>>(),
+    verdictWindow: jsonb("verdict_window").$type<{ beatId: string; score: number; outcome: string }[]>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

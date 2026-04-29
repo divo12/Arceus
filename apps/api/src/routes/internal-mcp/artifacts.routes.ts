@@ -83,7 +83,7 @@ const workspaceWriteBody = z.object({
 
 export default async function internalMcpArtifactsRoutes(app: FastifyInstance): Promise<void> {
   // POST /artifacts — create + optionally attach to a task
-  app.post(`${ARTIFACT_BASE}`, async (req, reply) => {
+  app.post(ARTIFACT_BASE, async (req, reply) => {
     const body = parseOrFail(createArtifactBody, req.body, reply);
     if (!body) return;
 

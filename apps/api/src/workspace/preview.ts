@@ -10,12 +10,12 @@ type PreviewTargetKind = "browser" | "service";
 type PreviewRuntime = "node" | "python" | "static" | "unknown";
 type ValidationStrategy = "entry-url" | "health-url" | "root-url";
 
-type ReportedPreviewCandidate = {
+interface ReportedPreviewCandidate {
   url: string;
   reportedAt: string;
-};
+}
 
-export type LocalPreviewState = {
+export interface LocalPreviewState {
   status: PreviewStatus;
   url: string | null;
   entryUrl: string | null;
@@ -29,7 +29,7 @@ export type LocalPreviewState = {
   port: number;
   lastError: string | null;
   startedAt: string | null;
-};
+}
 
 let previewProcess: ChildProcess | null = null;
 let previewStaticServer: Server | null = null;
@@ -59,7 +59,7 @@ async function exists(path: string) {
   }
 }
 
-type LaunchCommand = {
+interface LaunchCommand {
   command: string;
   args: string[];
   kind: "npm-preview" | "npm-start" | "npm-dev" | "static-http" | "python-uvicorn";
@@ -70,11 +70,11 @@ type LaunchCommand = {
   targetKind: PreviewTargetKind;
   runtime: PreviewRuntime;
   framework: string | null;
-};
+}
 
-type CandidatePreference = {
+interface CandidatePreference {
   preferredTargetPath?: string | null;
-};
+}
 
 const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -92,11 +92,11 @@ const contentTypes: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-type CandidateWorkspace = {
+interface CandidateWorkspace {
   dir: string;
   modifiedAtMs: number;
   depth: number;
-};
+}
 
 const ignoredDirectories = new Set(previewConfig.ignoredDirectories);
 
@@ -106,7 +106,7 @@ function detectNodePreviewProfile(parsed: { dependencies?: Record<string, string
     ...Object.keys(parsed.devDependencies ?? {}),
   ]);
 
-  const browserFrameworks: Array<[string, string]> = [
+  const browserFrameworks: [string, string][] = [
     ["next", "Next.js"],
     ["vite", "Vite"],
     ["react", "React"],
@@ -114,7 +114,7 @@ function detectNodePreviewProfile(parsed: { dependencies?: Record<string, string
     ["svelte", "Svelte"],
     ["astro", "Astro"],
   ];
-  const serviceFrameworks: Array<[string, string]> = [
+  const serviceFrameworks: [string, string][] = [
     ["fastify", "Fastify"],
     ["express", "Express"],
     ["koa", "Koa"],
@@ -429,7 +429,7 @@ export async function probePreviewHealth(timeoutMs = 5000): Promise<{
   }
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => { controller.abort(); }, timeoutMs);
     const res = await fetch(url, { method: "GET", signal: controller.signal, headers: { "Accept": "text/html,*/*" } });
     clearTimeout(timer);
 
@@ -477,7 +477,7 @@ async function terminatePreviewProcessTree(childProcess: ChildProcess) {
 
   if (process.platform === "win32") {
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => resolve(), 5000);
+      const timeout = setTimeout(() => { resolve(); }, 5000);
       const killer = spawn("taskkill", ["/PID", String(processId), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
@@ -501,7 +501,7 @@ export async function stopLocalPreview() {
 
   if (previewStaticServer) {
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => resolve(), 3000);
+      const timeout = setTimeout(() => { resolve(); }, 3000);
       previewStaticServer?.close((error) => {
         clearTimeout(timeout);
         resolve();
@@ -550,7 +550,7 @@ async function startStaticPreviewServer(rootDir: string) {
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(previewState.port, previewConfig.host, () => resolve());
+    server.listen(previewState.port, previewConfig.host, () => { resolve(); });
   });
 
   previewStaticServer = server;

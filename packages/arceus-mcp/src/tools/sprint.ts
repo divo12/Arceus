@@ -38,7 +38,7 @@ export const registerSprintTools = (
       // _meta — see spec 25 §4). Investigation complete; the debug logs are
       // gone and the param itself is unused here.
       const body = { goal, tasks };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SPRINTS}/create`,
         body,
@@ -57,7 +57,7 @@ export const registerSprintTools = (
       inputSchema: {},
     },
     async () => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${SPRINTS}/active`,
       });
@@ -73,7 +73,7 @@ export const registerSprintTools = (
       inputSchema: { sprintId: z.string() },
     },
     async ({ sprintId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: `${SPRINTS}/${sprintId}/completion`,
       });
@@ -89,7 +89,7 @@ export const registerSprintTools = (
       inputSchema: { sprintId: z.string() },
     },
     async ({ sprintId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SPRINTS}/${sprintId}/qa-gate`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_run_qa_gate", { sprintId }),
@@ -106,7 +106,7 @@ export const registerSprintTools = (
       inputSchema: { sprintId: z.string() },
     },
     async ({ sprintId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SPRINTS}/${sprintId}/final-gate`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_run_final_gate", { sprintId }),
@@ -123,7 +123,7 @@ export const registerSprintTools = (
       inputSchema: { sprintId: z.string() },
     },
     async ({ sprintId }) => {
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${SPRINTS}/${sprintId}/finalize`,
         idempotencyKey: deriveIdempotencyKey(ctx.beatId, "sprint_finalize", { sprintId }),

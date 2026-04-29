@@ -79,7 +79,7 @@ export default async function inspectorRoutes(app: FastifyInstance) {
     }, 10_000);
 
     const unsubscribe = subscribe((ev) => {
-      if (!matches(ev as unknown as Record<string, unknown>)) return;
+      if (!matches(ev)) return;
       try {
         reply.raw.write(`event: arceus\ndata: ${JSON.stringify(ev)}\n\n`);
       } catch {

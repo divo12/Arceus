@@ -141,7 +141,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
       kt.description || kt.title,
       kt.title,
       [`${kt.title} completed`],
-      kt.priority as Task["priority"],
+      kt.priority,
       "created",
       sprint.id,
     );
@@ -193,14 +193,14 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   // Auto-promote tasks with no dependencies to "planned"
   for (const task of createdTasks) {
     if (task.dependsOnTaskIds.length === 0 && task.status === "created") {
-      updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+      updateTask(task.id, (t) => ({ ...t, status: "planned" }));
     }
   }
 
   // Mark sprint as active
   updateSprint(sprint.id, (s) => ({
     ...s,
-    status: "executing" as Sprint["status"],
+    status: "executing",
     startedAt: nowIso(),
   }));
 

@@ -255,8 +255,8 @@ export class PgVectorStaticStore implements StaticMemoryStore {
   async searchByEmbedding(
     agentId: string,
     queryEmbedding: number[],
-    limit: number = 15,
-  ): Promise<Array<MemoryUnit & { similarity: number }>> {
+    limit = 15,
+  ): Promise<(MemoryUnit & { similarity: number })[]> {
     const db = getDb();
     const similarity = sql<number>`1 - (${cosineDistance(memoryEmbeddings.embedding, queryEmbedding)})`;
 
@@ -356,8 +356,8 @@ export class PgVectorDynamicStore implements DynamicMemoryStore {
   async searchByEmbedding(
     agentId: string,
     queryEmbedding: number[],
-    limit: number = 15,
-  ): Promise<Array<MemoryUnit & { similarity: number; decayedScore: number }>> {
+    limit = 15,
+  ): Promise<(MemoryUnit & { similarity: number; decayedScore: number })[]> {
     const db = getDb();
     const similarity = sql<number>`1 - (${cosineDistance(memoryEmbeddings.embedding, queryEmbedding)})`;
     const decayedScore = sql<number>`

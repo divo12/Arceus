@@ -132,7 +132,7 @@ export async function runCronTriggerSweep(opts: {
          HAVING count(*) >= ${minInv}
             AND avg(outcome_score) <= ${maxRate}
        )
-  `)) as unknown as Array<{ skill_id: string; company_id: string }>;
+  `)) as unknown as { skill_id: string; company_id: string }[];
 
   let enqueued = 0;
   let skipped = 0;
@@ -172,7 +172,7 @@ export async function runRollbackMonitor(opts: {
      WHERE created_at > now() - interval '24 hours'
        AND rollback_from_tag IS NULL
      GROUP BY skill_id
-  `)) as unknown as Array<{ skill_id: string; rev: number; applied_at: Date | string }>;
+  `)) as unknown as { skill_id: string; rev: number; applied_at: Date | string }[];
 
   let proposed = 0;
   let skipped = 0;
@@ -184,7 +184,7 @@ export async function runRollbackMonitor(opts: {
        WHERE skill_id = ${r.skill_id}
          AND rollback_from_tag IS NOT NULL
          AND created_at > now() - interval '7 days'
-    `)) as unknown as Array<{ n: number }>;
+    `)) as unknown as { n: number }[];
     if ((flaps[0]?.n ?? 0) > flapCap) {
       protectedCount++;
       continue;
@@ -197,7 +197,7 @@ export async function runRollbackMonitor(opts: {
       SELECT count(*)::int AS n FROM skill_usage_events
        WHERE skill_id = ${r.skill_id}
          AND occurred_at > ${appliedAtIso}::timestamptz
-    `)) as unknown as Array<{ n: number }>;
+    `)) as unknown as { n: number }[];
     if ((inv[0]?.n ?? 0) < minInv) { skipped++; continue; }
 
     // 2. Current EMA = registry successRate (column on skill_artifacts).

@@ -60,7 +60,7 @@ export const skillMutations = pgTable(
     /** Why the mutation happened (`Skill gap: foo`, `Pattern emerged ...`). */
     mutationReason: text("mutation_reason"),
     /** Optional test scenarios captured at proposal time. */
-    testCases: jsonb("test_cases").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    testCases: jsonb("test_cases").$type<Record<string, unknown>[]>().notNull().default([]),
     /** Set when the mutation was approved into the active registry. */
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })

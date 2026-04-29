@@ -16,7 +16,7 @@ let ceoStreaming = false;
 /** Returns whether the CEO agent is currently streaming a response. */
 export function isCeoStreaming(): boolean { return ceoStreaming; }
 
-type OpenCodeEvent = {
+interface OpenCodeEvent {
   type: string;
   properties?: {
     info?: {
@@ -40,7 +40,7 @@ type OpenCodeEvent = {
       message?: string;
     };
   };
-};
+}
 
 function sseWrite(reply: FastifyReply, event: string, data: unknown) {
   reply.raw.write(`event: ${event}\n`);

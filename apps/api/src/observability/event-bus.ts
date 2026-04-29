@@ -24,8 +24,8 @@ const listeners = new Set<EventListener>();
 
 function tag(event: ArceusEvent): ArceusEvent & { seq: number } {
   const seq = nextSeq++;
-  const tagged = { ...event, seq } as ArceusEvent & { seq: number };
-  seqs.set(tagged as unknown as object, seq);
+  const tagged = { ...event, seq };
+  seqs.set(tagged, seq);
   return tagged;
 }
 
@@ -58,9 +58,9 @@ export interface SnapshotFilter {
   limit?: number;
 }
 
-export function snapshot(filter: SnapshotFilter = {}): Array<ArceusEvent & { seq: number }> {
+export function snapshot(filter: SnapshotFilter = {}): (ArceusEvent & { seq: number })[] {
   const limit = Math.min(filter.limit ?? 1000, CAPACITY);
-  const out: Array<ArceusEvent & { seq: number }> = [];
+  const out: (ArceusEvent & { seq: number })[] = [];
   // walk newest → oldest until we hit limit, then reverse
   for (let i = buffer.length - 1; i >= 0 && out.length < limit; i--) {
     const ev = buffer[i] as ArceusEvent & { seq: number; [k: string]: unknown };
@@ -70,7 +70,7 @@ export function snapshot(filter: SnapshotFilter = {}): Array<ArceusEvent & { seq
     if (filter.companyId && ev.companyId !== filter.companyId) continue;
     if (filter.role && ev.role !== filter.role) continue;
     if (filter.sinceSeq !== undefined && ev.seq <= filter.sinceSeq) break;
-    if (filter.sinceTs !== undefined && (ev.ts as number) < filter.sinceTs) continue;
+    if (filter.sinceTs !== undefined && (ev.ts) < filter.sinceTs) continue;
     out.push(ev);
   }
   out.reverse();

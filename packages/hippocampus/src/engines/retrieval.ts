@@ -39,7 +39,7 @@ export function applyBoosts(
   candidates: RawCandidate[],
   agentContainer: string,
   options: RetrievalOptions,
-): Array<RawCandidate & { boostedScore: number }> {
+): (RawCandidate & { boostedScore: number })[] {
   return candidates.map((c) => {
     // Base score: for dynamic, use decayedScore if available (already includes decay)
     const baseScore = c.tier === "dynamic" && c.decayedScore != null
@@ -84,14 +84,14 @@ export function applyBoosts(
  * `selected`. Same semantics, no escape hatch.
  */
 export function selectByMMR(
-  candidates: Array<RawCandidate & { boostedScore: number }>,
+  candidates: (RawCandidate & { boostedScore: number })[],
   topK: number,
   lambda: number,
 ): ScoredMemory[] {
   if (candidates.length === 0) return [];
 
   const selected: ScoredMemory[] = [];
-  const selectedEmbeddings: Array<number[] | null> = [];
+  const selectedEmbeddings: (number[] | null)[] = [];
   const remaining = [...candidates];
 
   // Normalize boosted scores to [0, 1] for fair comparison with similarity

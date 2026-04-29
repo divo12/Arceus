@@ -259,7 +259,7 @@ async function applyOneMutation(companyId: string, mutation: StateMutation, _cau
 
     case "company_status":
       // Spec 31 Phase 7.C.d — updateCompanyStatus is keyed by companyId now.
-      await updateCompanyStatus(companyId, mutation.status as never);
+      await updateCompanyStatus(companyId, mutation.status);
       break;
 
     case "task_progress":
@@ -277,7 +277,7 @@ async function applyOneMutation(companyId: string, mutation: StateMutation, _cau
 
 // ── Control Plane status / health ──────────────────────────
 
-export type ControlPlaneStatus = {
+export interface ControlPlaneStatus {
   healthy: boolean;
   version: number;
   mutationCount: number;
@@ -289,7 +289,7 @@ export type ControlPlaneStatus = {
     auditLedger: { status: "ok" | "degraded" };
     executionSubstrate: { status: "ok" | "idle" | "executing" };
   };
-};
+}
 
 /**
  * Get the Control Plane health and component status summary. Spec 31
@@ -458,7 +458,7 @@ export async function cpLoadAgentContext(
     if (reviewState && reviewState.bugTaskIds.length > 0) {
       const existingIds = new Set(agentTasks.map((t) => t.id));
       const bugTasks = snap.tasks.filter(
-        (t) => (reviewState.bugTaskIds as string[]).includes(t.id) && !existingIds.has(t.id)
+        (t) => (reviewState.bugTaskIds).includes(t.id) && !existingIds.has(t.id)
       );
       agentTasks.push(...bugTasks);
     }
@@ -1167,7 +1167,7 @@ const recentViolationsCache: PolicyViolation[] = [];
  * by `applyStrategyTx` after the transaction commits. Fire-and-forget;
  * failures are warned but never thrown.
  */
-export async function cpInitializeAgentTrust(agents: Array<{ id: string }>): Promise<void> {
+export async function cpInitializeAgentTrust(agents: { id: string }[]): Promise<void> {
   const nowIso = new Date().toISOString();
   const results = await Promise.allSettled(
     agents.map((a) =>

@@ -14,11 +14,11 @@ export function deriveIdempotencyKey(beatId: string, op: string, body: unknown):
   return `${beatId || "shared"}:${op}:${bodyHash}`;
 }
 
-export type McpToolContent = {
+export interface McpToolContent {
   [key: string]: unknown;
-  content: Array<{ [key: string]: unknown; type: "text"; text: string }>;
+  content: { [key: string]: unknown; type: "text"; text: string }[];
   isError?: boolean;
-};
+}
 
 export const toMcpContent = <T>(result: ToolResult<T>): McpToolContent => ({
   content: [{ type: "text", text: JSON.stringify(result) }],

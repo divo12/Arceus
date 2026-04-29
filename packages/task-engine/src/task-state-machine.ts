@@ -181,7 +181,7 @@ export async function setTaskStatus(
         }
         cb.updateTask(task.id, (t) => ({
           ...t,
-          status: "planned" as Task["status"],
+          status: "planned",
           incomingArtifactIds: uniqueStrings(
             [...t.incomingArtifactIds, ...upstreamArtifactIds],
             MAX_INCOMING_ARTIFACT_IDS,

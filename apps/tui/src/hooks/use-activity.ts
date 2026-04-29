@@ -38,7 +38,7 @@ export function useActivity() {
         };
         setEvents((prev) => [...prev.slice(-(MAX_EVENTS - 1)), evt]);
       },
-      () => setConnected(false),
+      () => { setConnected(false); },
     );
     setConnected(true);
 
@@ -47,7 +47,7 @@ export function useActivity() {
     };
   }, []);
 
-  const clear = () => setEvents([]);
+  const clear = () => { setEvents([]); };
 
   return { events, connected, clear };
 }

@@ -60,7 +60,7 @@ function buildTree(files: FileEntry[]): TreeNode {
   return root;
 }
 
-function renderTree(node: TreeNode, prefix: string, isLast: boolean, lines: Array<{ text: string; color: string }>) {
+function renderTree(node: TreeNode, prefix: string, isLast: boolean, lines: { text: string; color: string }[]) {
   if (node.name !== "/") {
     const connector = isLast ? "└─ " : "├─ ";
     const icon = node.isFile ? "" : "📁 ";
@@ -106,7 +106,7 @@ export function WorkspaceView({ height }: WorkspaceViewProps) {
   }
 
   const tree = buildTree(files);
-  const lines: Array<{ text: string; color: string }> = [];
+  const lines: { text: string; color: string }[] = [];
   renderTree(tree, "", true, lines);
 
   // Show what fits in available height

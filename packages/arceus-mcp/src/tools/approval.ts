@@ -26,7 +26,7 @@ export const registerApprovalTools = (
     },
     async ({ type, title, description, meetingId, agendaItemId }) => {
       const body = { type, requestedByRole: ctx.role, title, description, meetingId, agendaItemId };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: APPROVALS,
         body,
@@ -52,7 +52,7 @@ export const registerApprovalTools = (
     },
     async ({ approvalId, status, filedByMe, pendingMyDecision, since, limit }) => {
       if (approvalId) {
-        const res = await client.request<ToolResult<unknown>>({
+        const res = await client.request<ToolResult>({
           method: "GET",
           path: `${APPROVALS}/${approvalId}`,
         });
@@ -65,7 +65,7 @@ export const registerApprovalTools = (
       if (since) params.set("since", since);
       if (limit !== undefined) params.set("limit", String(limit));
       const qs = params.toString();
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "GET",
         path: qs ? `${APPROVALS}?${qs}` : APPROVALS,
       });
@@ -88,7 +88,7 @@ export const registerApprovalTools = (
     },
     async ({ approvalId, title, description, meetingId, agendaItemId }) => {
       const body = { title, description, meetingId, agendaItemId };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "PATCH",
         path: `${APPROVALS}/${approvalId}`,
         body,
@@ -111,7 +111,7 @@ export const registerApprovalTools = (
     },
     async ({ approvalId, decision, reason }) => {
       const body = { decision, reason };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${APPROVALS}/${approvalId}/decide`,
         body,

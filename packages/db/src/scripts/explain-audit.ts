@@ -38,7 +38,7 @@ interface HotPath {
   /** SQL string with $1, $2, ... placeholders. */
   sql: string;
   /** Bound parameter values. */
-  params: Array<string | number | null>;
+  params: (string | number | null)[];
   /** Per-query execution budget in milliseconds. */
   budgetMs?: number;
 }
@@ -118,7 +118,7 @@ const HOT_PATHS: HotPath[] = [
 ];
 
 /** Recursively walk a plan tree, calling `visit` on each node. */
-type PlanNode = { "Node Type": string; "Relation Name"?: string; "Plan Rows"?: number; Plans?: PlanNode[] };
+interface PlanNode { "Node Type": string; "Relation Name"?: string; "Plan Rows"?: number; Plans?: PlanNode[] }
 function walkPlan(node: PlanNode, visit: (n: PlanNode) => void): void {
   visit(node);
   for (const child of node.Plans ?? []) walkPlan(child, visit);
@@ -129,7 +129,7 @@ interface QueryReport {
   description: string;
   executionMs: number;
   budgetMs: number;
-  seqScansOnLargeTables: Array<{ relation: string; rows: number }>;
+  seqScansOnLargeTables: { relation: string; rows: number }[];
   ok: boolean;
 }
 
@@ -139,7 +139,7 @@ interface QueryReport {
 const SEQ_SCAN_ROW_THRESHOLD = 1000;
 
 async function fetchTableSizes(sql: postgres.Sql): Promise<Map<string, number>> {
-  const rows = await sql<Array<{ relname: string; reltuples: string }>>`
+  const rows = await sql<{ relname: string; reltuples: string }[]>`
     SELECT relname, reltuples::text FROM pg_class
      WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace
   `;
@@ -154,7 +154,7 @@ async function explainOne(
   tableSizes: Map<string, number>,
 ): Promise<QueryReport> {
   const explainSql = `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${path.sql}`;
-  const result = await sql.unsafe<Array<{ "QUERY PLAN": Array<{ Plan: PlanNode; "Execution Time": number }> }>>(
+  const result = await sql.unsafe<{ "QUERY PLAN": { Plan: PlanNode; "Execution Time": number }[] }[]>(
     explainSql,
     path.params as never,
   );
@@ -163,7 +163,7 @@ async function explainOne(
     throw new Error(`[explain-audit] no plan returned for ${path.name}`);
   }
 
-  const seqScansOnLargeTables: Array<{ relation: string; rows: number }> = [];
+  const seqScansOnLargeTables: { relation: string; rows: number }[] = [];
   walkPlan(explainRow.Plan, (n) => {
     if (n["Node Type"] === "Seq Scan" && n["Relation Name"]) {
       const rel = n["Relation Name"];

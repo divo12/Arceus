@@ -153,7 +153,7 @@ const hydrateBody = z.object({
 
 export default async function internalMcpTasksRoutes(app: FastifyInstance): Promise<void> {
   // POST /tasks — create
-  app.post(`${TASK_BASE}`, async (req, reply) => {
+  app.post(TASK_BASE, async (req, reply) => {
     const body = parseOrFail(createTaskBody, req.body, reply);
     if (!body) return;
 
@@ -202,7 +202,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       taskId,
       companyId: req.mcp!.companyId,
       sprintId: task.sprintId ?? null,
-      assignedRole: (task.assignedRole ?? req.mcp!.role) as RoleType,
+      assignedRole: (task.assignedRole ?? req.mcp!.role),
       ts: Date.now(),
     });
 
@@ -324,7 +324,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    setTaskVerified(req.mcp!.companyId, taskId, body.verifiedBy);
+    setTaskVerified(req.mcp.companyId, taskId, body.verifiedBy);
     await persistTask(taskId);
     cacheAndSend(req, reply, 200, success(`Task ${taskId} verified.`, { taskId, verifiedBy: body.verifiedBy }));
   });

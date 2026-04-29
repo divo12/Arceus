@@ -8,7 +8,7 @@ export const primingStates = pgTable(
     agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     state: jsonb("state").$type<Record<string, unknown>>().notNull().default({}),
-    recentOutcomes: jsonb("recent_outcomes").$type<Array<{ beatId: string; score: number }>>().notNull().default([]),
+    recentOutcomes: jsonb("recent_outcomes").$type<{ beatId: string; score: number }[]>().notNull().default([]),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

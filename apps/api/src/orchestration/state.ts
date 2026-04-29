@@ -10,7 +10,7 @@ import { isInternalAgentRole } from "@arceus/company-runtime";
 import { orchestratorConfig } from "../config/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────
-export type AgentSessionState = {
+export interface AgentSessionState {
   role: string;
   agentId: string;
   sessionId: string;
@@ -33,61 +33,61 @@ export type AgentSessionState = {
   fileEditCount: number;
   shellCommandCount: number;
   stallReason: string | null;
-};
+}
 
-export type Artifact = {
+export interface Artifact {
   id: string;
   agent: string;
   kind: "plan" | "code" | "output" | "specification" | "handoff";
   title: string;
   content: string;
   createdAt: string;
-};
+}
 
 export type ExecutionStatus = "idle" | "planning" | "executing" | "verifying" | "awaiting_board_review" | "paused" | "done" | "error";
 
-export type ExecutionContext = {
+export interface ExecutionContext {
   companyId: string;
   buildTaskId: string;
   previewTaskId: string;
   reviewTaskId: string;
-};
+}
 
-export type MeetingAgendaInput = {
+export interface MeetingAgendaInput {
   topic: string;
   type: "update" | "blocker" | "question" | "proposal";
   content: string;
   raisedByRole: AgentIdentity["role"];
   relatedTaskId?: string | null;
   needsBoardApproval?: boolean;
-};
+}
 
-export type MeetingDecisionInput = {
+export interface MeetingDecisionInput {
   description: string;
   decidedByRoles: AgentIdentity["role"][];
   impactIds: string[];
-};
+}
 
-export type MeetingLearningInput = {
+export interface MeetingLearningInput {
   role: AgentIdentity["role"];
   content: string;
   promotedToSummary?: boolean;
-};
+}
 
-export type TaskModificationInput = {
+export interface TaskModificationInput {
   taskId: string;
   modificationType: "assign" | "reprioritize" | "reassign" | "cancel" | "decompose_further" | "unblock";
   details: string;
   assignedRole?: AgentIdentity["role"] | null;
   priority?: Task["priority"] | null;
   resultingStatus?: Task["status"] | null;
-};
+}
 
-export type MemoryModificationInput = {
+export interface MemoryModificationInput {
   role: AgentIdentity["role"];
   modificationType: "current_focus" | "recent_learning" | "active_pattern" | "open_blocker" | "important_decision" | "clear_blocker";
   content: string;
-};
+}
 
 // ─── Constants ────────────────────────────────────────────────────
 export const CORE_EXECUTION_TASK_KINDS = new Set<Task["kind"]>(orchestratorConfig.coreExecutionTaskKinds);

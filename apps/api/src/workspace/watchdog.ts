@@ -35,7 +35,7 @@ export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: stri
   if (!activeExecution || executionStatus !== "executing") return;
 
   const developerSession = agentSessions.get("developer");
-  if (!developerSession || developerSession.status !== "working") return;
+  if (developerSession?.status !== "working") return;
 
   const timer = setTimeout(() => {
     void failDeveloperStallFn(developerSession.sessionId);
@@ -47,7 +47,7 @@ export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: stri
 export async function failDeveloperStall(sessionId: string) {
   const developerSession = agentSessions.get("developer");
   if (!activeExecution || executionStatus !== "executing") return;
-  if (!developerSession || developerSession.sessionId !== sessionId || developerSession.status !== "working") return;
+  if (developerSession?.sessionId !== sessionId || developerSession.status !== "working") return;
 
   clearDeveloperWatchdog();
   stopDeveloperWorkspaceMonitor();

@@ -178,7 +178,7 @@ export async function stopSkillScheduler(): Promise<void> {
     const drain = inFlight;
     const winner = await Promise.race([
       drain.then(() => "done" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), SHUTDOWN_DRAIN_MS)),
+      new Promise<"timeout">((resolve) => setTimeout(() => { resolve("timeout"); }, SHUTDOWN_DRAIN_MS)),
     ]);
     if (winner === "timeout") {
       console.warn(`[SkillScheduler] in-flight job did not drain within ${SHUTDOWN_DRAIN_MS}ms`);

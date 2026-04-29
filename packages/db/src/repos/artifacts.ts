@@ -79,7 +79,7 @@ export function rowToArtifact(row: Artifact): ContractArtifact {
     summary: row.summary ?? row.content ?? "",
     location: row.location,
     contentType: row.contentType,
-    metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    metadata: (row.metadata ?? {}),
     createdAt: row.createdAt.toISOString(),
   };
 }

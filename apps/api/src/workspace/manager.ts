@@ -10,15 +10,15 @@ import { persistenceConfig } from "../config/index.js";
 import { cloneWorkspaceFromBundle, commitAllChanges, createBundleFromWorkspace, diffWorkspaceRefs, ensureGitRepository, getHeadSha, tagWorkspace } from "./git-ops.js";
 import { createSignedBucketUrl, downloadWorkspaceBundle, getAssetRecordByObjectKey, getLocalFileInfo, isStorageConfigured, uploadWorkspaceBundle } from "../persistence/supabase-storage.js";
 
-type WorkspaceOperationResult = {
+interface WorkspaceOperationResult {
   workspace: WorkspaceInfo;
   warnings: string[];
-};
+}
 
-type WorkspaceFileEntry = {
+interface WorkspaceFileEntry {
   path: string;
   modifiedAt: string;
-};
+}
 
 type WorkspaceManifestEntry = WorkspaceFileManifestEntry;
 
@@ -475,13 +475,13 @@ export class WorkspaceManager {
           // Cast through Record<string, unknown> — the schema is
           // declared untyped to avoid an @arceus/contracts circular
           // dep in @arceus/db. The runtime payload is a CompanySnapshot.
-          snapshotData: snapshot as unknown as Record<string, unknown>,
+          snapshotData: snapshot,
           // The canonical schema's jsonb is typed `{ path; sha256; bytes }`;
           // the workspace's listWorkspaceManifest helper produces
           // `{ path; size }` (contract `WorkspaceFileManifestEntry`).
           // The DB column is plain jsonb — cast through unknown so
           // both shapes can land without changing either type.
-          fileManifest: manifest as unknown as Array<{ path: string; sha256: string; bytes: number }>,
+          fileManifest: manifest as unknown as { path: string; sha256: string; bytes: number }[],
           status: "active",
           createdAt: new Date(),
         })
@@ -492,8 +492,8 @@ export class WorkspaceManager {
             bundleKey,
             bundleSha256,
             bundleBytes,
-            snapshotData: snapshot as unknown as Record<string, unknown>,
-            fileManifest: manifest as unknown as Array<{ path: string; sha256: string; bytes: number }>,
+            snapshotData: snapshot,
+            fileManifest: manifest as unknown as { path: string; sha256: string; bytes: number }[],
             status: "active",
           },
         });

@@ -28,7 +28,7 @@ export const registerArtifactTools = (
     },
     async ({ kind, title, content, taskId, attachToTaskIds }) => {
       const body = { agent: ctx.role, kind, title, content, taskId, attachToTaskIds };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: ARTIFACTS,
         body,
@@ -50,7 +50,7 @@ export const registerArtifactTools = (
     },
     async ({ artifactId, taskId, slug }) => {
       const body = { taskId, role: ctx.role, slug };
-      const res = await client.request<ToolResult<unknown>>({
+      const res = await client.request<ToolResult>({
         method: "POST",
         path: `${ARTIFACTS}/${artifactId}/workspace-writes`,
         body,

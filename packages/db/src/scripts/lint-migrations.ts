@@ -55,7 +55,7 @@ const DML_KEYWORDS = [
  * tracks which migrations have run and lives outside the schema-vs-data
  * distinction.
  */
-const DML_ALLOWLIST_PATTERNS: ReadonlyArray<RegExp> = [
+const DML_ALLOWLIST_PATTERNS: readonly RegExp[] = [
   /__drizzle_migrations/i,
   /drizzle\.__drizzle_migrations/i,
 ];
