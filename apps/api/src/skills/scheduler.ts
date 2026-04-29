@@ -146,7 +146,7 @@ async function tick(): Promise<void> {
     console.log(`[SkillScheduler] tick #${tickCount} (worker=${workerId}, interval=${TICK_INTERVAL_MS}ms)`);
   }
   inFlight = processOnce()
-    .catch((err) => {
+    .catch((err: unknown) => {
       console.error(`[SkillScheduler] tick error: ${err instanceof Error ? err.message : err}`);
     })
     .finally(() => {

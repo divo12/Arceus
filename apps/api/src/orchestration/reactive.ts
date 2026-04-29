@@ -23,7 +23,7 @@ export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigge
   void agentsRepo.findAgentByRole(getDb(), companyId, role).then((agent) => {
     if (!agent) return;
     emitter(companyId, agent.id, role, event);
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     console.warn(`[reactive] emitReactive lookup failed for role=${role}`, err);
   });
 }
@@ -42,7 +42,7 @@ export function emitReactiveBroadcast(event: BeatEventTrigger): void {
     for (const agent of agents) {
       emitter(companyId, agent.id, agent.role as AgentIdentity["role"], event);
     }
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     console.warn("[reactive] emitReactiveBroadcast list failed", err);
   });
 }
@@ -72,8 +72,8 @@ export function triggerEscalationMeeting(taskId: string, blockerDetail: string):
     if (!agent) return;
 
     const snapshot = await buildSnapshotView(companyId);
-    scheduler.createEscalationMeeting(snapshot, agent.id, blockerDetail, taskId);
-  })().catch((err) => {
+    await scheduler.createEscalationMeeting(snapshot, agent.id, blockerDetail, taskId);
+  })().catch((err: unknown) => {
     console.warn(`[reactive] triggerEscalationMeeting failed for task=${taskId}`, err);
   });
 }

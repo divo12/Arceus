@@ -17,8 +17,13 @@ export interface RetryOptions {
   backoff: number;
   /** Optional predicate — return false to skip retrying a specific error. */
   shouldRetry?: (error: unknown) => boolean;
-  /** Called before each retry with attempt index (1-based) and the error. */
-  onRetry?: (attempt: number, error: unknown) => void;
+  /**
+   * Called before each retry with attempt index (1-based) and the error.
+   * May be sync or async — the retry loop awaits the returned Promise so
+   * teardown (e.g. resetting an OpenCode connection) completes before the
+   * next attempt fires.
+   */
+  onRetry?: (attempt: number, error: unknown) => void | Promise<void>;
 }
 
 const DEFAULT_RETRY: RetryOptions = {
@@ -48,7 +53,7 @@ export async function withRetry<T>(
       if (attempt === maxRetries) break;
       if (shouldRetry && !shouldRetry(error)) break;
 
-      onRetry?.(attempt, error);
+      await onRetry?.(attempt, error);
 
       const jitter = Math.random() * 0.3 + 0.85; // 0.85–1.15
       const wait = delay * Math.pow(backoff, attempt - 1) * jitter;

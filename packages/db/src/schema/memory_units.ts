@@ -47,8 +47,8 @@ export const memoryUnits = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    agentTypeCreatedIdx: index("memory_units_agent_type_created_idx").on(
+  (table) => [
+    index("memory_units_agent_type_created_idx").on(
       table.agentId,
       table.type,
       table.createdAt,
@@ -59,22 +59,22 @@ export const memoryUnits = pgTable(
      * tight and matches the legacy `idx_memory_agent_type` shape so
      * plans don't regress on flip.
      */
-    agentTypeLiveIdx: index("memory_units_agent_type_live_idx")
+    index("memory_units_agent_type_live_idx")
       .on(table.agentId, table.type)
       .where(sql`${table.deletedAt} IS NULL`),
     /** GC path: find expired temporal facts efficiently. */
-    expiresLiveIdx: index("memory_units_expires_live_idx")
+    index("memory_units_expires_live_idx")
       .on(table.expiresAt)
       .where(sql`${table.expiresAt} IS NOT NULL AND ${table.deletedAt} IS NULL`),
-    dynamicExpiresIdx: index("memory_units_dynamic_expires_idx")
+    index("memory_units_dynamic_expires_idx")
       .on(table.agentId, table.expiresAt)
       .where(sql`type = 'dynamic'`),
-    companyCreatedIdx: index("memory_units_company_created_idx").on(table.companyId, table.createdAt),
-    sourceTaskIdx: index("memory_units_source_task_idx").on(table.sourceTaskId),
-    sourceBeatIdx: index("memory_units_source_beat_idx").on(table.sourceBeatId),
-    typeCheck: check(
+    index("memory_units_company_created_idx").on(table.companyId, table.createdAt),
+    index("memory_units_source_task_idx").on(table.sourceTaskId),
+    index("memory_units_source_beat_idx").on(table.sourceBeatId),
+    check(
       "memory_units_type_check",
       sql`${table.type} IN ('static','dynamic','procedural','priming','delegation')`,
-    ),
-  }),
+    )
+  ],
 );

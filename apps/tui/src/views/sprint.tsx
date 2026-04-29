@@ -47,7 +47,6 @@ function aggregateTaskStats(events: ActivityEvent[]): Map<string, TaskStats> {
         fileEdits: prev.fileEdits + fe,
         shellCmds: prev.shellCmds + sc,
       });
-    // eslint-disable-next-line no-restricted-syntax -- intentional: TUI sprint view fire-and-forget.
     } catch { /* ignore parse errors */ }
   }
   return map;

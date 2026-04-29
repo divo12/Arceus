@@ -76,7 +76,7 @@ const captureWithPlaywright = async (
 export default tool({
   description: "Capture a headless browser probe (screenshot + DOM + console + network) at a URL. Returns a bundle path. QA-only.",
   args: {
-    url: z.string().url(),
+    url: z.url(),
     timeoutMs: z.number().int().positive().max(60_000).optional(),
     outDir: z.string().optional(),
   },

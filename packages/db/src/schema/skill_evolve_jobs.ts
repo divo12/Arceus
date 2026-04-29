@@ -19,23 +19,23 @@ export const skillEvolveJobs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
-  (table) => ({
-    pendingLeaseIdx: index("skill_evolve_jobs_pending_lease_idx")
+  (table) => [
+    index("skill_evolve_jobs_pending_lease_idx")
       .on(table.createdAt)
       .where(sql`status = 'pending'`),
-    companyStatusCreatedIdx: index("skill_evolve_jobs_company_status_created_idx").on(
+    index("skill_evolve_jobs_company_status_created_idx").on(
       table.companyId,
       table.status,
       table.createdAt,
     ),
-    targetSkillIdx: index("skill_evolve_jobs_target_skill_idx").on(table.targetSkillId),
-    triggerCheck: check(
+    index("skill_evolve_jobs_target_skill_idx").on(table.targetSkillId),
+    check(
       "skill_evolve_jobs_trigger_check",
       sql`${table.trigger} IN ('ema_drop','cron','candidate','rollback')`,
     ),
-    statusCheck: check(
+    check(
       "skill_evolve_jobs_status_check",
       sql`${table.status} IN ('pending','claimed','running','done','failed')`,
-    ),
-  }),
+    )
+  ],
 );

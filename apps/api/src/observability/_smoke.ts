@@ -91,7 +91,7 @@ async function main() {
   console.log(`[smoke] done. Check Langfuse: search beatId=${beatId}`);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("[smoke] failed:", err);
   process.exit(1);
 });

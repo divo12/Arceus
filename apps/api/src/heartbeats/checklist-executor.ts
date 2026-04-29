@@ -163,7 +163,7 @@ async function handleCreateSprintPlanningTask(
     "planned",
     null, // no sprint yet
   );
-  upsertTask(task);
+  await upsertTask(task);
 
   emitEmployeeActivity("ceo", "transition", `${shortBeat(beatId)}: created task "${task.title}"`, { beatId, taskId: task.id });
   finish("completed", `Created sprint planning task: ${task.title}`, 0);
@@ -234,7 +234,7 @@ async function handleTaskResolveBlocker(
     "planned",
     blocked.sprintId ?? null,
   );
-  upsertTask(followup);
+  await upsertTask(followup);
 
   emitEmployeeActivity(role, "transition", `${shortBeat(beatId)}: spawned "${followup.title}" (${followup.id}) for blocker ${blocked.id}`, {
     beatId, taskId: followup.id, detail: { blockerTaskId: blocked.id, blockerStatus: blocked.status },

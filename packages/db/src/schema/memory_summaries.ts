@@ -24,8 +24,8 @@ export const memorySummaries = pgTable(
     importantDecisions: text("important_decisions").array().notNull().default(sql`ARRAY[]::text[]`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    pk: primaryKey({ columns: [table.agentId] }),
-    companyIdx: index("memory_summaries_company_idx").on(table.companyId),
-  }),
+  (table) => [
+    primaryKey({ columns: [table.agentId] }),
+    index("memory_summaries_company_idx").on(table.companyId)
+  ],
 );

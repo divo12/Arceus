@@ -5,6 +5,7 @@ import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { audit } from "../observability/audit-ledger.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { enrichRoleMemory, clearRoleBlockers } from "../memory/operations.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import type { TaskModificationInput, MemoryModificationInput, MeetingAgendaInput, MeetingDecisionInput, MeetingLearningInput } from "../orchestration/state.js";
@@ -21,7 +22,7 @@ export function applyTaskModification(
   modification: TaskModificationInput,
   agentByRole: Map<AgentIdentity["role"], { id: string }>,
 ): void {
-  updateTask(modification.taskId, (task) => {
+  swallowAndAudit("meeting.apply_task_modification", () => updateTask(modification.taskId, (task) => {
     const assignedAgent = modification.assignedRole ? agentByRole.get(modification.assignedRole) ?? null : null;
     const nextStatus =
       modification.resultingStatus ??
@@ -62,7 +63,7 @@ export function applyTaskModification(
     };
 
     return nextTask;
-  });
+  }), { companyId, detail: { taskId: modification.taskId, modificationType: modification.modificationType } });
 
   if (modification.modificationType === "assign" || modification.modificationType === "reassign") {
     audit({
@@ -218,7 +219,7 @@ export async function applyMeetingEffects(
   if (memoryModifications.length === 0) return;
   void Promise.all(
     memoryModifications.map((modification) =>
-      applyMemoryModification(companyId, modification).catch((err) => {
+      applyMemoryModification(companyId, modification).catch((err: unknown) => {
         console.warn(`[meetings] memory modification failed (${modification.modificationType})`, err);
       }),
     ),

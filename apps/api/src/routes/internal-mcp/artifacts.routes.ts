@@ -94,7 +94,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     // Attach to tasks — support both single taskId and array
     const taskIds = body.attachToTaskIds ?? (body.taskId ? [body.taskId] : []);
     for (const tid of taskIds) {
-      attachArtifactToTask(tid, artifact.id);
+      await attachArtifactToTask(tid, artifact.id);
       observability.logEvent({
         event: "task.artifact_attached",
         taskId: tid,

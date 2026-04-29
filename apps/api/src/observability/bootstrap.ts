@@ -104,8 +104,9 @@ export function startObservability(options: ObservabilityBootstrapOptions = {}):
       console.error("[observability] shutdown error:", err);
     }
   };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  // Node's signal-handler signature is sync; wrap to discard the Promise.
+  process.once("SIGTERM", () => { void shutdown(); });
+  process.once("SIGINT", () => { void shutdown(); });
 
   return true;
 }

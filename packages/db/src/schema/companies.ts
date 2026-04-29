@@ -53,22 +53,22 @@ export const companies = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
+  (table) => [
     // Slug index becomes a non-unique partial index on non-null values —
     // most rows will have null slug during the bridge.
-    slugIdx: index("companies_slug_idx").on(table.slug).where(sql`${table.slug} IS NOT NULL`),
-    taskPrefixIdx: index("companies_task_prefix_idx").on(table.taskPrefix).where(sql`${table.taskPrefix} IS NOT NULL`),
+    index("companies_slug_idx").on(table.slug).where(sql`${table.slug} IS NOT NULL`),
+    index("companies_task_prefix_idx").on(table.taskPrefix).where(sql`${table.taskPrefix} IS NOT NULL`),
     // Spec 31 Phase 4A: friendly_id is the public-facing string id
     // (`company_xxx`); used by the route layer to look up via the same
     // boundary uuidv5 deterministic encoding the rest of the repos use.
-    friendlyIdIdx: uniqueIndex("companies_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
-    statusIdx: index("companies_status_idx").on(table.status),
+    uniqueIndex("companies_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    index("companies_status_idx").on(table.status),
     // Spec 31 Phase 4A: include 'ideation' to match contracts.companyStatusSchema.
     // Bootstrap inserts at `ideation`; flips to `active` after strategy
     // approval. Removing it here would reject every newly-bootstrapped row.
-    statusCheck: check(
+    check(
       "companies_status_check",
       sql`${table.status} IN ('ideation','active','paused','archived')`,
-    ),
-  }),
+    )
+  ],
 );

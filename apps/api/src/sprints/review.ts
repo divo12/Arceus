@@ -216,7 +216,6 @@ export async function executeSprintReviewVerification(
           "Then produce your normal QA report below that line.",
         ].join("\n");
       }
-    // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
     } catch {
       // best-effort — never block verification on diff lookup
     }
@@ -325,7 +324,7 @@ export async function executeSprintReviewVerification(
       emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: PASS — advancing to final gate`, { beatId });
       emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: PASS`, "Tester verified all tasks pass their Definition of Done", "tester", 1.0);
 
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
       }));
@@ -374,7 +373,7 @@ export async function executeSprintReviewVerification(
           ["Preview URL responds with HTTP 200", "App renders without connection errors"],
           "critical", "planned", sprintId,
         );
-        upsertTask(bugTask);
+        await upsertTask(bugTask);
         newBugTaskIds.push(bugTask.id);
         rolesWithBugs.add("developer");
         emitGraphNodeAdded(sprintId, bugTask);
@@ -420,7 +419,7 @@ export async function executeSprintReviewVerification(
           ],
           "critical", "planned", sprintId,
         );
-        upsertTask(entryBug);
+        await upsertTask(entryBug);
         newBugTaskIds.push(entryBug.id);
         rolesWithBugs.add("developer");
         emitGraphNodeAdded(sprintId, entryBug);
@@ -454,7 +453,7 @@ export async function executeSprintReviewVerification(
             bugFields.sprintId,
           );
           bugTask.parentTaskId = bugFields.parentTaskId;
-          upsertTask(bugTask);
+          await upsertTask(bugTask);
           newBugTaskIds.push(bugTask.id);
           rolesWithBugs.add(bugFields.assignedRole);
           emitGraphNodeAdded(sprintId, bugTask);
@@ -475,7 +474,7 @@ export async function executeSprintReviewVerification(
           "tester", 0);
       }
 
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: updatedReviewState,
       }));
@@ -514,7 +513,7 @@ export async function executeSprintReviewVerification(
         emitReactive("cto", "escalation_received");
       }
 
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? {
           ...s.reviewState,
@@ -603,7 +602,7 @@ export async function executeSprintFinalGate(
   if (gateResult.passed) {
     emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} final gate PASSED — completing sprint`, { beatId, detail: { gateResult } });
 
-    updateSprint(sprintId, (s) => ({
+    await updateSprint(sprintId, (s) => ({
       ...s,
       reviewState: s.reviewState ? { ...s.reviewState, gateResults: updatedGateResults, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
     }));
@@ -626,7 +625,7 @@ export async function executeSprintFinalGate(
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
       );
-      upsertTask(bugTask);
+      await upsertTask(bugTask);
       newBugIds.push(bugTask.id);
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
@@ -634,7 +633,7 @@ export async function executeSprintFinalGate(
     const newReworkCount = reviewState.reworkCycleCount + 1;
     const escalate = newReworkCount >= reviewState.maxReworkCycles;
 
-    updateSprint(sprintId, (s) => ({
+    await updateSprint(sprintId, (s) => ({
       ...s,
       reviewState: s.reviewState ? {
         ...s.reviewState,
@@ -675,7 +674,7 @@ export async function executeRetestAfterRework(
 
   emitEmployeeActivity("tester", "transition", `Bug fixes resolved — advancing to tester re-verification`, { beatId });
 
-  updateSprint(sprintId, (s) => ({
+  await updateSprint(sprintId, (s) => ({
     ...s,
     reviewState: s.reviewState ? {
       ...s.reviewState,
@@ -762,7 +761,7 @@ export async function executeCtoBeatEscalationReview(
       beatId, detail: { decision, reasoning: result.reasoning },
     });
 
-    updateSprint(sprintId, (s) => ({
+    await updateSprint(sprintId, (s) => ({
       ...s,
       reviewState: s.reviewState ? {
         ...s.reviewState,
@@ -771,7 +770,7 @@ export async function executeCtoBeatEscalationReview(
     }));
 
     if (decision === "fix") {
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? {
           ...s.reviewState,
@@ -786,7 +785,7 @@ export async function executeCtoBeatEscalationReview(
       }
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO granted extra rework cycle — Sprint ${sprint.number} back to rework`, { beatId });
     } else if (decision === "skip") {
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? {
           ...s.reviewState,
@@ -797,7 +796,7 @@ export async function executeCtoBeatEscalationReview(
       await finalizeSprintCompletion(sprintId);
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO shipped Sprint ${sprint.number} with known defects`, { beatId });
     } else if (decision === "abort") {
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         status: "completed" as const,
         completedAt: new Date().toISOString(),

@@ -255,7 +255,7 @@ async function main(): Promise<void> {
   console.log(`\n[explain-audit] PASS — ${reports.length} queries clean (no seq scans on large tables, all under budget)`);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("[explain-audit] FAIL:", err);
   process.exit(1);
 });

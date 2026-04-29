@@ -18,14 +18,14 @@ export const activityLog = pgTable(
     details: jsonb("details").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyCreatedIdx: index("activity_log_company_created_idx").on(table.companyId, table.createdAt),
-    entityIdx: index("activity_log_entity_type_id_created_idx").on(
+  (table) => [
+    index("activity_log_company_created_idx").on(table.companyId, table.createdAt),
+    index("activity_log_entity_type_id_created_idx").on(
       table.entityType,
       table.entityId,
       table.createdAt,
     ),
-    runIdIdx: index("activity_log_run_id_idx").on(table.runId),
-    agentIdx: index("activity_log_agent_idx").on(table.agentId),
-  }),
+    index("activity_log_run_id_idx").on(table.runId),
+    index("activity_log_agent_idx").on(table.agentId)
+  ],
 );

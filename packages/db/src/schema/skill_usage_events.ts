@@ -15,10 +15,10 @@ export const skillUsageEvents = pgTable(
     outcomeScore: real("outcome_score").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    skillOccurredIdx: index("skill_usage_events_skill_occurred_idx").on(table.skillId, table.occurredAt),
-    companyOccurredIdx: index("skill_usage_events_company_occurred_idx").on(table.companyId, table.occurredAt),
-    beatIdx: index("skill_usage_events_beat_idx").on(table.beatId),
-    agentIdx: index("skill_usage_events_agent_idx").on(table.agentId),
-  }),
+  (table) => [
+    index("skill_usage_events_skill_occurred_idx").on(table.skillId, table.occurredAt),
+    index("skill_usage_events_company_occurred_idx").on(table.companyId, table.occurredAt),
+    index("skill_usage_events_beat_idx").on(table.beatId),
+    index("skill_usage_events_agent_idx").on(table.agentId)
+  ],
 );

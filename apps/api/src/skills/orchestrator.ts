@@ -272,8 +272,8 @@ async function createApplyProposalTask(args: {
     incomingArtifactIds: [args.artifactId],
     createdAt: now,
   };
-  upsertTask(task);
-  attachArtifactToTask(taskId, args.artifactId);
+  await upsertTask(task);
+  await attachArtifactToTask(taskId, args.artifactId);
   return taskId;
 }
 
@@ -531,8 +531,8 @@ async function runRollbackShortCircuit(job: SkillEvolveJob): Promise<PipelineRes
     incomingArtifactIds: [artifact.id],
     createdAt: now,
   };
-  upsertTask(task);
-  attachArtifactToTask(taskId, artifact.id);
+  await upsertTask(task);
+  await attachArtifactToTask(taskId, artifact.id);
 
   return {
     status: "rollback_proposed",

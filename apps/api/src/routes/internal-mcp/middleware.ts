@@ -314,7 +314,6 @@ export const mcpCapturePayloadCause = async (
     if (err?.cause) mcp.failureCause = err.cause;
     if (err?.stopWhen) mcp.failureStopWhen = err.stopWhen;
     if (err?.details && typeof err.details === "object") mcp.failureDetails = err.details;
-  // eslint-disable-next-line no-restricted-syntax -- legacy: needs audit per C2 cleanup.
   } catch {
     // Payload not JSON or not an envelope — fall back to status mapping.
   }

@@ -116,7 +116,7 @@ export async function runInternalAgentPrompt(
       shouldRetry: isRetryableError,
       onRetry: async (attempt, _error) => {
         const { resetOpencodeConnection } = await import("../infra/opencode.js");
-        resetOpencodeConnection();
+        await resetOpencodeConnection();
         agentSessions.delete(role);
         emitEmployeeActivity(role, "info", `Internal agent ${agentKey} connection lost — reconnecting (attempt ${attempt})…`);
         const freshSession = await ensureInternalAgentSession(agentKey);

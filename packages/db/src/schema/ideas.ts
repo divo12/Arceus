@@ -23,7 +23,7 @@ export const ideas = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyUniqueIdx: uniqueIndex("ideas_company_unique_idx").on(table.companyId),
-  }),
+  (table) => [
+    uniqueIndex("ideas_company_unique_idx").on(table.companyId)
+  ],
 );

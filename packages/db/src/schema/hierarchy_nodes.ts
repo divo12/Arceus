@@ -32,9 +32,9 @@ export const hierarchyNodes = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyParentIdx: index("hierarchy_nodes_company_parent_idx").on(table.companyId, table.parentNodeId),
-    companyRoleIdx: index("hierarchy_nodes_company_role_idx").on(table.companyId, table.role),
-    agentIdx: index("hierarchy_nodes_agent_idx").on(table.agentId),
-  }),
+  (table) => [
+    index("hierarchy_nodes_company_parent_idx").on(table.companyId, table.parentNodeId),
+    index("hierarchy_nodes_company_role_idx").on(table.companyId, table.role),
+    index("hierarchy_nodes_agent_idx").on(table.agentId)
+  ],
 );

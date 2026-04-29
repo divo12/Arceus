@@ -179,7 +179,6 @@ async function pollPendingPromptCompletions() {
         }
       }
     }
-  // eslint-disable-next-line no-restricted-syntax -- intentional: LLM streaming start probe; failure cascades through the surrounding await.
   } catch {
     // Non-fatal — SSE bridge is the primary path; polling is best-effort
   }
@@ -316,7 +315,7 @@ export async function runPromptText(
       backoff: 2,
       shouldRetry: isRetryableError,
       onRetry: async (attempt, _error) => {
-        resetOpencodeConnection();
+        await resetOpencodeConnection();
         agentSessions.delete(role);
         emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
         // Spec 31 Phase 7.C.c — canonical-backed view for the retry path.

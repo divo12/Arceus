@@ -44,12 +44,12 @@ export const sprints = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companySprintNumberUniqueIdx: uniqueIndex("sprints_company_number_idx")
+  (table) => [
+    uniqueIndex("sprints_company_number_idx")
       .on(table.companyId, table.sprintNumber)
       .where(sql`${table.sprintNumber} IS NOT NULL`),
-    friendlyIdIdx: uniqueIndex("sprints_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
-    companyStatusIdx: index("sprints_company_status_idx").on(table.companyId, table.status),
-    statusCheck: check("sprints_status_check", sql`${table.status} IN (${inLiteral(ALL_SPRINT_STATUSES)})`),
-  }),
+    uniqueIndex("sprints_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    index("sprints_company_status_idx").on(table.companyId, table.status),
+    check("sprints_status_check", sql`${table.status} IN (${inLiteral(ALL_SPRINT_STATUSES)})`)
+  ],
 );

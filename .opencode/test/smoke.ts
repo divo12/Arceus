@@ -189,7 +189,7 @@ const main = async () => {
   process.exit(failures.length === 0 ? 0 : 1);
 };
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   process.stderr.write(`smoke crashed: ${err instanceof Error ? err.stack : String(err)}\n`);
   process.exit(2);
 });

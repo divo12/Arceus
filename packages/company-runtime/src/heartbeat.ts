@@ -299,7 +299,7 @@ export class HeartbeatEngine {
       // write doesn't break the runtime — but it should be visible in logs
       // so we notice if the beats DB is failing systematically.
       if (this.deps) {
-        this.deps.commitBeatRecord(record).catch((err) => {
+        this.deps.commitBeatRecord(record).catch((err: unknown) => {
           console.warn(
             `[heartbeat] commitBeatRecord failed for ${record.agentId}/beat ${record.id}: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -334,7 +334,7 @@ export class HeartbeatEngine {
     this.triggerBeat({
       companyId, agentId, role,
       trigger: { type: "event", event },
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       console.error(`[HEARTBEAT] Reactive beat failed for ${role} (${event}):`, err instanceof Error ? err.message : err);
     });
   }
@@ -357,7 +357,7 @@ export class HeartbeatEngine {
       agentId,
       role: next.role,
       trigger: { type: "event", event: next.event },
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       console.error(`[HEARTBEAT] Queued reactive beat failed for ${next.role} (${next.event}):`, err instanceof Error ? err.message : err);
     });
   }
@@ -473,7 +473,7 @@ export class HeartbeatEngine {
         agentId: agent.agentId,
         role: agent.role,
         trigger: { type: "interval", scheduledAt: new Date(now).toISOString() },
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         console.error(`[HEARTBEAT] Auto-schedule beat failed for ${agent.role}:`, err instanceof Error ? err.message : err);
       });
     }

@@ -130,7 +130,6 @@ export const ArceusPlugin: Plugin = async () => {
     if (now - last < WATCHDOG_DEBOUNCE_MS) return;
     lastWatchdogResetByBeat.set(beatId, now);
 
-    // eslint-disable-next-line no-restricted-syntax -- intentional: opencode plugin runs in a separate process from the API so it can't import swallowAndAudit; watchdog reset failure must not affect the beat.
     void fetch(`${api}/api/internal/v1/beats/${beatId}/watchdog-reset`, {
       method: "POST",
       headers: {
@@ -147,7 +146,6 @@ export const ArceusPlugin: Plugin = async () => {
     const token = process.env.ARCEUS_TOKEN;
     if (!api || !token) return;
 
-    // eslint-disable-next-line no-restricted-syntax -- intentional: telemetry is best-effort; failure must not block the beat or leak into the agent's observation. Plugin runs in a separate process from the API.
     void fetch(`${api}/api/internal/telemetry/skills/${entry.skillId}/usage`, {
       method: "POST",
       headers: {
@@ -170,7 +168,6 @@ export const ArceusPlugin: Plugin = async () => {
     const api = process.env.ARCEUS_API;
     const token = process.env.ARCEUS_TOKEN;
     if (!api || !token) return;
-    // eslint-disable-next-line no-restricted-syntax -- intentional: observability emits must never block the agent. Plugin runs in a separate process; can't recursively re-emit on failure.
     void fetch(`${api}/api/internal/telemetry/events`, {
       method: "POST",
       headers: {

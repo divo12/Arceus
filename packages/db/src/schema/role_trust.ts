@@ -13,11 +13,11 @@ export const roleTrust = pgTable(
     lastVerdictAt: timestamp("last_verdict_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    pk: primaryKey({ columns: [table.companyId, table.role] }),
-    bandCheck: check(
+  (table) => [
+    primaryKey({ columns: [table.companyId, table.role] }),
+    check(
       "role_trust_band_check",
       sql`${table.band} IN ('probation','standard','senior')`,
-    ),
-  }),
+    )
+  ],
 );

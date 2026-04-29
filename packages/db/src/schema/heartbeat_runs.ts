@@ -57,25 +57,25 @@ export const heartbeatRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyAgentStartedIdx: index("heartbeat_runs_company_agent_started_idx").on(table.companyId, table.agentId, table.startedAt),
-    companyStatusIdx: index("heartbeat_runs_company_status_idx").on(table.companyId, table.status),
-    companyBeatNumberIdx: index("heartbeat_runs_company_beat_number_idx").on(table.companyId, table.beatNumber),
-    retryOfRunIdIdx: index("heartbeat_runs_retry_of_run_id_idx").on(table.retryOfRunId),
-    strandedIdx: index("heartbeat_runs_stranded_idx")
+  (table) => [
+    index("heartbeat_runs_company_agent_started_idx").on(table.companyId, table.agentId, table.startedAt),
+    index("heartbeat_runs_company_status_idx").on(table.companyId, table.status),
+    index("heartbeat_runs_company_beat_number_idx").on(table.companyId, table.beatNumber),
+    index("heartbeat_runs_retry_of_run_id_idx").on(table.retryOfRunId),
+    index("heartbeat_runs_stranded_idx")
       .on(table.status, table.startedAt)
       .where(sql`status = 'running'`),
-    statusCheck: check(
+    check(
       "heartbeat_runs_status_check",
       sql`${table.status} IN ('running','completed','failed','stranded')`,
     ),
-    verdictOutcomeCheck: check(
+    check(
       "heartbeat_runs_verdict_outcome_check",
       sql`${table.verdictOutcome} IN ('pass','fail') OR ${table.verdictOutcome} IS NULL`,
     ),
-    trustBandCheck: check(
+    check(
       "heartbeat_runs_trust_band_check",
       sql`${table.trustBand} IN ('probation','standard','senior')`,
-    ),
-  }),
+    )
+  ],
 );

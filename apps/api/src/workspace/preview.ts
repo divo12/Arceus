@@ -316,7 +316,6 @@ async function waitForUrl(url: string, timeoutMs: number) {
     try {
       const response = await fetch(url, { method: "GET" });
       if (response.ok) return true;
-    // eslint-disable-next-line no-restricted-syntax -- intentional: preview-server probe; failure means no preview, which is expected on cold start.
     } catch {
       /* retry */
     }
@@ -525,7 +524,9 @@ export async function stopLocalPreview() {
 }
 
 async function startStaticPreviewServer(rootDir: string) {
-  const server = createServer(async (request, response) => {
+  // Node's createServer expects a sync handler; wrap the async body so
+  // floating-promise lint stays satisfied. Errors land in the inner catch.
+  const server = createServer((request, response) => { void (async () => {
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? previewConfig.publicHost}`);
       const requestPath = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
@@ -546,7 +547,7 @@ async function startStaticPreviewServer(rootDir: string) {
       response.statusCode = 404;
       response.end("Not found");
     }
-  });
+  })(); });
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -613,11 +614,9 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
     const pids = execSync(`lsof -ti:${previewState.port}`, { encoding: "utf8" }).trim();
     if (pids) {
       for (const pid of pids.split("\n")) {
-        // eslint-disable-next-line no-restricted-syntax -- intentional: preview teardown; failure to kill an already-dead process is fine.
         try { process.kill(Number(pid), "SIGTERM"); } catch { /* already dead */ }
       }
     }
-    // eslint-disable-next-line no-restricted-syntax -- intentional: preview teardown probe; "no process on port" is the expected branch for fresh starts.
   } catch { /* no process on port — good */ }
 
   previewProcess = spawn(launch.command, launch.args, {

@@ -388,7 +388,7 @@ export const CANONICAL_COMPANY_ID = COMPANY_ID;
 if (import.meta.main) {
   seedCanonical()
     .then(() => process.exit(0))
-    .catch((err) => {
+    .catch((err: unknown) => {
       console.error("[seed] FAIL:", err);
       process.exit(1);
     });

@@ -67,17 +67,17 @@ export const skillMutations = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => ({
-    skillCreatedIdx: index("skill_mutations_skill_created_idx").on(
+  (table) => [
+    index("skill_mutations_skill_created_idx").on(
       table.skillId,
       table.createdAt,
     ),
-    companyCreatedIdx: index("skill_mutations_company_created_idx").on(
+    index("skill_mutations_company_created_idx").on(
       table.companyId,
       table.createdAt,
     ),
-    mutatedFromIdx: index("skill_mutations_mutated_from_idx").on(
+    index("skill_mutations_mutated_from_idx").on(
       table.mutatedFromSkillId,
-    ),
-  }),
+    )
+  ],
 );

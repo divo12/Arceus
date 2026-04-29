@@ -53,15 +53,15 @@ export const agents = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyRoleUniqueIdx: uniqueIndex("agents_company_role_idx").on(table.companyId, table.role),
-    companyIsInternalIdx: index("agents_company_is_internal_idx").on(table.companyId, table.isInternal),
-    companyStatusIdx: index("agents_company_status_idx").on(table.companyId, table.status),
-    managerAgentIdx: index("agents_manager_agent_idx").on(table.managerAgentId),
-    friendlyIdIdx: uniqueIndex("agents_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
-    roleCheck: check(
+  (table) => [
+    uniqueIndex("agents_company_role_idx").on(table.companyId, table.role),
+    index("agents_company_is_internal_idx").on(table.companyId, table.isInternal),
+    index("agents_company_status_idx").on(table.companyId, table.status),
+    index("agents_manager_agent_idx").on(table.managerAgentId),
+    uniqueIndex("agents_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    check(
       "agents_role_check",
       sql`${table.role} IN ('ceo','cto','pm','developer','tester','ui_designer','marketing','skills_lead') OR ${table.isInternal} = true`,
-    ),
-  }),
+    )
+  ],
 );

@@ -204,24 +204,37 @@ export function buildTaskMemoryOutput(task: Task, feedback?: string | null): str
   return sections.join("\n");
 }
 
-/** Append a result string to a task's executor results (capped at 50). */
+/**
+ * Append a result string to a task's executor results (capped at 50).
+ *
+ * Sync export: `updateTask` is async (it persists to canonical), but
+ * the in-memory append must happen on call. Fire-and-forget the DB
+ * write through `swallowAndAudit` so failures surface to observability
+ * instead of becoming an unhandled rejection.
+ */
 export function appendTaskResult(taskId: string, result: string) {
-  updateTask(taskId, (task) => ({
-    ...task,
-    executorState: {
-      ...task.executorState,
-      results: [...task.executorState.results, result].slice(-50),
-    },
-  }));
+  swallowAndAudit("task.append_result", () =>
+    updateTask(taskId, (task) => ({
+      ...task,
+      executorState: {
+        ...task.executorState,
+        results: [...task.executorState.results, result].slice(-50),
+      },
+    })),
+    { detail: { taskId } },
+  );
 }
 
-/** Link an artifact to a task and emit a graph event for the sprint. */
-export function attachArtifactToTask(taskId: string, artifactId: string) {
-  // Spec 31 Phase 7.B.4.2 — capture sprintId via updater callback closure
-  // instead of re-reading snapshot.tasks after the mutation. Wrap in an
-  // object so TS doesn't narrow the binding to its initial value.
+/**
+ * Link an artifact to a task and emit a graph event for the sprint.
+ *
+ * `async` because the caller must wait for the updater to capture the
+ * task's sprintId — the previous unawaited variant always read `prev`
+ * as null since the updater hadn't run yet. Spec 31 Phase 7.B.4.2.
+ */
+export async function attachArtifactToTask(taskId: string, artifactId: string): Promise<void> {
   const captured: { sprintId: string | null | undefined } = { sprintId: null };
-  updateTask(taskId, (task) => {
+  await updateTask(taskId, (task) => {
     captured.sprintId = task.sprintId;
     return {
       ...task,
@@ -236,15 +249,18 @@ export function attachArtifactToTask(taskId: string, artifactId: string) {
   }
 }
 
-/** Update the task's local preview URL. */
+/** Update the task's local preview URL. Fire-and-forget. */
 export function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null) {
-  updateTask(taskId, (task) => ({
-    ...task,
-    localPreviewUrl,
-  }));
+  swallowAndAudit("task.set_preview_url", () =>
+    updateTask(taskId, (task) => ({
+      ...task,
+      localPreviewUrl,
+    })),
+    { detail: { taskId } },
+  );
 }
 
-/** Populate a task's title, description, DoD, and priority from a planner spec. */
+/** Populate a task's title, description, DoD, and priority from a planner spec. Fire-and-forget. */
 export function hydrateTaskFromSpec(taskId: string, spec: {
   title: string;
   description: string;
@@ -253,42 +269,51 @@ export function hydrateTaskFromSpec(taskId: string, spec: {
   definition_of_done: string[];
   priority: Task["priority"];
 }) {
-  updateTask(taskId, (task) => ({
-    ...task,
-    title: spec.title,
-    description: spec.description,
-    problemStatement: spec.problem_statement,
-    deliverable: spec.deliverable,
-    definitionOfDone: spec.definition_of_done,
-    priority: spec.priority,
-    plannerState: {
-      ...task.plannerState,
-      objective: spec.problem_statement,
-    },
-  }));
+  swallowAndAudit("task.hydrate_from_spec", () =>
+    updateTask(taskId, (task) => ({
+      ...task,
+      title: spec.title,
+      description: spec.description,
+      problemStatement: spec.problem_statement,
+      deliverable: spec.deliverable,
+      definitionOfDone: spec.definition_of_done,
+      priority: spec.priority,
+      plannerState: {
+        ...task.plannerState,
+        objective: spec.problem_statement,
+      },
+    })),
+    { detail: { taskId } },
+  );
 }
 
-/** Append a plan step to the task's planner state (deduped, capped at 12). */
+/** Append a plan step to the task's planner state (deduped, capped at 12). Fire-and-forget. */
 export function appendTaskPlanStep(taskId: string, step: string) {
-  updateTask(taskId, (task) => ({
-    ...task,
-    plannerState: {
-      ...task.plannerState,
-      planSteps: uniqueStrings([...task.plannerState.planSteps, step], 12),
-    },
-  }));
+  swallowAndAudit("task.append_plan_step", () =>
+    updateTask(taskId, (task) => ({
+      ...task,
+      plannerState: {
+        ...task.plannerState,
+        planSteps: uniqueStrings([...task.plannerState.planSteps, step], 12),
+      },
+    })),
+    { detail: { taskId } },
+  );
 }
 
-/** Record a command execution on the task's executor state (capped at 50). */
+/** Record a command execution on the task's executor state (capped at 50). Fire-and-forget. */
 export function appendTaskCommand(taskId: string, command: string) {
-  updateTask(taskId, (task) => ({
-    ...task,
-    executorState: {
-      ...task.executorState,
-      currentCommand: command,
-      commandsExecuted: [...task.executorState.commandsExecuted, command].slice(-50),
-    },
-  }));
+  swallowAndAudit("task.append_command", () =>
+    updateTask(taskId, (task) => ({
+      ...task,
+      executorState: {
+        ...task.executorState,
+        currentCommand: command,
+        commandsExecuted: [...task.executorState.commandsExecuted, command].slice(-50),
+      },
+    })),
+    { detail: { taskId } },
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,7 +337,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
   // instead of a separate snapshot.tasks.find() pre-read. Wrap in an object
   // so TS doesn't narrow the binding to its initial null value.
   const captured: { prev: Task | null } = { prev: null };
-  updateTask(taskId, (task) => {
+  await updateTask(taskId, (task) => {
     captured.prev = task;
     return {
       ...task,
@@ -360,7 +385,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
     // Propagate artifacts from the completed task to its direct children
     if (completedTask && completedTask.artifactIds.length > 0) {
       for (const childId of completedTask.childTaskIds) {
-        updateTask(childId, (t) => ({
+        await updateTask(childId, (t) => ({
           ...t,
           incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...completedTask.artifactIds], MAX_INCOMING_ARTIFACT_IDS),
         }));
@@ -393,7 +418,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
             }
           }
         }
-        updateTask(task.id, (t) => ({
+        await updateTask(task.id, (t) => ({
           ...t,
           status: "planned",
           incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...upstreamArtifactIds], MAX_INCOMING_ARTIFACT_IDS),
@@ -444,7 +469,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
           outcome,
           taskTitle: task.title,
           role: task.assignedRole,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           console.warn(`[Hippocampus] processTaskCompletion failed for ${task.id}: ${describePgError(err)}`);
         });
       }
@@ -479,11 +504,11 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
 
             runATAPipeline(mutation.id).then((result) => {
               console.log(`[ATA] ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore}, revisions=${result.revisionCycles})`);
-            }).catch((err) => {
+            }).catch((err: unknown) => {
               console.warn(`[ATA] Pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
             });
           }
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           console.warn(`[SkillMutator] processTaskOutcome error for ${task.id}: ${err instanceof Error ? err.message : err}`);
         });
       }
@@ -514,7 +539,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
           if (pattern.usageCount === 1) {
             console.log(`[PatternLearner] New pattern ${pattern.id} for "${task.title.slice(0, 40)}"`);
           }
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           console.warn(`[PatternLearner] extractPattern error for ${task.id}: ${err instanceof Error ? err.message : err}`);
         });
       }

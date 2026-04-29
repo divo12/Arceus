@@ -28,7 +28,6 @@ export function App() {
   const quickExecute = useCallback(async (idea: string) => {
     try {
       await apiPost("/api/quick-execute", { idea });
-    // eslint-disable-next-line no-restricted-syntax -- intentional: TUI quick-execute is fire-and-forget; failure is non-critical for the UI.
     } catch {
       // non-critical
     }
@@ -38,7 +37,6 @@ export function App() {
     try {
        
       await apiPost("/api/sprint-proposal/approve");
-    // eslint-disable-next-line no-restricted-syntax -- intentional: TUI sprint approve fire-and-forget.
     } catch {
       // non-critical
     }
@@ -65,13 +63,13 @@ export function App() {
       return;
     }
 
-    // Heartbeat controls
-    if (input === "s") { start(); return; }
-    if (input === "x") { stop(); return; }
-    if (input === "t") { trigger(); return; }
+    // Heartbeat controls — fire-and-forget; UI updates land via polling.
+    if (input === "s") { void start(); return; }
+    if (input === "x") { void stop(); return; }
+    if (input === "t") { void trigger(); return; }
 
-    // Approve
-    if (input === "a") { approve(); return; }
+    // Approve — fire-and-forget; UI updates land via polling.
+    if (input === "a") { void approve(); return; }
 
     // Quit
     if (input === "q") { exit(); return; }
@@ -95,8 +93,8 @@ export function App() {
             height={contentHeight}
             active={viewFocused}
             onEscape={handleViewEscape}
-            onQuickExecute={quickExecute}
-            onStop={stop}
+            onQuickExecute={(idea: string) => { void quickExecute(idea); }}
+            onStop={() => { void stop(); }}
           />
         )}
         {activeTab === 1 && (

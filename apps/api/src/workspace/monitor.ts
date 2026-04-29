@@ -49,7 +49,6 @@ export async function collectWorkspaceSnapshot(dir = productDir, base = productD
     try {
       const info = await stat(fullPath);
       result.set(relative(base, fullPath).replace(/\\/g, "/"), info.mtimeMs);
-    // eslint-disable-next-line no-restricted-syntax -- intentional: filesystem stat probe; missing path is the expected branch.
     } catch {
       /* ignore transient file errors */
     }

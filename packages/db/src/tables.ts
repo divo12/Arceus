@@ -1,6 +1,9 @@
 /**
- * @deprecated Spec 31 Phase 7 transitional shim — only `trustScoresTable`
- * remains.
+ * Spec 31 Phase 7 transitional shim — only `trustScoresTable` remains.
+ * (Module-level `@deprecated` tag intentionally omitted: ESLint's
+ * `no-deprecated` rule applies it to every export, and the remaining
+ * `trustScoresTable` symbol is intentionally still in use until the
+ * Spec 31b deferred migration replaces it with `roleTrust`.)
  *
  * After 7.B.7 (sprint_snapshots + skill_artifacts cutover), the only
  * legacy `*Table` declaration left is:
@@ -46,7 +49,14 @@
  */
 import { jsonb, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
 
-/** @deprecated Use `roleTrust` from `@arceus/db/src/schema/role_trust.js`. */
+/**
+ * Spec 31b: legacy per-agent trust score table. Coexists with canonical
+ * `roleTrust` (`@arceus/db/src/schema/role_trust.js`) until the deferred
+ * migration lands — the two have different domain models (per-agent
+ * score 0–1 vs per-(company, role) band) so the cutover requires a data
+ * remodel, not a rename. Do NOT mark `@deprecated` until the migration
+ * is in flight; the lint rule fires on intentional in-use callsites.
+ */
 export const trustScoresTable = pgTable("trust_scores", {
   agentId: text("agent_id").primaryKey(),
   score: real("score").notNull().default(0.5),

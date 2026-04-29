@@ -15,15 +15,15 @@ export const skillRevisions = pgTable(
     summary: text("summary").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    gitTagUniqueIdx: uniqueIndex("skill_revisions_git_tag_idx").on(table.gitTag),
-    skillRevisionUniqueIdx: uniqueIndex("skill_revisions_skill_revision_idx").on(
+  (table) => [
+    uniqueIndex("skill_revisions_git_tag_idx").on(table.gitTag),
+    uniqueIndex("skill_revisions_skill_revision_idx").on(
       table.skillId,
       table.revisionNumber,
     ),
-    skillRevisionDescIdx: index("skill_revisions_skill_revision_desc_idx").on(
+    index("skill_revisions_skill_revision_desc_idx").on(
       table.skillId,
       table.revisionNumber,
-    ),
-  }),
+    )
+  ],
 );

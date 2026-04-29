@@ -33,7 +33,6 @@ export function emitBeatEvent(raw: { type: string; beatId: string; agentId: stri
   for (const handler of subscribers) {
     try {
       handler(event);
-    // eslint-disable-next-line no-restricted-syntax -- intentional: listener-safety boundary; if a subscriber throws, recursing into the bus would re-enter the broken subscriber.
     } catch {
       /* broken subscriber — ignore */
     }

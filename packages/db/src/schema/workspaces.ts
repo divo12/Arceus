@@ -18,11 +18,11 @@ export const workspaces = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyUniqueIdx: uniqueIndex("workspaces_company_idx").on(table.companyId),
-    statusCheck: check(
+  (table) => [
+    uniqueIndex("workspaces_company_idx").on(table.companyId),
+    check(
       "workspaces_status_check",
       sql`${table.status} IN ('active','archived','restoring')`,
-    ),
-  }),
+    )
+  ],
 );

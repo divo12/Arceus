@@ -35,10 +35,10 @@ export const meetingSchedules = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyEnabledNextIdx: index("meeting_schedules_company_enabled_next_idx")
+  (table) => [
+    index("meeting_schedules_company_enabled_next_idx")
       .on(table.companyId, table.enabled, table.nextCheckAt)
       .where(sql`${table.enabled} = true`),
-    companyTypeIdx: index("meeting_schedules_company_type_idx").on(table.companyId, table.type),
-  }),
+    index("meeting_schedules_company_type_idx").on(table.companyId, table.type)
+  ],
 );

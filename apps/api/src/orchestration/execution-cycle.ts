@@ -50,7 +50,7 @@ export async function completeExecutionCycle(reason: string) {
   );
 
   if (activeExecution) {
-    updateTask(activeExecution.reviewTaskId, (task) => ({
+    await updateTask(activeExecution.reviewTaskId, (task) => ({
       ...task,
       verifierState: {
         ...task.verifierState,
@@ -241,7 +241,7 @@ export async function approveBoardReview() {
     { taskId: reviewTaskId },
   );
 
-  updateTask(reviewTaskId, (task) => ({
+  await updateTask(reviewTaskId, (task) => ({
     ...task,
     verifierState: {
       ...task.verifierState,

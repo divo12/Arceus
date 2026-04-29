@@ -21,19 +21,19 @@ export const costEvents = pgTable(
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyOccurredIdx: index("cost_events_company_occurred_idx").on(table.companyId, table.occurredAt),
-    companyAgentOccurredIdx: index("cost_events_company_agent_occurred_idx").on(
+  (table) => [
+    index("cost_events_company_occurred_idx").on(table.companyId, table.occurredAt),
+    index("cost_events_company_agent_occurred_idx").on(
       table.companyId,
       table.agentId,
       table.occurredAt,
     ),
-    companyProviderOccurredIdx: index("cost_events_company_provider_occurred_idx").on(
+    index("cost_events_company_provider_occurred_idx").on(
       table.companyId,
       table.provider,
       table.occurredAt,
     ),
-    runIdx: index("cost_events_run_idx").on(table.runId),
-    taskIdx: index("cost_events_task_idx").on(table.taskId),
-  }),
+    index("cost_events_run_idx").on(table.runId),
+    index("cost_events_task_idx").on(table.taskId)
+  ],
 );

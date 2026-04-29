@@ -59,7 +59,7 @@ export async function runCrossSprintTransfer(
       );
       runATAPipeline(mutation.id).then((result) => {
         console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
       });
     } catch (err) {

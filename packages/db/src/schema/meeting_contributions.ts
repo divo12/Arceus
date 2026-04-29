@@ -12,11 +12,11 @@ export const meetingContributions = pgTable(
     contribution: text("contribution").notNull(),
     submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    meetingAgentUniqueIdx: uniqueIndex("meeting_contributions_meeting_agent_idx").on(
+  (table) => [
+    uniqueIndex("meeting_contributions_meeting_agent_idx").on(
       table.meetingId,
       table.agentId,
     ),
-    meetingIdx: index("meeting_contributions_meeting_idx").on(table.meetingId),
-  }),
+    index("meeting_contributions_meeting_idx").on(table.meetingId)
+  ],
 );

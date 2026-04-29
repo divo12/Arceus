@@ -50,14 +50,14 @@ export const artifacts = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyTaskIdx: index("artifacts_company_task_idx").on(table.companyId, table.taskId),
-    companySprintIdx: index("artifacts_company_sprint_idx").on(table.companyId, table.sprintId),
-    companyKindIdx: index("artifacts_company_kind_idx").on(table.companyId, table.kind),
-    companyCreatedIdx: index("artifacts_company_created_idx").on(table.companyId, table.createdAt),
-    agentIdx: index("artifacts_agent_idx").on(table.agentId),
-    friendlyIdIdx: index("artifacts_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
-    titleSearchIdx: index("artifacts_title_search_idx").using("gin", sql`${table.title} gin_trgm_ops`),
-    kindCheck: check("artifacts_kind_check", sql`${table.kind} IN (${inLiteral(ALL_ARTIFACT_KINDS)})`),
-  }),
+  (table) => [
+    index("artifacts_company_task_idx").on(table.companyId, table.taskId),
+    index("artifacts_company_sprint_idx").on(table.companyId, table.sprintId),
+    index("artifacts_company_kind_idx").on(table.companyId, table.kind),
+    index("artifacts_company_created_idx").on(table.companyId, table.createdAt),
+    index("artifacts_agent_idx").on(table.agentId),
+    index("artifacts_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    index("artifacts_title_search_idx").using("gin", sql`${table.title} gin_trgm_ops`),
+    check("artifacts_kind_check", sql`${table.kind} IN (${inLiteral(ALL_ARTIFACT_KINDS)})`)
+  ],
 );

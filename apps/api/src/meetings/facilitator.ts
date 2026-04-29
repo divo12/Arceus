@@ -120,7 +120,6 @@ export async function runFacilitatorSession(
     try {
       const json = extractJson(resolveOutput);
       if (json) resolutions = resolutionOutputSchema.parse(JSON.parse(json));
-    // eslint-disable-next-line no-restricted-syntax -- intentional: facilitator pre-meeting probe; failure to read prior context falls back to a clean slate.
     } catch {
       // Keep empty resolutions on parse failure
     }
@@ -152,7 +151,6 @@ export async function runFacilitatorSession(
       const json = extractJson(briefOutput);
        
       if (json) brief = dailySyncBriefSchema.parse(JSON.parse(json));
-    // eslint-disable-next-line no-restricted-syntax -- intentional: facilitator pre-meeting probe; failure to read prior context falls back to a clean slate.
     } catch {
       // No brief on parse failure
     }

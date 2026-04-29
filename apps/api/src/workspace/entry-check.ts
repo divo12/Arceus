@@ -60,7 +60,6 @@ export function checkEntryPointImports(): EntryPointCheckResult {
       entryContent = readFileSync(fullPath, "utf-8");
       entryFile = candidate;
       break;
-    // eslint-disable-next-line no-restricted-syntax -- intentional: filesystem probe; missing entry-point file is the expected branch (handled below).
     } catch { /* try next */ }
   }
 
@@ -136,7 +135,6 @@ export function checkEntryPointImports(): EntryPointCheckResult {
         const modContent = readFileSync(join(productDir, mod), "utf-8");
          
         queue.push({ path: mod, content: modContent });
-      // eslint-disable-next-line no-restricted-syntax -- intentional: filesystem probe; missing import target is the case we're checking for.
       } catch { /* skip unreadable */ }
     }
   }

@@ -10,7 +10,7 @@ export const idempotencyKeys = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    expiresAtIdx: index("idempotency_keys_expires_at_idx").on(table.expiresAt),
-  }),
+  (table) => [
+    index("idempotency_keys_expires_at_idx").on(table.expiresAt)
+  ],
 );

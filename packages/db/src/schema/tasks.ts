@@ -81,27 +81,27 @@ export const tasks = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    identifierUniqueIdx: uniqueIndex("tasks_identifier_idx").on(table.identifier),
-    companyTaskNumberUniqueIdx: uniqueIndex("tasks_company_task_number_idx").on(table.companyId, table.taskNumber),
+  (table) => [
+    uniqueIndex("tasks_identifier_idx").on(table.identifier),
+    uniqueIndex("tasks_company_task_number_idx").on(table.companyId, table.taskNumber),
 
-    companyStatusIdx: index("tasks_company_status_idx").on(table.companyId, table.status),
-    companyAssignedRoleStatusIdx: index("tasks_company_role_status_idx").on(table.companyId, table.assignedRole, table.status),
-    companySprintStatusIdx: index("tasks_company_sprint_status_idx").on(table.companyId, table.sprintId, table.status),
-    parentIdx: index("tasks_company_parent_idx").on(table.companyId, table.parentTaskId),
-    assignedAgentIdx: index("tasks_assigned_agent_idx").on(table.assignedAgentId),
-    checkoutRunIdx: index("tasks_checkout_run_idx").on(table.checkoutRunId),
-    executionRunIdx: index("tasks_execution_run_idx").on(table.executionRunId),
+    index("tasks_company_status_idx").on(table.companyId, table.status),
+    index("tasks_company_role_status_idx").on(table.companyId, table.assignedRole, table.status),
+    index("tasks_company_sprint_status_idx").on(table.companyId, table.sprintId, table.status),
+    index("tasks_company_parent_idx").on(table.companyId, table.parentTaskId),
+    index("tasks_assigned_agent_idx").on(table.assignedAgentId),
+    index("tasks_checkout_run_idx").on(table.checkoutRunId),
+    index("tasks_execution_run_idx").on(table.executionRunId),
 
     // Trigram search on title — requires pg_trgm extension
-    titleSearchIdx: index("tasks_title_search_idx").using("gin", sql`${table.title} gin_trgm_ops`),
+    index("tasks_title_search_idx").using("gin", sql`${table.title} gin_trgm_ops`),
 
     // Business invariant: at most one active claim per task. After 0010
     // tightened tasks_status_check to taskStatusSchema.options, 'claimed'
     // is no longer a reachable status — narrowed the WHERE clause to the
     // only value that can hold a claim today. If a future contract adds
     // an intermediate "claimed" state again, widen the partial accordingly.
-    activeClaimUniqueIdx: uniqueIndex("tasks_active_claim_idx")
+    uniqueIndex("tasks_active_claim_idx")
       .on(table.id)
       .where(sql`checkout_run_id IS NOT NULL AND status = 'in_progress'`),
 
@@ -111,17 +111,17 @@ export const tasks = pgTable(
     // the DB CHECK on the next db:generate. Prior hand-typed lists drifted
     // (DB allowed `ready`/`claimed`/`verified`/`standard`/`skill_apply_proposal`
     // that Zod doesn't, and was missing `verifying`/`failed` that Zod has).
-    statusCheck: check(
+    check(
       "tasks_status_check",
       sql`${table.status} IN (${inLiteral(taskStatusSchema.options)})`,
     ),
-    priorityCheck: check(
+    check(
       "tasks_priority_check",
       sql`${table.priority} IN (${inLiteral(prioritySchema.options)})`,
     ),
-    kindCheck: check(
+    check(
       "tasks_kind_check",
       sql`${table.kind} IN (${inLiteral(taskKindSchema.options)})`,
-    ),
-  }),
+    )
+  ],
 );

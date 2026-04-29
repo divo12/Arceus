@@ -163,7 +163,7 @@ export class MeetingScheduler {
         console.log(`[MEETING-SCHEDULER] Created ${schedule.type} meeting ${meeting.id}`);
 
         // Trigger the pipeline asynchronously (fire-and-forget from scheduler perspective)
-        this.deps.runPipeline(meeting.id).catch((err) => {
+        this.deps.runPipeline(meeting.id).catch((err: unknown) => {
           console.error(`[MEETING-SCHEDULER] Pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
         });
       }
@@ -339,7 +339,7 @@ export class MeetingScheduler {
     );
 
     // Fire pipeline immediately (async)
-    this.deps.runPipeline(meeting.id).catch((err) => {
+    this.deps.runPipeline(meeting.id).catch((err: unknown) => {
       console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
     });
 
@@ -399,7 +399,7 @@ export class MeetingScheduler {
       `[MEETING-SCHEDULER] Escalation UP ${meeting.id}: ${prevManager.role} → ${nextManagerRole}`,
     );
 
-    this.deps.runPipeline(meeting.id).catch((err) => {
+    this.deps.runPipeline(meeting.id).catch((err: unknown) => {
       console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
     });
 

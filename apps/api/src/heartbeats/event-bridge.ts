@@ -84,7 +84,7 @@ export async function startEventBridge(): Promise<void> {
         }
         // processEvent is async; surface any rejection rather than swallowing
         // (was `void processEvent(...)` — F-289 / C3 sweep extra).
-        processEvent(parsed as { type: string; properties?: Record<string, any> }).catch((err) => {
+        processEvent(parsed as { type: string; properties?: Record<string, any> }).catch((err: unknown) => {
           emitEmployeeActivity("system", "error", `event-bridge processEvent failed: ${err instanceof Error ? err.message : String(err)}`);
         });
       }
@@ -92,7 +92,7 @@ export async function startEventBridge(): Promise<void> {
   } catch (err) {
     emitEmployeeActivity("system", "info", `Event bridge disconnected — will reconnect (${err instanceof Error ? err.message : String(err)})`);
     setEventBridgeStarted(false);
-    resetOpencodeConnection();
+    await resetOpencodeConnection();
     scheduleReconnect();
     // Re-throw so a caller doing `await startEventBridge()` knows the
     // handshake never came up. Callers that don't care can `.catch(() => {})`.

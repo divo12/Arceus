@@ -51,16 +51,16 @@ export const meetings = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyStatusScheduledIdx: index("meetings_company_status_scheduled_idx").on(
+  (table) => [
+    index("meetings_company_status_scheduled_idx").on(
       table.companyId,
       table.status,
       table.scheduledAt,
     ),
-    companyKindIdx: index("meetings_company_kind_idx").on(table.companyId, table.kind),
-    sprintIdx: index("meetings_sprint_idx").on(table.sprintId),
-    friendlyIdIdx: uniqueIndex("meetings_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
-    kindCheck: check("meetings_kind_check", sql`${table.kind} IN (${inLiteral(ALL_MEETING_KINDS)})`),
-    statusCheck: check("meetings_status_check", sql`${table.status} IN (${inLiteral(ALL_MEETING_STATUSES)})`),
-  }),
+    index("meetings_company_kind_idx").on(table.companyId, table.kind),
+    index("meetings_sprint_idx").on(table.sprintId),
+    uniqueIndex("meetings_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    check("meetings_kind_check", sql`${table.kind} IN (${inLiteral(ALL_MEETING_KINDS)})`),
+    check("meetings_status_check", sql`${table.status} IN (${inLiteral(ALL_MEETING_STATUSES)})`)
+  ],
 );

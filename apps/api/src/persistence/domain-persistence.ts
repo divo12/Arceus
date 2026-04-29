@@ -65,7 +65,6 @@ function logPersist(
   if (outcome === "skip") {
     const code = pgErrorCode(err);
     const detail = pgErrorDetail(err);
-    // eslint-disable-next-line no-console
     console.log(`[persist:${table}] skip pg=${code} id=${id}${detail ? ` ${detail}` : ""}`);
     observability.logEvent({
       event: "persist.failed",
@@ -76,7 +75,6 @@ function logPersist(
     });
     return;
   }
-  // eslint-disable-next-line no-console
   console.log(`[persist:${table}] ${outcome} id=${id}`);
 }
 

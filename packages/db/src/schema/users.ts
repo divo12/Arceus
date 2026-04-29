@@ -9,7 +9,7 @@ export const users = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    emailUniqueIdx: uniqueIndex("users_email_idx").on(table.email),
-  }),
+  (table) => [
+    uniqueIndex("users_email_idx").on(table.email)
+  ],
 );

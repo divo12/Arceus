@@ -39,7 +39,6 @@ export const eventBusSink = {
     for (const listener of listeners) {
       try {
         listener(tagged);
-      // eslint-disable-next-line no-restricted-syntax -- intentional: listener-safety boundary — if a subscriber throws, recursing into the bus would re-enter the broken subscriber.
       } catch {
         // never let a broken subscriber take down the hot path
       }

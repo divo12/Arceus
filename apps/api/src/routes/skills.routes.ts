@@ -13,7 +13,8 @@ import {
   matchSkills as registryMatchSkills, recordSkillUsage,
   getUnusedSkills, getUnderperformingSkills, analyzeSprintPatterns,
 } from "@arceus/company-runtime";
-import { runPatternPromotionSweep } from "../skills/cross-sprint.js";
+import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 
 export default async function skillsRoutes(app: FastifyInstance) {
@@ -250,8 +251,18 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   app.post("/api/patterns/sweep", async () => {
     const companyId = getActiveCompanyId() ?? "";
-    const result = await runPatternPromotionSweep(companyId);
-    return { companyId, ...result };
+    if (!companyId) {
+      return { companyId, candidatesFound: 0, mutationsProposed: 0, mutationsRefused: 0, reason: "no active company" };
+    }
+    // Migrated off the deprecated all-time sweep — Spec 14 Phase 6
+    // promotes patterns within the current sprint's window only.
+    const snapshot = await buildSnapshotView(companyId);
+    const sprintId = snapshot.company.currentSprintId;
+    if (!sprintId) {
+      return { companyId, candidatesFound: 0, mutationsProposed: 0, mutationsRefused: 0, reason: "no active sprint" };
+    }
+    const result = await runCrossSprintTransfer(companyId, sprintId);
+    return { companyId, sprintId, ...result };
   });
 
   // ── Unused / underperforming skills ──

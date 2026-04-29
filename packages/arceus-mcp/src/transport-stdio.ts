@@ -10,7 +10,7 @@ const main = async (): Promise<void> => {
   await server.connect(transport);
 };
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   process.stderr.write(`arceus-mcp stdio transport failed: ${String(err)}\n`);
   process.exit(1);
 });

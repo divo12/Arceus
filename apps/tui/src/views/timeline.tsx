@@ -322,7 +322,6 @@ export function TimelineView({ height, active, onEscape, onQuickExecute, onStop 
           clearMessages();
           clearActivity();
           clearAudit();
-          // eslint-disable-next-line no-restricted-syntax -- intentional: TUI timeline fire-and-forget. (Also slated for deletion per knip Tier 3.)
           api("/api/company", { method: "DELETE" })
             .then(() => { refreshHistory(); })
             .catch(() => {})

@@ -33,35 +33,35 @@ export const boardMessages = pgTable(
     relatedApprovalId: uuid("related_approval_id").references(() => approvals.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyCreatedIdx: index("board_messages_company_created_idx").on(table.companyId, table.createdAt),
-    companyDirectionCreatedIdx: index("board_messages_company_direction_created_idx").on(
+  (table) => [
+    index("board_messages_company_created_idx").on(table.companyId, table.createdAt),
+    index("board_messages_company_direction_created_idx").on(
       table.companyId,
       table.direction,
       table.createdAt,
     ),
-    companyRoleCreatedIdx: index("board_messages_company_role_created_idx").on(
+    index("board_messages_company_role_created_idx").on(
       table.companyId,
       table.role,
       table.createdAt,
     ),
-    relatedTaskIdx: index("board_messages_related_task_idx").on(table.relatedTaskId),
-    relatedApprovalIdx: index("board_messages_related_approval_idx").on(table.relatedApprovalId),
-    friendlyIdIdx: uniqueIndex("board_messages_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    index("board_messages_related_task_idx").on(table.relatedTaskId),
+    index("board_messages_related_approval_idx").on(table.relatedApprovalId),
+    uniqueIndex("board_messages_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
     // Spec 31 Phase 4E: direction kept (legacy writers); role + card_type
     // gated through contracts enums via inLiteral so a new role/card type
     // in contracts widens the DB constraint on the next db:generate.
-    directionCheck: check(
+    check(
       "board_messages_direction_check",
       sql`${table.direction} IS NULL OR ${table.direction} IN ('inbound','outbound')`,
     ),
-    roleCheck: check(
+    check(
       "board_messages_role_check",
       sql`${table.role} IS NULL OR ${table.role} IN (${inLiteral(chatMessageRoleSchema.options)})`,
     ),
-    cardTypeCheck: check(
+    check(
       "board_messages_card_type_check",
       sql`${table.cardType} IS NULL OR ${table.cardType} IN (${inLiteral(chatMessageCardTypeSchema.options)})`,
-    ),
-  }),
+    )
+  ],
 );

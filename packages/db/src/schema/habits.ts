@@ -25,19 +25,19 @@ export const habits = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    agentActiveIdx: index("habits_agent_active_idx")
+  (table) => [
+    index("habits_agent_active_idx")
       .on(table.agentId)
       .where(sql`${table.isActive} = true`),
-    companyIdx: index("habits_company_idx").on(table.companyId),
-    confidenceCheck: check(
+    index("habits_company_idx").on(table.companyId),
+    check(
       "habits_confidence_check",
       sql`${table.confidence} >= 0.0 AND ${table.confidence} <= 1.0`,
     ),
-    usageCountCheck: check("habits_usage_count_check", sql`${table.usageCount} >= 0`),
-    formationModeCheck: check(
+    check("habits_usage_count_check", sql`${table.usageCount} >= 0`),
+    check(
       "habits_formation_mode_check",
       sql`${table.formationMode} IN ('auto','explicit')`,
-    ),
-  }),
+    )
+  ],
 );

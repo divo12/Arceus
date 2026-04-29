@@ -24,8 +24,8 @@ export function usePoll<T>(path: string, intervalMs: number) {
   }, [path]);
 
   useEffect(() => {
-    fetchData();
-    timerRef.current = setInterval(fetchData, intervalMs);
+    void fetchData();
+    timerRef.current = setInterval(() => { void fetchData(); }, intervalMs);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };

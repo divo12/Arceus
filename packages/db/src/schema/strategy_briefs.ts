@@ -26,12 +26,12 @@ export const strategyBriefs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyStatusIdx: index("strategy_briefs_company_status_idx").on(table.companyId, table.status),
-    companyCreatedIdx: index("strategy_briefs_company_created_idx").on(table.companyId, table.createdAt),
-    statusCheck: check(
+  (table) => [
+    index("strategy_briefs_company_status_idx").on(table.companyId, table.status),
+    index("strategy_briefs_company_created_idx").on(table.companyId, table.createdAt),
+    check(
       "strategy_briefs_status_check",
       sql`${table.status} IN ('draft','pending_board_approval','approved','rejected','superseded')`,
-    ),
-  }),
+    )
+  ],
 );

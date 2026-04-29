@@ -257,7 +257,7 @@ export async function finalizeSprintCompletion(
     if (result.candidatesFound > 0) {
       console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
     }
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
   });
 

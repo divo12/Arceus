@@ -11,8 +11,8 @@ export const primingStates = pgTable(
     recentOutcomes: jsonb("recent_outcomes").$type<{ beatId: string; score: number }[]>().notNull().default([]),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    pk: primaryKey({ columns: [table.agentId] }),
-    companyIdx: index("priming_states_company_idx").on(table.companyId),
-  }),
+  (table) => [
+    primaryKey({ columns: [table.agentId] }),
+    index("priming_states_company_idx").on(table.companyId)
+  ],
 );

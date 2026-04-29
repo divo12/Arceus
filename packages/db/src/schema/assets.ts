@@ -17,12 +17,12 @@ export const assets = pgTable(
     createdByAgentId: uuid("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyObjectKeyUniqueIdx: uniqueIndex("assets_company_object_key_idx").on(
+  (table) => [
+    uniqueIndex("assets_company_object_key_idx").on(
       table.companyId,
       table.objectKey,
     ),
-    companyNamespaceIdx: index("assets_company_namespace_idx").on(table.companyId, table.namespace),
-    createdByAgentIdx: index("assets_created_by_agent_idx").on(table.createdByAgentId),
-  }),
+    index("assets_company_namespace_idx").on(table.companyId, table.namespace),
+    index("assets_created_by_agent_idx").on(table.createdByAgentId)
+  ],
 );

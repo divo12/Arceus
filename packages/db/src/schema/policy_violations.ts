@@ -24,17 +24,17 @@ export const policyViolations = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyCreatedIdx: index("policy_violations_company_created_idx").on(table.companyId, table.createdAt),
-    companyAgentCreatedIdx: index("policy_violations_company_agent_created_idx").on(
+  (table) => [
+    index("policy_violations_company_created_idx").on(table.companyId, table.createdAt),
+    index("policy_violations_company_agent_created_idx").on(
       table.companyId,
       table.agentId,
       table.createdAt,
     ),
-    beatIdx: index("policy_violations_beat_idx").on(table.beatId),
-    severityCheck: check(
+    index("policy_violations_beat_idx").on(table.beatId),
+    check(
       "policy_violations_severity_check",
       sql`${table.severity} IN ('low','medium','high','critical')`,
-    ),
-  }),
+    )
+  ],
 );

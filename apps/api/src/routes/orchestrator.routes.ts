@@ -88,7 +88,7 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
       const body = (request.body as { action?: string; summary?: string }) ?? {};
       const action = body.action ?? "approved";
       const summary = body.summary ?? `Board ${action} at ${new Date().toISOString()}`;
-      const updated = updateApproval(id, (a) => ({
+      const updated = await updateApproval(id, (a) => ({
         ...a,
         status: action === "rejected" ? "rejected" : "approved",
         resolutionSummary: summary,

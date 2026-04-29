@@ -15,9 +15,9 @@ export const sessionBindings = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
   },
-  (table) => ({
-    sessionIdUniqueIdx: uniqueIndex("session_bindings_session_id_idx").on(table.sessionId),
-    beatIdx: index("session_bindings_beat_idx").on(table.beatId),
-    companyIdx: index("session_bindings_company_idx").on(table.companyId),
-  }),
+  (table) => [
+    uniqueIndex("session_bindings_session_id_idx").on(table.sessionId),
+    index("session_bindings_beat_idx").on(table.beatId),
+    index("session_bindings_company_idx").on(table.companyId)
+  ],
 );

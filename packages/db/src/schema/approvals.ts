@@ -48,19 +48,19 @@ export const approvals = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    companyStatusCreatedIdx: index("approvals_company_status_created_idx").on(
+  (table) => [
+    index("approvals_company_status_created_idx").on(
       table.companyId,
       table.status,
       table.createdAt,
     ),
-    companyKindStatusIdx: index("approvals_company_kind_status_idx").on(
+    index("approvals_company_kind_status_idx").on(
       table.companyId,
       table.kind,
       table.status,
     ),
-    requestedByAgentIdx: index("approvals_requested_by_agent_idx").on(table.requestedByAgentId),
-    friendlyIdIdx: uniqueIndex("approvals_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
-    statusCheck: check("approvals_status_check", sql`${table.status} IN (${inLiteral(ALL_APPROVAL_STATUSES)})`),
-  }),
+    index("approvals_requested_by_agent_idx").on(table.requestedByAgentId),
+    uniqueIndex("approvals_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
+    check("approvals_status_check", sql`${table.status} IN (${inLiteral(ALL_APPROVAL_STATUSES)})`)
+  ],
 );

@@ -193,12 +193,12 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   // Auto-promote tasks with no dependencies to "planned"
   for (const task of createdTasks) {
     if (task.dependsOnTaskIds.length === 0 && task.status === "created") {
-      updateTask(task.id, (t) => ({ ...t, status: "planned" }));
+      await updateTask(task.id, (t) => ({ ...t, status: "planned" }));
     }
   }
 
   // Mark sprint as active
-  updateSprint(sprint.id, (s) => ({
+  await updateSprint(sprint.id, (s) => ({
     ...s,
     status: "executing",
     startedAt: nowIso(),

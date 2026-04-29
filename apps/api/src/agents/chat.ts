@@ -128,7 +128,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       snapshot = await buildSnapshotView(requireActiveCompanyId());
     }
 
-  appendConversationMessage(snapshot, "board", trimmedMessage);
+  await appendConversationMessage(snapshot, "board", trimmedMessage);
   snapshot = await buildSnapshotView(requireActiveCompanyId());
 
   reply.raw.setHeader("Content-Type", "text/event-stream");
@@ -198,7 +198,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
         const meeting = await recordCeoCardMeeting(card, trimmedMessage, fullText);
         // Re-read after recordCeoCardMeeting may have appended tasks/meetings.
         const postMeetingSnapshot = await buildSnapshotView(requireActiveCompanyId());
-        appendConversationMessage(postMeetingSnapshot, "ceo", fullText, card);
+        await appendConversationMessage(postMeetingSnapshot, "ceo", fullText, card);
         if (meeting) {
           sseWrite(reply, "meeting", {
             meetingId: meeting.id,
@@ -212,7 +212,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
         sseWrite(reply, "proposal", card);
       } catch (cardErr) {
         const errorSnapshot = await buildSnapshotView(requireActiveCompanyId());
-        appendConversationMessage(errorSnapshot, "ceo", fullText);
+        await appendConversationMessage(errorSnapshot, "ceo", fullText);
         nextSnapshot = errorSnapshot;
         sseWrite(reply, "error", {
           message: cardErr instanceof Error ? cardErr.message : "Card classification failed"
@@ -228,11 +228,9 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     const errMsg = streamErr instanceof Error ? streamErr.message : "Unknown streaming error";
     try {
       sseWrite(reply, "error", { message: errMsg });
-      // eslint-disable-next-line no-restricted-syntax -- intentional: SSE stream is already broken (caller dropped the connection); writing the error is best-effort and any failure here cascades nowhere useful.
     } catch { /* stream already broken */ }
   } finally {
     reader.releaseLock();
-    // eslint-disable-next-line no-restricted-syntax -- intentional: reply.raw.end() in finally is a defensive close; if the stream is already ended (most paths above end it), throwing here would mask the original error.
     try { reply.raw.end(); } catch { /* already ended */ }
   }
 
@@ -264,7 +262,7 @@ export async function sendBoardMessageToCeo(message: string) {
     snapshot = await buildSnapshotView(requireActiveCompanyId());
   }
 
-  appendConversationMessage(snapshot, "board", trimmedMessage);
+  await appendConversationMessage(snapshot, "board", trimmedMessage);
   snapshot = await buildSnapshotView(requireActiveCompanyId());
 
   const strategy = await generateStrategy(snapshot);
@@ -310,7 +308,7 @@ export async function sendBoardMessageToCeo(message: string) {
   };
 
   const postSnapshot = await buildSnapshotView(requireActiveCompanyId());
-  appendConversationMessage(postSnapshot, "ceo", assistantMessage, card);
+  await appendConversationMessage(postSnapshot, "ceo", assistantMessage, card);
 
   return {
     assistantMessage,

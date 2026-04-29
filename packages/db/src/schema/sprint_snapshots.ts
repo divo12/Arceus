@@ -26,16 +26,16 @@ export const sprintSnapshots = pgTable(
     status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => ({
-    gitTagUniqueIdx: uniqueIndex("sprint_snapshots_git_tag_idx").on(table.gitTag),
-    companySprintNumberIdx: index("sprint_snapshots_company_sprint_number_idx").on(
+  (table) => [
+    uniqueIndex("sprint_snapshots_git_tag_idx").on(table.gitTag),
+    index("sprint_snapshots_company_sprint_number_idx").on(
       table.companyId,
       table.sprintNumber,
     ),
-    sprintIdx: index("sprint_snapshots_sprint_idx").on(table.sprintId),
-    statusCheck: check(
+    index("sprint_snapshots_sprint_idx").on(table.sprintId),
+    check(
       "sprint_snapshots_status_check",
       sql`${table.status} IN ('active','rolled_back')`,
-    ),
-  }),
+    )
+  ],
 );

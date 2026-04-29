@@ -69,7 +69,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
 
   const reviewState = createReviewState(3);
 
-  updateSprint(currentSprintId, (sprint) => ({
+  await updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
     status: "reviewing",
     reviewState,
@@ -124,7 +124,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
       );
-      upsertTask(bugTask);
+      await upsertTask(bugTask);
       reviewState.bugTaskIds.push(bugTask.id);
       reviewState.phase = "rework";
 
@@ -143,7 +143,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
     const preview = getLocalPreviewState();
     const previewUrl = preview.url ?? preview.entryUrl ?? preview.validationUrl;
     if (previewUrl) {
-      appendChatMessage({
+      await appendChatMessage({
         id: `chat_${crypto.randomUUID()}`,
         companyId: snapshot.company.id,
         sprintId: currentSprintId,
@@ -159,7 +159,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
     emitReactive("tester", "task_assigned");
   }
 
-  updateSprint(currentSprintId, (sprint) => ({
+  await updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
     reviewState,
   }));
@@ -196,7 +196,7 @@ export async function finalizeSprintCompletion(
     detail: { sprintNumber: sprint.number, sprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
   });
 
-  updateSprint(sprintId, (s) => ({
+  await updateSprint(sprintId, (s) => ({
     ...s,
     status: "completed",
     completedAt: nowIso(),
@@ -213,12 +213,12 @@ export async function finalizeSprintCompletion(
     if (result.candidatesFound > 0) {
       console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
     }
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
   });
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
-  appendChatMessage({
+  await appendChatMessage({
     id: `chat_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
     sprintId,

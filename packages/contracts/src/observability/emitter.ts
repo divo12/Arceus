@@ -40,7 +40,7 @@ export function logEvent(event: ArceusEvent): void {
   try {
     const result = currentSink.write(event);
     if (result && typeof (result).catch === "function") {
-      (result).catch((err) => {
+      (result).catch((err: unknown) => {
          
         console.error("[logEvent] sink write failed:", err);
       });

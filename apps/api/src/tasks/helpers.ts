@@ -1,6 +1,7 @@
 import type { Task, CompanySnapshot } from "@arceus/contracts";
 import { updateTask } from "../persistence/mutations.js";
 import { audit } from "../observability/audit-ledger.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { isTaskReady } from "@arceus/task-engine";
 import { CORE_EXECUTION_TASK_KINDS, AUTONOMOUS_READY_TASK_ROLES } from "../orchestration/state.js";
 
@@ -12,7 +13,7 @@ import { CORE_EXECUTION_TASK_KINDS, AUTONOMOUS_READY_TASK_ROLES } from "../orche
  * that did the work.
  */
 export function setTaskVerified(companyId: string, taskId: string, verifiedBy: string) {
-  updateTask(taskId, (task) => ({
+  swallowAndAudit("task.set_verified", () => updateTask(taskId, (task) => ({
     ...task,
     verifierState: {
       ...task.verifierState,
@@ -21,7 +22,7 @@ export function setTaskVerified(companyId: string, taskId: string, verifiedBy: s
         ? `${task.verifierState.feedback} | Verified by ${verifiedBy}`
         : `Verified by ${verifiedBy}`,
     },
-  }));
+  })), { companyId, detail: { taskId, verifiedBy } });
   audit({
     companyId,
     category: "task_lifecycle",

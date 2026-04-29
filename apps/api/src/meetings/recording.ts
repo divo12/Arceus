@@ -107,7 +107,7 @@ export async function recordMeeting(params: {
     completedAt: now,
   };
 
-  upsertMeeting(meeting);
+  await upsertMeeting(meeting);
   await applyMeetingEffects(companyId, params.taskModifications ?? [], meetingMemoryModifications);
 
   if (params.type === "escalation") {
@@ -179,7 +179,7 @@ async function createTaskFromCeoDelta(
     delta.priority,
     "created",
   );
-  upsertTask(task);
+  await upsertTask(task);
   return task;
 }
 

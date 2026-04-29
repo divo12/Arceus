@@ -245,7 +245,7 @@ const meetingPipeline = new MeetingPipeline({
           ? JSON.parse(jsonMatch[0])
           : { whatIDid: output, whatImDoing: "", blockers: "", learnings: "", questionsForTeam: "" };
 
-        updateMeeting(meeting.id, (m) => ({
+        await updateMeeting(meeting.id, (m) => ({
           ...m,
           contributions: [
             ...m.contributions,
@@ -377,7 +377,7 @@ const meetingPipeline = new MeetingPipeline({
       const task = snap.tasks.find((t) => t.id === relatedTaskId);
       if (task?.status === "blocked") {
         console.log(`[ESCALATION] Task ${relatedTaskId} still blocked after escalation meeting ${meeting.id} — escalating up`);
-        meetingScheduler.escalateUp(
+        await meetingScheduler.escalateUp(
           snap,
           meeting,
           `Task "${task.title}" still blocked after escalation to ${snap.agents.find((a) => a.id === meeting.facilitatorAgentId)?.role ?? "manager"}`,
@@ -507,8 +507,8 @@ async function shutdown(signal: string) {
   }
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
 
 await app.listen({ port, host });
 console.log(`[STARTUP] Server listening at http://${host}:${port}`);

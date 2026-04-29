@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("[apply-migrations] FAIL:", err);
   process.exit(1);
 });

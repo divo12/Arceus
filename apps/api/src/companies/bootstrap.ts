@@ -67,7 +67,6 @@ export async function deriveCompanyNameFromIdea(idea: string): Promise<string> {
     );
     const name = result.name?.trim();
     if (name && name.length >= 2 && name.length <= 30) return name;
-    // eslint-disable-next-line no-restricted-syntax -- intentional: LLM company-name generation is best-effort; on any failure (timeout, schema, content filter) we deterministically derive a name from the idea below. Surfacing the LLM error here would mislead operators into thinking bootstrap failed.
   } catch {
     // fall through to deterministic fallback
   }

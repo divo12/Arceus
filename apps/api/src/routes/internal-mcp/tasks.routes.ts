@@ -196,7 +196,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       createdAt: now,
     };
 
-    upsertTask(task);
+    await upsertTask(task);
     observability.logEvent({
       event: "task.created",
       taskId,
@@ -209,7 +209,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     // Attach reference artifacts if provided
     if (body.referenceArtifactIds?.length) {
       for (const artId of body.referenceArtifactIds) {
-        attachArtifactToTask(taskId, artId);
+        await attachArtifactToTask(taskId, artId);
         observability.logEvent({
           event: "task.artifact_attached",
           taskId,
@@ -603,7 +603,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       createdAt: now,
     };
 
-    upsertTask(bugTask);
+    await upsertTask(bugTask);
     await persistTask(bugId);
 
     cacheAndSend(
