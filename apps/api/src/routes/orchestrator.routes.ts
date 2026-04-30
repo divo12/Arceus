@@ -7,7 +7,7 @@ import { z } from "zod";
 import { flush } from "../persistence/mutations.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
-import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orchestration/state.js";
+import { getExecutionStatus } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { approveBoardReview } from "../orchestration/execution-cycle.js";
 import { updateApproval } from "../persistence/mutations.js";
@@ -132,11 +132,9 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     }
   });
 
-  app.get("/api/transitions", async () => {
-    return getTransitions();
-  });
-
-  app.get("/api/feedback-rounds", async () => {
-    return getFeedbackRounds();
-  });
+  // Spec 31 7.B.4 / 7.A.2 — transitions + feedback rounds will flow through
+  // `activity_log` once the producer ships. Until then return [] so any client
+  // polling the contract gets a valid (empty) array.
+  app.get("/api/transitions", async () => []);
+  app.get("/api/feedback-rounds", async () => []);
 }

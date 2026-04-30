@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
-import { getExecutionStatus, getTransitions, getFeedbackRounds } from "../orchestration/state.js";
+import { getExecutionStatus } from "../orchestration/state.js";
 import { graphStore } from "../observability/graph-store.js";
 
 export default async function debugRoutes(app: FastifyInstance) {
@@ -26,8 +26,8 @@ export default async function debugRoutes(app: FastifyInstance) {
         dependsOnTaskIds: t.dependsOnTaskIds,
         childTaskIds: t.childTaskIds,
       })),
-      transitions: getTransitions().slice(-50),
-      feedbackRounds: getFeedbackRounds(),
+      transitions: [],
+      feedbackRounds: [],
       executionStatus: getExecutionStatus(),
     };
   });

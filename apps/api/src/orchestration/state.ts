@@ -2,7 +2,7 @@
  * Orchestrator shared state — mutable singletons, constants, and convenience getters.
  */
 
-import type { AgentIdentity, BeatEventTrigger, CompanySnapshot, FeedbackRound, Task, Transition } from "@arceus/contracts";
+import type { AgentIdentity, BeatEventTrigger, CompanySnapshot, Task } from "@arceus/contracts";
 import type { MeetingScheduler } from "@arceus/company-runtime";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -208,44 +208,6 @@ export function getArtifacts() { return artifacts; }
 export function getExecutionStatus() { return executionStatus; }
 /** Get the active execution context (or null). */
 export function getActiveExecution() { return activeExecution; }
-/**
- * Spec 31 Phase 7.B.4 — transitions + feedback rounds moved off the
- * in-memory snapshot. They live in module-local arrays now; spec
- * 7.A.2 routes them through `activity_log` once that decision lands
- * (the canonical schema already exists). Until then this is the
- * single owner of both append + read.
- *
- * Audit C9: ring-buffered to prevent unbounded growth. The route
- * handlers `/api/transitions` + `/api/feedback-rounds` return the
- * trailing window — older entries flow into `activity_log` when that
- * pipeline lands.
- */
-const MAX_TRANSITIONS_LOG = 500;
-const MAX_FEEDBACK_ROUNDS_LOG = 500;
-const transitionsLog: Transition[] = [];
-const feedbackRoundsLog: FeedbackRound[] = [];
-
-/** Append a state transition to the in-memory log (capped). */
-export function recordTransition(transition: Transition): void {
-  transitionsLog.push(transition);
-  if (transitionsLog.length > MAX_TRANSITIONS_LOG) {
-    transitionsLog.splice(0, transitionsLog.length - MAX_TRANSITIONS_LOG);
-  }
-}
-
-/** Append a feedback round to the in-memory log (capped). */
-export function recordFeedbackRound(round: FeedbackRound): void {
-  feedbackRoundsLog.push(round);
-  if (feedbackRoundsLog.length > MAX_FEEDBACK_ROUNDS_LOG) {
-    feedbackRoundsLog.splice(0, feedbackRoundsLog.length - MAX_FEEDBACK_ROUNDS_LOG);
-  }
-}
-
-/** Get task state transitions (read-only view of the log). */
-export function getTransitions(): readonly Transition[] { return transitionsLog; }
-/** Get feedback rounds (read-only view of the log). */
-export function getFeedbackRounds(): readonly FeedbackRound[] { return feedbackRoundsLog; }
-
 // ─── Reset (for tests / server restart) ──────────────────────────
 
 /** Reset all orchestrator state to initial values. Used in tests and server restart. */
