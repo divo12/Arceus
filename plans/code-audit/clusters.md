@@ -26,7 +26,7 @@
 | **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | 🟡 partial | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
 | **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | 🟡 partial | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
 | **P1** | [C18 · Database layer (packages/db)](#c18--database-layer--packagesdb) | 🟡 partial | jsonb blob schema, missing FKs + indexes, migration races, pool discipline | `packages/db/*` |
-| **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | 🔴 open | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
+| **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | 🟡 partial | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
 | **P2** | [C12 · Type-safety leaks (`as any`, `z.unknown()`)](#c12--type-safety-leaks) | ✅ closed | Runtime-only guarantees; schema drift | `request.body as {…}`, contracts events, roleTools |
 | **P2** | [C13 · REST anti-patterns](#c13--rest-anti-patterns) | 🔴 open | Client SDKs cannot generically parse, no versioning, SSE buffer-overrun | routes/* surface |
 | **P2** | [C14 · God files & god functions](#c14--god-files--god-functions) | 🔴 open | Hard to test, hard to refactor, hidden coupling | server, ceo, heartbeat, review, executor |
