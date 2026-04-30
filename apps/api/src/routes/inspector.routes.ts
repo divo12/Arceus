@@ -12,20 +12,24 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshot, subscribe, bufferStats, type SnapshotFilter } from "../observability/event-bus.js";
+import { parseOptionalInt, HARD_LIST_CAP } from "./_helpers.js";
 
 const __inspector_dirname = dirname(fileURLToPath(import.meta.url));
 let viewerHtml: string | null = null;
 
 function parseFilter(query: Record<string, string | undefined>): SnapshotFilter {
+  // Audit C13 (F-434): NaN-safe int parsing.
+  // sinceSeq/sinceTs are monotonic counters with no useful upper bound — clamp at MAX_SAFE_INTEGER.
+  // limit is a list cap — clamp at HARD_LIST_CAP.
   return {
     event: query.event,
     beatId: query.beatId,
     sprintId: query.sprintId,
     companyId: query.companyId,
     role: query.role,
-    sinceSeq: query.sinceSeq ? Number(query.sinceSeq) : undefined,
-    sinceTs: query.sinceTs ? Number(query.sinceTs) : undefined,
-    limit: query.limit ? Number(query.limit) : undefined,
+    sinceSeq: parseOptionalInt(query.sinceSeq),
+    sinceTs: parseOptionalInt(query.sinceTs),
+    limit: parseOptionalInt(query.limit, { min: 1, max: HARD_LIST_CAP }),
   };
 }
 

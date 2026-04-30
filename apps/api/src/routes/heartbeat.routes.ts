@@ -9,6 +9,7 @@ import { getActiveCompanyId } from "../persistence/active-company.js";
 import { cpGetBeatHistory } from "../persistence/control-plane.js";
 import type { HeartbeatEngine, MeetingScheduler, HeartbeatConfig } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
+import { parseListLimit } from "./_helpers.js";
 
 /**
  * Body for `POST /api/heartbeat/trigger`. Trigger is the contract
@@ -103,7 +104,20 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
       trigger,
     });
 
-    return record ?? { status: "skipped", reason: "Beat was skipped (locked, paused, or at capacity)" };
+    if (record) return record;
+
+    // Audit C13 (F-435): beat skip is a concurrency/state rejection, not success.
+    // 200 OK with `{ status: "skipped" }` made client monitoring unable to
+    // distinguish a successful triggered beat from one throttled by a lock,
+    // pause, or capacity ceiling. 409 Conflict is the right semantic
+    // (per RFC 7231 — request conflicts with current resource state).
+    reply.code(409);
+    return {
+      error: {
+        code: "beat_skipped",
+        message: "Beat was skipped (locked, paused, or at capacity).",
+      },
+    };
   });
 
   app.get("/api/heartbeat/status", { logLevel: "warn" }, async () => {
@@ -122,7 +136,9 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     const companyId = getActiveCompanyId();
     if (!companyId) return [];
     const query = request.query as Record<string, string>;
-    const limit = query.limit ? Math.min(Number(query.limit), 500) : 100;
+    // Audit C13 (F-434): NaN-safe limit parse. `Math.min(Number(garbage), 500)` was
+    // returning NaN which Postgres rejected on the LIMIT clause.
+    const limit = parseListLimit(query.limit, { default: 100 });
     const agentId = query.agentId || undefined;
     const dbHistory = await cpGetBeatHistory(companyId, { limit, agentId });
     return dbHistory.length > 0 ? dbHistory : heartbeatEngine.getHistory(companyId);

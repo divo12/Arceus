@@ -56,6 +56,11 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
     if (warnings.length > 0) {
       request.log?.warn({ warnings }, "Workspace provision completed with warnings");
     }
+    // Audit C13 (F-436): RFC 7231 §7.1.2 expects 201 Created responses to
+    // include a `Location` header pointing at the newly created resource.
+    // The single-active-company shape means this is `/api/company` (no id
+    // path segment), but emitting the header keeps clients RFC-compliant.
+    reply.header("Location", `/api/company`);
     reply.code(201);
     return snapshot;
   });

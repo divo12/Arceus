@@ -17,6 +17,7 @@ import {
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { swallowAndAudit } from "../observability/swallow.js";
+import { parseOptionalInt } from "./_helpers.js";
 
 export default async function skillsRoutes(app: FastifyInstance) {
   app.get("/api/skills", async () => {
@@ -305,7 +306,9 @@ export default async function skillsRoutes(app: FastifyInstance) {
     const companyId = getActiveCompanyId() ?? "";
     const { sprintId } = request.params as { sprintId: string };
     const query = request.query as { minFrequency?: string };
-    const minFrequency = query.minFrequency ? Number.parseInt(query.minFrequency, 10) : 3;
+    // Audit C13 (F-434): NaN-safe parse with reasonable bounds. minFrequency is a clustering
+    // threshold — any positive int <= 50 is sensible.
+    const minFrequency = parseOptionalInt(query.minFrequency, { min: 1, max: 50 }) ?? 3;
     return {
       sprintId,
       minFrequency,

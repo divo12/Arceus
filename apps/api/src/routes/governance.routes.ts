@@ -12,6 +12,7 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import { inArray } from "drizzle-orm";
 import { getSprintBudget, getAllSprintBudgets, SPRINT_EVOLUTION_BUDGET_CENTS, MAX_MUTATIONS_PER_SPRINT, MIN_TRUST_FOR_MUTATION, canProposeMutation, lintSkillContent, recordMutationProposal } from "../skills/governance.js";
+import { parseOptionalInt, HARD_LIST_CAP } from "./_helpers.js";
 
 export default async function governanceRoutes(app: FastifyInstance) {
   app.get("/api/governance/trust-scores", async () => {
@@ -88,7 +89,10 @@ export default async function governanceRoutes(app: FastifyInstance) {
     const query = request.query as { agentId?: string; limit?: string };
     return cpGetPolicyViolations({
       agentId: query.agentId,
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
+      // Audit C13 (F-434): NaN-safe optional limit. `parseInt(garbage)` was returning NaN
+      // which silently became "no limit" downstream. Now: undefined on missing/invalid,
+      // capped at HARD_LIST_CAP otherwise.
+      limit: parseOptionalInt(query.limit, { min: 1, max: HARD_LIST_CAP }),
     });
   });
 

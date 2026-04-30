@@ -85,8 +85,11 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
   });
 
   // Audit C12 (F-426): Zod parse for the resolve body.
+  // Audit C13 (F-438): `action` is REQUIRED — defaulting to "approved" on a
+  // missing field meant a misfired empty request silently approved an
+  // approval. Now: missing/invalid → 422 with a field-level error.
   const approvalResolveBody = z.object({
-    action: z.enum(["approved", "rejected"]).optional(),
+    action: z.enum(["approved", "rejected"]),
     summary: z.string().max(2000).optional(),
   });
   const approvalResolveParams = z.object({ id: z.string().min(1) });
@@ -97,10 +100,18 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
       const body = approvalResolveBody.safeParse(request.body ?? {});
       if (!params.success || !body.success) {
         reply.code(422);
-        return { error: "Invalid approval resolution payload." };
+        return {
+          error: {
+            code: "validation_error",
+            message: "Invalid approval resolution payload.",
+            details: !body.success
+              ? body.error.issues.map((i) => ({ field: i.path.join("."), message: i.message }))
+              : params.error?.issues.map((i) => ({ field: i.path.join("."), message: i.message })),
+          },
+        };
       }
       const { id } = params.data;
-      const action = body.data.action ?? "approved";
+      const { action } = body.data;
       const summary = body.data.summary ?? `Board ${action} at ${new Date().toISOString()}`;
       const updated = await updateApproval(id, (a) => ({
         ...a,

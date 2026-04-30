@@ -73,12 +73,28 @@ export default async function workspaceRoutes(app: FastifyInstance) {
       return { error: "No company bootstrapped yet." };
     }
 
-    const body = z.object({
+    // Audit C13 (F-443): `agentRole` is REQUIRED — defaulting to "system" silently
+    // attributed every git commit from an automated caller (that forgot to pass role)
+    // to a non-existent "system" actor, breaking the audit trail. Now: missing role → 422.
+    // taskId/message keep defaults — they're convenience values for manual board sync,
+    // not identity-attribution.
+    const bodySchema = z.object({
       taskId: z.string().default("manual_sync"),
-      agentRole: z.string().default("system"),
+      agentRole: z.string().min(1, "agentRole is required (use a role name or 'board' / 'system' for manual)"),
       message: z.string().default("Manual workspace sync requested."),
-    }).parse(request.body ?? {});
-
+    });
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(422);
+      return {
+        error: {
+          code: "validation_error",
+          message: "Invalid workspace sync payload.",
+          details: parsed.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })),
+        },
+      };
+    }
+    const body = parsed.data;
     return workspaceManager.commitAndSync(companyId, body.taskId, body.agentRole, body.message);
   });
 
