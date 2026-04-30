@@ -10,7 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { auditCategorySchema, auditSeveritySchema } from "@arceus/contracts";
 import { auditConfig } from "../config/audit.js";
-import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats } from "../observability/audit-ledger.js";
+import { subscribeSse, getAuditEvents, getAuditStats } from "../observability/audit-view-sink.js";
 
 /**
  * Querystring schema for `GET /api/audit/events`. Coerces `limit` from string,

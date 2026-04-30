@@ -15,12 +15,14 @@ process.on("uncaughtException", (err) => {
 import { observability } from "@arceus/contracts";
 import { eventBusSink } from "./observability/event-bus.js";
 import { activityLogSink } from "./observability/activity-log-sink.js";
+import { auditViewSink } from "./observability/audit-view-sink.js";
 observability.setSink(
   observability.multiSink([
     observability.pinoSink(),
     observability.langfuseSink(),
     eventBusSink, // Spec 32 — feeds /api/inspector ring buffer + SSE.
     activityLogSink, // Spec 31 Phase 6 — durable Postgres mirror of every event.
+    auditViewSink, // Spec 11 — feeds /api/audit ring buffer + SSE.
   ]),
 );
 
@@ -50,7 +52,7 @@ import {
 import { cpLoadAgentContext, cpApplyMutations, cpCommitBeatRecord, cpGetSnapshotVersion, cpSetBuildCheckDir, cpHydrateTrustScores } from "./persistence/control-plane.js";
 import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./infra/azure-openai.js";
 import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";
-import { startAuditLedger, drainAuditLedger, audit } from "./observability/audit-ledger.js";
+import { audit } from "./observability/audit-ledger.js";
 import { buildContributionPrompt } from "./meetings/contribution-prompt.js";
 import { setReactiveEventEmitter, setMeetingScheduler } from "./orchestration/state.js";
 import { buildSnapshotView } from "./orchestration/snapshot-view.js";
@@ -141,11 +143,11 @@ const beatDeps: BeatDependencies = {
   flushStore: () => flush(),
   audit: {
     auditAgent: (companyId, agentRole, eventType, summary, opts) =>
-      audit({ companyId, category: "agent_action", eventType, summary, agentRole, ...opts }),
+      { audit({ companyId, category: "agent_action", eventType, summary, agentRole, ...opts }); },
     auditSystem: (companyId, eventType, summary, opts) =>
-      audit({ companyId, category: "system", eventType, summary, ...opts }),
+      { audit({ companyId, category: "system", eventType, summary, ...opts }); },
     auditError: (companyId, eventType, summary, error, opts) =>
-      audit({ companyId, category: "error", severity: "error", eventType, summary, detail: { error: error instanceof Error ? error.message : error }, ...opts }),
+      { audit({ companyId, category: "error", severity: "error", eventType, summary, detail: { error: error instanceof Error ? error.message : error }, ...opts }); },
   },
   executeTask: async (ctx, beatId) => {
     // Vision: orchestrator hands the beat to runBeat. The agent reads its open
@@ -533,9 +535,6 @@ await app.register(internalMcpRoutes);
 await app.register(internalTelemetryRoutes);
 await app.register(internalEventsRoutes);
 
-// ── Start audit ledger ──
-startAuditLedger();
-
 // ── Hydrate governance trust scores ──
 await cpHydrateTrustScores();
 
@@ -560,7 +559,6 @@ async function shutdown(signal: string) {
     meetingScheduler.stop();
     stopStrandedRunSweeper();
     await stopSkillScheduler();
-    await drainAuditLedger();
     await teardown();
     await app.close();
     console.log("[ARCEUS] Server closed cleanly.");
