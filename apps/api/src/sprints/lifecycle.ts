@@ -1,6 +1,6 @@
 import type { AgentIdentity, Sprint, SprintReviewState, Task } from "@arceus/contracts";
 import { getAgentByRole, createWorkflowTask, nowIso } from "@arceus/task-engine";
-import { appendChatMessage, updateSprint, upsertTask } from "../persistence/mutations.js";
+import { appendChatMessage, updateSprint, updateTask, upsertTask } from "../persistence/mutations.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
@@ -18,9 +18,15 @@ import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import {
   sprintCompletionGate,
+  executionStatus,
   setExecutionStatus,
+  setActiveExecution,
   activeExecution,
 } from "../orchestration/state.js";
+import { getDb } from "@arceus/db";
+import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import { recordMeeting } from "../meetings/recording.js";
+import { approvePendingBoardApprovals } from "../memory/handoffs.js";
 
 /**
  * Checks if all employee tasks in the current sprint have reached terminal status.
@@ -285,4 +291,77 @@ async function tagCurrentSprintSnapshot(): Promise<TagSprintResult> {
     });
     return { ok: false, error: message };
   }
+}
+
+/** Approve a pending board review: resolve approvals, mark execution done, and check sprint completion. */
+export async function approveBoardReview() {
+  if (executionStatus !== "awaiting_board_review" || !activeExecution) {
+    throw new Error("Board review is not awaiting approval.");
+  }
+
+  const reviewTaskId = activeExecution.reviewTaskId;
+  const companyId = activeExecution.companyId;
+  // Spec 31 Phase 7.B.3 — count via canonical instead of snapshot
+  // filter. `countTasksByKindAndStatus` was added in Phase 7.A
+  // exactly for this read.
+  const queuedFollowUpCount = await tasksRepo.countTasksByKindAndStatus(
+    getDb(), companyId, "follow_up", ["created", "planned"],
+  );
+  const resolvedApprovals = await approvePendingBoardApprovals(companyId);
+
+  setExecutionStatus("done");
+  emitEmployeeActivity(
+    "system",
+    "info",
+    queuedFollowUpCount > 0 || resolvedApprovals.length > 0
+      ? `Board approved the CTO handoff. Execution is complete. ${queuedFollowUpCount > 0 ? `${queuedFollowUpCount} follow-up task${queuedFollowUpCount === 1 ? "" : "s"} remain queued for the next cycle. ` : ""}${resolvedApprovals.length > 0 ? `${resolvedApprovals.length} pending approval request${resolvedApprovals.length === 1 ? " was" : "s were"} resolved.` : ""}`.trim()
+      : "Board approved the CTO handoff. Execution is marked complete.",
+    { taskId: reviewTaskId },
+  );
+
+  await updateTask(reviewTaskId, (task) => ({
+    ...task,
+    verifierState: {
+      ...task.verifierState,
+      isVerified: true,
+      feedback: queuedFollowUpCount > 0 || resolvedApprovals.length > 0
+        ? `Board approved the handoff.${queuedFollowUpCount > 0 ? ` ${queuedFollowUpCount} follow-up task${queuedFollowUpCount === 1 ? "" : "s"} remain queued for the next cycle.` : ""}${resolvedApprovals.length > 0 ? ` ${resolvedApprovals.length} pending approval request${resolvedApprovals.length === 1 ? " was" : "s were"} resolved.` : ""}`
+        : "Board approved the handoff and closed the current cycle.",
+    },
+  }));
+
+  await recordMeeting({
+    type: "eval_triggered",
+    facilitatorRole: "ceo",
+    participantRoles: ["ceo", "cto"],
+    summary: "Board approved the CTO handoff and closed the current execution cycle.",
+    agenda: [{
+      topic: "Board approval",
+      type: "proposal",
+      content: "The board accepted the CTO handoff artifact and closed the current increment.",
+      raisedByRole: "ceo",
+      relatedTaskId: reviewTaskId,
+    }],
+    decisions: [{
+      description: queuedFollowUpCount > 0 || resolvedApprovals.length > 0
+        ? `Execution is complete.${queuedFollowUpCount > 0 ? ` ${queuedFollowUpCount} follow-up task${queuedFollowUpCount === 1 ? "" : "s"} are queued for the next cycle.` : ""}${resolvedApprovals.length > 0 ? ` ${resolvedApprovals.length} approval request${resolvedApprovals.length === 1 ? " was" : "s were"} resolved by the board.` : ""}`
+        : "Execution is complete until the board starts another cycle.",
+      decidedByRoles: ["ceo", "cto"],
+      impactIds: [reviewTaskId],
+    }],
+    learnings: [{
+      role: "ceo",
+      content: "Board review closed the loop after CTO handoff without resuming autonomous execution.",
+    }],
+  });
+
+  setActiveExecution(null);
+  await checkSprintCompletion();
+
+  return {
+    executionStatus,
+    reviewTaskId,
+    queuedFollowUpCount,
+    resolvedApprovalCount: resolvedApprovals.length,
+  };
 }

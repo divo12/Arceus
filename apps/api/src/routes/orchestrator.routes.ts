@@ -9,7 +9,7 @@ import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
-import { approveBoardReview } from "../orchestration/execution-cycle.js";
+import { approveBoardReview } from "../sprints/lifecycle.js";
 import { updateApproval } from "../persistence/mutations.js";
 import { sanitizeError } from "../observability/sanitize.js";
 import { heartbeatConfig } from "../config/heartbeat.js";
