@@ -111,28 +111,6 @@ export const productDir = existsSync(resolve(workspaceRoot, "workspace")) || !pr
 // ─── Mutable state ────────────────────────────────────────────────
 export const agentSessions = new Map<string, AgentSessionState>();
 
-/**
- * Audit C9 (F-045) — in-memory ring of recent artifacts.
- *
- * Durable storage is `addArtifactSync` → canonical `artifacts` table.
- * This array is the hot-path read cache used by route handlers and
- * beat tooling that need synchronous access (`getArtifacts()`).
- *
- * Capped at MAX_RECENT_ARTIFACTS to prevent unbounded growth on a
- * long-running deployment — every cold read for a missed entry can
- * fall through to the canonical store via `listPersistedArtifacts`
- * (already wired in `hippocampus.routes.ts` for that exact purpose).
- */
-export const MAX_RECENT_ARTIFACTS = 500;
-export const artifacts: Artifact[] = [];
-
-/** Capped push. Drops the oldest artifact when over MAX_RECENT_ARTIFACTS. */
-export function pushArtifact(artifact: Artifact): void {
-  artifacts.push(artifact);
-  if (artifacts.length > MAX_RECENT_ARTIFACTS) {
-    artifacts.splice(0, artifacts.length - MAX_RECENT_ARTIFACTS);
-  }
-}
 export let executionStatus: ExecutionStatus = "idle";
 export const pendingPromptCompletions = new Map<string, { resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>();
 export let promptCompletionPollerHandle: NodeJS.Timeout | null = null;
@@ -202,8 +180,6 @@ export function getAgentSessions() {
     [...agentSessions].filter(([role]) => !isInternalAgentRole(role)),
   );
 }
-/** Get all stored artifacts. */
-export function getArtifacts() { return artifacts; }
 /** Get the current execution status string. */
 export function getExecutionStatus() { return executionStatus; }
 /** Get the active execution context (or null). */
@@ -213,7 +189,6 @@ export function getActiveExecution() { return activeExecution; }
 /** Reset all orchestrator state to initial values. Used in tests and server restart. */
 export function resetOrchestratorState() {
   agentSessions.clear();
-  artifacts.length = 0;
   executionStatus = "idle";
   pendingPromptCompletions.clear();
   if (promptCompletionPollerHandle) { clearInterval(promptCompletionPollerHandle); promptCompletionPollerHandle = null; }

@@ -407,8 +407,8 @@ function renderSprintHistory(ctx: BeatRenderContext): string {
   return lines.join("\n");
 }
 
-function renderUpstreamArtifacts(task: Task): string {
-  const upstreamLines = resolveIncomingArtifacts(task);
+async function renderUpstreamArtifacts(companyId: string, task: Task): Promise<string> {
+  const upstreamLines = await resolveIncomingArtifacts(companyId, task);
   if (upstreamLines.length === 0) return "";
   return upstreamLines.join("\n");
 }
@@ -615,7 +615,7 @@ export async function prepareBeatRender(
         renderRoleMemory(ctx),
         renderIncomingHandoffsSection(incomingHandoffs),
         renderLastProgressNotes(ctx, 5),
-        renderUpstreamArtifacts(task),
+        await renderUpstreamArtifacts(companyId, task),
       ].filter(Boolean).join("\n\n---\n\n")
     : null;
 

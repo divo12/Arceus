@@ -28,7 +28,7 @@ import type { AgentIdentity } from "@arceus/contracts";
 import { hippocampus } from "../../memory/index.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import { addArtifact } from "../../tasks/mutations.js";
+import { addArtifactSync } from "../../tasks/mutations.js";
 import { emitEmployeeActivity } from "../../observability/activity.js";
 import { success, failure, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
@@ -308,7 +308,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
 
     // Audit artifact (created first so memory units can reference it)
     const callerAgent = await agentsRepo.findAgentByRole(db, mcp.companyId, callerRole);
-    const artifact = addArtifact(
+    const artifact = await addArtifactSync(
       callerAgent?.id ?? `agent_${callerRole}`,
       "handoff",
       `Handoff from ${callerRole} to ${input.targets.join(", ")} (${input.kind})`,

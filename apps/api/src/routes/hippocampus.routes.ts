@@ -8,7 +8,6 @@ import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
-import { getArtifacts } from "../orchestration/state.js";
 import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { hippocampus } from "../memory/index.js";
 
@@ -34,9 +33,7 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
     for (const task of tasks) {
       const agent = await agentsRepo.findAgentByRole(db, companyId, task.assignedRole);
       if (!agent) continue;
-      const allArtifacts = getArtifacts().length > 0
-        ? getArtifacts()
-        : await listPersistedArtifacts(companyId);
+      const allArtifacts = await listPersistedArtifacts(companyId);
       const taskArtifacts = task.artifactIds
         .map((id: string) => allArtifacts.find((a) => a.id === id))
         .filter((a): a is NonNullable<typeof a> => Boolean(a));

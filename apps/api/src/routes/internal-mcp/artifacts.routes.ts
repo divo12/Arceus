@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
 import { addArtifactSync, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/mutations.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
-import { artifacts, type Artifact } from "../../orchestration/state.js";
+import {
+  listPersistedArtifacts,
+  getPersistedArtifactById,
+  type PersistedRuntimeArtifact,
+} from "../../persistence/artifact-persistence.js";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
@@ -41,8 +45,8 @@ const parseOrFail = <T>(schema: ZodSchema<T>, body: unknown, reply: FastifyReply
   return parsed.data;
 };
 
-const findArtifact = (artifactId: string): Artifact | null =>
-  artifacts.find((a) => a.id === artifactId) ?? null;
+const findArtifact = (companyId: string, artifactId: string): Promise<PersistedRuntimeArtifact | null> =>
+  getPersistedArtifactById(companyId, artifactId);
 
 const cacheAndSend = (
   req: FastifyRequest,
@@ -135,10 +139,9 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
       if (!body) return reply;
       const { artifactId } = req.params;
 
-      const artifact = findArtifact(artifactId);
+      const artifact = await findArtifact(req.mcp!.companyId, artifactId);
       if (!artifact) {
         return sendNotFound(reply, `Artifact ${artifactId}`);
-        return;
       }
 
       try {
@@ -191,10 +194,9 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     `${ARTIFACT_BASE}/:artifactId`,
     async (req, reply) => {
       const { artifactId } = req.params;
-      const artifact = findArtifact(artifactId);
+      const artifact = await findArtifact(req.mcp!.companyId, artifactId);
       if (!artifact) {
         return sendNotFound(reply, `Artifact ${artifactId}`);
-        return;
       }
       return cacheAndSend(req, reply, 200, success(`Artifact ${artifactId}.`, { artifact }));
     },
@@ -205,10 +207,11 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     ARTIFACT_BASE,
     async (req, reply) => {
       const { sprintId, kind, limit: limitStr } = req.query;
-      const snapshot = await buildSnapshotView(req.mcp!.companyId);
+      const companyId = req.mcp!.companyId;
+      const snapshot = await buildSnapshotView(companyId);
       const limit = Math.min(parseInt(limitStr || "50", 10), 100);
 
-      let filtered = artifacts;
+      let filtered: PersistedRuntimeArtifact[] = await listPersistedArtifacts(companyId);
 
       if (sprintId) {
         // Find tasks in this sprint, then find artifacts attached to those tasks
@@ -226,7 +229,8 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
         filtered = filtered.filter((a) => a.kind === kind);
       }
 
-      const results = filtered.slice(-limit);
+      // listPersistedArtifacts returns desc(createdAt); take the most-recent N.
+      const results = filtered.slice(0, limit);
 
       return cacheAndSend(req, reply, 200, success(
         `${results.length} artifact(s) found.`,

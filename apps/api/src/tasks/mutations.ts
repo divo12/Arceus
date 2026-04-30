@@ -15,7 +15,6 @@ import {
   emitGraphMemoryWrite,
   resolveActiveSprintId,
 } from "../observability/graph-emitter.js";
-import { persistRuntimeArtifact } from "../persistence/artifact-persistence.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { swallowAndAudit } from "../observability/swallow.js";
@@ -28,46 +27,20 @@ import {
 import { applyGovernanceToMutation } from "../skills/governance.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { triggerEscalationMeeting } from "../orchestration/reactive.js";
-import { artifacts, pushArtifact, productDir, type Artifact } from "../orchestration/state.js";
+import { productDir, type Artifact } from "../orchestration/state.js";
+import { getDb } from "@arceus/db";
+import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import { hippocampus } from "../memory/extractors.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Artifact helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Create a runtime artifact, persist it, and append to the in-memory list. */
-export function addArtifact(agent: string, kind: Artifact["kind"], title: string, content: string) {
-  const artifact: Artifact = {
-    id: `artifact_${crypto.randomUUID()}`,
-    agent,
-    kind,
-    title,
-    content,
-    createdAt: new Date().toISOString(),
-  };
-  pushArtifact(artifact);
-  // Spec 31 Phase 7.C.c — companyId via the seam helper. addArtifact stays
-  // sync because callers from inside synchronous paths (workflow renderers,
-  // beat tooling) rely on the immediate in-memory append. The persist call
-  // is fire-and-forget either way.
-  const companyIdForPersist = getActiveCompanyId();
-  if (companyIdForPersist) {
-    void persistRuntimeArtifact(companyIdForPersist, artifact);
-  }
-  // Auto-write artifact to workspace filesystem
-  swallowAndAudit("artifact.disk_write", () => writeArtifactToDisk(artifact), {
-    companyId: companyIdForPersist ?? undefined,
-    agentRole: artifact.agent,
-    detail: { artifactId: artifact.id, kind: artifact.kind },
-  });
-  return artifact;
-}
-
 /**
- * Spec 28 Phase B.1 — synchronous durable variant of {@link addArtifact}.
- * Awaits the DB insert before returning so callers can rely on the artifact
- * surviving a process kill. Filesystem write stays best-effort (disk is not
- * the source of truth). Use this from MCP route handlers that create artifacts.
+ * Create a runtime artifact, persist it durably, then write it to disk.
+ * Awaits the DB insert before returning so callers can rely on the
+ * artifact surviving a process kill. Filesystem write stays best-effort
+ * (disk is not the source of truth).
  */
 export async function addArtifactSync(
   agent: string,
@@ -165,7 +138,7 @@ export async function syncWorkspaceCheckpoint(taskId: string, agentRole: string,
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Build a text summary of a task's state, results, and artifacts for memory storage. */
-export function buildTaskMemoryOutput(task: Task, feedback?: string | null): string {
+export async function buildTaskMemoryOutput(task: Task, feedback?: string | null): Promise<string> {
   const sections: string[] = [
     `Task: ${task.title}`,
     `Role: ${task.assignedRole}`,
@@ -194,8 +167,8 @@ export function buildTaskMemoryOutput(task: Task, feedback?: string | null): str
   let artifactBudget = 4000;
   for (const artifactId of task.artifactIds) {
     if (artifactBudget <= 0) break;
-    const artifact = artifacts.find((a) => a.id === artifactId);
-    if (!artifact) continue;
+    const artifact = await artifactsRepo.findArtifactById(getDb(), artifactId);
+    if (!artifact?.content) continue;
     const snippet = artifact.content.slice(0, artifactBudget);
     sections.push(`\n--- Artifact: ${artifact.title} ---\n${snippet}`);
     artifactBudget -= snippet.length;
@@ -244,7 +217,7 @@ export async function attachArtifactToTask(taskId: string, artifactId: string): 
 
   const sprintId = captured.sprintId ?? resolveActiveSprintId();
   if (sprintId) {
-    const artifact = artifacts.find((a) => a.id === artifactId);
+    const artifact = await artifactsRepo.findArtifactById(getDb(), artifactId);
     emitGraphArtifactProduced(sprintId, taskId, artifactId, artifact?.kind ?? "output", artifact?.title ?? artifactId);
   }
 }
@@ -445,7 +418,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
       const agent = getAgentByRole(snapshot, task.assignedRole);
       if (agent) {
         const outcome = status === "completed" ? "success" : status === "failed" ? "failure" : "partial";
-        const memoryOutput = buildTaskMemoryOutput(task, feedback);
+        const memoryOutput = await buildTaskMemoryOutput(task, feedback);
 
         const sid = resolveActiveSprintId();
         if (sid) {
