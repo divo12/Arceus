@@ -1,34 +1,21 @@
 /**
- * Domain dual-write helpers — Phase 4B/C/D / Spec 31 Phase 7.B.4.3.
+ * Sprint + task row persistence — DB-only.
  *
- * Each `persistX(entity)` writes a single row to canonical via the matching
- * repo. Phase 7.B.4.3 dropped the `(id) → snapshot.find → repo.upsert`
- * middleman: store mutators now pass the entity directly so we do not
- * read from the in-memory snapshot during the persist path.
+ * Each `persistX(entity)` upserts a single row to canonical via the
+ * matching repo. Postgres is the source of truth; there is no in-memory
+ * shadow to converge against.
  *
- * Errors are logged + swallowed so route responses are never blocked. The
- * store is still authoritative; the DB row converges on the next mutation
- * if a write transiently fails. FK violations (23503) trigger a one-shot
- * parent backfill + retry.
+ * Errors are logged + swallowed so route responses are never blocked.
+ * FK violations (23503) trigger a one-shot parent backfill + retry —
+ * this self-heals the bootstrap race where governance tasks land before
+ * `applyStrategy`'s fire-and-forget company/sprint upsert finishes.
  */
 import { getDb } from "@arceus/db";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
-import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
-import * as meetingsRepo from "@arceus/db/src/repos/meetings.js";
-import * as approvalsRepo from "@arceus/db/src/repos/approvals.js";
-import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
-import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import postgres from "postgres";
 import { observability } from "@arceus/contracts";
-import type {
-  Approval,
-  Artifact as ContractArtifact,
-  ChatMessage,
-  Meeting,
-  Sprint,
-  Task,
-} from "@arceus/contracts";
+import type { Sprint, Task } from "@arceus/contracts";
 import { persistCompany } from "./company-persistence.js";
 
 function pgErrorCode(err: unknown): string {
@@ -50,9 +37,9 @@ function pgErrorDetail(err: unknown): string {
 }
 
 /**
- * Structured dual-write logger. Set `ARCEUS_DEBUG_PERSIST=1` to also see
- * successful writes (useful when diagnosing FK ordering races); errors
- * are always logged so missing dual-writes never go silent.
+ * Set `ARCEUS_DEBUG_PERSIST=1` to also log successful writes (useful when
+ * diagnosing FK ordering races); errors are always logged so persistence
+ * failures never go silent.
  */
 const PERSIST_DEBUG = process.env.ARCEUS_DEBUG_PERSIST === "1";
 function logPersist(
@@ -87,7 +74,6 @@ export async function persistSprint(sprint: Sprint): Promise<void> {
   } catch (err) {
     const code = pgErrorCode(err);
     // FK violation → parent company row missing. Backfill once and retry.
-    // Race exists because applyStrategy fires persistCompany fire-and-forget.
     if (code === "23503") {
       await persistCompany(sprint.companyId);
       try {
@@ -112,8 +98,7 @@ export async function persistTask(task: Task): Promise<void> {
   } catch (err) {
     const code = pgErrorCode(err);
     // 23503 = parent missing. Tasks FK both companies and sprints; backfill
-    // both before retrying. Self-heals the bootstrap race (governance task
-    // created before applyStrategy's fire-and-forget company upsert finishes).
+    // both before retrying.
     if (code === "23503") {
       await persistCompany(task.companyId);
       if (task.sprintId) {
@@ -130,76 +115,5 @@ export async function persistTask(task: Task): Promise<void> {
       }
     }
     logPersist("tasks", task.id, "skip", err);
-  }
-}
-
-// ── Artifacts ─────────────────────────────────────────────────
-
-/**
- * Artifacts live in the runtime artifact array (`orchestration/state.ts`),
- * not the snapshot, so the helper accepts the artifact directly rather
- * than looking it up. Callers pass the same shape they'd add to the store.
- */
-export async function persistArtifact(artifact: ContractArtifact): Promise<void> {
-  try {
-    await artifactsRepo.upsertArtifact(getDb(), artifact);
-    logPersist("artifacts", artifact.id, "ok");
-  } catch (err) {
-    logPersist("artifacts", artifact.id, "skip", err);
-  }
-}
-
-// ── Meetings ──────────────────────────────────────────────────
-
-export async function persistMeeting(meeting: Meeting): Promise<void> {
-  try {
-    await meetingsRepo.upsertMeeting(getDb(), meeting);
-    logPersist("meetings", meeting.id, "ok");
-  } catch (err) {
-    logPersist("meetings", meeting.id, "skip", err);
-  }
-}
-
-// ── Approvals ─────────────────────────────────────────────────
-
-export async function persistApproval(approval: Approval): Promise<void> {
-  try {
-    await approvalsRepo.upsertApproval(getDb(), approval);
-    logPersist("approvals", approval.id, "ok");
-  } catch (err) {
-    logPersist("approvals", approval.id, "skip", err);
-  }
-}
-
-// ── Agents ────────────────────────────────────────────────────
-
-/**
- * Dual-writes a list of agents. Caller supplies the agents (typically
- * `applyStrategy` after building the org chart). Idempotent — uses the
- * unique (company_id, role) index for the upsert target.
- */
-export async function persistAgentList(
-  agents: import("@arceus/contracts").AgentIdentity[],
-): Promise<void> {
-  if (agents.length === 0) return;
-  const db = getDb();
-  for (const agent of agents) {
-    try {
-      await agentsRepo.upsertAgent(db, agent);
-      logPersist("agents", agent.id, "ok");
-    } catch (err) {
-      logPersist("agents", agent.id, "skip", err);
-    }
-  }
-}
-
-// ── Board messages / chat ─────────────────────────────────────
-
-export async function persistChatMessage(message: ChatMessage): Promise<void> {
-  try {
-    await boardMessagesRepo.upsertChatMessage(getDb(), message);
-    logPersist("chat", message.id, "ok");
-  } catch (err) {
-    logPersist("chat", message.id, "skip", err);
   }
 }
