@@ -28,7 +28,7 @@ import type { AgentIdentity } from "@arceus/contracts";
 import { hippocampus } from "../../memory/index.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import { addArtifact } from "../../tasks/index.js";
+import { addArtifact } from "../../tasks/mutations.js";
 import { emitEmployeeActivity } from "../../observability/activity.js";
 import { success, failure, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";

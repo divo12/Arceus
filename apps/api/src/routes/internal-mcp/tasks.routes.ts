@@ -3,14 +3,14 @@ import { randomUUID } from "node:crypto";
 import { z, ZodError, type ZodSchema } from "zod";
 import {
   setTaskStatus,
-  setTaskVerified,
   appendTaskResult,
   appendTaskCommand,
   appendTaskPlanStep,
   setTaskPreviewUrl,
   attachArtifactToTask,
   hydrateTaskFromSpec,
-} from "../../tasks/index.js";
+} from "../../tasks/mutations.js";
+import { setTaskVerified } from "../../tasks/helpers.js";
 import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/mutations.js";
 import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";

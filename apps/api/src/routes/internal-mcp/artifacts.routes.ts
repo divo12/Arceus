@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodSchema } from "zod";
-import { addArtifactSync, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/index.js";
+import { addArtifactSync, writeArtifactToWorkspace, attachArtifactToTask } from "../../tasks/mutations.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { artifacts, type Artifact } from "../../orchestration/state.js";
 import { observability } from "@arceus/contracts";

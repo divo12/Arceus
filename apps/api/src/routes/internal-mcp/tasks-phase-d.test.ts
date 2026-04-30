@@ -8,7 +8,7 @@ import internalMcpRoutes from "./index.js";
 import { __resetForTest as resetIdempotency } from "./idempotency.js";
 import { __resetBearerToken } from "../../auth/bearer.js";
 import { bootstrapCompany } from "../../persistence/store.js";
-import { setTaskPreviewUrl, appendTaskCommand, appendTaskPlanStep } from "../../tasks/index.js";
+import { setTaskPreviewUrl, appendTaskCommand, appendTaskPlanStep } from "../../tasks/mutations.js";
 
 const TEST_TOKEN = "arceus-test-token-phase-d";
 process.env.ARCEUS_INTERNAL_TOKEN = TEST_TOKEN;
