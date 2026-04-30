@@ -2,6 +2,7 @@ import { resolve, dirname } from "node:path";
 import { readFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, writeFileSync } from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
+import { platform } from "node:os";
 import { createServer } from "node:net";
 import { Agent as UndiciAgent, setGlobalDispatcher, getGlobalDispatcher } from "undici";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
@@ -304,8 +305,20 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
   // Sync config + prompt files into workspace so OpenCode picks them up
   syncOpencodeConfigToWorkspace(mergedConfig);
 
+  // Audit C5 (F-063): default to shell:false so node spawns the binary
+  // directly without /bin/sh -c interpolation. Args are already in argv
+  // form so no shell parsing is needed. This is defense in depth — today
+  // hostname/port are admin-controlled (env), not user-controlled, but the
+  // shell:true flag is a footgun for any future change that adds a flag
+  // from a user-facing input. Argv mode makes the spawn injection-proof.
+  //
+  // Windows still needs `shell: true` because `opencode` (and `npm`/`npx`)
+  // arrive as `.cmd` shims that node's spawn() can't resolve without a
+  // shell. Arceus is developed and deployed on POSIX; if Windows becomes
+  // a target, switch to cross-spawn or pre-resolve via `which`.
+  const useShell = platform() === "win32";
   const proc = spawn("opencode", args, {
-    shell: true,
+    shell: useShell,
     cwd: productWorkspace,
     env: {
       ...process.env,
