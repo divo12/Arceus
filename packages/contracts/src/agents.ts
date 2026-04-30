@@ -74,3 +74,37 @@ export type RoleType = z.infer<typeof roleTypeSchema>;
 export type HierarchyNode = z.infer<typeof hierarchyNodeSchema>;
 export type AgentIdentity = z.infer<typeof agentIdentitySchema>;
 export type SessionBinding = z.infer<typeof sessionBindingSchema>;
+
+/**
+ * Validate a runtime value (DB row, env var, HTTP body) is a valid RoleType.
+ * Returns the typed role on match, `null` on any other input. Use this at
+ * untrusted boundaries instead of `value as RoleType` — the cast silently
+ * propagates stale values if the schema enum changes; this surfaces them.
+ *
+ * Audit C11 (F-098 family): replaces ~15 `as AgentIdentity["role"]` /
+ * `as RoleType` casts that bypass validation.
+ */
+export function parseRole(value: unknown): RoleType | null {
+  const result = roleTypeSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+/**
+ * Like {@link parseRole} but throws on miss. Use when the value is
+ * trusted-by-construction (e.g. hard-coded literals, values you just
+ * pulled from a previously-validated record) and a stale string would be
+ * a programmer error worth crashing on.
+ */
+export function parseRoleStrict(value: unknown): RoleType {
+  return roleTypeSchema.parse(value);
+}
+
+/** Filter an array of strings down to those that parse as valid RoleTypes. */
+export function filterValidRoles(values: readonly unknown[]): RoleType[] {
+  const out: RoleType[] = [];
+  for (const v of values) {
+    const r = parseRole(v);
+    if (r !== null) out.push(r);
+  }
+  return out;
+}

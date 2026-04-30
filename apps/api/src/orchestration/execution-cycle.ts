@@ -3,6 +3,7 @@
  */
 
 import type { AgentIdentity } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { uniqueStrings, nowIso } from "@arceus/task-engine";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
@@ -190,7 +191,7 @@ export async function stopExecution(reason = "Board manually stopped company exe
       ...tasks
         .filter((task) => impactedTaskIds.includes(task.id))
         .map((task) => task.assignedRole),
-    ]) as AgentIdentity["role"][],
+    ]).map((r) => parseRoleStrict(r)),
     summary: "Board manually stopped the current execution cycle.",
     agenda: [{
       topic: "Manual stop",

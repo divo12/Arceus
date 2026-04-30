@@ -1,5 +1,5 @@
 // heartbeats/checklist-executor.ts — Execute a checklist-driven action when no task exists
-import type { AgentBeatContext, AgentIdentity } from "@arceus/contracts";
+import type { AgentBeatContext, AgentIdentity, ChecklistDispatch } from "@arceus/contracts";
 import { loadSkillsLeadPolicy } from "./skills-lead-policy.js";
 
 // Cluster C17 — F-281 + F-288. Read once at module load; env-driven so
@@ -42,36 +42,64 @@ import { startEventBridge } from "./event-bridge.js";
 
 interface HandlerResult { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }
 type FinishFn = (status: "completed" | "failed", summary: string, toolCalls: number) => void;
+
+/**
+ * Audit C11 (F-249/F-251/F-275/F-276/F-286): action contract is now typed.
+ * `dispatch` is the machine-routed kind (discriminated union from
+ * `@arceus/contracts`). `suggestedAction` is reserved for human display;
+ * we no longer parse it via `startsWith` / `split(":")`.
+ */
+interface ChecklistAction {
+  detail: string;
+  suggestedAction: string;
+  dispatch?: ChecklistDispatch;
+}
+
 type ChecklistHandler = (
   ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ) => Promise<HandlerResult>;
 
 /**
- * Action-prefix dispatch table. Replaces the old `if (role === "X")` chain.
- * Order matters — first match wins. Specific actions before broader prefixes.
- * The orchestrator is now role-neutral: it routes by what the checklist asked for,
- * not by who the agent is. See plans/agent-redesign/00-vision.md blocker #3.
+ * Kind-keyed dispatch. Record forces every dispatch kind to have a handler
+ * at compile time — adding a kind to the union without a handler here is
+ * a TS error. Replaces the old prefix-matcher table that parsed
+ * colon-strings via `startsWith`.
  */
-const CHECKLIST_HANDLERS: { matches: (action: { suggestedAction: string }) => boolean; handle: ChecklistHandler }[] = [
-  { matches: (a) => a.suggestedAction === "sprint_review:cto_escalation_review", handle: handleCtoEscalationReview },
-  { matches: (a) => a.suggestedAction === "sprint_review:cto_escalation_force_complete", handle: handleCtoEscalationForceComplete },
-  { matches: (a) => a.suggestedAction.startsWith("sprint_review:"), handle: handleTesterSprintReview },
-  { matches: (a) => a.suggestedAction.startsWith("skills_lead:"), handle: handleSkillsLeadDispatch },
-  { matches: (a) => a.suggestedAction.startsWith("meeting_contribution:"), handle: handleMeetingContribution },
-  { matches: (a) => a.suggestedAction.startsWith("task_resolve_blocker:"), handle: handleTaskResolveBlocker },
-  { matches: (a) => /\bpropose (next|new) sprint\b/i.test(a.suggestedAction) || /^plan sprint\b/i.test(a.suggestedAction), handle: handleCreateSprintPlanningTask },
-];
+const DISPATCH_HANDLERS: Record<ChecklistDispatch["kind"], ChecklistHandler> = {
+  "sprint_review.cto_escalation_review": handleCtoEscalationReview,
+  "sprint_review.cto_escalation_force_complete": handleCtoEscalationForceComplete,
+  "sprint_review.run_tester_verification": handleRunTesterVerification,
+  "sprint_review.run_final_gate": handleRunFinalGate,
+  "sprint_review.retest_after_rework": handleRetestAfterRework,
+  "skills_lead.mutate_underperformer": handleSkillsLeadMutateUnderperformer,
+  "skills_lead.deprecate_unused": handleSkillsLeadDeprecateUnused,
+  "skills_lead.fill_skill_gap": handleSkillsLeadFillSkillGap,
+  "meeting_contribution": handleMeetingContribution,
+  "task_resolve_blocker": handleTaskResolveBlocker,
+};
+
+/**
+ * Free-form fallback for English checklist suggestedAction strings (no dispatch set).
+ * Currently the only freeform action is "Propose new/next sprint" → planning task.
+ */
+function matchesProposeSprint(a: ChecklistAction): boolean {
+  return /\bpropose (next|new) sprint\b/i.test(a.suggestedAction)
+    || /^plan sprint\b/i.test(a.suggestedAction);
+}
 
 /**
  * Execute a checklist-driven action when no task is assigned.
- * Dispatches by action prefix (not by role) — the orchestrator stays neutral.
+ * Dispatches by typed `dispatch.kind` (machine-routed) or falls back to
+ * regex / LLM for freeform English actions. The orchestrator stays
+ * role-neutral: it routes by what the checklist asked for, not by who
+ * the agent is. See plans/agent-redesign/00-vision.md blocker #3.
  */
 export async function executeChecklistAction(
   ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  action: ChecklistAction,
   beatId: string,
 ): Promise<HandlerResult> {
   const role = ctx.role;
@@ -98,14 +126,18 @@ export async function executeChecklistAction(
     beatId, detail: { suggestedAction: action.suggestedAction, actionDetail: action.detail },
   });
 
-  // ── Dispatch by action prefix (no role gates) ──
-  for (const { matches, handle } of CHECKLIST_HANDLERS) {
-    if (matches(action)) {
-      return handle(ctx, action, beatId, finish);
-    }
+  // ── Typed dispatch (Audit C11 fix) ──
+  if (action.dispatch) {
+    const handler = DISPATCH_HANDLERS[action.dispatch.kind];
+    return handler(ctx, action, beatId, finish);
   }
 
-  // ── Fallback: strategic roles reason about freeform actions via LLM ──
+  // ── Freeform fallback: regex match for "propose sprint" English text ──
+  if (matchesProposeSprint(action)) {
+    return handleCreateSprintPlanningTask(ctx, action, beatId, finish);
+  }
+
+  // ── Strategic roles reason about freeform actions via LLM ──
   if (ROLE_CAPABILITIES[role].respondsToFreeformChecklistActions) {
     return handleFreeformLlmAction(ctx, action, beatId, finish);
   }
@@ -124,7 +156,7 @@ export async function executeChecklistAction(
 /** Create a governance task so the responsible agent plans the next sprint. */
 async function handleCreateSprintPlanningTask(
   _ctx: AgentBeatContext,
-  _action: { detail: string; suggestedAction: string },
+  _action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
@@ -183,13 +215,13 @@ async function handleCreateSprintPlanningTask(
  */
 async function handleTaskResolveBlocker(
   ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
   const role = ctx.role;
-  // suggestedAction format: "task_resolve_blocker:<taskId>"
-  const taskId = action.suggestedAction.split(":", 2)[1] ?? "";
+  // Audit C11: taskId now comes from typed dispatch (was: split(":") on suggestedAction)
+  const taskId = action.dispatch?.kind === "task_resolve_blocker" ? action.dispatch.taskId : "";
   const blocked = ctx.tasks.find((t) => t.id === taskId);
   if (!blocked) {
     finish("completed", `Blocker task ${taskId} no longer present`, 0);
@@ -249,7 +281,7 @@ async function handleTaskResolveBlocker(
 /** CTO sprint escalation review (Spec 21). */
 async function handleCtoEscalationReview(
   ctx: AgentBeatContext,
-  _action: { detail: string; suggestedAction: string },
+  _action: ChecklistAction,
   beatId: string,
   _finish: FinishFn,
 ): Promise<HandlerResult> {
@@ -259,7 +291,7 @@ async function handleCtoEscalationReview(
 /** CTO escalation timeout safety valve. */
 async function handleCtoEscalationForceComplete(
   _ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
@@ -291,53 +323,49 @@ async function handleCtoEscalationForceComplete(
   };
 }
 
-/** Tester sprint review actions (Spec 21). */
-async function handleTesterSprintReview(
+/** Tester sprint review — run tester verification (Spec 21). */
+async function handleRunTesterVerification(
   ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  _action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
   startBeatTokenAccumulator(beatId);
-  const reviewAction = action.suggestedAction;
-
-  if (reviewAction === "sprint_review:run_tester_verification") {
-    const res = await executeSprintReviewVerification(ctx, beatId);
-    finish("completed", "tester verification", res.toolCalls);
-    return res;
-  }
-  if (reviewAction === "sprint_review:run_final_gate") {
-    const res = await executeSprintFinalGate(ctx, beatId);
-    finish("completed", "final gate", res.toolCalls);
-    return res;
-  }
-  if (reviewAction === "sprint_review:retest_after_rework") {
-    const res = await executeRetestAfterRework(ctx, beatId);
-    finish("completed", "retest after rework", res.toolCalls);
-    return res;
-  }
-
-  finish("completed", `Unknown review action: ${reviewAction}`, 0);
-  return {
-    summary: `Unknown sprint review action: ${reviewAction}`,
-    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
-  };
+  const res = await executeSprintReviewVerification(ctx, beatId);
+  finish("completed", "tester verification", res.toolCalls);
+  return res;
 }
 
-/** Skills Lead governance dispatcher (Spec 14 Phase 6). */
-async function handleSkillsLeadDispatch(
+/** Tester sprint review — run final gate (Spec 21). */
+async function handleRunFinalGate(
   ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  _action: ChecklistAction,
   beatId: string,
-  _finish: FinishFn,
+  finish: FinishFn,
 ): Promise<HandlerResult> {
-  return executeSkillsLeadAction(ctx, beatId, action.suggestedAction);
+  startBeatTokenAccumulator(beatId);
+  const res = await executeSprintFinalGate(ctx, beatId);
+  finish("completed", "final gate", res.toolCalls);
+  return res;
+}
+
+/** Tester sprint review — retest after rework (Spec 21). */
+async function handleRetestAfterRework(
+  ctx: AgentBeatContext,
+  _action: ChecklistAction,
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  startBeatTokenAccumulator(beatId);
+  const res = await executeRetestAfterRework(ctx, beatId);
+  finish("completed", "retest after rework", res.toolCalls);
+  return res;
 }
 
 /** Meeting contribution — now collected directly by pipeline (Spec 24 Phase 4a). */
 async function handleMeetingContribution(
   _ctx: AgentBeatContext,
-  _action: { detail: string; suggestedAction: string },
+  _action: ChecklistAction,
   _beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
@@ -351,7 +379,7 @@ async function handleMeetingContribution(
 /** Generic LLM call — strategic roles reason about freeform action detail. */
 async function handleFreeformLlmAction(
   _ctx: AgentBeatContext,
-  action: { detail: string; suggestedAction: string },
+  action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
@@ -391,124 +419,150 @@ async function handleFreeformLlmAction(
 
 // ── Skills Lead action handlers (Spec 14 Phase 6) ──────────
 
-/** Handle Skills Lead governance actions: mutate underperformers, deprecate unused, fill gaps. */
-async function executeSkillsLeadAction(
-  _ctx: AgentBeatContext,
+/**
+ * Shared setup + error wrapper for the 3 skills_lead handlers below.
+ * Audit C11 (F-275/F-276) — was a single function with internal string
+ * switch; split into 3 narrowly-typed handlers each calling this wrapper.
+ */
+async function withSkillsLeadContext(
+  ctx: AgentBeatContext,
   beatId: string,
-  suggestedAction: string,
-): Promise<{ summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }> {
+  fn: (env: { companyId: string; sprintId: string | null; snapshot: Awaited<ReturnType<typeof buildSnapshotView>> }) => Promise<HandlerResult>,
+): Promise<HandlerResult> {
   startBeatTokenAccumulator(beatId);
-  // Spec 31 Phase 7.B.4 — companyId from beat ctx, snapshot view for agent lookups below.
-  const companyId = _ctx.company.id;
+  const companyId = ctx.company.id;
   const snapshot = await buildSnapshotView(companyId);
   const sprintId = snapshot.company.currentSprintId ?? null;
-
   try {
-    // ── mutate_underperformer: rewrite the worst active skill ──
-    if (suggestedAction === "skills_lead:mutate_underperformer") {
-      const underperformers = getUnderperformingSkills(companyId, skillsLeadPolicy.underperformerSuccessRate);
-      if (underperformers.length === 0) {
-        emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: no underperformers`, { beatId });
-        return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-      }
-      const worst = underperformers[0];
-      emitEmployeeActivity("skills_lead", "working", `${shortBeat(beatId)}: mutating ${worst.name}`, { beatId });
-
-      const mutation = await processTaskOutcome({
-        taskId: `skills_lead_mutation_${worst.id}_${Date.now()}`,
-        taskTitle: `Improve underperforming skill: ${worst.name}`,
-        taskDescription: `Skill ${worst.name} has a ${(worst.successRate * 100).toFixed(0)}% success rate over ${worst.usageCount} uses. Identify root cause and propose an improved version.`,
-        assignedRole: worst.role,
-        companyId,
-        status: "failed",
-        iterationCount: 3,
-        executionTrace: `Historical rate ${worst.successRate.toFixed(2)} across ${worst.usageCount} invocations.`,
-      });
-
-      if (!mutation) {
-        return { summary: `No mutation produced for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
-      }
-
-      const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
-      const gov = await applyGovernanceToMutation({
-        mutation, companyId, sprintId,
-        proposerAgentId: skillsLeadAgent?.id ?? null,
-        proposerRole: "skills_lead",
-        estimatedCostCents: 2,
-      });
-      if (!gov.allowed) {
-        return { summary: `Mutation for ${worst.name} refused: ${gov.reason}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
-      }
-
-      swallowAndAudit("ata.pipeline.skills_lead", () => runATAPipeline(mutation.id), {
-        companyId,
-        agentRole: "skills_lead",
-        beatId,
-        detail: { mutationId: mutation.id, skillName: worst.name },
-      });
-      return { summary: `Proposed mutation ${mutation.id} for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
-    }
-
-    // ── deprecate_unused: flip unused skills to deprecated ──
-    if (suggestedAction === "skills_lead:deprecate_unused") {
-      const unused = getUnusedSkills(companyId, skillsLeadPolicy.unusedSkillStaleDays);
-      if (unused.length === 0) {
-        return { summary: "No unused skills to deprecate", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-      }
-      const deprecated: string[] = [];
-      for (const s of unused.slice(0, skillsLeadPolicy.maxBatchPerBeat)) {
-        registryDeprecateSkill(s.id, `Unused for ${skillsLeadPolicy.unusedSkillStaleDays}+ days (0 invocations since ${s.lastUsedAt ?? "creation"})`);
-        deprecated.push(s.name);
-        auditAgent(companyId, "skills_lead", "skill_deprecated", `Skills Lead deprecated unused skill ${s.name}`, {
-          severity: "info", detail: { skillId: s.id, lastUsedAt: s.lastUsedAt },
-        });
-      }
-      emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: deprecated ${deprecated.length} skills`, { beatId });
-      return { summary: `Deprecated ${deprecated.length} unused skills: ${deprecated.join(", ")}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: deprecated.length, toolCalls: 1 };
-    }
-
-    // ── fill_skill_gap: synthesize skill from sprint cluster ──
-    if (suggestedAction === "skills_lead:fill_skill_gap") {
-      if (!sprintId) {
-        return { summary: "No current sprint — skipping skill-gap fill", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-      }
-      const candidates = analyzeSprintPatterns(companyId, sprintId, skillsLeadPolicy.patternClusterMinSize);
-      if (candidates.length === 0) {
-        return { summary: "No sprint skill gaps detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-      }
-      let proposed = 0;
-      let refused = 0;
-      // Cap cluster proposals at the same per-beat batch limit as
-      // deprecate_unused — both fan out to the ATA pipeline and we don't
-      // want one beat to monopolise the LLM budget.
-      for (const candidate of candidates.slice(0, skillsLeadPolicy.maxBatchPerBeat)) {
-        try {
-          const mutation = await proposeSkillFromCluster(candidate);
-          const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
-          const gov = await applyGovernanceToMutation({
-            mutation, companyId, sprintId,
-            proposerAgentId: skillsLeadAgent?.id ?? null,
-            proposerRole: "skills_lead",
-            estimatedCostCents: 2,
-          });
-          if (!gov.allowed) { refused++; continue; }
-          proposed++;
-          swallowAndAudit("ata.pipeline.gap_fill", () => runATAPipeline(mutation.id), {
-            companyId,
-            agentRole: "skills_lead",
-            beatId,
-            detail: { mutationId: mutation.id, candidateClusterId: candidate.clusterId },
-          });
-        } catch (err) {
-          console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      return { summary: `Proposed ${proposed} emergent skills, ${refused} refused by governance`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: proposed, toolCalls: proposed + refused };
-    }
-
-    return { summary: `Unknown Skills Lead action: ${suggestedAction}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    return await fn({ companyId, sprintId, snapshot });
   } catch (err) {
     emitEmployeeActivity("skills_lead", "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
-    return { summary: `Skills Lead action failed: ${err instanceof Error ? err.message : String(err)}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    return {
+      summary: `Skills Lead action failed: ${err instanceof Error ? err.message : String(err)}`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
   }
+}
+
+/** Skills Lead — rewrite the worst active skill via the ATA pipeline. */
+async function handleSkillsLeadMutateUnderperformer(
+  ctx: AgentBeatContext,
+  _action: ChecklistAction,
+  beatId: string,
+  _finish: FinishFn,
+): Promise<HandlerResult> {
+  return withSkillsLeadContext(ctx, beatId, async ({ companyId, sprintId, snapshot }) => {
+    const underperformers = getUnderperformingSkills(companyId, skillsLeadPolicy.underperformerSuccessRate);
+    if (underperformers.length === 0) {
+      emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: no underperformers`, { beatId });
+      return { summary: "No underperforming skills detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    const worst = underperformers[0];
+    emitEmployeeActivity("skills_lead", "working", `${shortBeat(beatId)}: mutating ${worst.name}`, { beatId });
+
+    const mutation = await processTaskOutcome({
+      taskId: `skills_lead_mutation_${worst.id}_${Date.now()}`,
+      taskTitle: `Improve underperforming skill: ${worst.name}`,
+      taskDescription: `Skill ${worst.name} has a ${(worst.successRate * 100).toFixed(0)}% success rate over ${worst.usageCount} uses. Identify root cause and propose an improved version.`,
+      assignedRole: worst.role,
+      companyId,
+      status: "failed",
+      iterationCount: 3,
+      executionTrace: `Historical rate ${worst.successRate.toFixed(2)} across ${worst.usageCount} invocations.`,
+    });
+
+    if (!mutation) {
+      return { summary: `No mutation produced for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+    }
+
+    const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
+    const gov = await applyGovernanceToMutation({
+      mutation, companyId, sprintId,
+      proposerAgentId: skillsLeadAgent?.id ?? null,
+      proposerRole: "skills_lead",
+      estimatedCostCents: 2,
+    });
+    if (!gov.allowed) {
+      return { summary: `Mutation for ${worst.name} refused: ${gov.reason}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+    }
+
+    swallowAndAudit("ata.pipeline.skills_lead", () => runATAPipeline(mutation.id), {
+      companyId,
+      agentRole: "skills_lead",
+      beatId,
+      detail: { mutationId: mutation.id, skillName: worst.name },
+    });
+    return { summary: `Proposed mutation ${mutation.id} for ${worst.name}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1 };
+  });
+}
+
+/** Skills Lead — deprecate skills unused for N+ days. */
+async function handleSkillsLeadDeprecateUnused(
+  ctx: AgentBeatContext,
+  _action: ChecklistAction,
+  beatId: string,
+  _finish: FinishFn,
+): Promise<HandlerResult> {
+  return withSkillsLeadContext(ctx, beatId, async ({ companyId }) => {
+    const unused = getUnusedSkills(companyId, skillsLeadPolicy.unusedSkillStaleDays);
+    if (unused.length === 0) {
+      return { summary: "No unused skills to deprecate", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    const deprecated: string[] = [];
+    for (const s of unused.slice(0, skillsLeadPolicy.maxBatchPerBeat)) {
+      registryDeprecateSkill(s.id, `Unused for ${skillsLeadPolicy.unusedSkillStaleDays}+ days (0 invocations since ${s.lastUsedAt ?? "creation"})`);
+      deprecated.push(s.name);
+      auditAgent(companyId, "skills_lead", "skill_deprecated", `Skills Lead deprecated unused skill ${s.name}`, {
+        severity: "info", detail: { skillId: s.id, lastUsedAt: s.lastUsedAt },
+      });
+    }
+    emitEmployeeActivity("skills_lead", "context", `${shortBeat(beatId)}: deprecated ${deprecated.length} skills`, { beatId });
+    return { summary: `Deprecated ${deprecated.length} unused skills: ${deprecated.join(", ")}`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: deprecated.length, toolCalls: 1 };
+  });
+}
+
+/** Skills Lead — synthesize a new skill from a sprint pattern cluster. */
+async function handleSkillsLeadFillSkillGap(
+  ctx: AgentBeatContext,
+  _action: ChecklistAction,
+  beatId: string,
+  _finish: FinishFn,
+): Promise<HandlerResult> {
+  return withSkillsLeadContext(ctx, beatId, async ({ companyId, sprintId, snapshot }) => {
+    if (!sprintId) {
+      return { summary: "No current sprint — skipping skill-gap fill", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    const candidates = analyzeSprintPatterns(companyId, sprintId, skillsLeadPolicy.patternClusterMinSize);
+    if (candidates.length === 0) {
+      return { summary: "No sprint skill gaps detected", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+    }
+    let proposed = 0;
+    let refused = 0;
+    // Cap cluster proposals at the same per-beat batch limit as
+    // deprecate_unused — both fan out to the ATA pipeline and we don't
+    // want one beat to monopolise the LLM budget.
+    for (const candidate of candidates.slice(0, skillsLeadPolicy.maxBatchPerBeat)) {
+      try {
+        const mutation = await proposeSkillFromCluster(candidate);
+        const skillsLeadAgent = getAgentByRole(snapshot, "skills_lead");
+        const gov = await applyGovernanceToMutation({
+          mutation, companyId, sprintId,
+          proposerAgentId: skillsLeadAgent?.id ?? null,
+          proposerRole: "skills_lead",
+          estimatedCostCents: 2,
+        });
+        if (!gov.allowed) { refused++; continue; }
+        proposed++;
+        swallowAndAudit("ata.pipeline.gap_fill", () => runATAPipeline(mutation.id), {
+          companyId,
+          agentRole: "skills_lead",
+          beatId,
+          detail: { mutationId: mutation.id, candidateClusterId: candidate.clusterId },
+        });
+      } catch (err) {
+        console.warn(`[SkillsLead] fill_skill_gap failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { summary: `Proposed ${proposed} emergent skills, ${refused} refused by governance`, tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: proposed, toolCalls: proposed + refused };
+  });
 }

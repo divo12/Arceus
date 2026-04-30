@@ -96,11 +96,12 @@ function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
     return { status: "ok", detail: `${myBlockers.length} blocker(s) already being worked on` };
   }
   const next = pending[0];
-  // Encode taskId in the suggestedAction so the dispatcher can route by prefix.
+  // Audit C11: typed dispatch instead of colon-string (was: `task_resolve_blocker:${next.id}`)
   return {
     status: "action_needed",
     detail: `Task "${next.title}" (${next.id}) is ${next.status}`,
-    suggestedAction: `task_resolve_blocker:${next.id}`,
+    suggestedAction: `Resolve blocker on task: ${next.title}`,
+    dispatch: { kind: "task_resolve_blocker", taskId: next.id },
   };
 }
 
@@ -297,7 +298,8 @@ function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} awaiting tester verification (cycle ${reviewState.reworkCycleCount})`,
-      suggestedAction: "sprint_review:run_tester_verification",
+      suggestedAction: `Run tester verification for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.run_tester_verification" },
     };
   }
 
@@ -305,7 +307,8 @@ function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} awaiting final gate`,
-      suggestedAction: "sprint_review:run_final_gate",
+      suggestedAction: `Run final gate for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.run_final_gate" },
     };
   }
 
@@ -335,7 +338,8 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} in rework with no bug tasks — re-verifying`,
-      suggestedAction: "sprint_review:retest_after_rework",
+      suggestedAction: `Re-test Sprint ${sprint.number} after rework`,
+      dispatch: { kind: "sprint_review.retest_after_rework" },
     };
   }
 
@@ -350,7 +354,8 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `All ${bugTaskIds.length} bug fix(es) resolved — ready for re-verification`,
-      suggestedAction: "sprint_review:retest_after_rework",
+      suggestedAction: `Re-test Sprint ${sprint.number} (${bugTaskIds.length} bug fix(es) ready)`,
+      dispatch: { kind: "sprint_review.retest_after_rework" },
     };
   }
 
@@ -392,13 +397,15 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
       return {
         status: "action_needed",
         detail: `Sprint ${sprint.number} escalation pending ${ageMinutes}m without decision — force-completing as safety valve`,
-        suggestedAction: "sprint_review:cto_escalation_force_complete",
+        suggestedAction: `Force-complete Sprint ${sprint.number} (escalation timeout)`,
+        dispatch: { kind: "sprint_review.cto_escalation_force_complete" },
       };
     }
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles — awaiting CTO decision (fix/skip/abort)`,
-      suggestedAction: "sprint_review:cto_escalation_review",
+      suggestedAction: `Review CTO escalation for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.cto_escalation_review" },
     };
   }
 
@@ -418,7 +425,8 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
       return {
         status: "action_needed",
         detail: `Sprint ${sprint.number} stuck in ${reviewState.phase} for ${ageMinutes}m after CTO "fix" decision — force-completing`,
-        suggestedAction: "sprint_review:cto_escalation_force_complete",
+        suggestedAction: `Force-complete stuck Sprint ${sprint.number}`,
+        dispatch: { kind: "sprint_review.cto_escalation_force_complete" },
       };
     }
   }
@@ -490,7 +498,8 @@ function checkMeetingContribution(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `Meeting "${collectingMeeting.title}" awaiting your contribution`,
-    suggestedAction: `meeting_contribution:${collectingMeeting.id}`,
+    suggestedAction: `Contribute to meeting: ${collectingMeeting.title}`,
+    dispatch: { kind: "meeting_contribution", meetingId: collectingMeeting.id },
   };
 }
 
@@ -512,7 +521,8 @@ function checkSkillHealth(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `${health.worstPerformers.length} underperforming skill(s), worst: ${worst.name} (${Math.round(worst.successRate * 100)}%)`,
-    suggestedAction: "skills_lead:mutate_underperformer",
+    suggestedAction: `Mutate underperforming skill: ${worst.name}`,
+    dispatch: { kind: "skills_lead.mutate_underperformer" },
   };
 }
 
@@ -529,7 +539,8 @@ function checkUnusedSkills(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `${unused.length} skill(s) unused for 30+ days`,
-    suggestedAction: "skills_lead:deprecate_unused",
+    suggestedAction: `Deprecate ${unused.length} stale skill(s)`,
+    dispatch: { kind: "skills_lead.deprecate_unused" },
   };
 }
 
@@ -545,7 +556,8 @@ function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `${gapCount} skill gap(s) in current sprint`,
-    suggestedAction: "skills_lead:fill_skill_gap",
+    suggestedAction: `Fill ${gapCount} skill gap(s) in current sprint`,
+    dispatch: { kind: "skills_lead.fill_skill_gap" },
   };
 }
 

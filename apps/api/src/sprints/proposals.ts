@@ -1,4 +1,5 @@
 import type { AgentIdentity, Sprint, Task } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { createSprintRecord } from "@arceus/task-engine";
 import {
@@ -131,7 +132,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   const createdTasks: Task[] = [];
 
   for (const kt of input.tasks) {
-    const role = kt.assigned_role as AgentIdentity["role"];
+    const role = parseRoleStrict(kt.assigned_role);
     const task = createWorkflowTask(
       freshSnapshot,
       "implementation",

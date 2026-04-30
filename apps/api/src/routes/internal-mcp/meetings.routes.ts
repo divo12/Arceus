@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z, ZodError, type ZodSchema } from "zod";
 import type { AgentIdentity, Meeting, RoleType, Task } from "@arceus/contracts";
-import { observability } from "@arceus/contracts";
+import { observability, parseRole, parseRoleStrict } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
 import { writeMeetingSync } from "../../persistence/mutations.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
@@ -141,24 +141,24 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
 
     const recorded: Meeting = await recordMeeting({
       type: body.type,
-      facilitatorRole: body.facilitatorRole as AgentIdentity["role"],
-      participantRoles: body.participantRoles as AgentIdentity["role"][],
+      facilitatorRole: parseRoleStrict(body.facilitatorRole),
+      participantRoles: body.participantRoles.map((r) => parseRoleStrict(r)),
       summary: body.summary,
       agenda: body.agenda.map((item) => ({
         topic: item.topic,
         type: item.type,
         content: item.content,
-        raisedByRole: item.raisedByRole as AgentIdentity["role"],
+        raisedByRole: parseRoleStrict(item.raisedByRole),
         relatedTaskId: item.relatedTaskId ?? null,
         needsBoardApproval: item.needsBoardApproval,
       })),
       decisions: body.decisions?.map((d) => ({
         description: d.description,
-        decidedByRoles: d.decidedByRoles as AgentIdentity["role"][],
+        decidedByRoles: d.decidedByRoles.map((r) => parseRoleStrict(r)),
         impactIds: d.impactIds ?? [],
       })),
       learnings: body.learnings?.map((l) => ({
-        role: l.role as AgentIdentity["role"],
+        role: parseRoleStrict(l.role),
         content: l.content,
         promotedToSummary: l.promotedToSummary,
       })),
@@ -166,12 +166,12 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
         taskId: m.taskId,
         modificationType: m.modificationType,
         details: m.details,
-        assignedRole: (m.assignedRole ?? null) as AgentIdentity["role"] | null,
+        assignedRole: m.assignedRole != null ? parseRole(m.assignedRole) : null,
         priority: (m.priority ?? null),
         resultingStatus: (m.resultingStatus ?? null),
       })),
       memoryModifications: body.memoryModifications?.map((m) => ({
-        role: m.role as AgentIdentity["role"],
+        role: parseRoleStrict(m.role),
         modificationType: m.modificationType,
         content: m.content,
       })),
@@ -184,7 +184,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       event: "meeting.recorded",
       meetingId: meeting.id,
       companyId: req.mcp!.companyId,
-      participants: body.participantRoles as RoleType[],
+      participants: body.participantRoles.map((r) => parseRoleStrict(r)),
       ts: Date.now(),
     });
 
@@ -237,14 +237,14 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       // Record the meeting shell with status "open"
       const recordedDecision: Meeting = await recordMeeting({
         type: "escalation",
-        facilitatorRole: mcp.role as AgentIdentity["role"],
-        participantRoles: body.participantRoles as AgentIdentity["role"][],
+        facilitatorRole: parseRoleStrict(mcp.role),
+        participantRoles: body.participantRoles.map((r) => parseRoleStrict(r)),
         summary: `Decision requested: ${body.topic}`,
         agenda: [{
           topic: body.topic,
           type: "proposal",
           content: body.description,
-          raisedByRole: mcp.role as AgentIdentity["role"],
+          raisedByRole: parseRoleStrict(mcp.role),
           relatedTaskId: null,
         }],
         decisions: [],

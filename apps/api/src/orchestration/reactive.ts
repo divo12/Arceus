@@ -1,4 +1,5 @@
 import type { AgentIdentity, BeatEventTrigger } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
@@ -43,7 +44,7 @@ export function emitReactiveBroadcast(event: BeatEventTrigger): void {
   swallowAndAudit("reactive.broadcast", async () => {
     const agents = await agentsRepo.listAgentsByCompany(getDb(), companyId);
     for (const agent of agents) {
-      emitter(companyId, agent.id, agent.role as AgentIdentity["role"], event);
+      emitter(companyId, agent.id, parseRoleStrict(agent.role), event);
     }
   },
     { companyId, detail: { event } },

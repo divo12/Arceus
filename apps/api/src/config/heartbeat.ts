@@ -3,6 +3,7 @@
  * Controls beat intervals, concurrency, budgets, and pause rules per role.
  */
 import type { AgentIdentity } from "@arceus/contracts";
+import { filterValidRoles } from "@arceus/contracts";
 import { readOptionalEnv, readNumberEnv, readListEnv } from "./env";
 import defaultsRaw from "./heartbeat.json" with { type: "json" };
 
@@ -65,8 +66,8 @@ export const heartbeatConfig = {
   /** Hard stop at 100% budget. */
   pauseWhenBudgetExhausted: readOptionalEnv("ARCEUS_HEARTBEAT_PAUSE_BUDGET_EXHAUSTED", String(defaults.pauseWhenBudgetExhausted)) === "true",
 
-  /** Manually paused roles. */
-  pauseRoles: readListEnv("ARCEUS_HEARTBEAT_PAUSE_ROLES", defaults.pauseRoles) as AgentIdentity["role"][],
+  /** Manually paused roles. Invalid env values silently dropped (graceful — env vars commonly mistyped). */
+  pauseRoles: filterValidRoles(readListEnv("ARCEUS_HEARTBEAT_PAUSE_ROLES", defaults.pauseRoles)),
 
   /** Feature flag: enable/disable the meeting scheduler entirely. */
   meetingsEnabled: readOptionalEnv("ARCEUS_MEETINGS_ENABLED", "true") === "true",

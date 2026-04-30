@@ -27,6 +27,7 @@ import type {
   Sprint,
   Task,
 } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
@@ -143,7 +144,7 @@ export async function loadBeatRenderContext(
 
   const agents: BeatAgentSlice[] = agentRows.map((row) => ({
     id: row.id,
-    role: row.role as AgentIdentity["role"],
+    role: parseRoleStrict(row.role),
     displayName: row.displayName,
   }));
   const sprints = sprintRows.map(sprintsRepo.rowToSprint);

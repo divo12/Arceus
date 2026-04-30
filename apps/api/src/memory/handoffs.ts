@@ -1,4 +1,5 @@
 import type { AgentIdentity, Approval } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { getDb, type DbClient } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as approvalsRepo from "@arceus/db/src/repos/approvals.js";
@@ -79,7 +80,7 @@ export async function approvePendingBoardApprovals(
     if (approval.requestedByAgentId) {
       const requestor = await agentsRepo.findAgentById(db, approval.requestedByAgentId);
       if (requestor) {
-        emitReactive(requestor.role as AgentIdentity["role"], "approval_granted");
+        emitReactive(parseRoleStrict(requestor.role), "approval_granted");
       }
     }
   }

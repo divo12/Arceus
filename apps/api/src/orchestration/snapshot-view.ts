@@ -37,6 +37,7 @@ import type {
   Sprint,
   Task,
 } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { createEmptyCompanySnapshot } from "@arceus/company-runtime";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
@@ -70,7 +71,7 @@ function rowToAgentIdentity(row: Awaited<ReturnType<typeof agentsRepo.listAgents
     companyId: row.companyId,
     nodeId: "",
     name: row.displayName,
-    role: row.role as AgentIdentity["role"],
+    role: parseRoleStrict(row.role),
     title: row.title ?? "",
     managerAgentId: row.managerAgentId ?? null,
     reportAgentIds: row.reportAgentIds ?? [],

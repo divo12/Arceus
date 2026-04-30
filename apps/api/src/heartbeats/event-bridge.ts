@@ -1,5 +1,6 @@
 // heartbeats/event-bridge.ts — SSE event bridge from OpenCode → agent state
 import type { AgentIdentity, PolicyEvalContext } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { buildTrustEvent, evaluatePolicy, BASE_POLICY_RULES, ROLE_CAPABILITIES } from "@arceus/company-runtime";
 import { nowIso } from "@arceus/task-engine";
 
@@ -413,7 +414,7 @@ async function processEvent(event: OpenCodeEvent) {
     }
     if (caps.escalatesOnSessionError && activeExecution) {
       await setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? `${role} session error`);
-      const typedRole = role as AgentIdentity["role"];
+      const typedRole = parseRoleStrict(role);
       await recordMeeting({
         type: "escalation",
         facilitatorRole: typedRole,

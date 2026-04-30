@@ -72,6 +72,7 @@ import { runBeat } from "./orchestration/run-beat.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import type { AgentIdentity } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
 import { executeChecklistAction } from "./heartbeats/checklist-executor.js";
 import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
@@ -186,7 +187,7 @@ const beatDeps: BeatDependencies = {
     const agents = await agentsRepo.listAgentsByCompany(getDb(), companyId);
     return agents.map((a) => ({
       agentId: a.id,
-      role: a.role as AgentIdentity["role"],
+      role: parseRoleStrict(a.role),
       companyId,
     }));
   },

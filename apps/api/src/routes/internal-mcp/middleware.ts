@@ -6,7 +6,7 @@ import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
 import { resolveBearerToken } from "../../auth/bearer.js";
 import { hashBody, lookupIdempotency, rememberIdempotency, releaseIdempotency, IDEMPOTENCY_FAILURES } from "./idempotency.js";
 import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
-import { observability, type RoleType } from "@arceus/contracts";
+import { observability, parseRoleStrict, type RoleType } from "@arceus/contracts";
 import { routeToTool } from "./route-to-tool.js";
 import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
 import { swallowAndAudit } from "../../observability/swallow.js";
@@ -233,7 +233,7 @@ export const mcpEmitToolInvoked: McpHook = async (req) => {
   observability.logEvent({
     event: "tool.invoked",
     beatId: mcp.beatId,
-    role: mcp.role as RoleType,
+    role: parseRoleStrict(mcp.role),
     tool,
     args: mergedArgs,
     idempotencyKey: mcp.idempotencyKey ?? undefined,
