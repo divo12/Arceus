@@ -13,7 +13,7 @@ import type { observability } from "@arceus/contracts";
 
 type ArceusEvent = Parameters<typeof observability.logEvent>[0];
 
-export type EventListener = (event: ArceusEvent) => void;
+type EventListener = (event: ArceusEvent) => void;
 
 const CAPACITY = Number(process.env.ARCEUS_INSPECTOR_BUFFER ?? "5000");
 
@@ -88,7 +88,7 @@ export function bufferStats() {
 }
 
 /** Test helper — clears the ring and resets the seq counter. */
-export function _resetEventBus(): void {
+function _resetEventBus(): void {
   buffer = [];
   nextSeq = 1;
   listeners.clear();

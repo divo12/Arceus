@@ -5,7 +5,7 @@
 
 import type { FastifyReply } from "fastify";
 
-export interface EmployeeActivityEntry {
+interface EmployeeActivityEntry {
   id: string;
   timestamp: string;
   employee: string;
@@ -18,7 +18,7 @@ export interface EmployeeActivityEntry {
   detail?: Record<string, unknown> | null;
 }
 
-export type ActivityEvent = EmployeeActivityEntry;
+type ActivityEvent = EmployeeActivityEntry;
 
 const log: EmployeeActivityEntry[] = [];
 const subs = new Set<(e: EmployeeActivityEntry) => void>();
@@ -107,7 +107,4 @@ export function streamEmployeeActivity(reply: FastifyReply) {
   });
 }
 
-export const resetActivityLog = resetEmployeeActivityLog;
 export const emitActivity = emitEmployeeActivity;
-export const getActivityLog = getEmployeeActivityLog;
-export const streamActivity = streamEmployeeActivity;

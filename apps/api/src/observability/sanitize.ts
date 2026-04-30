@@ -40,7 +40,7 @@ import { randomUUID } from "node:crypto";
 import { observability } from "@arceus/contracts";
 import type { ArceusEvent } from "@arceus/contracts/src/observability/events.js";
 
-export interface SanitizedError {
+interface SanitizedError {
   /** Operator-safe message. In prod = the fallback; in dev = err.message. */
   error: string;
   /**
@@ -51,7 +51,7 @@ export interface SanitizedError {
   correlationId: string;
 }
 
-export interface SanitizeContext {
+interface SanitizeContext {
   /** Route path used to scope the error event (`POST /api/strategy`). */
   route?: string;
   /** Company under which the failure occurred, when known. */

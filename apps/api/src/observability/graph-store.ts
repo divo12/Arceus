@@ -9,7 +9,7 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export interface StatusTransition {
+interface StatusTransition {
   from: string;
   to: string;
   triggeredBy: string;
@@ -17,7 +17,7 @@ export interface StatusTransition {
   timestamp: string;
 }
 
-export interface StateDiff {
+interface StateDiff {
   taskChanges: {
     taskId: string;
     field: string;
@@ -64,7 +64,7 @@ export interface DecisionEntry {
   sourceRole: string;
 }
 
-export interface ToolCallEntry {
+interface ToolCallEntry {
   name: string;
   status: "invoked" | "completed" | "error";
   summary: string | null;
@@ -164,7 +164,7 @@ export interface GraphEdge {
   artifactId: string | null;
 }
 
-export interface ExecutionGraph {
+interface ExecutionGraph {
   sprintId: string;
   sprintNumber: number;
   sprintGoal: string;
@@ -179,7 +179,7 @@ export interface ExecutionGraph {
 // Graph events — emitted by orchestrator, consumed by store + SSE
 // ---------------------------------------------------------------------------
 
-export type GraphEvent =
+type GraphEvent =
   | { type: "sprint_started"; sprintId: string; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: "node_added"; sprintId: string; node: GraphNode; edges: GraphEdge[] }
   | { type: "edge_added"; sprintId: string; edge: GraphEdge }
@@ -206,7 +206,7 @@ type GraphEventListener = (event: GraphEvent) => void;
  * In-memory store for execution graph data.
  * Manages sprint graphs, nodes, edges, beats, and emits events to SSE subscribers.
  */
-export class ExecutionGraphStore {
+class ExecutionGraphStore {
   private graphs = new Map<string, ExecutionGraph>();
   private listeners = new Set<GraphEventListener>();
 

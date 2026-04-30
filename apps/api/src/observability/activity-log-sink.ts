@@ -475,11 +475,3 @@ export const activityLogSink: observability.EventSink = {
   },
 };
 
-/** Test-only — exposes the variant mapper + beat / agent resolvers. */
-export const _internal = {
-  mapEventToRow,
-  setBeatCompany,
-  lookupBeatCompany,
-  resetBeatMap: () => { beatCompanyMap.clear(); },
-  resetAgentCache: () => { agentCache.clear(); },
-};

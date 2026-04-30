@@ -303,7 +303,7 @@ export function emitGraphFileChanges(
 // ---------------------------------------------------------------------------
 
 /** Start tracking a rework cycle group on a graph node. */
-export function emitGraphReworkStarted(
+function emitGraphReworkStarted(
   sprintId: string,
   nodeId: string,
   maxCycles: number,
@@ -318,7 +318,7 @@ export function emitGraphReworkStarted(
 }
 
 /** Append a rework iteration verdict to an existing rework group. */
-export function emitGraphReworkIteration(
+function emitGraphReworkIteration(
   sprintId: string,
   nodeId: string,
   cycle: number,

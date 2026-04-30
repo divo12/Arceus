@@ -35,9 +35,9 @@ import { toDbId as companyToDbId } from "@arceus/db/src/repos/companies.js";
 import { toDbId as friendlyToUuid } from "@arceus/db/src/repos/tasks.js";
 import postgres from "postgres";
 
-export type Provider = "azure" | "openai" | "anthropic" | "opencode";
+type Provider = "azure" | "openai" | "anthropic" | "opencode";
 
-export interface RecordLlmCostInput {
+interface RecordLlmCostInput {
   provider: Provider;
   model: string;
   inputTokens: number;
@@ -149,4 +149,3 @@ export async function recordLlmCost(input: RecordLlmCostInput): Promise<void> {
 }
 
 /** Test-only — exposes the pricing-lookup logic for unit tests. */
-export const _internal = { computeCostCents };

@@ -56,7 +56,7 @@
  */
 import { observability } from "@arceus/contracts";
 
-export interface SwallowContext {
+interface SwallowContext {
   /** Friendly company id when known. Defaults to `_system`. */
   companyId?: string;
   /** Agent role on whose behalf the call ran (`developer`, `ceo`, …). */

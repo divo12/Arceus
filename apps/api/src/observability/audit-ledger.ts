@@ -125,7 +125,7 @@ function stopFlushTimer() {
 
 // ── Public API ─────────────────────────────────────────────
 
-export interface AuditAppendInput {
+interface AuditAppendInput {
   companyId: string;
   category: AuditCategory;
   severity?: AuditSeverity;
@@ -240,7 +240,7 @@ export function auditSystem(
 }
 
 /** Convenience: audit an error. */
-export function auditError(
+function auditError(
   companyId: string,
   eventType: string,
   summary: string,
@@ -318,7 +318,7 @@ export function startAuditLedger() {
  * Returns audit functions pre-bound with a beatId.
  * Use inside a beat executor to tag all events to the current beat.
  */
-export function withBeatScope(beatId: string) {
+function withBeatScope(beatId: string) {
   return {
     audit: (input: AuditAppendInput) => audit({ ...input, beatId }),
     auditAgent: (
