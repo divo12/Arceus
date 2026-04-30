@@ -116,10 +116,10 @@
 | [control-plane.ts](apps/api/src/persistence/control-plane.ts) — `cpApplyMutations` | Master mutation lane | F-086, F-088 |
 | [mutations.ts](apps/api/src/tasks/mutations.ts) | Task status + artifact propagation | F-215, F-216, F-258, F-281, F-374 |
 | [review.ts](apps/api/src/sprints/review.ts) — `updateSprint` | Dual reviewState writes race | F-345, F-346 |
-| [proposals.ts](apps/api/src/sprints/proposals.ts) — `approveSprintProposal` | Task creation loop, no tx | F-350 |
+| [proposals.ts](apps/api/src/sprints/proposals.ts) — `createSprintWithTasks` | Sprint insert + task-batch insert + status flip not atomic | F-350 |
 | [meeting-pipeline.ts](packages/company-runtime/src/meeting-pipeline.ts) — `updateMeeting` | Full-object overwrite on status transition | F-277, F-359 |
 | [meeting-scheduler.ts](packages/company-runtime/src/meeting-scheduler.ts) | Skip-count, total-runs, upsert+schedule pair | F-351 (cluster), F-361 |
-| [lifecycle.ts](apps/api/src/sprints/lifecycle.ts) — `finalizeSprintCompletion` | Write + `tagSprint` + persist non-atomic | F-347 |
+| [lifecycle.ts](apps/api/src/sprints/lifecycle.ts) — `finalizeSprintCompletion` | Tag-first ordering shipped (closed) | F-347 |
 
 **Why it matters:** two heartbeats for the same task both flip to `in_progress`; two agents contributing to a meeting lose a write; review phase oscillates because handlers race. This is the single biggest class of bug in the codebase.
 
@@ -136,7 +136,8 @@ The audit's original "use Paperclip's `issues.ts:1779-1851`" reference was a mis
 - ✅ **Phase 2** — Pattern A row locks across 7 repos (`tasks`, `sprints`, `meetings`, `meeting_schedules`, `approvals`, `companies`, `memory_summaries`); wired into all `update*` helpers in `apps/api/src/persistence/mutations.ts`. Closes F-104, F-256, F-215, F-216, F-345, F-346, F-277, F-359 lost-update gaps.
 - ✅ **Phase 3** — `meetingsRepo.transitionStatus` + `meeting-pipeline.ts` swap. 5 status flips now atomic with prior-state guard; completion flip keeps Phase 2 lock + inline assertion.
 - ✅ **Phase 4** — `meetingSchedulesRepo.incrementCounter` + `markSkipped` (atomic skip+timestamps); scheduler skip path swapped.
-- 🟡 **Open:** `proposals.ts approveSprintProposal` task-creation loop (F-350) and `lifecycle.ts finalizeSprintCompletion` (F-347) still need transaction-boundary review (these are multi-table, not single-row, so Pattern A doesn't directly apply).
+- ✅ **F-347 closed** — `finalizeSprintCompletion` already implements tag-first ordering at [lifecycle.ts:217-226](apps/api/src/sprints/lifecycle.ts:217). `tagCurrentSprintSnapshot()` runs before the status flip; on tag failure the function returns and leaves the sprint in `reviewing` (recoverable). The post-flip writes (`appendChatMessage`, fire-and-forget `runCrossSprintTransfer`) are best-effort and do not violate the invariant.
+- 🟡 **Open — F-350 only:** `proposals.ts createSprintWithTasks` is multi-table (sprint INSERT + N task INSERTs + sprint status flip + auto-promote) with no transaction. Failure mid-batch leaves a partially-populated sprint stranded. Agreed approach: wrap the function body in `getDb().transaction(async (tx) => { ... })` and call repo functions (`sprintsRepo.upsertSprint(tx, …)`, `tasksRepo.upsertTask(tx, …)`) directly inside the block; the existing topo-sort still serves the intra-batch task→task FK ordering. Persist helpers' FK-retry path is bypassed inside the tx (FK violations they retry against can't occur there). **Implementation deferred — tracked here.**
 
 Tests: `packages/db/src/repos/locks.test.ts` — 10 concurrency tests (Pattern A serialization, Pattern B status guard, atomic counters), all passing against live Postgres.
 
