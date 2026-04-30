@@ -6,25 +6,12 @@ process.on("uncaughtException", (err) => {
   console.error("[ARCEUS] Uncaught exception (process kept alive):", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
 });
 
-// Spec 32 — Observability sinks.
-//
-// Two sinks fan out from the same emit:
-//   pinoSink     → JSON lines on stdout (greppable in dev / shippable to any log aggregator)
-//   langfuseSink → Langfuse native SDK so traces show up in their v3 preview UI
-//
-// otelSink + startObservability() are intentionally dormant. Both pointed
-// at Langfuse Cloud, which would duplicate every trace alongside langfuseSink.
-// Re-enable when adding a non-Langfuse backend (Datadog / SigNoz / Honeycomb /
-// local Jaeger). The sink, bootstrap, and 37 unit tests stay in place — flip
-// them on with one line:
-//
-//   import { startObservability } from "./observability/bootstrap.js";
-//   startObservability();              // installs OTEL global tracer provider
-//   observability.setSink(observability.multiSink([
-//     observability.pinoSink(),
-//     observability.otelSink,          // ← restore here
-//     observability.langfuseSink(),
-//   ]));
+// Spec 32 — Observability sinks. Each sink lands the same firehose in a
+// different consumer:
+//   pinoSink         → JSON lines on stdout (operator log aggregator)
+//   langfuseSink     → Langfuse SaaS UI for LLM trace debugging
+//   eventBusSink     → in-process ring + /api/inspector/{stream,snapshot}
+//   activityLogSink  → durable Postgres `activity_log` (cold-path SQL paging)
 import { observability } from "@arceus/contracts";
 import { eventBusSink } from "./observability/event-bus.js";
 import { activityLogSink } from "./observability/activity-log-sink.js";

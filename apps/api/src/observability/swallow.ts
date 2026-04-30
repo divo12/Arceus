@@ -20,7 +20,7 @@
  *   - `eventBusSink` → in-memory ring buffer (live `/inspector` SSE)
  *   - `activityLogSink` → durable `activity_log` table row
  *   - `pinoSink` → structured stdout
- *   - `otelSink` → OTel span event
+ *   - `langfuseSink` → trace span for the active beat
  *
  * Use this — NOT `audit()` — for swallowed RUNTIME errors. `audit()` is
  * for governance "who-did-what" trails (different SSE channel, different
