@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { updateCompanyStatus } from "../../persistence/mutations.js";
+import { updateCompanyStatus } from "../../persistence/mutations/index.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";

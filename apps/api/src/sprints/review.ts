@@ -4,7 +4,7 @@ import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import {
   updateSprint,
-} from "../persistence/mutations.js";
+} from "../persistence/mutations/index.js";
 import { persistTask } from "../persistence/domain-persistence.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import {

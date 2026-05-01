@@ -4,7 +4,7 @@ import { z, ZodError, type ZodSchema } from "zod";
 import type { AgentIdentity, Meeting, RoleType, Task } from "@arceus/contracts";
 import { observability, parseRole, parseRoleStrict } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
-import { writeMeetingSync } from "../../persistence/mutations.js";
+import { writeMeetingSync } from "../../persistence/mutations/index.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";

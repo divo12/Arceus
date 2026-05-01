@@ -48,7 +48,7 @@ import {
   updateTask,
   upsertApproval,
   appendChatMessage,
-} from "./persistence/mutations.js";
+} from "./persistence/mutations/index.js";
 import { cpLoadAgentContext, cpApplyMutations, cpCommitBeatRecord, cpGetSnapshotVersion, cpSetBuildCheckDir, cpHydrateTrustScores } from "./persistence/control-plane.js";
 import { startMeetingTokenAccumulator, drainMeetingTokenAccumulator } from "./infra/azure-openai.js";
 import { emitEmployeeActivity, shortBeat } from "./observability/activity.js";

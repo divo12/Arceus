@@ -20,10 +20,10 @@ import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
 } from "../observability/graph-emitter/index.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
-import { updateMeeting, updateSprint } from "../persistence/mutations.js";
+import { updateMeeting, updateSprint } from "../persistence/mutations/index.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
-import { flush } from "../persistence/mutations.js";
+import { flush } from "../persistence/mutations/index.js";
 import { ensureAgentSession } from "../prompts/llm.js";
 import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
@@ -31,7 +31,7 @@ import { isCeoStreaming } from "../agents/chat.js";
 import { applyGovernanceToMutation } from "../skills/governance.js";
 import { eventBridgeOnce } from "../orchestration/state.js";
 import { createWorkflowTask } from "@arceus/task-engine";
-import { upsertTask } from "../persistence/mutations.js";
+import { upsertTask } from "../persistence/mutations/index.js";
 import { checkSprintCompletion } from "../sprints/lifecycle.js";
 import { finalizeSprintCompletion } from "../sprints/lifecycle.js";
 import {

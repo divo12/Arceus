@@ -58,7 +58,7 @@ import {
   updateAgentStatus,
   updateCompanyStatus,
   updateTaskProgress,
-} from "./mutations.js";
+} from "./mutations/index.js";
 
 // ── Version tracking ───────────────────────────────────────
 

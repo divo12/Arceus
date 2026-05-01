@@ -7,7 +7,7 @@ import {
   updateSprint,
   upsertSprint,
   updateCompanySprint,
-} from "../persistence/mutations.js";
+} from "../persistence/mutations/index.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";

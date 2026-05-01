@@ -1,6 +1,6 @@
 import type { AgentIdentity, Sprint, SprintReviewState, Task } from "@arceus/contracts";
 import { getAgentByRole, createWorkflowTask, nowIso } from "@arceus/task-engine";
-import { appendChatMessage, updateSprint, updateTask, upsertTask } from "../persistence/mutations.js";
+import { appendChatMessage, updateSprint, updateTask, upsertTask } from "../persistence/mutations/index.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";

@@ -4,13 +4,13 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { flush } from "../persistence/mutations.js";
+import { flush } from "../persistence/mutations/index.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { approveBoardReview } from "../sprints/lifecycle.js";
-import { updateApproval } from "../persistence/mutations.js";
+import { updateApproval } from "../persistence/mutations/index.js";
 import { sanitizeError } from "../observability/sanitize.js";
 import { heartbeatConfig } from "../config/heartbeat.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";

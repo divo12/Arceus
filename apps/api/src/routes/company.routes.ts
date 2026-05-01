@@ -4,7 +4,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { resetCompany, clearPersistedStoreState } from "../persistence/mutations.js";
+import { resetCompany, clearPersistedStoreState } from "../persistence/mutations/index.js";
 import { getActiveCompanyId, clearActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { resetCompanyTx } from "../companies/reset.js";
@@ -114,7 +114,7 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
   });
 
   app.get("/api/events", async (_request, reply) => {
-    const { getEvents } = await import("../persistence/mutations.js");
+    const { getEvents } = await import("../persistence/mutations/index.js");
     reply.raw.setHeader("Content-Type", "text/event-stream");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
     reply.raw.setHeader("Connection", "keep-alive");

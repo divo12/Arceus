@@ -1,5 +1,5 @@
 import type { Task, CompanySnapshot } from "@arceus/contracts";
-import { updateTask } from "../persistence/mutations.js";
+import { updateTask } from "../persistence/mutations/index.js";
 import { audit } from "../observability/audit-ledger.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import { isTaskReady } from "@arceus/task-engine";

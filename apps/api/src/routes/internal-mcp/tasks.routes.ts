@@ -11,7 +11,7 @@ import {
   hydrateTaskFromSpec,
 } from "../../tasks/mutations.js";
 import { setTaskVerified } from "../../tasks/helpers.js";
-import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/mutations.js";
+import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/mutations/index.js";
 import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";

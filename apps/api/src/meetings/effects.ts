@@ -1,6 +1,6 @@
 import type { AgentIdentity, Task } from "@arceus/contracts";
 import { uniqueStrings } from "@arceus/task-engine";
-import { updateTask } from "../persistence/mutations.js";
+import { updateTask } from "../persistence/mutations/index.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
