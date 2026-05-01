@@ -46,7 +46,7 @@ describe("applyMeetingEffects (B.2 read migration)", () => {
     });
     mock.module("@arceus/db/src/repos/agents.js", () => ({ 
       findAgentByRole: findAgentSpy, listAgentsByCompany: async () => [], findAgentById: async () => null }));
-    mock.module("@arceus/db/src/repos/tasks.js", () => ({
+    mock.module("@arceus/db/src/repos/tasks/index.js", () => ({
       findByIdHydrated: async () => null,
       listByCompanyHydrated: async () => [],
     }));
@@ -83,7 +83,7 @@ describe("applyMeetingEffects (B.2 read migration)", () => {
   it("dispatches memory modifications fire-and-forget without awaiting per-mod persistence", async () => {
     mock.module("@arceus/db/src/repos/agents.js", () => ({ 
       findAgentByRole: async () => null, listAgentsByCompany: async () => [], findAgentById: async () => null }));
-    mock.module("@arceus/db/src/repos/tasks.js", () => ({
+    mock.module("@arceus/db/src/repos/tasks/index.js", () => ({
       findByIdHydrated: async () => null,
       listByCompanyHydrated: async () => [],
     }));
@@ -136,7 +136,7 @@ describe("deriveMeetingMemoryModifications (B.2 read migration)", () => {
       }
       return null;
     });
-    mock.module("@arceus/db/src/repos/tasks.js", () => ({
+    mock.module("@arceus/db/src/repos/tasks/index.js", () => ({
       findByIdHydrated: findByIdSpy,
       listByCompanyHydrated: async () => [],
     }));
@@ -172,7 +172,7 @@ describe("deriveMeetingMemoryModifications (B.2 read migration)", () => {
   });
 
   it("dedupes by (role, modificationType, content) tuple", async () => {
-    mock.module("@arceus/db/src/repos/tasks.js", () => ({
+    mock.module("@arceus/db/src/repos/tasks/index.js", () => ({
       findByIdHydrated: async () => null,
       listByCompanyHydrated: async () => [],
     }));

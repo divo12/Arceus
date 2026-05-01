@@ -18,7 +18,7 @@ import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 import { readTaskHybrid, persistTask, CLAIM_FAILURES } from "./task-persistence.js";
 import { getDb } from "@arceus/db";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 
 const TASK_BASE = "/api/internal/v1/tasks";
 

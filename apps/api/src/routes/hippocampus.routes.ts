@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { hippocampus } from "../memory/index.js";

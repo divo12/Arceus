@@ -25,7 +25,7 @@ import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/a
 import { startHeartbeatRun, finishHeartbeatRun, bindSession, unbindSession } from "./beat-lifecycle.js";
 import { updateTrustScore } from "../governance/trust.js";
 import { persistSkillUsageEvent } from "../skills/usage-persistence.js";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { getDb } from "@arceus/db";
 import { setTaskStatus } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";

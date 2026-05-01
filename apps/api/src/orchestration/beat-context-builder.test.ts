@@ -80,7 +80,7 @@ function setupRepoMocks(opts: {
     listSprintsByCompany: listSprints,
     rowToSprint: (row: unknown) => row,
   }));
-  mock.module("@arceus/db/src/repos/tasks.js", () => ({ listByCompanyHydrated: listTasks }));
+  mock.module("@arceus/db/src/repos/tasks/index.js", () => ({ listByCompanyHydrated: listTasks }));
   mock.module("@arceus/db/src/repos/artifacts.js", () => ({
     listArtifactsByCompany: listArtifacts,
     rowToArtifact: (row: unknown) => row,

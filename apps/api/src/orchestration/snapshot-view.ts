@@ -51,7 +51,7 @@ import * as meetingSchedulesRepo from "@arceus/db/src/repos/meeting_schedules.js
 import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 
 /** Cap on chatMessages loaded into a snapshot view. Bounded to keep
  *  hot-path latency stable as boards age — consumers that need full

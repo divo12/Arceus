@@ -13,7 +13,7 @@
  */
 import type { Task as ContractTask } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import postgres from "postgres";
 import { observability } from "@arceus/contracts";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";

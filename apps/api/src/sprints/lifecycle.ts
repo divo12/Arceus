@@ -24,7 +24,7 @@ import {
   activeExecution,
 } from "../orchestration/state.js";
 import { getDb } from "@arceus/db";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { recordMeeting } from "../meetings/recording.js";
 import { approvePendingBoardApprovals } from "../memory/handoffs.js";
 

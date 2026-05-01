@@ -6,7 +6,7 @@ export * as agents from "./agents.js";
 export * as users from "./users.js";
 
 export * as sprints from "./sprints.js";
-export * as tasks from "./tasks.js";
+export * as tasks from "./tasks/index.js";
 export * as artifacts from "./artifacts.js";
 export * as meetings from "./meetings.js";
 export * as approvals from "./approvals.js";

@@ -3,7 +3,7 @@ import { uniqueStrings } from "@arceus/task-engine";
 import { updateTask } from "../persistence/mutations/index.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { audit } from "../observability/audit-ledger.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import { enrichRoleMemory, clearRoleBlockers } from "../memory/operations.js";

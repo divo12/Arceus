@@ -4,7 +4,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { getDb } from "@arceus/db";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { graphStore } from "../observability/graph-store.js";

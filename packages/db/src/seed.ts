@@ -29,7 +29,7 @@ import { companies } from "./schema/companies.js";
 import * as companiesRepo from "./repos/companies.js";
 import * as agentsRepo from "./repos/agents.js";
 import * as sprintsRepo from "./repos/sprints.js";
-import * as tasksRepo from "./repos/tasks.js";
+import * as tasksRepo from "./repos/tasks/index.js";
 import * as artifactsRepo from "./repos/artifacts.js";
 import * as meetingsRepo from "./repos/meetings.js";
 import * as approvalsRepo from "./repos/approvals.js";

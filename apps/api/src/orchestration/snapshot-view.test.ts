@@ -88,7 +88,7 @@ function setupMocks(overrides: {
     listSprintsByCompany: listSprints,
     rowToSprint: (row: unknown) => row,
   }));
-  mock.module("@arceus/db/src/repos/tasks.js", () => ({ listByCompanyHydrated: listTasks }));
+  mock.module("@arceus/db/src/repos/tasks/index.js", () => ({ listByCompanyHydrated: listTasks }));
   mock.module("@arceus/db/src/repos/approvals.js", () => ({
     listApprovalsByCompany: listApprovals,
     rowToApproval: (row: unknown) => row,

@@ -7,7 +7,7 @@
  */
 import type { Task, TaskProgress } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 
 /** Insert or replace a task. */
 export async function upsertTask(task: Task): Promise<Task> {

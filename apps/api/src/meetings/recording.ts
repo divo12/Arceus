@@ -6,7 +6,7 @@ import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphMeeting, resolveActiveSprintId } from "../observability/graph-emitter/index.js";
 import { emitReactive } from "../orchestration/reactive.js";

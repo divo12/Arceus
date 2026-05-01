@@ -35,7 +35,7 @@ import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as memoryUnitsRepo from "@arceus/db/src/repos/memory_units.js";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
-import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getLocalPreviewState } from "../workspace/preview.js";

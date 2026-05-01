@@ -32,7 +32,7 @@ import { toDbId as companyToDbId } from "@arceus/db/src/repos/companies.js";
 // Re-using it here means cost_events.run_id resolves to the same uuid the
 // FK target holds. TODO(spec-31 cleanup): centralise ARCEUS_UUID_NS into a
 // shared @arceus/db helper instead of leaning on tasks.toDbId.
-import { toDbId as friendlyToUuid } from "@arceus/db/src/repos/tasks.js";
+import { toDbId as friendlyToUuid } from "@arceus/db/src/repos/tasks/index.js";
 import postgres from "postgres";
 
 type Provider = "azure" | "openai" | "anthropic" | "opencode";

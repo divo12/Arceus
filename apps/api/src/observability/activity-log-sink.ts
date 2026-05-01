@@ -33,7 +33,7 @@ import { toDbId as companyToDbId } from "@arceus/db/src/repos/companies.js";
 // Same uuidv5 namespace as tasks.toDbId — heartbeat_runs.id is computed
 // from friendlyBeatId via this exact function in beat-lifecycle.ts.
 // TODO(spec-31 cleanup): centralise ARCEUS_UUID_NS into @arceus/db.
-import { toDbId as friendlyToUuid } from "@arceus/db/src/repos/tasks.js";
+import { toDbId as friendlyToUuid } from "@arceus/db/src/repos/tasks/index.js";
 import { observability } from "@arceus/contracts";
 import postgres from "postgres";
 

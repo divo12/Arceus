@@ -17,7 +17,7 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as heartbeatRunsRepo from "@arceus/db/src/repos/heartbeat_runs.js";
 import * as sessionBindingsRepo from "@arceus/db/src/repos/session_bindings.js";
 import { toDbId as companyToDbId } from "@arceus/db/src/repos/companies.js";
-import { toDbId } from "@arceus/db/src/repos/tasks.js";
+import { toDbId } from "@arceus/db/src/repos/tasks/index.js";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
 import { heartbeatRuns } from "@arceus/db/src/schema/heartbeat_runs.js";
