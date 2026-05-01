@@ -12,7 +12,7 @@ const coreStrategyRoles = ["ceo", "cto", "pm", "developer", "tester", "skills_le
 type CoreStrategyRole = (typeof coreStrategyRoles)[number];
 const ceoMeetingTypeSchema = z.enum(["ad_hoc", "sync", "escalation"]);
 /** Valid CEO conversation stages. */
-export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
+const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
 
 const ceoTaskDeltaSchema = z.object({
   action: z.enum(["create", "reprioritize", "reassign", "cancel"]),
@@ -124,7 +124,7 @@ export const strategyOutputSchema = z.object({
 });
 
 export type StrategyOutput = z.infer<typeof strategyOutputSchema>;
-export type CeoStage = z.infer<typeof ceoStageSchema>;
+type CeoStage = z.infer<typeof ceoStageSchema>;
 
 type StrategyRoleEntry = StrategyOutput["roles"][number];
 
@@ -147,7 +147,7 @@ const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRoleEntry, 
  * (and the other core roles) are present regardless of what the LLM produced.
  * Called after every strategy generation / classification path.
  */
-export function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
+function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
   const present = new Set(roles.map((r) => r.role));
   const result = [...roles];
   for (const core of coreStrategyRoles) {
@@ -221,7 +221,7 @@ const sprintProposalBlockSchema = z.object({
 });
 
 /** Schema for structured CEO boardroom cards sent to the UI. */
-export const ceoCardSchema = z.object({
+const ceoCardSchema = z.object({
   card_type: z.enum(["welcome_brief", "mission_brief", "clarifying_question", "strategy_proposal", "status_update", "sprint_proposal"]),
   stage: ceoStageSchema,
   title: z.string(),
@@ -297,7 +297,7 @@ function summarizeMeetings(snapshot: CompanySnapshot) {
 }
 
 /** Infer the current CEO conversation stage from company snapshot state. */
-export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
+function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
   if (!snapshot.company.id) {
     return "welcome";
   }

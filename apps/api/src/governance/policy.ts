@@ -17,9 +17,9 @@ import { toDbId as companyToDbId } from "@arceus/db/src/repos/companies.js";
 import postgres from "postgres";
 
 export type DenyReason = "not_in_allowlist" | "role_gate" | "governance_block";
-export type DenySeverity = "low" | "medium" | "high" | "critical";
+type DenySeverity = "low" | "medium" | "high" | "critical";
 
-export interface RecordPolicyDenyInput {
+interface RecordPolicyDenyInput {
   companyId: string;
   role: string;
   tool: string;

@@ -28,7 +28,7 @@ import { hippocampus } from "../memory/extractors.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Create a new OpenCode session for an agent and register it in the session map. */
-export async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
+async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
   const soul = getRoleSoul(agent.role);
   if (!soul) throw new Error(`No SOUL policy for role: ${agent.role}`);
 
@@ -142,13 +142,6 @@ function startPromptCompletionPoller() {
   }, PROMPT_COMPLETION_POLL_INTERVAL_MS);
 }
 
-/** Stop the background poller that checks for stalled prompt completions. */
-export function stopPromptCompletionPoller() {
-  if (promptCompletionPollerHandle) {
-    clearInterval(promptCompletionPollerHandle);
-    promptCompletionPollerHandle = null;
-  }
-}
 
 async function pollPendingPromptCompletions() {
   if (pendingPromptCompletions.size === 0) return;

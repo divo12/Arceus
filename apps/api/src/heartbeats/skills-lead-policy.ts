@@ -15,14 +15,14 @@
  * via the partial in `loadSkillsLeadPolicy`.
  */
 
-export interface SkillsLeadPolicy {
+interface SkillsLeadPolicy {
   underperformerSuccessRate: number;
   unusedSkillStaleDays: number;
   patternClusterMinSize: number;
   maxBatchPerBeat: number;
 }
 
-export const DEFAULT_SKILLS_LEAD_POLICY: Readonly<SkillsLeadPolicy> = {
+const DEFAULT_SKILLS_LEAD_POLICY: Readonly<SkillsLeadPolicy> = {
   underperformerSuccessRate: 0.6,
   unusedSkillStaleDays: 30,
   patternClusterMinSize: 3,

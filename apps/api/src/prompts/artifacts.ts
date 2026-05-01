@@ -25,8 +25,3 @@ export async function resolveIncomingArtifacts(companyId: string, task: Task): P
   return lines;
 }
 
-/** Get the best available preview URL for verification evidence. */
-export function getPreviewEvidenceUrl() {
-  const preview = getLocalPreviewState();
-  return preview.validationUrl ?? preview.entryUrl ?? preview.url;
-}

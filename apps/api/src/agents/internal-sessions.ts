@@ -65,17 +65,3 @@ export async function ensureInternalAgentSession(
   return state;
 }
 
-/**
- * Destroy all internal agent sessions. Called during beat cleanup.
- */
-export async function destroyInternalAgentSessions(): Promise<void> {
-  const { destroyBeatSession } = await import("../infra/opencode.js");
-
-  for (const [role, session] of agentSessions) {
-    if (role.startsWith("_internal/")) {
-      swallowAndAudit("internal_session.destroy", () => destroyBeatSession(session.sessionId),
-        { agentRole: role, detail: { sessionId: session.sessionId } });
-      agentSessions.delete(role);
-    }
-  }
-}

@@ -15,10 +15,3 @@ export const recordBeatActivity = (beatId: string): number => {
   return ts;
 };
 
-/** Read `lastActivityAt` for a beat, or null if none recorded. */
-export const getBeatActivity = (beatId: string): number | null =>
-  lastActivity.get(beatId) ?? null;
-
-export const resetWatchdogForTests = (): void => {
-  lastActivity.clear();
-};

@@ -18,7 +18,7 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { inArray, eq } from "drizzle-orm";
 
-export interface ResetCompanyResult {
+interface ResetCompanyResult {
   agentIdsRemoved: string[];
   policyViolationsCleared: number;
   trustScoresCleared: number;
@@ -66,8 +66,3 @@ export async function resetCompanyTx(companyId: string): Promise<ResetCompanyRes
   return { agentIdsRemoved: agentIds, policyViolationsCleared, trustScoresCleared };
 }
 
-/** Re-export of the company existence check for the reset route. */
-export async function companyExists(companyId: string): Promise<boolean> {
-  const company = await companiesRepo.findCompanyById(getDb(), companyId);
-  return company !== null;
-}

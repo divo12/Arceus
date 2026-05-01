@@ -87,7 +87,7 @@ export interface BootstrapInput {
   budgetCents: number;
 }
 
-export interface BootstrapResult {
+interface BootstrapResult {
   company: Company;
   idea: FundamentalIdea;
   strategy: StrategyBrief;
@@ -153,13 +153,4 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
   seedExistingSkills(companyId);
 
   return { company, idea, strategy };
-}
-
-/** Build the bootstrap event for the activity log. Pure, no side effects. */
-export function buildBootstrapEvent(input: BootstrapInput, companyId: string) {
-  return createBootstrapEvent("Board bootstrapped a new company.", {
-    companyId,
-    companyName: input.companyName,
-    budgetCents: input.budgetCents,
-  });
 }
