@@ -27,7 +27,7 @@ const bootstrapSchema = z.object({
   budgetCents: z.number().int().nonnegative(),
 });
 
-export interface CompanyRouteDeps {
+interface CompanyRouteDeps {
   heartbeatEngine: HeartbeatEngine;
   meetingScheduler: MeetingScheduler;
 }

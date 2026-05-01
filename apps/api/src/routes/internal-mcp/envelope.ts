@@ -30,7 +30,7 @@ export const failure = <T = unknown>(
   ...(extras?.nextActions ? { nextActions: extras.nextActions } : {})
 });
 
-export const ERROR_CAUSES = [
+const ERROR_CAUSES = [
   "validation",
   "governance",
   "not_found",

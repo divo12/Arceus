@@ -15,7 +15,7 @@ import { sanitizeError } from "../observability/sanitize.js";
 import { heartbeatConfig } from "../config/heartbeat.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
-export interface OrchestratorRouteDeps {
+interface OrchestratorRouteDeps {
   heartbeatEngine: HeartbeatEngine;
   meetingScheduler: MeetingScheduler;
 }

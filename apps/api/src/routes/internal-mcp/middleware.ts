@@ -11,7 +11,7 @@ import { routeToTool } from "./route-to-tool.js";
 import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
 import { swallowAndAudit } from "../../observability/swallow.js";
 
-export interface McpRequestContext {
+interface McpRequestContext {
   companyId: string;
   beatId: string;
   role: string;
@@ -334,10 +334,9 @@ function causeFromStatus(status: number): string | undefined {
 
 /**
  * Emit `idempotency.replay` when mcpIdempotencyReplay short-circuits a request.
- * This is exported so route hooks can call it before the early-return; the
- * mcpIdempotencyReplay hook below is updated to use it.
+ * Called by the early-return path in mcpIdempotencyReplay below.
  */
-export function emitIdempotencyReplay(tool: string, key: string): void {
+function emitIdempotencyReplay(tool: string, key: string): void {
   observability.logEvent({
     event: "idempotency.replay",
     tool,
@@ -345,5 +344,3 @@ export function emitIdempotencyReplay(tool: string, key: string): void {
     ts: Date.now(),
   });
 }
-
-export { hashBody };

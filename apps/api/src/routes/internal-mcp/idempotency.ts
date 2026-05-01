@@ -44,7 +44,7 @@ interface StoredResponseShape {
  * here — TypeScript will then force every consumer (middleware, tests) to
  * handle it. No literal strings duplicated at call sites.
  */
-export interface IdempotencyFailureSpec {
+interface IdempotencyFailureSpec {
   cause: ErrorCause;
   summary: string;
   retry: RetrySafety;
@@ -73,9 +73,9 @@ export const IDEMPOTENCY_FAILURES = {
   },
 } as const satisfies Record<string, IdempotencyFailureSpec>;
 
-export type IdempotencyFailureKind = keyof typeof IDEMPOTENCY_FAILURES;
+type IdempotencyFailureKind = keyof typeof IDEMPOTENCY_FAILURES;
 
-export type IdempotencyLookup =
+type IdempotencyLookup =
   | { kind: "miss" }
   | { kind: "hit"; status: number; body: unknown; locationHeader: string | null }
   | { kind: "fail"; reason: IdempotencyFailureKind };

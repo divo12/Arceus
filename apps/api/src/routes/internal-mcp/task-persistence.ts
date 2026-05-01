@@ -158,4 +158,4 @@ export const CLAIM_FAILURES = {
   },
 } as const satisfies Record<string, ClaimFailureSpec>;
 
-export type ClaimFailureKind = keyof typeof CLAIM_FAILURES;
+type ClaimFailureKind = keyof typeof CLAIM_FAILURES;

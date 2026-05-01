@@ -51,7 +51,7 @@ const heartbeatConfigPatchSchema = z.object({
   | "pauseWhenBudgetExhausted"
 >>>;
 
-export interface HeartbeatRouteDeps {
+interface HeartbeatRouteDeps {
   heartbeatEngine: HeartbeatEngine;
   meetingScheduler: MeetingScheduler;
 }

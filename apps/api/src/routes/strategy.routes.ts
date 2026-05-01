@@ -17,7 +17,7 @@ import { bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
 
-export interface StrategyRouteDeps {
+interface StrategyRouteDeps {
   heartbeatEngine: HeartbeatEngine;
   meetingScheduler: MeetingScheduler;
 }
