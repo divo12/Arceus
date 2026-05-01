@@ -67,6 +67,9 @@ import { serverConfig, orchestratorConfig } from "./config/index.js";
 import { heartbeatConfig } from "./config/heartbeat.js";
 import { initSkillEvolution } from "./skills/evolution.js";
 import { startSkillScheduler, stopSkillScheduler } from "./skills/scheduler.js";
+import { hydrateSkillRegistryFromDb } from "./skills/db-writethrough.js";
+import { seedExistingSkills } from "@arceus/company-runtime";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { sweepStrandedRunsOnBoot, startStrandedRunSweeper, stopStrandedRunSweeper } from "./orchestration/stranded-run-sweeper.js";
 import { workspaceManager } from "./workspace/manager.js";
 import { warmUpOpencode } from "./infra/opencode.js";
@@ -130,6 +133,26 @@ await hydrate();
 // sync callers (route handlers, fire-and-forget reactive paths) can resolve
 // companyId immediately on first request after a restart.
 await loadActiveCompanyIdFromCanonical();
+
+// Skill registry hydration — for each existing company in DB, load
+// persisted skill rows (telemetry: successRate, usageCount, lastUsedAt) into
+// the in-memory registry, then run the filesystem seed in `preserve` mode so
+// new SKILL.md files added on disk get added without clobbering the DB-backed
+// telemetry. Without this, every restart resets EMA back to the 0.5 default
+// and the skill mutator + rollback monitor run blind for ~24h.
+try {
+  const companies = await companiesRepo.listCompanies(getDb());
+  for (const company of companies) {
+    const companyId = company.friendlyId ?? company.id;
+    await hydrateSkillRegistryFromDb(companyId);
+    seedExistingSkills(companyId, { mode: "preserve" });
+  }
+  if (companies.length > 0) {
+    console.log(`[STARTUP] Skill registry hydrated for ${companies.length} compan${companies.length === 1 ? "y" : "ies"}.`);
+  }
+} catch (err) {
+  console.warn(`[STARTUP] Skill registry hydration failed: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 // ── Heartbeat Engine (Spec 12 Phase 3) ─────────────────────
 

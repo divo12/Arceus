@@ -7,7 +7,7 @@ import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import {
   getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory,
-  seedExistingSkills, getMutationsForCompany, getAttributionsForCompany,
+  getMutationsForCompany, getAttributionsForCompany,
   processTaskOutcome, runATAPipeline, getMutationById,
   getPatternsForCompany, clusterPatterns, checkSkillCandidates,
   proposeSkillFromCluster, getPatternCount, extractPattern,
@@ -22,9 +22,6 @@ import { parseOptionalInt } from "./_helpers.js";
 export default async function skillsRoutes(app: FastifyInstance) {
   app.get("/api/skills", async () => {
     const companyId = getActiveCompanyId();
-    if (companyId && getAllSkills(companyId).length === 0) {
-      seedExistingSkills(companyId);
-    }
     const skills = companyId ? getAllSkills(companyId) : [];
     return {
       skills: skills.map((s) => ({
@@ -45,18 +42,12 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   app.get("/api/skills/health", async () => {
     const companyId = getActiveCompanyId() ?? "";
-    if (companyId && companyId !== "company_empty") {
-      seedExistingSkills(companyId);
-    }
     return getSkillHealth(companyId);
   });
 
   app.get("/api/skills/:name/history", async (request) => {
     const { name } = request.params as { name: string };
     const companyId = getActiveCompanyId() ?? "";
-    if (companyId && companyId !== "company_empty") {
-      seedExistingSkills(companyId);
-    }
     const history = registryGetSkillHistory(companyId, name);
     return { name, versions: history };
   });
@@ -115,9 +106,6 @@ export default async function skillsRoutes(app: FastifyInstance) {
     }
     const body = parsed.data;
     const companyId = getActiveCompanyId() ?? "";
-    if (companyId && companyId !== "company_empty") {
-      seedExistingSkills(companyId);
-    }
 
     const preMatchedSkills = registryMatchSkills(
       companyId,
@@ -279,9 +267,6 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   app.get("/api/skills/unused", async () => {
     const companyId = getActiveCompanyId() ?? "";
-    if (companyId && companyId !== "company_empty") {
-      seedExistingSkills(companyId);
-    }
     const staleDays = 30;
     return {
       staleDays,
@@ -291,9 +276,6 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   app.get("/api/skills/underperforming", async (request) => {
     const companyId = getActiveCompanyId() ?? "";
-    if (companyId && companyId !== "company_empty") {
-      seedExistingSkills(companyId);
-    }
     const query = request.query as { threshold?: string };
     const threshold = query.threshold ? Number.parseFloat(query.threshold) : 0.6;
     return {

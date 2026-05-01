@@ -51,8 +51,14 @@ import { and, desc, eq } from "drizzle-orm";
 
 const FLAG_ENV = "ARCEUS_SKILLS_DB_WRITETHROUGH";
 
+/**
+ * DB write-through is on by default whenever the database is configured.
+ * Set `ARCEUS_SKILLS_DB_WRITETHROUGH=0` to disable (e.g. tests / cold-start
+ * forensics that want pure-filesystem skill behavior).
+ */
 export function isSkillsDbWritethroughEnabled(): boolean {
-  return process.env[FLAG_ENV] === "1" && isDatabaseConfigured();
+  if (!isDatabaseConfigured()) return false;
+  return process.env[FLAG_ENV] !== "0";
 }
 
 // ── Mapping ───────────────────────────────────────────────

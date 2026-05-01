@@ -26,6 +26,7 @@ import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as ideasRepo from "@arceus/db/src/repos/ideas.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
 import { setActiveCompanyId } from "../persistence/active-company.js";
+import { seedExistingSkills } from "@arceus/company-runtime";
 
 function titleCase(value: string) {
   return value
@@ -144,6 +145,12 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
   // The transaction committed — wire the active-company seam so sync
   // callers can resolve companyId without a DB roundtrip.
   setActiveCompanyId(companyId);
+
+  // Seed the in-memory skill registry from the filesystem corpus. The
+  // write-through callbacks (wired in evolution.ts) mirror each seeded skill
+  // into Postgres, giving us a starting baseline EMA + usage count for the
+  // company's first beat. Sync; no DB roundtrip beyond the per-skill upsert.
+  seedExistingSkills(companyId);
 
   return { company, idea, strategy };
 }
