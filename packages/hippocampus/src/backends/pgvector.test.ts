@@ -15,7 +15,7 @@ import {
   PgVectorProceduralStore,
   PgVectorPrimingStore,
   setMemoryEmbedding,
-} from "./pgvector.js";
+} from "./pgvector/index.js";
 import type { MemoryUnit, Habit, PrimingState } from "@arceus/contracts";
 
 // Use deterministic UUIDs so tests are idempotent and cleanable

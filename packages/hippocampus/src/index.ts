@@ -5,7 +5,7 @@ export * from "./tiers/dynamic";
 export * from "./tiers/procedural";
 export * from "./tiers/priming";
 export * from "./backends/embedding";
-export * from "./backends/pgvector";
+export * from "./backends/pgvector/index.js";
 export * from "./engines/retrieval";
 export * from "./engines/extractor";
 export * from "./engines/action-decider";
