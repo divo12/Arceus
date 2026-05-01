@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { productDir } from "../orchestration/state.js";
 
-export interface EntryPointCheckResult {
+interface EntryPointCheckResult {
   pass: boolean;
   entryFile: string | null;
   reason: string;

@@ -4,15 +4,15 @@
  * call recordX(); readers call getHealth().
  */
 
-export type CategoryStatus = "ok" | "fail" | "unknown";
+type CategoryStatus = "ok" | "fail" | "unknown";
 
-export interface CategoryHealth {
+interface CategoryHealth {
   status: CategoryStatus;
   errorsFirstN: string[];
   since: string | null;
 }
 
-export interface BuildHealth {
+interface BuildHealth {
   typecheck: CategoryHealth;
   build: CategoryHealth;
   test: CategoryHealth;
@@ -39,8 +39,6 @@ const record = (category: keyof BuildHealth, ok: boolean, errors: string[]): voi
 };
 
 export const recordTypecheck = (ok: boolean, errors: string[] = []): void => { record("typecheck", ok, errors); };
-export const recordBuild = (ok: boolean, errors: string[] = []): void => { record("build", ok, errors); };
-export const recordTest = (ok: boolean, errors: string[] = []): void => { record("test", ok, errors); };
 export const recordPreview = (ok: boolean, errors: string[] = []): void => { record("preview", ok, errors); };
 
 export const getHealth = (): BuildHealth => ({
@@ -50,9 +48,3 @@ export const getHealth = (): BuildHealth => ({
   preview: { ...cache.preview },
 });
 
-export const resetHealthForTests = (): void => {
-  cache.typecheck = empty();
-  cache.build = empty();
-  cache.test = empty();
-  cache.preview = empty();
-};

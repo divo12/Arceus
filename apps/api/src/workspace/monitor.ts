@@ -27,7 +27,7 @@ import { scheduleDeveloperWatchdog, failDeveloperStall } from "./watchdog.js";
 import { appendTaskResult, setTaskPreviewUrl } from "../tasks/mutations.js";
 
 /** Recursively collect file paths and modification times from the product directory. */
-export async function collectWorkspaceSnapshot(dir = productDir, base = productDir, result = new Map<string, number>()) {
+async function collectWorkspaceSnapshot(dir = productDir, base = productDir, result = new Map<string, number>()) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -67,7 +67,7 @@ export function stopDeveloperWorkspaceMonitor() {
 }
 
 /** Compare the current workspace to the last snapshot and emit events for changed files. */
-export async function pollDeveloperWorkspaceChanges() {
+async function pollDeveloperWorkspaceChanges() {
   if (!activeExecution || executionStatus !== "executing") {
     return;
   }
@@ -116,17 +116,8 @@ export async function pollDeveloperWorkspaceChanges() {
   }
 }
 
-/** Take an initial snapshot and start polling for workspace file changes. */
-export async function startDeveloperWorkspaceMonitor() {
-  stopDeveloperWorkspaceMonitor();
-  setDeveloperWorkspaceSnapshot(await collectWorkspaceSnapshot());
-  setDeveloperWorkspaceMonitor(setInterval(() => {
-    void pollDeveloperWorkspaceChanges();
-  }, WORKSPACE_MONITOR_INTERVAL_MS));
-}
-
 /** If no preview is running and the workspace has a runnable project, start a live preview. */
-export async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
+async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   if (!activeExecution || executionStatus !== "executing") {
     return;
   }
@@ -170,26 +161,3 @@ export async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   });
 }
 
-/** Attempt to start a preview server if a runnable project exists in the workspace. */
-export async function tryAutoPreview() {
-  const previewState = getLocalPreviewState();
-  if (previewState.status === "starting" || previewState.status === "ready") {
-    emitEmployeeActivity("system", "preview", `Auto-preview skipped — already ${previewState.status}`);
-    return;
-  }
-
-  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(productDir);
-  if (!hasCandidate) {
-    emitEmployeeActivity("system", "preview", "Auto-preview skipped — no runnable project found in workspace/");
-    return;
-  }
-
-  emitEmployeeActivity("system", "preview", "Auto-starting preview after developer beat…");
-  const preview = await startLocalPreview(productDir);
-  const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
-  if (preview.status === "ready" && previewUrl) {
-    emitEmployeeActivity("system", "preview", `Preview auto-started → ${previewUrl}`, { detail: { url: previewUrl, status: preview.status } });
-  } else {
-    emitEmployeeActivity("system", "error", `Auto-preview failed: ${preview.lastError ?? "did not become reachable"}`, { detail: { status: preview.status, lastError: preview.lastError } });
-  }
-}

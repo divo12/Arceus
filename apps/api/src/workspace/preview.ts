@@ -15,7 +15,7 @@ interface ReportedPreviewCandidate {
   reportedAt: string;
 }
 
-export interface LocalPreviewState {
+interface LocalPreviewState {
   status: PreviewStatus;
   url: string | null;
   entryUrl: string | null;
@@ -379,10 +379,6 @@ export function hasReportedPreviewCandidate() {
   return reportedPreviewCandidate !== null;
 }
 
-/** Discard the agent-reported preview URL candidate. */
-export function clearReportedPreviewCandidate() {
-  reportedPreviewCandidate = null;
-}
 
 /** Register an agent-reported preview URL, stopping any existing preview first. */
 export async function registerReportedPreviewUrl(url: string) {

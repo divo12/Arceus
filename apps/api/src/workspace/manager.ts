@@ -275,7 +275,7 @@ async function listWorkspaceFiles(dir: string, base: string): Promise<WorkspaceF
  * Manages the product workspace lifecycle — provisioning, git commit/sync,
  * sprint snapshots, bundle export, and archive/cleanup.
  */
-export class WorkspaceManager {
+class WorkspaceManager {
   /** Return the legacy workspace directory path. */
   getLegacyProductDir() {
     return legacyProductDir;
