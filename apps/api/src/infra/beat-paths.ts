@@ -11,13 +11,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { productWorkspace } from "./opencode.js";
 
-export const beatScratchDir = (beatId: string): string =>
+const beatScratchDir = (beatId: string): string =>
   path.join("/tmp", "arceus", "beats", beatId);
 
 export const beatSkillsDir = (beatId: string): string =>
   path.join(beatScratchDir(beatId), "skills");
 
-export const productWorkspaceSkillsSymlink = (): string =>
+const productWorkspaceSkillsSymlink = (): string =>
   path.join(productWorkspace, ".opencode", "skills");
 
 export async function swapSkillsSymlink(targetDir: string): Promise<void> {

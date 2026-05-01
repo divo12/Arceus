@@ -38,7 +38,7 @@ const DEFECT_ROUTE: Record<DefectArea, AgentIdentity["role"]> = {
 };
 
 /** Map a defect area to the role best suited to fix it. */
-export function routeDefect(area: DefectArea): AgentIdentity["role"] {
+function routeDefect(area: DefectArea): AgentIdentity["role"] {
   return DEFECT_ROUTE[area] ?? "developer";
 }
 
@@ -56,7 +56,7 @@ const DEFECT_FALLBACK: Partial<Record<AgentIdentity["role"], AgentIdentity["role
  * Falls back through DEFECT_FALLBACK until it finds a hired role.
  * Last-resort is "developer" — every company has one.
  */
-export function resolveDefectRole(
+function resolveDefectRole(
   area: DefectArea,
   hiredRoles: Set<AgentIdentity["role"]>,
 ): AgentIdentity["role"] {
@@ -91,7 +91,7 @@ export function createReviewState(maxReworkCycles = 3): SprintReviewState {
 
 // ── Tester QA report parsing ────────────────────────────────
 
-export interface QAFinding {
+interface QAFinding {
   taskId: string;
   defectArea: DefectArea;
   severity: Task["priority"];
@@ -102,7 +102,7 @@ export interface QAFinding {
   fixSuggestion: string;
 }
 
-export interface QAReport {
+interface QAReport {
   verdict: "pass" | "fail";
   tasks: {
     taskId: string;
@@ -170,61 +170,9 @@ const asBuildStatus = (v: unknown): "pass" | "fail" | "skipped" =>
 const asTestSuiteStatus = (v: unknown): "pass" | "fail" | "skipped" | "no_tests" =>
   v === "pass" || v === "fail" || v === "no_tests" ? v : "skipped";
 
-/** Try to extract a structured QA report from tester LLM output. */
-export function parseQAReport(raw: string): QAReport | null {
-  // Look for JSON block in the tester output
-  const jsonMatch = /\{[\s\S]*"verdict"[\s\S]*\}/.exec(raw);
-  if (!jsonMatch) return null;
-
-  try {
-    const parsed = JSON.parse(jsonMatch[0]) as RawQAReport;
-    // Minimal validation
-    if (!parsed.verdict || !Array.isArray(parsed.tasks)) return null;
-    const tasks = parsed.tasks as RawQATask[];
-    return {
-      verdict: asPassFail(parsed.verdict),
-      tasks: tasks.map((t) => {
-        const taskId = asString(t.taskId ?? t.task_id);
-        return {
-          taskId,
-          verdict: asPassFail(t.verdict),
-          findings: asArray(t.findings).map((rawFinding) => {
-            const f = rawFinding as RawQAFinding;
-            return {
-              taskId,
-              defectArea: asString(f.defect_area ?? f.defectArea, "logic_error") as QAFinding["defectArea"],
-              severity: asString(f.severity, "high") as QAFinding["severity"],
-              description: asString(f.description),
-              expected: asString(f.expected),
-              actual: asString(f.actual),
-              file: asString(f.file),
-              fixSuggestion: asString(f.fix_suggestion ?? f.fixSuggestion),
-            };
-          }),
-          dodChecklist: asArray(t.dod_checklist ?? t.dodChecklist).map((rawItem) => {
-            const c = rawItem as RawQADodItem;
-            return {
-              item: asString(c.item),
-              status: asPassFail(c.status),
-              evidence: asString(c.evidence),
-            };
-          }),
-        };
-      }),
-      testFilesWritten: asArray(parsed.test_files_written ?? parsed.testFilesWritten).filter(
-        (x): x is string => typeof x === "string",
-      ),
-      buildStatus: asBuildStatus(parsed.build_status ?? parsed.buildStatus),
-      testSuiteStatus: asTestSuiteStatus(parsed.test_suite_status ?? parsed.testSuiteStatus),
-    };
-  } catch {
-    return null;
-  }
-}
-
 // ── Bug-fix task builder ────────────────────────────────────
 
-export interface BugFixTaskInput {
+interface BugFixTaskInput {
   finding: QAFinding;
   sprintId: string;
   parentTaskId: string;
@@ -322,25 +270,13 @@ export function buildGateFailureBugFields(
 /**
  * Check if all bug_fix tasks in the sprint are terminal (completed/cancelled/failed).
  */
-export function allBugFixesResolved(tasks: Task[], bugTaskIds: string[]): boolean {
+function allBugFixesResolved(tasks: Task[], bugTaskIds: string[]): boolean {
   if (bugTaskIds.length === 0) return true;
   return bugTaskIds.every((id) => {
     const task = tasks.find((t) => t.id === id);
     if (!task) return true; // missing task counts as resolved
     return ["completed", "cancelled", "failed"].includes(task.status);
   });
-}
-
-/**
- * Determine if the review should advance from rework → tester_verification.
- * True when all bug_fix tasks are resolved.
- */
-export function shouldRetestAfterRework(
-  reviewState: SprintReviewState,
-  tasks: Task[],
-): boolean {
-  if (reviewState.phase !== "rework") return false;
-  return allBugFixesResolved(tasks, reviewState.bugTaskIds);
 }
 
 /**

@@ -226,7 +226,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
 /**
  * Sprint execution entry — ensures workspace is ready and sets status.
  */
-export async function beginSprintExecution(
+async function beginSprintExecution(
   onStartEventBridge?: () => Promise<void>,
 ): Promise<void> {
   // Spec 31 Phase 7.B.4 — only reads `company.id` from the snapshot

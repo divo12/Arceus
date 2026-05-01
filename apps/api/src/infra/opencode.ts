@@ -462,7 +462,7 @@ export function resetCeoSession() {
  *
  * Phase 6.5 — Package E.
  */
-export async function writeSharedOpencodeConfig(): Promise<void> {
+async function writeSharedOpencodeConfig(): Promise<void> {
   // 1. Copy plugin into productWorkspace
   const pluginSrc = resolve(projectRoot, ".opencode", "plugin", "arceus.ts");
   const pluginDst = resolve(productWorkspace, ".opencode", "plugin", "arceus.ts");

@@ -36,7 +36,7 @@ import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
 import type { StrategyOutput } from "../agents/ceo.js";
 
-export interface ApplyStrategyResult {
+interface ApplyStrategyResult {
   company: Company;
   idea: FundamentalIdea;
   strategy: StrategyBrief;
@@ -220,27 +220,3 @@ export async function applyStrategyTx(
  * `strategy.proposed` event after applyStrategyTx commits. Pure helper
  * — no side effects.
  */
-export function buildStrategyProposedEvent(
-  companyId: string,
-  strategyId: string,
-  ceoAgentId: string,
-  output: StrategyOutput,
-) {
-  return {
-    eventId: crypto.randomUUID(),
-    companyId,
-    entityType: "strategy" as const,
-    entityId: strategyId,
-    eventType: "strategy.proposed" as const,
-    causationId: null,
-    correlationId: crypto.randomUUID(),
-    actorType: "agent" as const,
-    actorId: ceoAgentId,
-    occurredAt: new Date().toISOString(),
-    summary: "CEO proposed the first real strategy and org chart.",
-    payload: {
-      firstRelease: output.first_release,
-      roles: output.roles,
-    },
-  };
-}

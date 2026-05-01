@@ -9,7 +9,7 @@ import { swallowAndAudit } from "../observability/swallow.js";
 interface ChatMessage { role: "system" | "user" | "assistant"; content: string }
 
 /** Optional context for audit logging LLM calls. */
-export interface LlmAuditContext {
+interface LlmAuditContext {
   companyId: string;
   agentRole?: string;
   correlationId?: string;
@@ -130,7 +130,7 @@ function auditLlmCall(
 }
 
 /** Send a chat completion request to Azure OpenAI with resilience and audit logging. */
-export async function chatCompletion(
+async function chatCompletion(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
   auditCtx?: LlmAuditContext,
@@ -295,7 +295,7 @@ export async function structuredCompletion<T>(
 }
 
 /** Stream a chat completion response from Azure OpenAI, returning the raw byte stream. */
-export async function chatCompletionStream(
+async function chatCompletionStream(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
   auditCtx?: LlmAuditContext,

@@ -35,25 +35,3 @@ export function setTaskVerified(companyId: string, taskId: string, verifiedBy: s
   });
 }
 
-/** Extract the top-level directory from the most recent edited file result on a task. */
-export function getPreferredPreviewTargetPathFromTask(task: Task | null | undefined) {
-  if (!task) return null;
-
-  const editedResult = [...task.executorState.results]
-    .reverse()
-    .find((entry) => entry.startsWith("edited:"));
-
-  if (!editedResult) return null;
-
-  const relativePath = editedResult.slice("edited:".length).replace(/\\/g, "/");
-  if (!relativePath || relativePath.startsWith(".")) return null;
-
-  return relativePath.split("/")[0] ?? null;
-}
-
-/** Return true if a specialist task can run autonomously (correct role, not a core kind, deps met). */
-export function isTaskReadyForAutonomousExecution(task: Task, snapshot: CompanySnapshot) {
-  if (!AUTONOMOUS_READY_TASK_ROLES.has(task.assignedRole)) return false;
-  if (CORE_EXECUTION_TASK_KINDS.has(task.kind)) return false;
-  return isTaskReady(task, snapshot);
-}

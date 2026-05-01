@@ -106,39 +106,13 @@ export async function writeArtifactToWorkspace(
   }
 }
 
-/** Commit and push the product workspace via git; logs warnings on failure. */
-export async function syncWorkspaceCheckpoint(taskId: string, agentRole: string, message: string) {
-  // Spec 31 Phase 7.C.c — companyId via the seam helper.
-  const companyId = getActiveCompanyId();
-  if (!companyId) {
-    return;
-  }
-
-  try {
-    const result = await workspaceManager.commitAndSync(companyId, taskId, agentRole, message);
-    if (result.warnings.length > 0) {
-      emitEmployeeActivity("system", "info", `Workspace sync completed with warnings: ${result.warnings.join(" | ")}`, {
-        taskId,
-      });
-      return;
-    }
-
-    emitEmployeeActivity("system", "info", `Workspace sync complete at commit ${result.commitSha}.`, {
-      taskId,
-    });
-  } catch (error) {
-    emitEmployeeActivity("system", "error", error instanceof Error ? error.message : "Workspace sync failed.", {
-      taskId,
-    });
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Task field mutations
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Build a text summary of a task's state, results, and artifacts for memory storage. */
-export async function buildTaskMemoryOutput(task: Task, feedback?: string | null): Promise<string> {
+async function buildTaskMemoryOutput(task: Task, feedback?: string | null): Promise<string> {
   const sections: string[] = [
     `Task: ${task.title}`,
     `Role: ${task.assignedRole}`,
