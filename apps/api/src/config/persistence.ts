@@ -47,13 +47,3 @@ export const persistenceConfig = {
 export function isSupabaseConfigured() {
   return persistenceConfig.supabase.configured;
 }
-
-/** Check whether both Supabase and database are configured. */
-export function isPersistenceConfigured() {
-  return persistenceConfig.supabase.configured && persistenceConfig.database.configured;
-}
-
-/** Return the resolved database URL, or null if unconfigured. */
-export function getConfiguredDatabaseUrl() {
-  return persistenceConfig.database.url || null;
-}

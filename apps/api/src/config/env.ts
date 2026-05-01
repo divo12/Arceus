@@ -39,15 +39,6 @@ export function readAliasedOptionalEnv(name: string, aliases: string[], fallback
   return fallback;
 }
 
-/** Read a required env var, checking aliases. Throws if none are set. */
-export function readAliasedRequiredEnv(name: string, aliases: string[]) {
-  const value = readAliasedOptionalEnv(name, aliases);
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}${aliases.length > 0 ? ` (aliases: ${aliases.join(", ")})` : ""}`);
-  }
-  return value;
-}
-
 /** Read a numeric environment variable with a fallback default. */
 export function readNumberEnv(name: string, fallback: number) {
   const raw = process.env[name]?.trim();
