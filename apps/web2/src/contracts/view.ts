@@ -18,7 +18,7 @@ export type NarrativeText = z.infer<typeof narrativeTextSchema>;
 
 export const tabIdSchema = z.enum([
   "today", "sprint", "team", "memory", "skills",
-  "meetings", "inbox", "preview", "logs", "settings",
+  "meetings", "inbox", "preview", "logs", "inspector", "settings",
 ]);
 export type TabId = z.infer<typeof tabIdSchema>;
 

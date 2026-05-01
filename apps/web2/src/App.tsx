@@ -21,6 +21,7 @@ import { MeetingsPage } from "./views/Meetings.js";
 import { InboxPage } from "./views/Inbox.js";
 import { PreviewPage } from "./views/Preview.js";
 import { LogsPage } from "./views/Logs.js";
+import { InspectorPage } from "./views/Inspector.js";
 import { SettingsPage } from "./views/Settings.js";
 import { AskBar } from "./components/AskBar.js";
 
@@ -28,8 +29,6 @@ export function App() {
   const [active, setActive] = useState<TabId>("today");
   const heartbeat = useHeartbeat();
 
-  // Aggregate fetch — every endpoint we have today, in parallel.
-  // Failures fall back to empty arrays so the UI still renders.
   const bundle = useView(async () => {
     const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
       try { return await p; } catch { return fallback; }
@@ -66,6 +65,7 @@ export function App() {
 
     return {
       shell,
+      raw: { agents, tasks, audit: auditEvents, sprints, skills, meetings, memories },
       today:    deriveToday({ company, agents, memories, sprints, heartbeat, audit: auditEvents }),
       sprint:   deriveSprint({ sprints, tasks }),
       team:     deriveTeam({ agents }),
@@ -79,16 +79,13 @@ export function App() {
     };
   }, [heartbeat.beatCount, heartbeat.running]);
 
-  // Refetch on every audit event — cheap because everything is GET-with-cache.
   useAuditStream(useCallback(() => { bundle.refresh(); }, [bundle]));
 
   const onPromote = useCallback(async (skillId: string) => {
-    // Endpoint doesn't exist yet (integration-plan §2.5). Surface intent.
     try {
       await api.post(`/api/skills/${skillId}/promote`);
       bundle.refresh();
     } catch (e) {
-      // Expected until the route lands.
       console.warn("[promote]", e);
     }
   }, [bundle]);
@@ -120,7 +117,7 @@ export function App() {
         <div className="rail" />
         <main className="main">
           <div className="col">
-            <div className="date">Loading</div>
+            <div className="date">loading</div>
             <h1 className="sentence">The company is waking up.</h1>
             {bundle.error && <ErrorBanner message={bundle.error} />}
           </div>
@@ -142,7 +139,7 @@ export function App() {
           }}
           title="Reset company"
         >
-          Reset
+          reset
         </button>
       )}
       <main className="main">
@@ -151,16 +148,17 @@ export function App() {
             <ErrorBanner message={bundle.error} />
           </div>
         )}
-        {active === "today"    && <TodayPage    v={data.today} onRefresh={() => { bundle.refresh(); }} />}
-        {active === "sprint"   && <SprintPage   v={data.sprint} />}
-        {active === "team"     && <TeamPage     v={data.team} />}
-        {active === "memory"   && <MemoryPage   v={data.memory} />}
-        {active === "skills"   && <SkillsPage   v={data.skills} onPromote={onPromote} />}
-        {active === "meetings" && <MeetingsPage v={data.meetings} />}
-        {active === "inbox"    && <InboxPage    v={data.inbox} />}
-        {active === "preview"  && <PreviewPage  v={data.preview} />}
-        {active === "logs"     && <LogsPage     v={data.logs} />}
-        {active === "settings" && <SettingsPage v={data.settings} heartbeatRunning={heartbeat.running} onToggleHeartbeat={onToggleHeartbeat} onReset={onReset} />}
+        {active === "today"     && <TodayPage     v={data.today} pulse={data.shell.pulse} onRefresh={() => { bundle.refresh(); }} />}
+        {active === "sprint"    && <SprintPage    v={data.sprint} tasks={data.raw.tasks} agents={data.raw.agents} />}
+        {active === "team"      && <TeamPage      v={data.team} agents={data.raw.agents} audit={data.raw.audit} />}
+        {active === "memory"    && <MemoryPage    v={data.memory} />}
+        {active === "skills"    && <SkillsPage    v={data.skills} onPromote={onPromote} />}
+        {active === "meetings"  && <MeetingsPage  v={data.meetings} />}
+        {active === "inbox"     && <InboxPage     v={data.inbox} />}
+        {active === "preview"   && <PreviewPage   v={data.preview} />}
+        {active === "logs"      && <LogsPage      v={data.logs} audit={data.raw.audit} />}
+        {active === "inspector" && <InspectorPage pulse={data.shell.pulse} agents={data.raw.agents} audit={data.raw.audit} heartbeatRunning={heartbeat.running} onToggleHeartbeat={onToggleHeartbeat} />}
+        {active === "settings"  && <SettingsPage  v={data.settings} heartbeatRunning={heartbeat.running} onToggleHeartbeat={onToggleHeartbeat} onReset={onReset} />}
       </main>
       {data.today.mode === "chat" && data.today.companyName && (
         <AskBar companyName={data.today.companyName} onAfter={() => { bundle.refresh(); }} />

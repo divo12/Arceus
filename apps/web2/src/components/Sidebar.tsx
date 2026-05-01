@@ -3,9 +3,9 @@ import type { Shell } from "../contracts/views.js";
 import type { TabId } from "../contracts/view.js";
 
 const GROUP_LABELS = {
-  company: "The company",
-  knowledge: "Knowledge",
-  "for-you": "For you",
+  company: "company",
+  knowledge: "knowledge",
+  "for-you": "for you",
 } as const;
 
 export function Sidebar({
@@ -23,6 +23,7 @@ export function Sidebar({
     { key: "for-you",   tabs: shell.tabs.filter(t => t.group === "for-you" && t.id !== "settings") },
   ];
   const settings = shell.tabs.find(t => t.id === "settings");
+  const p = shell.pulse;
 
   return (
     <nav className="rail">
@@ -34,7 +35,7 @@ export function Sidebar({
       ) : (
         <div className="brand brand-empty">
           <div className="logo logo-empty" />
-          <div className="name name-empty">No company</div>
+          <div className="name name-empty">no company</div>
         </div>
       )}
 
@@ -63,12 +64,27 @@ export function Sidebar({
           <span>{settings.label}</span>
         </button>
       )}
+
       <div className="footer">
-        <div className="who">
-          <div className="avatar">{shell.ceo.initials}</div>
-          <span>CEO</span>
+        <div className="row">
+          <span className="k">
+            <span className={`pulse-dot${p.heartbeatRunning ? " live" : ""}`} />
+            heartbeat
+          </span>
+          <span className="v">{p.heartbeatRunning ? `#${p.beatCount}` : "off"}</span>
         </div>
-        <span>{shell.version}</span>
+        <div className="row">
+          <span className="k">agents</span>
+          <span className="v">{p.agentLive}/{p.agentTotal}{p.awaitingCount ? ` ·${p.awaitingCount}w` : ""}</span>
+        </div>
+        <div className="row">
+          <span className="k">events</span>
+          <span className="v">{p.auditTotal.toLocaleString()}</span>
+        </div>
+        <div className="row" style={{ marginTop: 4, opacity: 0.7 }}>
+          <span className="k">{shell.ceo.initials} · ceo</span>
+          <span className="v">{shell.version}</span>
+        </div>
       </div>
     </nav>
   );

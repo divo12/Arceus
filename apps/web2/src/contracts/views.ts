@@ -3,6 +3,18 @@ import { z } from "zod";
 import { narrativeTextSchema, tabIdSchema } from "./view.js";
 
 // ── Shell ───────────────────────────────────────────────
+export const pulseSchema = z.object({
+  heartbeatRunning: z.boolean(),
+  beatCount: z.number(),
+  lastBeatAt: z.string().nullable(),
+  lastBeatAgo: z.string(),
+  agentTotal: z.number(),
+  agentLive: z.number(),
+  awaitingCount: z.number(),
+  auditTotal: z.number(),
+});
+export type Pulse = z.infer<typeof pulseSchema>;
+
 export const shellSchema = z.object({
   brand: z.object({ initial: z.string(), name: z.string() }).nullable(),
   tabs: z.array(
@@ -16,6 +28,7 @@ export const shellSchema = z.object({
   ),
   ceo: z.object({ initials: z.string(), name: z.string() }),
   version: z.string(),
+  pulse: pulseSchema,
 });
 export type Shell = z.infer<typeof shellSchema>;
 

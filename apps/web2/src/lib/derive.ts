@@ -92,25 +92,39 @@ export function deriveShell(input: {
   const realCompany = Boolean(company.company?.id) && company.company?.status !== "ideation";
   const compName = realCompany ? (company.company?.name ?? null) : null;
 
+  const agentLive = agents.filter(isAgentWorking).length;
+  const awaitingCount = agents.filter(a => !!a.session?.awaiting).length;
+
   return {
     brand: compName ? { initial: compName[0]!.toUpperCase(), name: compName } : null,
     tabs: [
-      { id: "today",    label: "Today",    group: "company",   count: null,                                              live: heartbeat.running },
-      { id: "sprint",   label: "Sprint",   group: "company",   count: totalSprints ? `${activeSprints}/${totalSprints}` : null, live: false },
-      { id: "team",     label: "Team",     group: "company",   count: agents.length ? String(agents.length) : null,      live: false },
-      { id: "memory",   label: "Memory",   group: "knowledge", count: lessons ? String(lessons) : null,                  live: false },
-      { id: "skills",   label: "Skills",   group: "knowledge", count: skills.length ? `${skillsLib} · ${skillsForming}` : null, live: false },
-      { id: "meetings", label: "Meetings", group: "knowledge", count: todayMeetings ? String(todayMeetings) : null,      live: false },
-      { id: "inbox",    label: "Inbox",    group: "for-you",   count: null,                                              live: false },
-      { id: "preview",  label: "Preview",  group: "for-you",   count: null,                                              live: false },
-      { id: "logs",     label: "Logs",     group: "for-you",   count: audit.total ? audit.total.toLocaleString() : null, live: false },
-      { id: "settings", label: "Settings", group: "for-you",   count: null,                                              live: false },
+      { id: "today",     label: "today",     group: "company",   count: null,                                              live: heartbeat.running },
+      { id: "sprint",    label: "sprint",    group: "company",   count: totalSprints ? `${activeSprints}/${totalSprints}` : null, live: false },
+      { id: "team",      label: "team",      group: "company",   count: agents.length ? String(agents.length) : null,      live: agentLive > 0 },
+      { id: "memory",    label: "memory",    group: "knowledge", count: lessons ? String(lessons) : null,                  live: false },
+      { id: "skills",    label: "skills",    group: "knowledge", count: skills.length ? `${skillsLib}·${skillsForming}` : null, live: false },
+      { id: "meetings",  label: "meetings",  group: "knowledge", count: todayMeetings ? String(todayMeetings) : null,      live: false },
+      { id: "inbox",     label: "inbox",     group: "for-you",   count: null,                                              live: false },
+      { id: "preview",   label: "preview",   group: "for-you",   count: null,                                              live: false },
+      { id: "logs",      label: "logs",      group: "for-you",   count: audit.total ? audit.total.toLocaleString() : null, live: false },
+      { id: "inspector", label: "inspector", group: "for-you",   count: null,                                              live: heartbeat.running },
+      { id: "settings",  label: "settings",  group: "for-you",   count: null,                                              live: false },
     ],
     ceo: {
       initials: ceo ? agentInitials(ceo.name) : "—",
       name: ceo?.name ?? "—",
     },
     version: "v0.7",
+    pulse: {
+      heartbeatRunning: heartbeat.running,
+      beatCount: heartbeat.beatCount,
+      lastBeatAt: heartbeat.lastBeatAt ?? null,
+      lastBeatAgo: timeAgo(heartbeat.lastBeatAt),
+      agentTotal: agents.length,
+      agentLive,
+      awaitingCount,
+      auditTotal: audit.total,
+    },
   };
 }
 

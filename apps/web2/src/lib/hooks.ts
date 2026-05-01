@@ -55,18 +55,23 @@ export function useAuditStream(onTick: () => void) {
 
 /** Poll heartbeat status; lighter than wiring SSE for now. */
 export function useHeartbeat(intervalMs = 4000) {
-  const [hb, setHb] = useState<{ running: boolean; beatCount: number }>({
+  const [hb, setHb] = useState<{ running: boolean; beatCount: number; lastBeatAt: string | null }>({
     running: false,
     beatCount: 0,
+    lastBeatAt: null,
   });
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
-        const v = await api.get<{ running: boolean; beatCount: number }>(
+        const v = await api.get<{ running: boolean; beatCount: number; lastBeatAt?: string | null }>(
           "/api/heartbeat/status",
         );
-        if (alive) setHb({ running: !!v.running, beatCount: v.beatCount ?? 0 });
+        if (alive) setHb({
+          running: !!v.running,
+          beatCount: v.beatCount ?? 0,
+          lastBeatAt: v.lastBeatAt ?? null,
+        });
       } catch { /* noop */ }
     };
     void tick();

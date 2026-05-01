@@ -1,12 +1,31 @@
 import React from "react";
-import type { TodayView } from "../contracts/views.js";
+import type { TodayView, Pulse } from "../contracts/views.js";
 import { Sentence, Subline, Kicker, Section, Foot, Item, MemoryQuote, Pip, Empty } from "../components/primitives.js";
 import { QuickExecute } from "../components/QuickExecute.js";
 
-export function TodayPage({ v, onRefresh }: { v: TodayView; onRefresh: () => void }) {
+function PulseStrip({ p }: { p: Pulse }) {
+  return (
+    <div className="pulse">
+      <span><span className="k">beat</span><span className={`v ${p.heartbeatRunning ? "green" : ""}`}>{p.heartbeatRunning ? `#${p.beatCount}` : "off"}</span></span>
+      <span className="sep">·</span>
+      <span><span className="k">last</span><span className="v">{p.lastBeatAgo}</span></span>
+      <span className="sep">·</span>
+      <span><span className="k">agents</span><span className="v">{p.agentLive}/{p.agentTotal}</span></span>
+      {p.awaitingCount > 0 && <>
+        <span className="sep">·</span>
+        <span><span className="k">awaiting</span><span className="v amber">{p.awaitingCount}</span></span>
+      </>}
+      <span className="sep">·</span>
+      <span><span className="k">events</span><span className="v">{p.auditTotal.toLocaleString()}</span></span>
+    </div>
+  );
+}
+
+export function TodayPage({ v, pulse, onRefresh }: { v: TodayView; pulse: Pulse; onRefresh: () => void }) {
   return (
     <div className="col">
       <Kicker text={v.kicker} />
+      <PulseStrip p={pulse} />
       <Sentence text={v.headline} />
       <Subline text={v.subline} live />
 
