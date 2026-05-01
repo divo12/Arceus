@@ -1,0 +1,44 @@
+{
+  "$schema": "./god-file-budget.schema.json",
+  "_comment": "Per-file LoC budgets. Files exceeding their budget trigger a max-lines eslint warning. Adjusted as god-file decompositions land per Spec 34 v3.",
+
+  "defaults": {
+    "maxLinesWarn": 500,
+    "maxLinesError": 1000
+  },
+
+  "exceptions": {
+    "apps/api/src/persistence/control-plane.ts": {
+      "maxLinesWarn": 1200,
+      "rationale": "Spec 34 v3 PR 11 will split into 5 files. Until then, warn-only above 1200."
+    },
+    "apps/api/src/persistence/mutations.ts": {
+      "maxLinesWarn": 700,
+      "rationale": "Spec 34 v3 PR 10 will split by entity into 7 sibling files."
+    },
+    "apps/api/src/server.ts": {
+      "maxLinesWarn": 600,
+      "rationale": "Spec 34 v3 PR 12 will split into bootstrap/* + a 30-LoC entry."
+    },
+    "apps/api/src/sprints/review.ts": {
+      "maxLinesWarn": 800,
+      "rationale": "Spec 34 v3 PR 13 — function-level extraction of the 424-line fn."
+    },
+    "packages/company-runtime/src/heartbeat.ts": {
+      "maxLinesWarn": 800,
+      "rationale": "Spec 34 v3 PR 13 — function-level extraction of the 214-line fn."
+    },
+    "apps/api/src/observability/graph-store.ts": {
+      "maxLinesWarn": 600,
+      "rationale": "Single-domain god file; not in Spec 34 v3 scope to split."
+    },
+    "packages/db/src/repos/tasks.ts": {
+      "maxLinesWarn": 700,
+      "rationale": "Spec 34 v3 PR 6 — internal split planned."
+    },
+    "packages/hippocampus/src/backends/pgvector.ts": {
+      "maxLinesWarn": 800,
+      "rationale": "Spec 34 v3 PR 7 — base class extraction."
+    }
+  }
+}

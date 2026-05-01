@@ -73,6 +73,13 @@ export default tseslint.config(
           allowRegExp: true,
         },
       ],
+      // Spec 34 v3 PR 4 — flag god files. Warn-only so existing
+      // overshoot files don't block merges; new files stay disciplined.
+      // Per-file overrides (the legitimately-bigger god files slated
+      // for decomposition) live in tools/god-file-budget.json — not
+      // duplicated here because eslint can't read JSON config natively.
+      // Track the budget alongside refactor PRs.
+      "max-lines": ["warn", { max: 500, skipBlankLines: true, skipComments: true }],
     },
   },
 );
