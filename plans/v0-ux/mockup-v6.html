@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Arceus</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:  #FAFAF7;
+    --rail:   #F4F2EC;
+    --card:   #FFFFFF;
+    --ink:    #111111;
+    --ink-2:  #5B5B58;
+    --ink-3:  #9A9A95;
+    --rule:   #ECEAE3;
+    --amber:  #B7873A;
+    --green:  #4F7A57;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Invisible scrollbars (Apple-quiet) ---------- */
+  html, body, .thread, .main, .rail {
+    scrollbar-width: none;          /* Firefox */
+    -ms-overflow-style: none;       /* IE/legacy Edge */
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  .thread::-webkit-scrollbar,
+  .main::-webkit-scrollbar,
+  .rail::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 76px 1fr;
+    height: 100vh;
+  }
+
+  /* ---------- Rail ---------- */
+  .rail {
+    background: var(--rail);
+    border-right: 1px solid var(--rule);
+    padding: 22px 0 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .rail .logo {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: var(--ink);
+    color: var(--paper);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 22px;
+  }
+  .rail nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    width: 100%;
+    align-items: center;
+  }
+  .rail .room {
+    width: 56px;
+    padding: 10px 0 8px;
+    border-radius: 12px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    color: var(--ink-3);
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .04em;
+    transition: color 160ms ease, background 160ms ease;
+  }
+  .rail .room svg { display: block; }
+  .rail .room:hover { color: var(--ink-2); }
+  .rail .room.active { color: var(--ink); background: #FFFFFF; box-shadow: 0 1px 0 var(--rule); }
+  .rail .room .badge {
+    position: absolute;
+    transform: translate(14px, -6px);
+    background: var(--amber);
+    color: #FFFFFF;
+    font-size: 9px;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 1px 5px;
+    line-height: 1.4;
+  }
+  .rail .room.has-badge { position: relative; }
+  .rail .gear {
+    color: var(--ink-3);
+    background: none; border: none;
+    cursor: pointer; padding: 8px;
+  }
+  .rail .gear:hover { color: var(--ink-2); }
+
+  /* ---------- Main ---------- */
+  .main {
+    height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 28px 80px;
+    /* soft fade at the top edge so cards dissolve under the crumb */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
+  }
+  .main .inner {
+    width: 100%;
+    max-width: 1080px;
+  }
+
+  /* ---------- Today: split layout ---------- */
+  .today-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 40px;
+    align-items: start;
+  }
+  @media (max-width: 1080px) {
+    .today-split { grid-template-columns: 1fr; }
+    .gutter { display: none; }
+  }
+  .cards-col { min-width: 0; }
+
+  /* Other rooms keep the centered narrow column */
+  .room-view:not([data-view="today"]) .inner-narrow {
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  /* ---------- Crumb ---------- */
+  .crumb {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 36px;
+  }
+  .crumb .where {
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+  }
+  .crumb .where .sep { color: var(--rule); margin: 0 8px; }
+  .crumb .where .here { color: var(--ink); }
+  .crumb .meta {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .02em;
+  }
+
+  /* ---------- Today ---------- */
+  .today h1 {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-weight: 400;
+    font-size: 36px;
+    line-height: 1.2;
+    letter-spacing: -0.012em;
+    color: var(--ink);
+    margin: 0 0 8px;
+  }
+  .today h1 .quiet { color: var(--ink-2); }
+  .today .sub {
+    font-size: 14px;
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .02em;
+    margin-bottom: 56px;
+  }
+  .today .sub .dot {
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--amber);
+    margin-right: 8px;
+    transform: translateY(-1px);
+  }
+
+  /* ---------- Cards ---------- */
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+  .card {
+    background: var(--card);
+    border-radius: 18px;
+    padding: 22px 24px;
+    transition: transform 220ms cubic-bezier(.22,.61,.36,1), box-shadow 220ms ease;
+  }
+  .card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 1px 0 var(--rule);
+  }
+  .card .kicker {
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card .title {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 21px;
+    line-height: 1.35;
+    color: var(--ink);
+    margin: 0 0 14px;
+    letter-spacing: -0.005em;
+  }
+  .card .body {
+    font-size: 14px;
+    color: var(--ink-2);
+    margin: 0 0 18px;
+    line-height: 1.6;
+  }
+  .card .actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+
+  .btn {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    border-radius: 999px;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: transform 140ms ease, background 140ms ease, color 140ms ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--ink); color: var(--paper); }
+  .btn.ghost { background: transparent; color: var(--ink-3); }
+  .btn.ghost:hover { color: var(--ink); }
+
+  .card.decision .kicker .badge { color: var(--amber); }
+
+  /* Right-now: hero card */
+  .card.now {
+    padding: 26px 28px 22px;
+  }
+  .card.now .kicker { margin-bottom: 18px; }
+  .card.now .kicker .live {
+    display: inline-flex; align-items: center; gap: 8px;
+    color: var(--ink-2);
+    text-transform: none;
+    letter-spacing: .02em;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+  }
+  .card.now .kicker .live::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    animation: breathe 2.6s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: .35; transform: scale(1); }
+    50%      { opacity: 1;   transform: scale(1.12); }
+  }
+  .card.now .title {
+    font-size: 26px;
+    line-height: 1.25;
+    margin-bottom: 4px;
+  }
+  .card.now .lede {
+    font-size: 13px;
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .02em;
+    margin: 0 0 18px;
+  }
+  .stream { list-style: none; margin: 0; padding: 0; }
+  .stream li {
+    display: grid;
+    grid-template-columns: 96px 1fr auto;
+    gap: 14px;
+    align-items: baseline;
+    padding: 12px 0;
+    font-size: 14.5px;
+  }
+  .stream li + li { border-top: 1px solid var(--rule); }
+  .stream .role {
+    font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 500;
+  }
+  .stream .what { color: var(--ink); }
+  .stream .verb {
+    font-size: 11px; color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  .stream .verb::before {
+    content: ""; display: inline-block;
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--ink-3);
+    margin-right: 7px; transform: translateY(-1px);
+  }
+  .stream .verb.writing::before  { background: var(--ink); }
+  .stream .verb.thinking::before { background: var(--amber); animation: blink 2.4s ease-in-out infinite; }
+  @keyframes blink { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+
+  /* Decision: secondary, restrained */
+  .card.decision {
+    background: transparent;
+    padding: 18px 0 22px;
+    border-bottom: 1px solid var(--rule);
+    border-radius: 0;
+  }
+  .card.decision:hover { transform: none; box-shadow: none; }
+  .card.decision + .card.decision { padding-top: 22px; }
+  .card.decision .title { font-size: 19px; margin-bottom: 8px; }
+  .card.decision .body  { font-size: 13.5px; margin-bottom: 14px; color: var(--ink-2); }
+  .decisions-group { margin-top: 8px; }
+  .decisions-group .group-label {
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--amber);
+    font-weight: 500;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  .decisions-group .group-label .meta {
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .04em;
+  }
+
+  .summary {
+    margin-top: 18px;
+    color: var(--ink-3);
+    font-size: 13px;
+    text-align: center;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .02em;
+  }
+
+  /* ---------- Memory-in-flight card ---------- */
+  .card.memory .title { margin-bottom: 14px; }
+  .card.memory blockquote {
+    margin: 0 0 14px;
+    padding: 0 0 0 16px;
+    border-left: 1px solid var(--rule);
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-style: italic;
+    font-size: 17px;
+    line-height: 1.5;
+    color: var(--ink);
+  }
+  .card.memory blockquote cite {
+    display: block;
+    margin-top: 6px;
+    font-style: normal;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .card.memory .foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12px;
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .02em;
+  }
+  .card.memory .foot a { color: var(--ink-2); text-decoration: none; }
+  .card.memory .foot a:hover { color: var(--ink); }
+
+  /* ---------- Earned-absence card (conditional) ---------- */
+  .card.absence .title {
+    font-size: 24px;
+    margin-bottom: 10px;
+  }
+  .card.absence .body { margin-bottom: 0; }
+
+  /* ---------- Conversation gutter ---------- */
+  .gutter {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    height: calc(100vh - 56px - 80px); /* viewport minus main padding */
+  }
+  .gutter .label {
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex: 0 0 auto;
+  }
+  .gutter .label .age {
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .04em;
+    text-transform: none;
+    font-weight: 400;
+  }
+  .gutter .thread {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding: 4px 4px 4px 0;
+    /* soft fade so messages dissolve at top/bottom of the thread */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  }
+  .gutter .turn .who {
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  .gutter .turn.ceo .body {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--ink);
+    letter-spacing: -0.003em;
+  }
+  .gutter .turn.ceo .body em { color: var(--ink-2); }
+  .gutter .turn.you {
+    align-self: flex-end;
+    max-width: 88%;
+  }
+  .gutter .turn.you .body {
+    background: var(--rail);
+    padding: 8px 12px;
+    border-radius: 12px 12px 4px 12px;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .gutter .turn.you .who { text-align: right; }
+
+  /* ---------- Inline composer (gutter) ---------- */
+  .gutter-composer {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 10px 12px 8px;
+    box-shadow: 0 1px 0 var(--rule);
+    transition: box-shadow 220ms ease;
+  }
+  .gutter-composer:focus-within { box-shadow: 0 1px 0 var(--ink-3), 0 8px 24px rgba(17,17,17,0.04); }
+  .gutter-composer textarea {
+    width: 100%;
+    border: none; outline: none; resize: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--ink);
+    line-height: 1.5;
+    padding: 4px 4px 8px;
+    min-height: 36px;
+    max-height: 160px;
+  }
+  .gutter-composer textarea::placeholder { color: var(--ink-3); }
+  .gutter-composer .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 4px;
+  }
+  .modes {
+    display: flex; gap: 14px;
+  }
+  .mode {
+    background: none; border: none;
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    cursor: pointer;
+    padding: 4px 0;
+    font-weight: 500;
+    border-bottom: 1px solid transparent;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  .mode:hover { color: var(--ink-2); }
+  .mode.active { color: var(--ink); border-color: var(--ink); }
+  .gutter-composer .send {
+    background: var(--ink); color: var(--paper);
+    border: none; border-radius: 999px;
+    width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+
+  /* ---------- Sprint room ---------- */
+  .sprint-head {
+    margin-bottom: 36px;
+  }
+  .sprint-head h1 {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-weight: 400;
+    font-size: 32px;
+    line-height: 1.2;
+    color: var(--ink);
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  .sprint-head .lede {
+    color: var(--ink-2);
+    font-size: 14px;
+    margin-bottom: 14px;
+  }
+  .progress {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12px; color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  .progress .bar {
+    flex: 1; height: 4px; background: var(--rule); border-radius: 999px; overflow: hidden;
+  }
+  .progress .bar i { display: block; height: 100%; width: 78%; background: var(--ink); border-radius: 999px; }
+
+  .group { margin-bottom: 28px; }
+  .group .who {
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 500;
+    margin-bottom: 10px;
+    display: flex; justify-content: space-between;
+  }
+  .group .who .count { color: var(--ink-3); font-family: ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: .04em; }
+  .group ul { list-style: none; margin: 0; padding: 0; background: var(--card); border-radius: 14px; }
+  .group li {
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    gap: 12px;
+    align-items: baseline;
+    padding: 12px 18px;
+    font-size: 14px;
+  }
+  .group li + li { border-top: 1px solid var(--rule); }
+  .group li .mark {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--ink-3);
+    font-size: 12px;
+  }
+  .group li.done .mark { color: var(--green); }
+  .group li.done .what { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--rule); }
+  .group li.now .mark  { color: var(--ink); }
+  .group li.now .what  { color: var(--ink); }
+  .group li .what { color: var(--ink-2); }
+  .group li .meta {
+    font-size: 11px; color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  /* ---------- Stub rooms ---------- */
+  .stub {
+    margin-top: 80px;
+    text-align: center;
+    color: var(--ink-3);
+  }
+  .stub h2 {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-weight: 400;
+    font-size: 24px;
+    color: var(--ink-2);
+    margin: 0 0 8px;
+    letter-spacing: -0.005em;
+  }
+  .stub p { margin: 0; font-size: 13px; }
+
+  /* ---------- Composer ---------- */
+  .composer {
+    position: fixed;
+    bottom: 24px;
+    left: calc(76px + (100vw - 76px) / 2);
+    transform: translateX(-50%);
+    width: min(560px, calc(100vw - 76px - 48px));
+    background: var(--card);
+    border-radius: 999px;
+    padding: 6px 6px 6px 22px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 1px 0 var(--rule), 0 8px 24px rgba(17,17,17,0.04);
+    transition: box-shadow 220ms ease, opacity 220ms ease, transform 220ms ease;
+  }
+  .composer:focus-within {
+    box-shadow: 0 1px 0 var(--ink-3), 0 12px 28px rgba(17,17,17,0.06);
+  }
+  .composer.hidden {
+    opacity: 0; pointer-events: none; transform: translate(-50%, 12px);
+  }
+  .composer input {
+    flex: 1; border: none; outline: none; background: transparent;
+    font-family: inherit; font-size: 14px; color: var(--ink); padding: 10px 0;
+  }
+  .composer input::placeholder { color: var(--ink-3); }
+  .composer .send {
+    background: var(--ink); color: var(--paper); border: none; border-radius: 999px;
+    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ---------- Rail ---------- -->
+  <aside class="rail">
+    <div class="logo">A</div>
+    <nav>
+      <button class="room active has-badge" data-room="today">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        Today
+        <span class="badge">2</span>
+      </button>
+      <button class="room" data-room="sprint">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h10M4 18h16"/></svg>
+        Sprint
+      </button>
+      <button class="room" data-room="memory">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 4v4h4"/></svg>
+        Memory
+      </button>
+      <button class="room" data-room="skills">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.5 5 5.5.8-4 3.9 1 5.5L12 15.8 7 18.2l1-5.5-4-3.9 5.5-.8z"/></svg>
+        Skills
+      </button>
+      <button class="room" data-room="approvals">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12l4 4 10-10"/></svg>
+        Approvals
+      </button>
+      <button class="room" data-room="artifacts">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></svg>
+        Artifacts
+      </button>
+    </nav>
+    <button class="gear" aria-label="Settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </aside>
+
+  <!-- ---------- Main ---------- -->
+  <main class="main">
+    <div class="inner">
+
+      <!-- TODAY -->
+      <section class="room-view" data-view="today">
+        <div class="crumb">
+          <div class="where"><span class="here">Today</span></div>
+          <div class="meta">Fri &middot; May 1</div>
+        </div>
+
+        <div class="today-split">
+
+          <!-- Cards column -->
+          <div class="cards-col">
+            <div class="today">
+              <h1>
+                Acme is shipping the onboarding rewrite.
+                <span class="quiet">Two things need you.</span>
+              </h1>
+              <div class="sub"><span class="dot"></span>14 in flight &middot; last beat 2m ago</div>
+            </div>
+
+            <div class="stack">
+
+              <article class="card now">
+                <div class="kicker"><span>Right now</span><span class="live">live &middot; beat 2,184</span></div>
+                <h2 class="title">The company is moving.</h2>
+                <p class="lede">Four agents working &middot; updated 12 seconds ago</p>
+                <ul class="stream">
+                  <li><span class="role">Engineering</span><span class="what">Reviewing the auth migration.</span><span class="verb">reading</span></li>
+                  <li><span class="role">Marketing</span><span class="what">Testing three pricing variants.</span><span class="verb writing">writing</span></li>
+                  <li><span class="role">Quality</span><span class="what">Probing mobile signup on a slow connection.</span><span class="verb thinking">thinking</span></li>
+                  <li><span class="role">Product</span><span class="what">Drafting next sprint&rsquo;s brief.</span><span class="verb writing">writing</span></li>
+                </ul>
+              </article>
+
+              <section class="decisions-group">
+                <div class="group-label"><span>Two decisions waiting</span><span class="meta">oldest 11m</span></div>
+
+                <article class="card decision">
+                  <div class="kicker"><span class="badge">Decision</span><span>Marketing &middot; 4m</span></div>
+                  <h2 class="title">Approve the new pricing copy.</h2>
+                  <p class="body">Plainer language. Cites three lessons in memory: returning users skim, &ldquo;seat&rdquo; tested poorly, the free tier was buried.</p>
+                  <div class="actions">
+                    <button class="btn ghost">Why now?</button>
+                    <button class="btn ghost">Hold</button>
+                    <button class="btn primary">Approve</button>
+                  </div>
+                </article>
+
+                <article class="card decision">
+                  <div class="kicker"><span class="badge">Decision</span><span>CTO &middot; 11m</span></div>
+                  <h2 class="title">Ship Friday, or hold a day for QA.</h2>
+                  <p class="body">All eleven acceptance tests pass. Tester wants one more pass on mobile. Either path is safe.</p>
+                  <div class="actions">
+                    <button class="btn ghost">Open diff</button>
+                    <button class="btn ghost">Hold</button>
+                    <button class="btn primary">Ship</button>
+                  </div>
+                </article>
+              </section>
+
+              <article class="card memory">
+                <div class="kicker"><span>Memory in flight</span><span>3 forming</span></div>
+                <h2 class="title">A new lesson is being written.</h2>
+                <blockquote>
+                  Returning users skim the first screen for two seconds. If pricing isn&rsquo;t plain by then, they leave.
+                  <cite>Drafted by Marketing &middot; from this week&rsquo;s funnel</cite>
+                </blockquote>
+                <div class="foot">
+                  <span>2 more forming &middot; auth migration, mobile signup</span>
+                  <a href="#">Open library &rarr;</a>
+                </div>
+              </article>
+
+              <!-- Earned absence: rendered conditionally; shown here as a preview when zero decisions -->
+              <article class="card absence" hidden>
+                <div class="kicker"><span>Earned absence</span><span>quiet</span></div>
+                <h2 class="title">You haven&rsquo;t been needed for 6 hours.</h2>
+                <p class="body">In that time the company shipped 4 things and resolved 2 risks on its own.</p>
+              </article>
+
+              <div class="summary">Today &middot; 11 shipped &middot; 3 decisions made &middot; 1 risk caught</div>
+            </div>
+          </div>
+
+          <!-- Conversation gutter -->
+          <aside class="gutter">
+            <div class="label"><span>Talk to the company</span><span class="age">CEO &middot; 9:14 am</span></div>
+
+            <div class="thread" id="thread">
+              <div class="turn ceo">
+                <div class="who">CEO</div>
+                <div class="body">
+                  Good morning. I held the Friday ship &mdash; the mobile flow needs another pass.
+                  <em>I&rsquo;ll revisit at 3pm.</em>
+                </div>
+              </div>
+
+              <div class="turn you">
+                <div class="who">You &middot; 8:58 am</div>
+                <div class="body">how are we tracking on the onboarding rewrite?</div>
+              </div>
+
+              <div class="turn ceo">
+                <div class="who">CEO</div>
+                <div class="body">
+                  On track. 11 of 14 done. Yesterday we caught a risk in the welcome email pipeline &mdash; already fixed, saved as a lesson.
+                </div>
+              </div>
+            </div>
+
+            <form class="gutter-composer" id="gcomposer" onsubmit="event.preventDefault();">
+              <textarea id="ginput" placeholder="Talk to the company&hellip;" rows="1"></textarea>
+              <div class="row">
+                <div class="modes" role="tablist">
+                  <button type="button" class="mode active" data-mode="ask">Ask</button>
+                  <button type="button" class="mode" data-mode="direct">Direct</button>
+                  <button type="button" class="mode" data-mode="remember">Remember</button>
+                </div>
+                <button class="send" type="submit" aria-label="Send">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                    <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+            </form>
+          </aside>
+
+        </div>
+      </section>
+
+      <!-- SPRINT -->
+      <section class="room-view" data-view="sprint" hidden>
+        <div class="crumb">
+          <div class="where"><span>Sprint</span><span class="sep">/</span><span class="here">Active</span></div>
+          <div class="meta">Sprint 14 &middot; ends Wed</div>
+        </div>
+
+        <div class="sprint-head">
+          <h1>Onboarding rewrite.</h1>
+          <p class="lede">Make the first five minutes feel obvious. Cut sign-up steps from seven to three.</p>
+          <div class="progress">
+            <span>11 of 14</span>
+            <span class="bar"><i></i></span>
+            <span>78%</span>
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="who"><span>Engineering</span><span class="count">4 tasks</span></div>
+          <ul>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Strip legacy session middleware.</span><span class="meta">2h</span></li>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Wire the magic-link sender.</span><span class="meta">3h</span></li>
+            <li class="now"><span class="mark">&#9679;</span><span class="what">Review the auth migration.</span><span class="meta">now</span></li>
+            <li><span class="mark">&deg;</span><span class="what">Backfill audit log for new flow.</span><span class="meta">queued</span></li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="who"><span>Marketing</span><span class="count">3 tasks</span></div>
+          <ul>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Draft empty-state copy.</span><span class="meta">1h</span></li>
+            <li class="now"><span class="mark">&#9679;</span><span class="what">Test three pricing variants.</span><span class="meta">now</span></li>
+            <li><span class="mark">&deg;</span><span class="what">Write the welcome email.</span><span class="meta">queued</span></li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="who"><span>Quality</span><span class="count">3 tasks</span></div>
+          <ul>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Acceptance suite, desktop.</span><span class="meta">4h</span></li>
+            <li class="now"><span class="mark">&#9679;</span><span class="what">Probe mobile signup, slow connection.</span><span class="meta">now</span></li>
+            <li><span class="mark">&deg;</span><span class="what">Regression on the magic-link path.</span><span class="meta">queued</span></li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="who"><span>Product</span><span class="count">4 tasks</span></div>
+          <ul>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Cut sign-up to three steps.</span><span class="meta">decided</span></li>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Pick the empty-state illustration brief.</span><span class="meta">decided</span></li>
+            <li class="done"><span class="mark">&#10003;</span><span class="what">Write the activation metric.</span><span class="meta">decided</span></li>
+            <li class="now"><span class="mark">&#9679;</span><span class="what">Draft next sprint&rsquo;s brief.</span><span class="meta">now</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- STUB rooms -->
+      <section class="room-view" data-view="memory" hidden>
+        <div class="crumb"><div class="where"><span class="here">Memory</span></div><div class="meta">142 lessons</div></div>
+        <div class="stub"><h2>The lesson library lives here.</h2><p>Every decision the company has learned from, browsable by sprint and tag.</p></div>
+      </section>
+      <section class="room-view" data-view="skills" hidden>
+        <div class="crumb"><div class="where"><span class="here">Skills</span></div><div class="meta">28 skills &middot; 3 evolving</div></div>
+        <div class="stub"><h2>The skills your company is building.</h2><p>Each skill earns its place by being used; weak ones get retired.</p></div>
+      </section>
+      <section class="room-view" data-view="approvals" hidden>
+        <div class="crumb"><div class="where"><span>Approvals</span><span class="sep">/</span><span class="here">All</span></div><div class="meta">2 pending &middot; 47 this sprint</div></div>
+        <div class="stub"><h2>Every gate, in order.</h2><p>Pending at the top, history below. Each approval keeps its trace.</p></div>
+      </section>
+      <section class="room-view" data-view="artifacts" hidden>
+        <div class="crumb"><div class="where"><span class="here">Artifacts</span></div><div class="meta">312 produced</div></div>
+        <div class="stub"><h2>Everything the company has made.</h2><p>Drafts, decisions, designs, code, copy. Searchable, versioned.</p></div>
+      </section>
+
+    </div>
+  </main>
+
+</div>
+
+<!-- ---------- Composer (non-Today rooms) ---------- -->
+<form class="composer hidden" id="composer" onsubmit="event.preventDefault();">
+  <input type="text" placeholder="Talk to the company&hellip;" autocomplete="off" />
+  <button class="send" type="submit" aria-label="Send">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+      <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+</form>
+
+<script>
+  // ---- Room switching ----
+  const rooms = document.querySelectorAll('.room');
+  const views = document.querySelectorAll('.room-view');
+  const composer = document.getElementById('composer');
+
+  rooms.forEach(btn => btn.addEventListener('click', () => {
+    const room = btn.dataset.room;
+    rooms.forEach(b => b.classList.toggle('active', b === btn));
+    views.forEach(v => v.hidden = (v.dataset.view !== room));
+    composer.classList.add('hidden');
+    document.querySelector('.main').scrollTo({ top: 0, behavior: 'smooth' });
+  }));
+
+  // ---- Gutter modes & composer ----
+  const ginput = document.getElementById('ginput');
+  const modes  = document.querySelectorAll('.mode');
+  const thread = document.getElementById('thread');
+  const placeholders = {
+    ask:      'Talk to the company\u2026',
+    direct:   'Tell the company what to do\u2026',
+    remember: 'Save this for the company to remember\u2026',
+  };
+  let mode = 'ask';
+
+  modes.forEach(b => b.addEventListener('click', () => {
+    modes.forEach(x => x.classList.toggle('active', x === b));
+    mode = b.dataset.mode;
+    ginput.placeholder = placeholders[mode];
+    ginput.focus();
+  }));
+
+  ginput.addEventListener('input', () => {
+    ginput.style.height = 'auto';
+    ginput.style.height = Math.min(ginput.scrollHeight, 160) + 'px';
+  });
+
+  function appendUser(text) {
+    const el = document.createElement('div');
+    el.className = 'turn you';
+    el.innerHTML = '<div class="who">You &middot; just now</div><div class="body"></div>';
+    el.querySelector('.body').textContent = text;
+    thread.appendChild(el);
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  document.getElementById('gcomposer').addEventListener('submit', e => {
+    e.preventDefault();
+    const text = ginput.value.trim();
+    if (!text) return;
+    appendUser(text);
+    ginput.value = '';
+    ginput.style.height = 'auto';
+  });
+  ginput.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('gcomposer').dispatchEvent(new Event('submit'));
+    }
+  });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Arceus</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #FAFAF7;
+    --ink:   #111111;
+    --ink-2: #5B5B58;
+    --ink-3: #9A9A95;
+    --rule:  #ECEAE3;
+    --inset: #F4F2EC;
+    --amber: #B7873A;
+    --green: #4F7A57;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    display: flex;
+    justify-content: center;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 760px;
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    padding: 0 32px;
+  }
+
+  /* ---------- Header ---------- */
+  .head {
+    padding: 28px 0 22px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .brand {
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+  }
+  .status {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 17px;
+    color: var(--ink-2);
+    line-height: 1.4;
+    text-align: right;
+    flex: 1;
+  }
+  .status .strong { color: var(--ink); }
+  .status .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--amber);
+    margin-right: 8px;
+    transform: translateY(-2px);
+  }
+
+  /* ---------- Transcript ---------- */
+  .transcript {
+    padding: 40px 0 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    animation: enter 500ms cubic-bezier(.22,.61,.36,1) both;
+  }
+  @keyframes enter {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg .who {
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .msg .who .when {
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .04em;
+    text-transform: none;
+    font-weight: 400;
+    font-size: 11px;
+  }
+
+  .msg.ceo .body,
+  .msg.system .body {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 19px;
+    line-height: 1.5;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .msg .body em { color: var(--ink-2); font-style: italic; }
+  .msg .body .cite {
+    color: var(--ink-2);
+    border-bottom: 1px dashed var(--ink-3);
+    cursor: pointer;
+  }
+
+  /* user message: right-aligned, lighter weight */
+  .msg.user {
+    align-self: flex-end;
+    max-width: 78%;
+    text-align: right;
+  }
+  .msg.user .body {
+    background: var(--inset);
+    padding: 12px 16px;
+    border-radius: 14px 14px 4px 14px;
+    font-size: 15px;
+    color: var(--ink);
+    display: inline-block;
+    text-align: left;
+  }
+  .msg.user .who { justify-content: flex-end; }
+
+  /* ---------- Inline decision card ---------- */
+  .decision-card {
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 20px 0;
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 24px;
+    align-items: center;
+  }
+  .decision-card + .decision-card {
+    border-top: 0;
+    margin-top: 0;
+  }
+  .decision-card .title {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 18px;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .decision-card .meta {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .02em;
+  }
+  .decision-card .actions { display: flex; gap: 8px; align-items: center; }
+  .decision-card .btn {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    border-radius: 999px;
+    padding: 9px 16px;
+    cursor: pointer;
+    transition: transform 140ms ease, opacity 140ms ease;
+  }
+  .decision-card .btn:active { transform: translateY(1px); }
+  .decision-card .btn.primary { background: var(--ink); color: var(--paper); }
+  .decision-card .btn.ghost   { background: transparent; color: var(--ink-2); }
+  .decision-card .btn.ghost:hover { color: var(--ink); }
+
+  /* ---------- Inline live stream ---------- */
+  .stream {
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .stream .row {
+    display: grid;
+    grid-template-columns: 90px 1fr auto;
+    gap: 16px;
+    align-items: baseline;
+    font-size: 14px;
+  }
+  .stream .role {
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+  }
+  .stream .what { color: var(--ink); }
+  .stream .verb {
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .stream .verb::before {
+    content: "";
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--ink-3);
+    margin-right: 7px;
+    transform: translateY(-1px);
+  }
+  .stream .verb.writing::before  { background: var(--ink); }
+  .stream .verb.thinking::before { background: var(--amber); animation: blink 2.4s ease-in-out infinite; }
+  @keyframes blink {
+    0%, 100% { opacity: .35; }
+    50%      { opacity: 1; }
+  }
+
+  /* ---------- Composer ---------- */
+  .composer {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(to bottom, rgba(250,250,247,0) 0%, var(--paper) 18%);
+    padding: 28px 0 24px;
+  }
+  .composer .field {
+    border: 1px solid var(--rule);
+    background: #FFFFFF;
+    border-radius: 16px;
+    padding: 12px 14px 10px;
+    transition: border-color 180ms ease, box-shadow 180ms ease;
+  }
+  .composer .field:focus-within {
+    border-color: var(--ink-2);
+    box-shadow: 0 1px 0 var(--ink-2);
+  }
+  .composer textarea {
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 15px;
+    color: var(--ink);
+    line-height: 1.5;
+    padding: 4px 4px 6px;
+    min-height: 40px;
+  }
+  .composer textarea::placeholder { color: var(--ink-3); }
+  .composer .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 4px;
+  }
+  .composer .modes {
+    display: flex; gap: 4px;
+  }
+  .composer .mode {
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: transparent;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+  }
+  .composer .mode.active {
+    color: var(--ink);
+    background: var(--inset);
+  }
+  .composer .send {
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .composer .send kbd {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    background: rgba(255,255,255,0.14);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .composer .hint {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--ink-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    letter-spacing: .04em;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ---------- Header ---------- -->
+  <header class="head">
+    <div class="brand">Arceus &middot; Acme</div>
+    <div class="status">
+      <span class="dot"></span>
+      <span class="strong">Two decisions are waiting for you.</span>
+      Otherwise the company is shipping the onboarding rewrite.
+    </div>
+  </header>
+
+  <!-- ---------- Transcript ---------- -->
+  <section class="transcript" id="transcript">
+
+    <article class="msg ceo">
+      <div class="who">CEO <span class="when">9:14 am</span></div>
+      <div class="body">
+        Good morning. I held the Friday ship &mdash; the mobile flow needs another pass.
+        Working from <span class="cite" title="14 lessons cited">14 lessons learned this sprint</span>,
+        we picked the safer path. <em>I&rsquo;ll revisit at 3pm.</em>
+      </div>
+    </article>
+
+    <article class="msg system">
+      <div class="who">For your decision</div>
+      <div class="decision-card">
+        <div>
+          <div class="title">Approve the new pricing copy.</div>
+          <div class="meta">Marketing &middot; proposed 4 minutes ago &middot; cites 3 lessons</div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost">Why now?</button>
+          <button class="btn ghost">Hold</button>
+          <button class="btn primary">Approve</button>
+        </div>
+      </div>
+      <div class="decision-card">
+        <div>
+          <div class="title">Ship Friday, or hold a day for QA.</div>
+          <div class="meta">CTO &middot; proposed 11 minutes ago</div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost">Open diff</button>
+          <button class="btn ghost">Hold</button>
+          <button class="btn primary">Ship</button>
+        </div>
+      </div>
+    </article>
+
+    <article class="msg ceo">
+      <div class="who">CEO <span class="when">9:12 am</span></div>
+      <div class="body">
+        Here&rsquo;s what the company is doing right now. I&rsquo;ll surface anything that needs you.
+      </div>
+      <div class="stream">
+        <div class="row">
+          <span class="role">Engineering</span>
+          <span class="what">Reviewing the auth migration.</span>
+          <span class="verb">reading</span>
+        </div>
+        <div class="row">
+          <span class="role">Marketing</span>
+          <span class="what">Testing three pricing variants against last quarter&rsquo;s funnel.</span>
+          <span class="verb writing">writing</span>
+        </div>
+        <div class="row">
+          <span class="role">Quality</span>
+          <span class="what">Probing the mobile signup flow on a slow connection.</span>
+          <span class="verb thinking">thinking</span>
+        </div>
+        <div class="row">
+          <span class="role">Product</span>
+          <span class="what">Drafting next sprint&rsquo;s brief from this week&rsquo;s lessons.</span>
+          <span class="verb writing">writing</span>
+        </div>
+      </div>
+    </article>
+
+    <article class="msg user">
+      <div class="who">You <span class="when">8:58 am</span></div>
+      <div class="body">how are we tracking on the onboarding rewrite?</div>
+    </article>
+
+    <article class="msg ceo">
+      <div class="who">CEO <span class="when">8:58 am</span></div>
+      <div class="body">
+        On track. Eleven of fourteen tasks are done; the remaining three are with Engineering and Quality.
+        <em>Yesterday we caught one risk in the welcome email pipeline</em> &mdash; already fixed,
+        cited as a new lesson.
+      </div>
+    </article>
+
+  </section>
+
+  <!-- ---------- Composer ---------- -->
+  <footer class="composer">
+    <div class="field">
+      <textarea id="input" placeholder="Talk to the company..." rows="1"></textarea>
+      <div class="row">
+        <div class="modes">
+          <button class="mode active" data-mode="ask">Ask</button>
+          <button class="mode" data-mode="direct">Direct</button>
+          <button class="mode" data-mode="remember">Remember</button>
+        </div>
+        <button class="send" id="send">Send <kbd>&#8984;&#9166;</kbd></button>
+      </div>
+    </div>
+    <div class="hint">Ask &mdash; the company answers. Direct &mdash; the company acts. Remember &mdash; saved as a lesson.</div>
+  </footer>
+
+</div>
+
+<script>
+  const input = document.getElementById('input');
+  const send  = document.getElementById('send');
+  const tx    = document.getElementById('transcript');
+
+  // auto-grow textarea
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 220) + 'px';
+  });
+
+  // mode selector
+  document.querySelectorAll('.mode').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.mode').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+
+  function appendUser(text) {
+    const el = document.createElement('article');
+    el.className = 'msg user';
+    el.innerHTML = `<div class="who">You <span class="when">just now</span></div>
+                    <div class="body"></div>`;
+    el.querySelector('.body').textContent = text;
+    tx.appendChild(el);
+    el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+
+  function submit() {
+    const text = input.value.trim();
+    if (!text) return;
+    appendUser(text);
+    input.value = '';
+    input.style.height = 'auto';
+  }
+
+  send.addEventListener('click', submit);
+  input.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+  });
+</script>
+
+</body>
+</html>

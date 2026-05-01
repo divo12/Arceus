@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Arceus — v7</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Source+Serif+4:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FAFAF7;
+    --rail:#F6F4EE;
+    --ink:#111;
+    --ink-2:#666;
+    --ink-3:#9A9A95;
+    --rule:#ECEAE3;
+    --green:#4F7A57;
+    --amber:#B7873A;
+    --serif:'Source Serif 4', Georgia, serif;
+    --sans:'Inter', system-ui, sans-serif;
+    --mono:ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:var(--sans);
+    color:var(--ink);
+    background:var(--paper);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+  a{color:inherit}
+
+  .shell{display:grid;grid-template-columns:208px 1fr;height:100vh}
+
+  /* ── Rail ─────────────────────────── */
+  .rail{
+    background:var(--rail);
+    border-right:1px solid var(--rule);
+    display:flex;flex-direction:column;
+    padding:24px 16px;
+  }
+  .rail .brand{
+    display:flex;align-items:center;gap:10px;
+    padding:0 8px 28px;
+  }
+  .rail .brand .logo{
+    width:24px;height:24px;border-radius:6px;
+    background:var(--ink);color:var(--paper);
+    display:grid;place-items:center;
+    font-family:var(--serif);font-style:italic;font-size:13px;
+  }
+  .rail .brand .name{
+    font-family:var(--serif);font-size:16px;letter-spacing:-0.005em;
+  }
+  .rail .brand .name .quiet{color:var(--ink-3)}
+
+  .rail .group-label{
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink-3);
+    padding:18px 8px 8px;
+  }
+  .rail .tab{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:7px 10px;border-radius:6px;
+    border:0;background:transparent;width:100%;
+    color:var(--ink-2);
+    font-family:var(--sans);font-size:13.5px;
+    cursor:pointer;text-align:left;
+    transition:background .12s ease, color .12s ease;
+  }
+  .rail .tab:hover{color:var(--ink)}
+  .rail .tab.active{
+    color:var(--ink);
+    background:var(--paper);
+    box-shadow:0 0 0 1px var(--rule);
+  }
+  .rail .tab .count{
+    font-family:var(--mono);
+    font-size:10.5px;color:var(--ink-3);
+  }
+  .rail .tab.active .count{color:var(--ink-2)}
+  .rail .tab .dot{
+    width:6px;height:6px;border-radius:50%;background:var(--green);
+    animation:breathe 2.6s ease-in-out infinite;
+  }
+  .rail .spacer{flex:1}
+  .rail .footer{
+    border-top:1px solid var(--rule);
+    margin:0 -16px;padding:14px 24px 0;
+    display:flex;align-items:center;justify-content:space-between;
+    font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+    letter-spacing:.04em;text-transform:uppercase;
+  }
+  .rail .footer .who{display:flex;align-items:center;gap:8px}
+  .rail .footer .avatar{
+    width:18px;height:18px;border-radius:50%;background:var(--ink-3);
+    display:grid;place-items:center;color:var(--paper);
+    font-family:var(--sans);font-size:9px;letter-spacing:0;text-transform:none;
+  }
+
+  /* ── Main ─────────────────────────── */
+  .main{
+    height:100vh;overflow-y:auto;
+    scrollbar-width:none;
+    -ms-overflow-style:none;
+    overscroll-behavior:contain;
+    mask-image:linear-gradient(to bottom, transparent 0, #000 32px, #000 calc(100% - 40px), transparent 100%);
+  }
+  .main::-webkit-scrollbar{display:none}
+
+  .view{display:none}
+  .view.active{display:block}
+
+  .col{
+    max-width:880px;
+    margin:0 auto;
+    padding:64px 56px 140px;
+  }
+
+  /* Date kicker */
+  .date{
+    font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.06em;
+    color:var(--ink-3);text-transform:uppercase;
+    margin-bottom:48px;
+  }
+
+  /* The page sentence */
+  .sentence{
+    font-family:var(--serif);
+    font-weight:400;font-size:30px;line-height:1.2;
+    letter-spacing:-0.011em;color:var(--ink);
+    margin:0 0 18px;max-width:680px;
+  }
+  .sentence .quiet{color:var(--ink-3)}
+
+  /* Subline */
+  .subline{
+    font-family:var(--mono);
+    font-size:11.5px;color:var(--ink-2);
+    display:flex;align-items:center;gap:9px;
+    margin:0 0 72px;
+  }
+  .dot{
+    width:6px;height:6px;border-radius:50%;background:var(--green);
+    animation:breathe 2.6s ease-in-out infinite;
+  }
+  @keyframes breathe{
+    0%,100%{opacity:.55;transform:scale(1)}
+    50%{opacity:1;transform:scale(1.18)}
+  }
+
+  /* Section header */
+  .h{
+    font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--ink-3);
+    font-weight:500;margin:0 0 20px;
+  }
+
+  .section{margin:0 0 72px}
+
+  /* Item row */
+  .item{
+    padding:20px 0;
+    border-top:1px solid var(--rule);
+  }
+  .section > .item:last-of-type{border-bottom:1px solid var(--rule)}
+  .item .who{
+    font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-3);
+    margin-bottom:10px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .item .who .pip{width:5px;height:5px;border-radius:50%;background:var(--ink-3);display:inline-block}
+  .item .who .pip.green{background:var(--green);animation:breathe 2.6s ease-in-out infinite}
+  .item .who .pip.amber{background:var(--amber)}
+  .item .ask{
+    font-family:var(--serif);
+    font-size:18px;line-height:1.35;color:var(--ink);
+    margin:0 0 6px;max-width:600px;
+  }
+  .item .why{
+    font-size:13px;color:var(--ink-2);
+    margin:0 0 14px;max-width:560px;
+  }
+  .item .acts{display:flex;gap:20px;align-items:center}
+  .item .acts a{
+    font-size:12.5px;color:var(--ink-2);
+    text-decoration:none;
+    border-bottom:1px solid transparent;
+    padding-bottom:1px;cursor:pointer;
+  }
+  .item .acts a:hover{color:var(--ink);border-bottom-color:var(--ink)}
+  .item .acts .primary{color:var(--ink);font-weight:500}
+
+  /* Tight list */
+  .list{list-style:none;padding:0;margin:0}
+  .list li{
+    display:grid;
+    grid-template-columns:120px 1fr auto;
+    gap:24px;padding:11px 0;
+    align-items:baseline;
+    font-size:13.5px;
+  }
+  .list li + li{border-top:1px solid var(--rule)}
+  .list .role{
+    font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-3);
+  }
+  .list .doing{color:var(--ink)}
+  .list .doing.muted{color:var(--ink-3);text-decoration:line-through}
+  .list .verb{
+    font-family:var(--mono);
+    font-size:10.5px;color:var(--ink-3);
+    text-transform:lowercase;
+  }
+
+  /* Memory blockquote */
+  .memory{
+    font-family:var(--serif);font-style:italic;
+    font-size:16px;line-height:1.5;color:var(--ink);
+    border-left:1px solid var(--ink);
+    padding:3px 0 3px 18px;
+    margin:0 0 12px;max-width:580px;
+  }
+  .memory-cite{
+    font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-3);
+    margin:0 0 32px;
+  }
+
+  /* Footer */
+  .foot{
+    font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-3);
+    text-align:center;padding-top:36px;
+    border-top:1px solid var(--rule);
+  }
+
+  /* Progress bar (Sprint) */
+  .progress{
+    height:1px;background:var(--rule);
+    margin:6px 0 64px;position:relative;
+  }
+  .progress > span{
+    position:absolute;left:0;top:0;height:100%;background:var(--ink);
+  }
+
+  /* Composer */
+  .ask-bar{
+    position:fixed;
+    bottom:0;left:208px;right:0;
+    background:linear-gradient(to bottom, transparent, var(--paper) 32px);
+    padding:40px 0 20px;
+    pointer-events:none;
+  }
+  .ask-bar form{
+    pointer-events:auto;
+    max-width:880px;margin:0 auto;
+    padding:14px 56px 0;
+    display:flex;align-items:center;gap:12px;
+    border-top:1px solid var(--rule);
+  }
+  .ask-bar input{
+    flex:1;border:0;background:transparent;
+    font-family:var(--sans);font-size:14px;color:var(--ink);
+    outline:none;padding:4px 0;
+  }
+  .ask-bar input::placeholder{color:var(--ink-3)}
+  .ask-bar .hint{
+    font-family:var(--mono);font-size:11px;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ─────────── RAIL ─────────── -->
+  <nav class="rail">
+
+    <div class="brand">
+      <div class="logo">A</div>
+      <div class="name">Acme<span class="quiet">.</span></div>
+    </div>
+
+    <div class="group-label">The company</div>
+    <button class="tab active" data-view="today">
+      <span>Today</span>
+      <span class="dot"></span>
+    </button>
+    <button class="tab" data-view="sprint">
+      <span>Sprint</span>
+      <span class="count">11/14</span>
+    </button>
+    <button class="tab" data-view="team">
+      <span>Team</span>
+      <span class="count">14</span>
+    </button>
+
+    <div class="group-label">Knowledge</div>
+    <button class="tab" data-view="memory">
+      <span>Memory</span>
+      <span class="count">42</span>
+    </button>
+    <button class="tab" data-view="skills">
+      <span>Skills</span>
+      <span class="count">9 &middot; 3</span>
+    </button>
+    <button class="tab" data-view="meetings">
+      <span>Meetings</span>
+      <span class="count">3</span>
+    </button>
+
+    <div class="group-label">For you</div>
+    <button class="tab" data-view="inbox">
+      <span>Inbox</span>
+      <span class="count">2</span>
+    </button>
+    <button class="tab" data-view="preview">
+      <span>Preview</span>
+      <span class="count">2</span>
+    </button>
+    <button class="tab" data-view="logs">
+      <span>Logs</span>
+      <span class="count">2,184</span>
+    </button>
+
+    <div class="spacer"></div>
+
+    <button class="tab" data-view="settings">
+      <span>Settings</span>
+    </button>
+
+    <div class="footer">
+      <div class="who">
+        <div class="avatar">P</div>
+        <span>CEO</span>
+      </div>
+      <span>v0.7</span>
+    </div>
+  </nav>
+
+  <!-- ─────────── MAIN ─────────── -->
+  <main class="main">
+
+    <!-- ── TODAY ────────────────── -->
+    <section class="view active" id="today">
+      <div class="col">
+
+        <div class="date">Friday &middot; May 1</div>
+
+        <h1 class="sentence">
+          Acme is shipping the onboarding rewrite.
+          <span class="quiet">Two things need you.</span>
+        </h1>
+
+        <p class="subline">
+          <span class="dot"></span>
+          <span>Fourteen agents working &middot; last beat two minutes ago</span>
+        </p>
+
+        <section class="section">
+          <h3 class="h">Needs you</h3>
+
+          <div class="item">
+            <div class="who">Marketing &middot; 4 minutes ago</div>
+            <p class="ask">Approve the new pricing copy.</p>
+            <p class="why">Plainer language. Three lessons in memory back this draft.</p>
+            <div class="acts">
+              <a class="primary">Approve</a>
+              <a>Read it</a>
+              <a>Hold</a>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="who">Engineering &middot; 11 minutes ago</div>
+            <p class="ask">Ship Friday, or hold a day for QA.</p>
+            <p class="why">All eleven tests pass. Tester wants one more pass on mobile. Either path is safe.</p>
+            <div class="acts">
+              <a class="primary">Ship</a>
+              <a>Hold a day</a>
+              <a>Open diff</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Right now</h3>
+          <ul class="list">
+            <li><span class="role">Engineering</span><span class="doing">Reviewing the auth migration.</span><span class="verb">reading</span></li>
+            <li><span class="role">Marketing</span><span class="doing">Testing three pricing variants.</span><span class="verb">writing</span></li>
+            <li><span class="role">Quality</span><span class="doing">Probing mobile signup on a slow connection.</span><span class="verb">thinking</span></li>
+            <li><span class="role">Product</span><span class="doing">Drafting next sprint&rsquo;s brief.</span><span class="verb">writing</span></li>
+          </ul>
+        </section>
+
+        <blockquote class="memory">
+          Returning users skim the first screen for two seconds. If pricing isn&rsquo;t plain by then, they leave.
+        </blockquote>
+        <div class="memory-cite">A new lesson, drafted by Marketing &middot; from this week&rsquo;s funnel</div>
+
+        <div class="foot">11 shipped &middot; 3 decisions made &middot; 1 risk caught</div>
+      </div>
+    </section>
+
+    <!-- ── SPRINT ───────────────── -->
+    <section class="view" id="sprint">
+      <div class="col">
+
+        <div class="date">Sprint 14 &middot; day 4 of 7</div>
+
+        <h1 class="sentence">
+          Onboarding rewrite.
+          <span class="quiet">Eleven of fourteen done.</span>
+        </h1>
+
+        <p class="subline">
+          <span class="dot"></span>
+          <span>On track for Friday &middot; 78% complete</span>
+        </p>
+
+        <div class="progress"><span style="width:78%"></span></div>
+
+        <section class="section">
+          <h3 class="h">Engineering &middot; 4</h3>
+          <ul class="list">
+            <li><span class="role">Done</span><span class="doing muted">Replace email validation.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Done</span><span class="doing muted">Add password strength meter.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Now</span><span class="doing">Reviewing the auth migration.</span><span class="verb">reading</span></li>
+            <li><span class="role">Next</span><span class="doing">Add rate-limit on signup endpoint.</span><span class="verb">queued</span></li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Marketing &middot; 3</h3>
+          <ul class="list">
+            <li><span class="role">Done</span><span class="doing muted">Write the new pricing page.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Now</span><span class="doing">Testing three pricing variants.</span><span class="verb">writing</span></li>
+            <li><span class="role">Next</span><span class="doing">Draft the launch announcement.</span><span class="verb">queued</span></li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Quality &middot; 3</h3>
+          <ul class="list">
+            <li><span class="role">Done</span><span class="doing muted">Run accessibility audit.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Done</span><span class="doing muted">Verify desktop signup flow.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Now</span><span class="doing">Probing mobile signup on a slow connection.</span><span class="verb">thinking</span></li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Product &middot; 4</h3>
+          <ul class="list">
+            <li><span class="role">Done</span><span class="doing muted">Define success metrics.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Done</span><span class="doing muted">Write the brief.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Done</span><span class="doing muted">Sign off the copy direction.</span><span class="verb">shipped</span></li>
+            <li><span class="role">Now</span><span class="doing">Drafting next sprint&rsquo;s brief.</span><span class="verb">writing</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">Started Monday &middot; ships Friday &middot; on plan</div>
+      </div>
+    </section>
+
+    <!-- ── TEAM ─────────────────── -->
+    <section class="view" id="team">
+      <div class="col">
+
+        <div class="date">Team</div>
+
+        <h1 class="sentence">
+          Fourteen agents in the company.
+          <span class="quiet">Four are working.</span>
+        </h1>
+
+        <p class="subline">
+          <span class="dot"></span>
+          <span>Hired across nine roles &middot; ten resting</span>
+        </p>
+
+        <section class="section">
+          <h3 class="h">Working now</h3>
+          <div class="item">
+            <div class="who"><span class="pip green"></span>Engineering &middot; Ada</div>
+            <p class="ask">Reviewing the auth migration.</p>
+            <p class="why">Reading 312 lines across four files. Five minutes in.</p>
+            <div class="acts"><a>Open thread</a><a>Pause</a></div>
+          </div>
+          <div class="item">
+            <div class="who"><span class="pip green"></span>Marketing &middot; June</div>
+            <p class="ask">Testing three pricing variants.</p>
+            <p class="why">Drafting copy. Looked up two lessons in memory.</p>
+            <div class="acts"><a>Open thread</a><a>Pause</a></div>
+          </div>
+          <div class="item">
+            <div class="who"><span class="pip amber"></span>Quality &middot; Otto</div>
+            <p class="ask">Probing mobile signup on a slow connection.</p>
+            <p class="why">Thinking about the next test case. Eleven seconds idle.</p>
+            <div class="acts"><a>Open thread</a><a>Pause</a></div>
+          </div>
+          <div class="item">
+            <div class="who"><span class="pip green"></span>Product &middot; Mira</div>
+            <p class="ask">Drafting next sprint&rsquo;s brief.</p>
+            <p class="why">Writing. Cited four lessons from last sprint.</p>
+            <div class="acts"><a>Open thread</a><a>Pause</a></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Resting &middot; 10</h3>
+          <ul class="list">
+            <li><span class="role">CTO</span><span class="doing">Cyrus</span><span class="verb">idle 14m</span></li>
+            <li><span class="role">Design</span><span class="doing">Iris</span><span class="verb">idle 1h</span></li>
+            <li><span class="role">Design</span><span class="doing">Reza</span><span class="verb">idle 2h</span></li>
+            <li><span class="role">Sales</span><span class="doing">Vera</span><span class="verb">idle 3h</span></li>
+            <li><span class="role">Support</span><span class="doing">Kai</span><span class="verb">idle 4h</span></li>
+            <li><span class="role">Finance</span><span class="doing">Lina</span><span class="verb">idle 5h</span></li>
+            <li><span class="role">Legal</span><span class="doing">Theo</span><span class="verb">idle 6h</span></li>
+            <li><span class="role">Ops</span><span class="doing">Nico</span><span class="verb">idle 8h</span></li>
+            <li><span class="role">Data</span><span class="doing">Sage</span><span class="verb">idle 12h</span></li>
+            <li><span class="role">Research</span><span class="doing">Owen</span><span class="verb">idle 1d</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">Hire someone &middot; Retire someone &middot; Edit a role</div>
+      </div>
+    </section>
+
+    <!-- ── MEMORY ───────────────── -->
+    <section class="view" id="memory">
+      <div class="col">
+
+        <div class="date">Memory</div>
+
+        <h1 class="sentence">
+          What the company has learned.
+          <span class="quiet">Forty-two lessons. Three forming.</span>
+        </h1>
+
+        <p class="subline"><span>Updated 4 minutes ago</span></p>
+
+        <section class="section">
+          <h3 class="h">Forming now</h3>
+
+          <blockquote class="memory">
+            Returning users skim the first screen for two seconds. If pricing isn&rsquo;t plain by then, they leave.
+          </blockquote>
+          <div class="memory-cite">Drafted by Marketing &middot; from this week&rsquo;s funnel</div>
+
+          <blockquote class="memory">
+            The auth migration breaks if we run it before the session table is drained. Sequence matters.
+          </blockquote>
+          <div class="memory-cite">Drafted by Engineering &middot; from a near-miss on staging</div>
+
+          <blockquote class="memory">
+            Mobile signup fails silently on slow networks. Add a timeout banner.
+          </blockquote>
+          <div class="memory-cite">Drafted by Quality &middot; from today&rsquo;s probes</div>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Recent lessons</h3>
+          <ul class="list">
+            <li><span class="role">Marketing</span><span class="doing">&ldquo;Seat&rdquo; tested poorly. Use &ldquo;person&rdquo;.</span><span class="verb">2d ago</span></li>
+            <li><span class="role">Engineering</span><span class="doing">Postgres &gt; SQLite past 100 RPS.</span><span class="verb">3d ago</span></li>
+            <li><span class="role">Product</span><span class="doing">Free tier was buried &mdash; promote it.</span><span class="verb">4d ago</span></li>
+            <li><span class="role">Quality</span><span class="doing">Always test on a throttled network.</span><span class="verb">5d ago</span></li>
+            <li><span class="role">Design</span><span class="doing">Two CTAs above the fold confuse.</span><span class="verb">1w ago</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">42 lessons &middot; 9 contributors &middot; oldest 6 months</div>
+      </div>
+    </section>
+
+    <!-- ── SKILLS ───────────────── -->
+    <section class="view" id="skills">
+      <div class="col">
+
+        <div class="date">Skills</div>
+
+        <h1 class="sentence">
+          What the company can do.
+          <span class="quiet">Nine skills practised. Three forming.</span>
+        </h1>
+
+        <p class="subline">
+          <span class="dot"></span>
+          <span>Two skills evolved this week &middot; one promoted to v3</span>
+        </p>
+
+        <section class="section">
+          <h3 class="h">Forming now</h3>
+
+          <div class="item">
+            <div class="who"><span class="pip green"></span>Drafting &middot; Quality &middot; tried 4 times</div>
+            <p class="ask">Probe a flow on a throttled mobile network.</p>
+            <p class="why">Otto wrote a runbook after today&rsquo;s mobile-signup failure. Two more successful runs and it earns its place in the library.</p>
+            <div class="acts"><a class="primary">Read draft</a><a>See attempts</a><a>Promote</a></div>
+          </div>
+
+          <div class="item">
+            <div class="who"><span class="pip amber"></span>Drafting &middot; Marketing &middot; tried 7 times</div>
+            <p class="ask">Test a pricing page in three variants without a feature flag.</p>
+            <p class="why">Works most of the time, but the rollback step is fragile. June is iterating.</p>
+            <div class="acts"><a class="primary">Read draft</a><a>See attempts</a><a>Send back</a></div>
+          </div>
+
+          <div class="item">
+            <div class="who"><span class="pip"></span>Drafting &middot; Engineering &middot; tried 2 times</div>
+            <p class="ask">Migrate an auth table without dropping live sessions.</p>
+            <p class="why">Ada drafted from yesterday&rsquo;s near-miss. Needs one more clean run.</p>
+            <div class="acts"><a class="primary">Read draft</a><a>See attempts</a></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3 class="h">In the library</h3>
+          <ul class="list">
+            <li><span class="role">v3 &middot; new</span><span class="doing">Write a pricing page that converts.</span><span class="verb">used 14&times;</span></li>
+            <li><span class="role">v2</span><span class="doing">Run an accessibility audit on a public page.</span><span class="verb">used 9&times;</span></li>
+            <li><span class="role">v2</span><span class="doing">Ship a small feature behind a flag.</span><span class="verb">used 22&times;</span></li>
+            <li><span class="role">v1</span><span class="doing">Draft a launch announcement.</span><span class="verb">used 6&times;</span></li>
+            <li><span class="role">v1</span><span class="doing">Open a PR with a tested diff.</span><span class="verb">used 38&times;</span></li>
+            <li><span class="role">v1</span><span class="doing">Write a brief from a decision.</span><span class="verb">used 11&times;</span></li>
+            <li><span class="role">v1</span><span class="doing">Hold a fifteen-minute meeting.</span><span class="verb">used 14&times;</span></li>
+            <li><span class="role">v1</span><span class="doing">File a lesson into memory.</span><span class="verb">used 42&times;</span></li>
+            <li><span class="role">v1</span><span class="doing">Estimate the cost of a sprint.</span><span class="verb">used 4&times;</span></li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h3 class="h">How a skill evolves</h3>
+          <ul class="list">
+            <li><span class="role">1. Try</span><span class="doing">An agent solves a problem in a way worth keeping.</span><span class="verb">draft</span></li>
+            <li><span class="role">2. Practise</span><span class="doing">It runs three more times. Each run sharpens the steps.</span><span class="verb">forming</span></li>
+            <li><span class="role">3. Promote</span><span class="doing">CEO or peer review accepts it into the library.</span><span class="verb">v1</span></li>
+            <li><span class="role">4. Refine</span><span class="doing">A better version replaces it. The old one is kept.</span><span class="verb">v2, v3&hellip;</span></li>
+            <li><span class="role">5. Retire</span><span class="doing">Unused for a sprint &mdash; archived, not deleted.</span><span class="verb">archived</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">9 in library &middot; 3 forming &middot; 1 promoted &middot; 0 retired this sprint</div>
+      </div>
+    </section>
+
+    <!-- ── MEETINGS ─────────────── -->
+    <section class="view" id="meetings">
+      <div class="col">
+
+        <div class="date">Meetings</div>
+
+        <h1 class="sentence">
+          Three meetings this week.
+          <span class="quiet">All decided.</span>
+        </h1>
+
+        <p class="subline"><span>Async by default &middot; transcripts kept</span></p>
+
+        <section class="section">
+          <h3 class="h">This week</h3>
+
+          <div class="item">
+            <div class="who">Tuesday &middot; 9:14 am &middot; 4 attended</div>
+            <p class="ask">Should onboarding hold for legal review?</p>
+            <p class="why">Decided: ship Friday. Legal will review the live page; nothing ambiguous in the copy.</p>
+            <div class="acts"><a>Read transcript</a><a>See decision</a></div>
+          </div>
+
+          <div class="item">
+            <div class="who">Wednesday &middot; 2:42 pm &middot; 3 attended</div>
+            <p class="ask">How do we measure onboarding success?</p>
+            <p class="why">Decided: time-to-first-value, not signup count. Product owns the dashboard.</p>
+            <div class="acts"><a>Read transcript</a><a>See decision</a></div>
+          </div>
+
+          <div class="item">
+            <div class="who">Thursday &middot; 11:08 am &middot; 5 attended</div>
+            <p class="ask">Pricing copy direction.</p>
+            <p class="why">Decided: plainer language, lead with the free tier. Marketing drafts; CEO approves.</p>
+            <div class="acts"><a>Read transcript</a><a>See decision</a></div>
+          </div>
+        </section>
+
+        <div class="foot">3 this week &middot; 14 this sprint &middot; average 11 minutes</div>
+      </div>
+    </section>
+
+    <!-- ── INBOX ────────────────── -->
+    <section class="view" id="inbox">
+      <div class="col">
+
+        <div class="date">Inbox</div>
+
+        <h1 class="sentence">
+          Two things need you.
+          <span class="quiet">Oldest 11 minutes.</span>
+        </h1>
+
+        <p class="subline"><span>Cleared 9 today &middot; held 1 for tomorrow</span></p>
+
+        <section class="section">
+          <h3 class="h">Waiting</h3>
+
+          <div class="item">
+            <div class="who"><span class="pip amber"></span>Marketing &middot; 4 minutes ago</div>
+            <p class="ask">Approve the new pricing copy.</p>
+            <p class="why">Plainer language. Three lessons in memory back this draft.</p>
+            <div class="acts">
+              <a class="primary">Approve</a>
+              <a>Read it</a>
+              <a>Hold</a>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="who"><span class="pip amber"></span>Engineering &middot; 11 minutes ago</div>
+            <p class="ask">Ship Friday, or hold a day for QA.</p>
+            <p class="why">All eleven tests pass. Tester wants one more pass on mobile.</p>
+            <div class="acts">
+              <a class="primary">Ship</a>
+              <a>Hold a day</a>
+              <a>Open diff</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Cleared today</h3>
+          <ul class="list">
+            <li><span class="role">Approved</span><span class="doing">Use Postgres for the prod database.</span><span class="verb">8:42 am</span></li>
+            <li><span class="role">Approved</span><span class="doing">Hire one more engineer for next sprint.</span><span class="verb">9:11 am</span></li>
+            <li><span class="role">Approved</span><span class="doing">Spend up to $200 on font licenses.</span><span class="verb">9:58 am</span></li>
+            <li><span class="role">Held</span><span class="doing">Switch to a new CRM.</span><span class="verb">10:14 am</span></li>
+            <li><span class="role">Approved</span><span class="doing">Publish the engineering blog draft.</span><span class="verb">10:33 am</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">9 cleared today &middot; 1 held &middot; 0 ignored</div>
+      </div>
+    </section>
+
+    <!-- ── PREVIEW ──────────────── -->
+    <section class="view" id="preview">
+      <div class="col">
+
+        <div class="date">Preview</div>
+
+        <h1 class="sentence">
+          Acme is running.
+          <span class="quiet">Two builds live.</span>
+        </h1>
+
+        <p class="subline">
+          <span class="dot"></span>
+          <span>Last deploy 6 minutes ago &middot; build #482</span>
+        </p>
+
+        <section class="section">
+          <h3 class="h">Live</h3>
+
+          <div class="item">
+            <div class="who"><span class="pip green"></span>Production &middot; build 482</div>
+            <p class="ask">acme.app</p>
+            <p class="why">Deployed 6 minutes ago. All probes green. 2,184 requests in the last hour.</p>
+            <div class="acts">
+              <a class="primary">Open</a>
+              <a>See changes</a>
+              <a>Roll back</a>
+            </div>
+          </div>
+
+          <div class="item">
+            <div class="who"><span class="pip green"></span>Staging &middot; build 483 (PR)</div>
+            <p class="ask">staging-pr-128.acme.app</p>
+            <p class="why">Onboarding rewrite preview. Tester is running the mobile pass right now.</p>
+            <div class="acts">
+              <a class="primary">Open</a>
+              <a>See diff</a>
+              <a>Promote</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Recent deploys</h3>
+          <ul class="list">
+            <li><span class="role">Prod</span><span class="doing">Pricing copy update.</span><span class="verb">6m ago</span></li>
+            <li><span class="role">Prod</span><span class="doing">Email validation fix.</span><span class="verb">2h ago</span></li>
+            <li><span class="role">Stg</span><span class="doing">Auth migration draft.</span><span class="verb">3h ago</span></li>
+            <li><span class="role">Prod</span><span class="doing">Password strength meter.</span><span class="verb">yesterday</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">99.98% uptime &middot; 0 rollbacks this week</div>
+      </div>
+    </section>
+
+    <!-- ── LOGS ─────────────────── -->
+    <section class="view" id="logs">
+      <div class="col">
+
+        <div class="date">Logs</div>
+
+        <h1 class="sentence">
+          The company&rsquo;s heartbeat.
+          <span class="quiet">2,184 beats in the last hour.</span>
+        </h1>
+
+        <p class="subline">
+          <span class="dot"></span>
+          <span>Streaming live &middot; oldest visible 12 minutes ago</span>
+        </p>
+
+        <section class="section">
+          <h3 class="h">Recent beats</h3>
+          <ul class="list">
+            <li><span class="role">9:42:18</span><span class="doing">Marketing wrote pricing.copy v3.</span><span class="verb">tool: edit</span></li>
+            <li><span class="role">9:42:11</span><span class="doing">Engineering read auth/migrate.ts.</span><span class="verb">tool: read</span></li>
+            <li><span class="role">9:41:58</span><span class="doing">Quality opened mobile-slow probe.</span><span class="verb">tool: probe</span></li>
+            <li><span class="role">9:41:42</span><span class="doing">Product cited lesson L-038.</span><span class="verb">tool: memory</span></li>
+            <li><span class="role">9:41:14</span><span class="doing">Marketing requested approval.</span><span class="verb">decision</span></li>
+            <li><span class="role">9:40:51</span><span class="doing">Engineering finished test pass.</span><span class="verb">tool: test</span></li>
+            <li><span class="role">9:40:29</span><span class="doing">Quality drafted lesson L-043.</span><span class="verb">memory</span></li>
+            <li><span class="role">9:40:02</span><span class="doing">Engineering opened auth diff.</span><span class="verb">tool: diff</span></li>
+            <li><span class="role">9:39:48</span><span class="doing">Product wrote brief v2.</span><span class="verb">tool: edit</span></li>
+            <li><span class="role">9:39:21</span><span class="doing">Marketing read funnel report.</span><span class="verb">tool: read</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">Filter by agent &middot; Filter by tool &middot; Export</div>
+      </div>
+    </section>
+
+    <!-- ── SETTINGS ─────────────── -->
+    <section class="view" id="settings">
+      <div class="col">
+
+        <div class="date">Settings</div>
+
+        <h1 class="sentence">
+          The company&rsquo;s preferences.
+          <span class="quiet">Sensible defaults.</span>
+        </h1>
+
+        <p class="subline"><span>You&rsquo;re the CEO &middot; you decide</span></p>
+
+        <section class="section">
+          <h3 class="h">Company</h3>
+          <ul class="list">
+            <li><span class="role">Name</span><span class="doing">Acme</span><span class="verb">edit</span></li>
+            <li><span class="role">Mission</span><span class="doing">Make signup feel obvious.</span><span class="verb">edit</span></li>
+            <li><span class="role">Sprint length</span><span class="doing">7 days</span><span class="verb">edit</span></li>
+            <li><span class="role">Working hours</span><span class="doing">Always on</span><span class="verb">edit</span></li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Budget</h3>
+          <ul class="list">
+            <li><span class="role">Monthly cap</span><span class="doing">$500</span><span class="verb">edit</span></li>
+            <li><span class="role">Spent so far</span><span class="doing">$184.20</span><span class="verb">37%</span></li>
+            <li><span class="role">Alerts</span><span class="doing">At 80% and 100%</span><span class="verb">edit</span></li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h3 class="h">Trust</h3>
+          <ul class="list">
+            <li><span class="role">Auto-approve</span><span class="doing">Edits under 50 lines</span><span class="verb">edit</span></li>
+            <li><span class="role">Always ask</span><span class="doing">Deploys, money, hires</span><span class="verb">edit</span></li>
+            <li><span class="role">Never</span><span class="doing">Touch the database directly</span><span class="verb">edit</span></li>
+          </ul>
+        </section>
+
+        <div class="foot">Sign out &middot; Export everything &middot; Delete the company</div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Composer pinned to bottom -->
+<div class="ask-bar">
+  <form onsubmit="event.preventDefault(); this.querySelector('input').value=''">
+    <input type="text" placeholder="Talk to the company&hellip;" autocomplete="off" />
+    <span class="hint">&#8984;&crarr;</span>
+  </form>
+</div>
+
+<script>
+  const tabs = document.querySelectorAll('.rail .tab[data-view]');
+  const views = document.querySelectorAll('.view');
+  const main = document.querySelector('.main');
+  tabs.forEach(btn => btn.addEventListener('click', () => {
+    tabs.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const id = btn.dataset.view;
+    views.forEach(v => v.classList.toggle('active', v.id === id));
+    main.scrollTo({top:0, behavior:'instant'});
+  }));
+</script>
+</body>
+</html>

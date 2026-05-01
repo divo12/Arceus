@@ -459,7 +459,7 @@ onBeatEvent((event) => {
 // allow-list, browsers from arbitrary origins can read SSE streams /
 // agent activity even when the API itself is behind admin auth.
 const allowedOriginsRaw = process.env.ARCEUS_ALLOWED_ORIGINS
-  ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:3000,http://localhost:4000");
+  ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:3000,http://localhost:4000,http://localhost:5273");
 const allowedOrigins = allowedOriginsRaw
   .split(",")
   .map((s) => s.trim())
