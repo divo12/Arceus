@@ -53,13 +53,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 let resolvedAdminToken: string | null = null;
 let warnedDev = false;
 
-/** @internal — reset cached token for tests */
-export function __resetAdminToken(): void {
-  resolvedAdminToken = null;
-  warnedDev = false;
-}
-
-export function resolveAdminToken(): string {
+function resolveAdminToken(): string {
   if (resolvedAdminToken) return resolvedAdminToken;
 
   const token = process.env.ARCEUS_ADMIN_TOKEN ?? process.env.ARCEUS_TOKEN;
@@ -93,7 +87,7 @@ export function resolveAdminToken(): string {
  * request — the env can flip without a restart in some deployment
  * scenarios, and tests benefit from the per-call lookup.
  */
-export function isAuthRequired(): boolean {
+function isAuthRequired(): boolean {
   const flag = process.env.ARCEUS_REQUIRE_AUTH;
   if (flag === "1" || flag === "true") return true;
   if (flag === "0" || flag === "false") return false;

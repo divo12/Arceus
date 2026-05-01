@@ -43,7 +43,3 @@ export const persistenceConfig = {
   },
 };
 
-/** Check whether Supabase storage credentials are configured. */
-export function isSupabaseConfigured() {
-  return persistenceConfig.supabase.configured;
-}

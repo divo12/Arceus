@@ -141,7 +141,7 @@ export async function getSupabaseEndpointHealth() {
 }
 
 /** Upload a local file to a Supabase storage bucket. */
-export async function uploadFileToBucket(bucket: string, objectKey: string, localFilePath: string, contentType: string) {
+async function uploadFileToBucket(bucket: string, objectKey: string, localFilePath: string, contentType: string) {
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase storage is not configured.");
   }
@@ -171,7 +171,7 @@ export async function uploadFileToBucket(bucket: string, objectKey: string, loca
 }
 
 /** Download a file from a Supabase storage bucket to a local path. */
-export async function downloadFileFromBucket(bucket: string, objectKey: string, localFilePath: string) {
+async function downloadFileFromBucket(bucket: string, objectKey: string, localFilePath: string) {
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase storage is not configured.");
   }
