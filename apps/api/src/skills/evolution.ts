@@ -27,44 +27,21 @@ import type {
 } from "@arceus/contracts";
 import { structuredCompletion } from "../infra/azure-openai.js";
 
-// ── Inline phase-specific system prompts (no shared session; information
+// ── Phase-specific system prompts (no shared session; information
 //     isolation between phases is the design feature — spec 27 §2.5).
 //     Each primitive gets a tight, phase-scoped prompt instead of the old
-//     6-phase Skill Evolution Agent shared-session prompt.
-
-const ATTRIBUTION_SYSTEM_PROMPT =
-  "You analyze a task failure and attribute it to a specific skill (or identify a skill gap). " +
-  "Respond with JSON matching the requested schema — no prose, no explanation.";
-
-const MUTATION_SYSTEM_PROMPT =
-  "You rewrite an existing skill to fix a failure mode. Return the full Markdown body, " +
-  "a one-line trigger, and a one-line description. Respond with JSON matching the schema.";
-
-const DISCOVERY_SYSTEM_PROMPT =
-  "You create a new skill from failure-attribution output. Return the kebab-case name, full " +
-  "Markdown body, trigger, and description. Respond with JSON matching the schema.";
-
-const TGA_SYSTEM_PROMPT =
-  "You are the Test Generator Agent (TGA). Given a proposed skill mutation, generate a small " +
-  "set of test scenarios that would validate the change. Respond with JSON matching the schema.";
-
-const EAA_SYSTEM_PROMPT =
-  "You are the Execution Agent (EAA). Given a skill and a test scenario, dry-run the scenario " +
-  "and report whether the skill's guidance would produce the expected outcome. Respond with JSON.";
-
-const ROA_SYSTEM_PROMPT =
-  "You are the Review Oracle Agent (ROA). Given a mutation, its test scenarios, and execution " +
-  "results, emit a verdict (approve / reject / revise / needs_sl_review) with revision guidance " +
-  "and security concerns. You receive only typed outputs from prior phases — never their prompts " +
-  "or reasoning (information isolation prevents confirmation bias). Respond with JSON.";
-
-const REVISION_SYSTEM_PROMPT =
-  "You revise a skill mutation based on ROA feedback. Return the revised Markdown body, " +
-  "trigger, and description. Respond with JSON matching the schema.";
-
-const SYNTHESIS_SYSTEM_PROMPT =
-  "You synthesize a reusable skill from recurring agent behavior. Return the kebab-case name, " +
-  "Markdown body, trigger, and description. Respond with JSON matching the schema.";
+//     6-phase Skill Evolution Agent shared-session prompt. Bodies live in
+//     `./prompts/*.md` so they can be edited without churning .ts.
+import {
+  ATTRIBUTION_SYSTEM_PROMPT,
+  MUTATION_SYSTEM_PROMPT,
+  DISCOVERY_SYSTEM_PROMPT,
+  TGA_SYSTEM_PROMPT,
+  EAA_SYSTEM_PROMPT,
+  ROA_SYSTEM_PROMPT,
+  REVISION_SYSTEM_PROMPT,
+  SYNTHESIS_SYSTEM_PROMPT,
+} from "./prompts/loader.js";
 
 // ── Zod schemas for LLM structured output ────────────────
 
