@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { cpGetBeatHistory } from "../../persistence/control-plane.js";
+import { cpGetBeatHistory } from "../../persistence/control-plane/index.js";
 import { recordBeatActivity } from "../../heartbeats/watchdog.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";

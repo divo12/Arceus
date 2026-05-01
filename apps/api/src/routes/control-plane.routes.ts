@@ -5,7 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getExecutionStatus } from "../orchestration/state.js";
-import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } from "../persistence/control-plane.js";
+import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } from "../persistence/control-plane/index.js";
 import { sanitizeError } from "../observability/sanitize.js";
 
 export default async function controlPlaneRoutes(app: FastifyInstance) {

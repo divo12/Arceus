@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { roleTypeSchema, beatTriggerSchema, beatEventTriggerSchema } from "@arceus/contracts";
 import { getActiveCompanyId } from "../persistence/active-company.js";
-import { cpGetBeatHistory } from "../persistence/control-plane.js";
+import { cpGetBeatHistory } from "../persistence/control-plane/index.js";
 import type { HeartbeatEngine, MeetingScheduler, HeartbeatConfig } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
 import { parseListLimit } from "./_helpers.js";

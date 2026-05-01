@@ -44,7 +44,7 @@ import { emitEmployeeActivity } from "../observability/activity.js";
 import { auditAgent } from "../observability/audit-ledger.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import { sanitizeToolArgs, truncateTelemetry, extractPreviewUrls } from "../infra/utils.js";
-import { cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "../persistence/control-plane.js";
+import { cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "../persistence/control-plane/index.js";
 import {
   agentSessions,
   activeExecution,
