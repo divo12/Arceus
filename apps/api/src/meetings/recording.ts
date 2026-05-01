@@ -8,7 +8,7 @@ import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
-import { emitGraphMeeting, resolveActiveSprintId } from "../observability/graph-emitter.js";
+import { emitGraphMeeting, resolveActiveSprintId } from "../observability/graph-emitter/index.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import type { MeetingAgendaInput, MeetingDecisionInput, MeetingLearningInput, TaskModificationInput, MemoryModificationInput } from "../orchestration/state.js";
 import { deriveMeetingMemoryModifications, applyMeetingEffects } from "./effects.js";

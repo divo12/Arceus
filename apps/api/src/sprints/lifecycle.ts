@@ -8,7 +8,7 @@ import {
   emitGraphDecision,
   emitGraphSprintCompleted,
   emitGraphNodeAdded,
-} from "../observability/graph-emitter.js";
+} from "../observability/graph-emitter/index.js";
 import { stopLocalPreview, getLocalPreviewState, startLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { createReviewState, buildGateFailureBugFields } from "./review-helpers.js";

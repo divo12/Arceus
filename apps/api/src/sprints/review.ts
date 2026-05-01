@@ -17,7 +17,7 @@ import {
   emitGraphNodeAdded,
   emitGraphBeatStarted,
   emitGraphBeatCompleted,
-} from "../observability/graph-emitter.js";
+} from "../observability/graph-emitter/index.js";
 import {
   structuredCompletion,
   startBeatTokenAccumulator,

@@ -20,7 +20,7 @@ import {
 } from "../orchestration/state.js";
 import { nowIso } from "@arceus/task-engine";
 import { emitEmployeeActivity } from "../observability/activity.js";
-import { emitGraphFileChanges, resolveActiveSprintId } from "../observability/graph-emitter.js";
+import { emitGraphFileChanges, resolveActiveSprintId } from "../observability/graph-emitter/index.js";
 import { getLocalPreviewState, hasReportedPreviewCandidate, hasLocalPreviewCandidate, startLocalPreview } from "./preview.js";
 import { touchAgentSession, updateAgentSessionState } from "../agents/sessions.js";
 import { scheduleDeveloperWatchdog, failDeveloperStall } from "./watchdog.js";

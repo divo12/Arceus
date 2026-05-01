@@ -14,7 +14,7 @@ import {
   emitGraphFileChanges,
   emitGraphMemoryWrite,
   resolveActiveSprintId,
-} from "../observability/graph-emitter.js";
+} from "../observability/graph-emitter/index.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { swallowAndAudit } from "../observability/swallow.js";

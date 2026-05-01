@@ -18,7 +18,7 @@ import { auditAgent } from "../observability/audit-ledger.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import {
   emitGraphBeatStarted, emitGraphBeatCompleted, resolveActiveSprintId,
-} from "../observability/graph-emitter.js";
+} from "../observability/graph-emitter/index.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
 import { updateMeeting, updateSprint } from "../persistence/mutations.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";

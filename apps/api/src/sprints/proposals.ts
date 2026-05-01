@@ -11,7 +11,7 @@ import {
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
-import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
+import { emitGraphSprintStarted } from "../observability/graph-emitter/index.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
 import { persistSprint, persistTask } from "../persistence/domain-persistence.js";
