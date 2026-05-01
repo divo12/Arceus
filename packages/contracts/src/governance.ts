@@ -89,7 +89,8 @@ export const policySeveritySchema = z.enum(["low", "medium", "high", "critical"]
 export const policyViolationSchema = z.object({
   id: z.string(),
   companyId: z.string(),
-  agentId: z.string(),
+  /** Null for system-scoped denies (no agent owns the call). */
+  agentId: z.string().nullable(),
   ruleId: z.string(),
   tool: z.string(),
   decision: policyDecisionKindSchema,

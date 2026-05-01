@@ -78,7 +78,7 @@ function runBuildCheck(productDir: string): typeof lastBuildCheck {
     // surfaces it on the rejected-promise path, not the thrown one. Read it
     // through a narrowed shape rather than `any`.
     const errWithStderr = err as { stderr?: { toString?: () => string } };
-    const stderr = errWithStderr.stderr?.toString?.().slice(0, 500) ?? "";
+    const stderr = errWithStderr.stderr?.toString?.().slice(0, 500);
     lastBuildCheck = { status: "error", detail: stderr || "Build failed", checkedAt: new Date().toISOString() };
   }
 

@@ -66,9 +66,8 @@ export async function cpLoadSnapshot(): Promise<CompanySnapshot & { _version: nu
 
 /** Get the current version info. */
 export async function cpGetVersion(): Promise<SnapshotVersion> {
-  const companyId = getActiveCompanyId() ?? "";
   return {
-    companyId,
+    companyId: getActiveCompanyId(),
     version: snapshotVersion,
     updatedAt: new Date().toISOString(),
     mutationCount,
@@ -87,7 +86,8 @@ export interface ControlPlaneStatus {
   version: number;
   mutationCount: number;
   upSince: string;
-  companyId: string;
+  /** Null when no company is bootstrapped (control plane is pending). */
+  companyId: string | null;
   snapshotStale: boolean;
   components: {
     stateStore: { status: "ok" | "degraded"; inMemory: boolean; dbPersist: boolean; dirty: boolean; mutationsSinceHydrate: number; lastHydratedAt: string | null; lastFlushedAt: string | null };
@@ -102,8 +102,8 @@ export interface ControlPlaneStatus {
  * canonical-direct architecture has no in-memory cache to report on.
  */
 export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
-  const companyId = getActiveCompanyId() ?? "";
-  const isPending = !companyId;
+  const companyId = getActiveCompanyId();
+  const isPending = companyId === null;
 
   return {
     healthy: true,
@@ -142,8 +142,8 @@ export async function cpGetSnapshotSummary() {
   if (!companyId) {
     return {
       version: snapshotVersion,
-      companyId: "",
-      companyName: "",
+      companyId: null,
+      companyName: null,
       companyStatus: "ideation",
       agentCount: 0,
       activeSessions: 0,

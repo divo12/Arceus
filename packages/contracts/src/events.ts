@@ -99,7 +99,7 @@ export type StateMutation = z.infer<typeof stateMutationSchema>;
 
 /** Summary of a snapshot version checkpoint */
 export const snapshotVersionSchema = z.object({
-  companyId: z.string(),
+  companyId: z.string().nullable(),
   version: z.number().int(),
   updatedAt: z.string(),
   mutationCount: z.number().int(),

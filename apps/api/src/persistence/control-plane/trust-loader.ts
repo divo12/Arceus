@@ -191,10 +191,7 @@ export async function cpGetPolicyViolations(opts?: { agentId?: string; limit?: n
       return rows.map((r) => ({
         id: r.id,
         companyId: r.companyId,
-        // The canonical schema allows null agent_id for system-scoped
-        // denies; the contract requires a string. Surface as empty
-        // string so consumers can gate on `agentId.length`.
-        agentId: r.agentId ?? "",
+        agentId: r.agentId,
         ruleId: r.ruleId,
         tool: r.tool,
         decision: r.decision as PolicyViolation["decision"],
