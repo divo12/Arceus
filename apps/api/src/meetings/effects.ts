@@ -17,7 +17,7 @@ import type { TaskModificationInput, MemoryModificationInput, MeetingAgendaInput
  * `applyMeetingEffects` so this function can stay sync inside the
  * `updateTask` updater closure.
  */
-export function applyTaskModification(
+function applyTaskModification(
   companyId: string,
   modification: TaskModificationInput,
   agentByRole: Map<AgentIdentity["role"], { id: string }>,

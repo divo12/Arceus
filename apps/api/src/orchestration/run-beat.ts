@@ -33,7 +33,7 @@ import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 
 const HARD_CAP_MS = 15 * 60 * 1000;
 
-export interface BeatResult {
+interface BeatResult {
   beatId: string;
   sessionId: string;
   verdict: "pass" | "fail";

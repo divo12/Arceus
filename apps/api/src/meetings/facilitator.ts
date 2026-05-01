@@ -37,7 +37,7 @@ function extractJson(output: string): string | null {
 
 // ── Facilitator Session ────────────────────────────────────
 
-export interface FacilitatorResult {
+interface FacilitatorResult {
   synthesis: SynthesisOutput;
   resolutions: ResolutionOutput;
   brief: DailySyncBrief | null;

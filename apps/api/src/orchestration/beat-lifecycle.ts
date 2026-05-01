@@ -43,7 +43,7 @@ async function nextBeatNumber(dbCompanyId: string): Promise<number> {
   return Number((row as { next?: number } | undefined)?.next ?? 1);
 }
 
-export interface StartHeartbeatRunInput {
+interface StartHeartbeatRunInput {
   beatId: string;
   companyId: string;
   role: string;
@@ -90,7 +90,7 @@ export async function startHeartbeatRun(input: StartHeartbeatRunInput): Promise<
   }
 }
 
-export interface FinishHeartbeatRunInput {
+interface FinishHeartbeatRunInput {
   runDbId: string | null;
   beatId: string;
   verdict: "pass" | "fail";
@@ -114,7 +114,7 @@ export async function finishHeartbeatRun(input: FinishHeartbeatRunInput): Promis
   }
 }
 
-export interface BindSessionInput {
+interface BindSessionInput {
   sessionId: string;
   beatDbId: string | null;
   companyId: string;

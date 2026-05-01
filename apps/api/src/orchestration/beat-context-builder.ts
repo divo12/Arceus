@@ -98,7 +98,7 @@ interface BeatMemoryUnitSlice {
   createdAt: string;
 }
 
-export interface BeatRenderContext {
+interface BeatRenderContext {
   company: Company | null;
   agents: readonly BeatAgentSlice[];
   sprints: Sprint[];
@@ -271,14 +271,14 @@ function renderCompanyState(ctx: BeatRenderContext): string {
  * to skip the prompt entirely when an agent has nothing to do
  * (avoids filler-work hallucination from a bored LLM).
  */
-export function countOpenTasks(ctx: BeatRenderContext, role: Role): number {
+function countOpenTasks(ctx: BeatRenderContext, role: Role): number {
   return ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   ).length;
 }
 
 /** Snapshot of what the role sees in `## Your Tasks` (for diagnostic events). */
-export function summarizeShownTasks(
+function summarizeShownTasks(
   ctx: BeatRenderContext,
   role: Role,
 ): { id: string; title: string; status: string; claimable: boolean }[] {
@@ -558,7 +558,7 @@ function renderTaskContext(task: Task): string {
  * one batch fetch of `BeatRenderContext`; the renderers themselves
  * are pure.
  */
-export async function renderStateForAgent(role: Role, companyId: string): Promise<string> {
+async function renderStateForAgent(role: Role, companyId: string): Promise<string> {
   const ctx = await loadBeatRenderContext(companyId, role);
   const sections = [
     renderCompanyState(ctx),
