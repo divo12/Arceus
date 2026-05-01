@@ -5,13 +5,13 @@
  */
 
 import {
-  activeExecution,
-  executionStatus,
+  getActiveExecution,
+  getExecutionStatus,
   setExecutionStatus,
   agentSessions,
   DEVELOPER_STALL_TIMEOUT_MINUTES,
   DEVELOPER_STALL_TIMEOUT_MS,
-  developerWatchdog,
+  getDeveloperWatchdog,
   setDeveloperWatchdog,
 } from "../orchestration/state.js";
 import { summarizeDeveloperStall } from "../agents/sessions.js";
@@ -23,8 +23,9 @@ import { stopDeveloperWorkspaceMonitor } from "./monitor.js";
 
 /** Cancel any pending developer stall timer. */
 export function clearDeveloperWatchdog() {
-  if (!developerWatchdog) return;
-  clearTimeout(developerWatchdog);
+  const watchdog = getDeveloperWatchdog();
+  if (!watchdog) return;
+  clearTimeout(watchdog);
   setDeveloperWatchdog(null);
 }
 
@@ -32,7 +33,7 @@ export function clearDeveloperWatchdog() {
 export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: string) => Promise<void>) {
   clearDeveloperWatchdog();
 
-  if (!activeExecution || executionStatus !== "executing") return;
+  if (!getActiveExecution() || getExecutionStatus() !== "executing") return;
 
   const developerSession = agentSessions.get("developer");
   if (developerSession?.status !== "working") return;
@@ -46,7 +47,8 @@ export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: stri
 /** Mark the developer session as stalled, fail the build task, and escalate via meeting. */
 export async function failDeveloperStall(sessionId: string) {
   const developerSession = agentSessions.get("developer");
-  if (!activeExecution || executionStatus !== "executing") return;
+  const activeExecution = getActiveExecution();
+  if (!activeExecution || getExecutionStatus() !== "executing") return;
   if (developerSession?.sessionId !== sessionId || developerSession.status !== "working") return;
 
   clearDeveloperWatchdog();

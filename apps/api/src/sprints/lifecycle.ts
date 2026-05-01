@@ -18,10 +18,10 @@ import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import {
   sprintCompletionGate,
-  executionStatus,
+  getExecutionStatus,
   setExecutionStatus,
   setActiveExecution,
-  activeExecution,
+  getActiveExecution,
 } from "../orchestration/state.js";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
@@ -275,6 +275,7 @@ type TagSprintResult = { ok: true } | { ok: false; error: string };
 async function tagCurrentSprintSnapshot(): Promise<TagSprintResult> {
   const companyId = requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
+  const activeExecution = getActiveExecution();
 
   try {
     const result = await workspaceManager.tagSprint(companyId, snapshot.company.currentSprintNumber ?? 1, snapshot);
@@ -295,7 +296,8 @@ async function tagCurrentSprintSnapshot(): Promise<TagSprintResult> {
 
 /** Approve a pending board review: resolve approvals, mark execution done, and check sprint completion. */
 export async function approveBoardReview() {
-  if (executionStatus !== "awaiting_board_review" || !activeExecution) {
+  const activeExecution = getActiveExecution();
+  if (getExecutionStatus() !== "awaiting_board_review" || !activeExecution) {
     throw new Error("Board review is not awaiting approval.");
   }
 
@@ -359,7 +361,7 @@ export async function approveBoardReview() {
   await checkSprintCompletion();
 
   return {
-    executionStatus,
+    executionStatus: getExecutionStatus(),
     reviewTaskId,
     queuedFollowUpCount,
     resolvedApprovalCount: resolvedApprovals.length,

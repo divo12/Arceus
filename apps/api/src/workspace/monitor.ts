@@ -7,12 +7,12 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import {
-  activeExecution,
-  executionStatus,
+  getActiveExecution,
+  getExecutionStatus,
   productDir,
-  developerWorkspaceMonitor,
-  developerWorkspaceSnapshot,
-  developerStepLoopActive,
+  getDeveloperWorkspaceMonitor,
+  getDeveloperWorkspaceSnapshot,
+  getDeveloperStepLoopActive,
   setDeveloperWorkspaceMonitor,
   setDeveloperWorkspaceSnapshot,
   WORKSPACE_MONITOR_INTERVAL_MS,
@@ -59,8 +59,9 @@ async function collectWorkspaceSnapshot(dir = productDir, base = productDir, res
 
 /** Stop the periodic workspace polling interval and clear the cached snapshot. */
 export function stopDeveloperWorkspaceMonitor() {
-  if (developerWorkspaceMonitor) {
-    clearInterval(developerWorkspaceMonitor);
+  const monitor = getDeveloperWorkspaceMonitor();
+  if (monitor) {
+    clearInterval(monitor);
     setDeveloperWorkspaceMonitor(null);
   }
   setDeveloperWorkspaceSnapshot(new Map<string, number>());
@@ -68,13 +69,15 @@ export function stopDeveloperWorkspaceMonitor() {
 
 /** Compare the current workspace to the last snapshot and emit events for changed files. */
 async function pollDeveloperWorkspaceChanges() {
-  if (!activeExecution || executionStatus !== "executing") {
+  const activeExecution = getActiveExecution();
+  if (!activeExecution || getExecutionStatus() !== "executing") {
     return;
   }
 
+  const previousSnapshot = getDeveloperWorkspaceSnapshot();
   const nextSnapshot = await collectWorkspaceSnapshot();
   const changedFiles = Array.from(nextSnapshot.entries())
-    .filter(([path, mtime]) => (developerWorkspaceSnapshot.get(path) ?? 0) < mtime)
+    .filter(([path, mtime]) => (previousSnapshot.get(path) ?? 0) < mtime)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 8)
     .map(([path]) => path);
@@ -118,11 +121,12 @@ async function pollDeveloperWorkspaceChanges() {
 
 /** If no preview is running and the workspace has a runnable project, start a live preview. */
 async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
-  if (!activeExecution || executionStatus !== "executing") {
+  const activeExecution = getActiveExecution();
+  if (!activeExecution || getExecutionStatus() !== "executing") {
     return;
   }
 
-  if (developerStepLoopActive) {
+  if (getDeveloperStepLoopActive()) {
     return;
   }
 

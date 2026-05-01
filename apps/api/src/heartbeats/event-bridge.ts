@@ -47,11 +47,10 @@ import { sanitizeToolArgs, truncateTelemetry, extractPreviewUrls } from "../infr
 import { cpLoadTrustScore, cpUpdateTrustScore, cpRecordPolicyViolation } from "../persistence/control-plane/index.js";
 import {
   agentSessions,
-  activeExecution,
+  getActiveExecution,
   eventBridgeOnce,
   pendingPromptCompletions,
-  developerStepLoopActive,
-  executionStatus,
+  getDeveloperStepLoopActive,
   setExecutionStatus,
 } from "../orchestration/state.js";
 import { updateAgentSessionState, touchAgentSession, resolveRoleBySessionId } from "../agents/sessions.js";
@@ -176,6 +175,11 @@ async function processEvent(event: OpenCodeEvent) {
 
   const role = resolveRoleBySessionId(sessionId);
   if (!role) return;
+
+  // Capture once per event so TS narrowing on `if (activeExecution)` works
+  // and we don't read inconsistent runtime state mid-handler.
+  const activeExecution = getActiveExecution();
+  const developerStepLoopActive = getDeveloperStepLoopActive();
 
   // Capability flags replace `role === "developer"` checks across this bridge.
   // Add new behaviours by extending ROLE_CAPABILITIES, never by adding role string
