@@ -30,6 +30,3 @@ export async function resolveSessionContext(sessionId: string): Promise<BeatCont
   }
 }
 
-export function clearSessionContextCache(): void {
-  cache.clear();
-}

@@ -65,23 +65,23 @@ export interface MeetingPipelineDeps {
 
 // ── Step Interfaces (stubs for now, real in Phases 4-6) ────
 
-export interface CollectResult {
+interface CollectResult {
   contributionCount: number;
 }
 
-export interface SynthesizeResult {
+interface SynthesizeResult {
   conflictCount: number;
   blockerCount: number;
 }
 
-export interface ResolveResult {
+interface ResolveResult {
   decisionCount: number;
   tasksCreated: number;
   tasksModified: number;
   escalationsCreated: number;
 }
 
-export interface LearnResult {
+interface LearnResult {
   memoriesExtracted: number;
 }
 

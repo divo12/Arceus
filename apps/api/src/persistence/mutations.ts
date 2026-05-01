@@ -309,21 +309,6 @@ export async function appendChatMessage(message: ChatMessage): Promise<ChatMessa
  * Spec 33 / Audit C1 — `lockByAgent` (PK is `agent_id`, not `id`)
  * serializes concurrent writers so concurrent learnings don't clobber.
  */
-export async function updateAgentMemory(
-  agentId: string,
-  companyId: string,
-  updater: (memory: MemorySummary) => MemorySummary,
-): Promise<MemorySummary | null> {
-  return await getDb().transaction(async (tx) => {
-    await memorySummariesRepo.lockByAgent(tx, agentId);
-    const current = await memorySummariesRepo.findByAgentHydrated(tx, agentId);
-    if (!current) return null;
-    const next = updater(current);
-    await memorySummariesRepo.upsertSummary(tx, next, companyId);
-    return next;
-  });
-}
-
 export async function updateAgentStatus(
   agentId: string,
   status: string,
@@ -369,18 +354,6 @@ const taskProgressMap = new Map<string, TaskProgress>();
 
 export function updateTaskProgress(taskId: string, progress: TaskProgress): void {
   taskProgressMap.set(taskId, progress);
-}
-
-export function getTaskProgress(taskId: string): TaskProgress | null {
-  return taskProgressMap.get(taskId) ?? null;
-}
-
-export function getAllTaskProgress(): TaskProgress[] {
-  return Array.from(taskProgressMap.values());
-}
-
-export function clearTaskProgress(taskId: string): void {
-  taskProgressMap.delete(taskId);
 }
 
 // ─── Lifecycle no-ops (kept for caller compat) ────────────────────

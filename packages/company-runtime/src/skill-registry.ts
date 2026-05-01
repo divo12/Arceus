@@ -275,7 +275,7 @@ export function isSeeded(): boolean {
   return seeded;
 }
 
-export function markSeeded(): void {
+function markSeeded(): void {
   seeded = true;
 }
 

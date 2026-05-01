@@ -16,7 +16,7 @@
  */
 import { observability, type ArceusEvent } from "@arceus/contracts";
 
-export interface SwallowContext {
+interface SwallowContext {
   companyId?: string;
   beatId?: string;
   detail?: Record<string, unknown>;
@@ -55,19 +55,3 @@ export function swallowAndAudit<T>(
   });
 }
 
-/**
- * Awaitable variant. Returns the resolved value on success, `undefined`
- * on failure (after emitting the error event).
- */
-export async function swallowAndReport<T>(
-  where: string,
-  fn: () => Promise<T>,
-  ctx: SwallowContext = {},
-): Promise<T | undefined> {
-  try {
-    return await fn();
-  } catch (err) {
-    emitErrorEvent(where, err, ctx);
-    return undefined;
-  }
-}

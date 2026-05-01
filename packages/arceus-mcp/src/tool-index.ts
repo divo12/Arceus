@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export interface ToolIndexEntry {
+interface ToolIndexEntry {
   id: string;
   description: string;
   sourceFile: string;

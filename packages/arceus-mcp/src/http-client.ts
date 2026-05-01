@@ -1,7 +1,7 @@
 import type { McpContext } from "./context.js";
 import { resolveSessionContext } from "./context-resolver.js";
 
-export interface ArceusRequestInit {
+interface ArceusRequestInit {
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   path: string;
   body?: unknown;
@@ -10,7 +10,7 @@ export interface ArceusRequestInit {
   sessionId?: string;
 }
 
-export interface ArceusResponse<T> {
+interface ArceusResponse<T> {
   status: number;
   data: T;
   headers: Record<string, string>;

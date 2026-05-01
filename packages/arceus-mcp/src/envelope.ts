@@ -14,7 +14,7 @@ export function deriveIdempotencyKey(beatId: string, op: string, body: unknown):
   return `${beatId || "shared"}:${op}:${bodyHash}`;
 }
 
-export interface McpToolContent {
+interface McpToolContent {
   [key: string]: unknown;
   content: { [key: string]: unknown; type: "text"; text: string }[];
   isError?: boolean;

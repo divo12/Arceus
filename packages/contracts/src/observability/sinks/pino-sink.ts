@@ -8,7 +8,7 @@ import pino, { type Logger } from "pino";
 import type { EventSink } from "../emitter.js";
 import type { ArceusEvent } from "../events.js";
 
-export interface PinoSinkOptions {
+interface PinoSinkOptions {
   logger?: Logger;
   level?: pino.Level;
 }

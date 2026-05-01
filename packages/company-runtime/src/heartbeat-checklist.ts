@@ -23,17 +23,7 @@ import { loadChecklistConfig, type ChecklistConfig } from "./checklist-config";
 // `loadChecklistConfig()` reads ARCEUS_CHECKLIST_* env vars on first call.
 // Tests can override via `setChecklistConfigForTests({ ... })`.
 
-let activeConfig: ChecklistConfig = loadChecklistConfig();
-
-/** Test-only: override the active checklist config. */
-export function setChecklistConfigForTests(overrides: Partial<ChecklistConfig>): void {
-  activeConfig = { ...activeConfig, ...overrides };
-}
-
-/** Test-only: reset to env-driven defaults. */
-export function resetChecklistConfigForTests(): void {
-  activeConfig = loadChecklistConfig();
-}
+const activeConfig: ChecklistConfig = loadChecklistConfig();
 
 // ── Individual check functions ─────────────────────────────
 

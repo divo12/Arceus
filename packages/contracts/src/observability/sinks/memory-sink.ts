@@ -14,7 +14,7 @@ export interface MemorySink extends EventSink {
   size(): number;
 }
 
-export interface MemorySinkOptions {
+interface MemorySinkOptions {
   /** Max events retained. Older entries dropped on overflow. Default 10_000. */
   capacity?: number;
 }
