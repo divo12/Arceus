@@ -69,6 +69,10 @@ export async function applyStrategyTx(
   companyId: string,
   output: StrategyOutput,
 ): Promise<ApplyStrategyResult> {
+  if (output.roles.some((r) => r.role === "developer") && !output.roles.some((r) => r.role === "senior_developer")) {
+    const ctoRole = output.roles.find((r) => r.role === "cto");
+    output.roles.push({ role: "senior_developer", title: "Senior Developer", parent_role: ctoRole?.role ?? "cto", capabilities: ["Code review", "Architecture hygiene"] });
+  }
   assertRoleHierarchy(output.roles);
 
   const db = getDb();

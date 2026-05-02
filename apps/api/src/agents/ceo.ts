@@ -3,7 +3,7 @@ import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import { structuredCompletion, LlmTruncatedOutputError } from "../infra/azure-openai.js";
 
-const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
+const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "senior_developer", "tester", "ui_designer", "marketing", "skills_lead"]);
 // Mandatory hierarchy floor. Enforced deterministically after the LLM returns
 // (see `enforceMandatoryRoles` below), NOT via Zod — so a drifting LLM never
 // causes a retry/latency spike. Kept in lockstep with MANDATORY_ROLES in

@@ -156,9 +156,6 @@ export async function checkSprintCompletion(): Promise<boolean> {
       });
       reviewState.phase = "tester_verification";
 
-      // Surface the preview URL to the user as soon as the gate passes — this
-      // is the "ship it" moment from the user's POV. Tester still needs to
-      // verify, but the user can poke at the preview now.
       const preview = getLocalPreviewState();
       const previewUrl = preview.url ?? preview.entryUrl ?? preview.validationUrl;
       if (previewUrl) {

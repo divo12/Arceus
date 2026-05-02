@@ -3,6 +3,7 @@ export type Role =
   | "cto"
   | "pm"
   | "developer"
+  | "senior_developer"
   | "tester"
   | "ui_designer"
   | "marketing"
@@ -378,6 +379,32 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       approval_update: true,
       task_attach_artifact: true,
       sprint_get_active: true,
+      meeting_contribute: true,
+      company_get_summary: true,
+    }),
+  },
+  senior_developer: {
+    mode: "primary",
+    model: "azure/gpt-4.1",
+    description: "Code reviewer and quality guardian that conducts pre-merge reviews before QA.",
+    promptFile: "./.opencode/prompts/senior-developer-soul.txt",
+    permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
+    tools: denyRest({
+      ...BUILTIN_EDITOR,
+      ...TIER_A_ALL_EXECUTORS,
+      ...TIER_B_COMMON_EXECUTOR,
+      ...MEMORY_ALL,
+      task_get: true,
+      task_list_progress: true,
+      task_claim: true,
+      task_report_bug: true,
+      task_attach_artifact: true,
+      artifact_get: true,
+      artifact_list_sprint: true,
+      sprint_get_active: true,
+      workspace_get_build_health: true,
+      workspace_check_exports: true,
+      workspace_verify_baseline: true,
       meeting_contribute: true,
       company_get_summary: true,
     }),
