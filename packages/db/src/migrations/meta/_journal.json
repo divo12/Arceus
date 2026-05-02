@@ -141,6 +141,13 @@
       "when": 1777390000000,
       "tag": "0020_trust_scores_table",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1777668711991,
+      "tag": "0021_chat2_board_messages_extension",
+      "breakpoints": true
     }
   ]
 }

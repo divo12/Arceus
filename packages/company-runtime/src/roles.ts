@@ -162,7 +162,7 @@ export interface RoleRuntimeCapabilities {
 }
 
 export const ROLE_CAPABILITIES: Record<Role, RoleRuntimeCapabilities> = {
-  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
+  ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
   cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
   pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
   developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true,  seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },

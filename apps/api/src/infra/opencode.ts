@@ -50,7 +50,7 @@ interface OpencodeInstance {
 }
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
-let ceoSessionPromise: Promise<Session> | null = null;
+let ceoChatSessionPromise: Promise<Session> | null = null;
 
 /**
  * Resolve the monorepo root.  process.cwd() varies by runner:
@@ -450,9 +450,9 @@ export async function resetOpencodeConnection() {
   opencodePromise = null;
 }
 
-/** Clear the cached CEO session so the next bootstrap creates a fresh one. */
-export function resetCeoSession() {
-  ceoSessionPromise = null;
+/** Clear the cached CEO chat session so the next chat turn creates a fresh one. */
+export function resetCeoChatSession() {
+  ceoChatSessionPromise = null;
 }
 
 /**
@@ -546,39 +546,48 @@ export async function openOpencodeEventStream() {
   );
 }
 
-/** Get (or lazily create) the singleton CEO session on OpenCode. */
-export async function getCeoSession() {
-  if (!ceoSessionPromise) {
+/**
+ * Get (or lazily create) the singleton CEO **chat** session on OpenCode.
+ *
+ * Spec 35 — this session is owned exclusively by the user-facing chat
+ * surface (`apps/api/src/agents/chat.ts`). The CEO heartbeat path uses
+ * `ensureAgentSession("ceo")` (per-role persistent session in
+ * `agentSessions`) which is physically separate, so chat and beats no
+ * longer collide — the legacy `isCeoStreaming()` skip-guard was removed
+ * once these were named distinctly.
+ */
+export async function getCeoChatSession() {
+  if (!ceoChatSessionPromise) {
     const attempt = (async () => {
       const opencode = await getOpencode();
       ensureDeployment("ceoDeployment");
 
       const sessionResponse = await opencode.client.session.create({
-        body: { title: "Arceus CEO" }
+        body: { title: "Arceus CEO chat" }
       });
 
       if (!sessionResponse.data) {
-        throw new Error("OpenCode did not return a CEO session.");
+        throw new Error("OpenCode did not return a CEO chat session.");
       }
 
       return sessionResponse.data;
     })();
 
-    ceoSessionPromise = attempt;
+    ceoChatSessionPromise = attempt;
 
     attempt.catch(() => {
-      if (ceoSessionPromise === attempt) {
-        ceoSessionPromise = null;
+      if (ceoChatSessionPromise === attempt) {
+        ceoChatSessionPromise = null;
       }
     });
   }
 
-  return ceoSessionPromise;
+  return ceoChatSessionPromise;
 }
 
 /**
  * Create an ephemeral session for a single beat execution.
- * Unlike getCeoSession(), this creates a fresh session each time
+ * Unlike getCeoChatSession(), this creates a fresh session each time
  * to avoid context bleed across beats (Spec 12 Phase 4).
  */
 export async function createBeatSession(role: string, beatId: string): Promise<Session> {

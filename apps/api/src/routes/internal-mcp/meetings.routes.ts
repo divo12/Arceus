@@ -5,9 +5,17 @@ import type { AgentIdentity, Meeting, RoleType, Task } from "@arceus/contracts";
 import { observability, parseRole, parseRoleStrict } from "@arceus/contracts";
 import { recordMeeting } from "../../meetings/recording.js";
 import { writeMeetingSync } from "../../persistence/mutations/index.js";
+import { upsertMeeting } from "../../persistence/mutations/index.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
+import { getMeetingPipelineRunner } from "../../orchestration/state.js";
+import { trackChatMeetingRequest, takeChatMeetingRequest } from "../../agents/chat-meeting-tracker.js";
+import { swallowAndAudit } from "../../observability/swallow.js";
+import { appendChatMessage } from "../../persistence/mutations/index.js";
+import { publishChatEvent } from "../../agents/chat-events.js";
+import { getDb } from "@arceus/db";
+import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
 
 const MEETINGS_BASE = "/api/internal/v1/meetings";
 
@@ -323,4 +331,173 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
       }));
     },
   );
+
+  // ── Spec 35 §5 — async "let me check with the team" ───────────
+  app.post(`${MEETINGS_BASE}/request`, async (req, reply) => {
+    const requestBody = z.object({
+      topic: z.string().min(1).max(200),
+      attendees: z.array(z.string().min(1)).min(1).max(8),
+      question: z.string().min(1).max(4000),
+    });
+    const body = parseOrFail(requestBody, req.body, reply);
+    if (!body) return reply;
+
+    const mcp = req.mcp!;
+    if (mcp.role !== "ceo") {
+      return reply.code(403).send(
+        failure("meeting_request is CEO-only.", "governance", "never", "role_correct"),
+      );
+    }
+
+    const snap = await buildSnapshotView(mcp.companyId);
+    if (snap.agents.length === 0) {
+      return reply.code(409).send(
+        failure(
+          "Cannot schedule a team meeting before the company has agents. Hire the team first.",
+          "conflict",
+          "unsafe",
+          "agents_exist",
+        ),
+      );
+    }
+
+    // Resolve attendee roles → real agent IDs. Unknown roles are dropped
+    // (CEO may have hallucinated a role); we keep going if at least one
+    // resolves so the user still gets a meeting.
+    const facilitator = snap.agents.find((a) => a.role === "ceo") ?? snap.agents[0];
+    const participantIds: string[] = [];
+    const resolvedRoles: string[] = [];
+    const unresolvedRoles: string[] = [];
+    for (const role of body.attendees) {
+      const agent = snap.agents.find((a) => a.role === role);
+      if (agent && !participantIds.includes(agent.id)) {
+        participantIds.push(agent.id);
+        resolvedRoles.push(role);
+      } else if (!agent) {
+        unresolvedRoles.push(role);
+      }
+    }
+    // Always include the facilitator (CEO) so the meeting has a known
+    // host.
+    if (!participantIds.includes(facilitator.id)) {
+      participantIds.push(facilitator.id);
+    }
+    if (resolvedRoles.length === 0) {
+      return reply.code(409).send(
+        failure(
+          `None of the requested roles exist on this team: ${body.attendees.join(", ")}.`,
+          "conflict",
+          "unsafe",
+          "roles_exist",
+        ),
+      );
+    }
+
+    const now = new Date().toISOString();
+    const meetingId = `meeting_${randomUUID()}`;
+    const meeting: Meeting = {
+      id: meetingId,
+      companyId: mcp.companyId,
+      scheduleId: null,
+      type: "eval_triggered",
+      title: `Avery asked the team: ${body.topic}`,
+      status: "scheduled",
+      facilitatorAgentId: facilitator.id,
+      participantAgentIds: participantIds,
+      contributions: [],
+      synthesis: null,
+      resolutions: null,
+      brief: null,
+      healthSnapshot: null,
+      createdAt: now,
+      completedAt: null,
+    };
+
+    await upsertMeeting(meeting);
+
+    // Find the most recent user board message — that's the "requested by"
+    // message id for cards/threading. Best-effort.
+    let requestedByChatMessageId: string | null = null;
+    try {
+      const recent = await boardMessagesRepo.listBoardMessages(getDb(), mcp.companyId, 20);
+      const userMsg = recent.find((r) => r.role === "board");
+      requestedByChatMessageId = userMsg?.id ?? null;
+    } catch { /* non-fatal */ }
+
+    trackChatMeetingRequest(meetingId, {
+      companyId: mcp.companyId,
+      requestedByChatMessageId,
+      topic: body.topic,
+      question: body.question,
+      attendees: resolvedRoles,
+    });
+
+    const runner = getMeetingPipelineRunner();
+    if (!runner) {
+      return reply.code(503).send(
+        failure("Meeting pipeline runner not initialized.", "upstream", "safe", "system_recovered"),
+      );
+    }
+
+    // Fire-and-forget pipeline. When it completes, emit a meeting_summary card.
+    swallowAndAudit("chat.meeting_request_pipeline", async () => {
+      try {
+        await runner(meetingId);
+      } finally {
+        const tracked = takeChatMeetingRequest(meetingId);
+        if (tracked) {
+          // Re-read the meeting to get the synthesized brief / decisions.
+          const completed = await buildSnapshotView(tracked.companyId);
+          const m = completed.meetings.find((x) => x.id === meetingId);
+          const summaryText = m?.brief?.teamUpdates?.map((u) => `${u.agentRole}: ${u.summary}`).join("; ")
+            ?? m?.synthesis?.highlights?.join("; ")
+            ?? "Meeting complete — see Meetings tab for transcript.";
+          const decisionsList = m?.resolutions?.decisions?.map((d) => d.decision) ?? [];
+
+          const cardMessage = await appendChatMessage({
+            id: `chat_${randomUUID()}`,
+            companyId: tracked.companyId,
+            sprintId: completed.company.currentSprintId,
+            agentId: null,
+            role: "ceo",
+            content: "",
+            cardType: "meeting_summary",
+            cardData: {
+              type: "meeting_summary",
+              meetingId,
+              topic: tracked.topic,
+              question: tracked.question,
+              attendees: tracked.attendees,
+              summary: summaryText,
+              decisions: decisionsList,
+              status: m?.status ?? "completed",
+            },
+            createdAt: new Date().toISOString(),
+            mode: null,
+            parentMessageId: tracked.requestedByChatMessageId,
+            cardDecision: null,
+            cardDecidedAt: null,
+            cardDecidedBy: null,
+          });
+          publishChatEvent({ type: "chat.card_added", companyId: tracked.companyId, message: cardMessage });
+        }
+      }
+    }, { detail: { meetingId, kind: "chat_meeting_request" } });
+
+    return cacheAndSend(
+      req,
+      reply,
+      201,
+      success(
+        `Meeting ${meetingId} scheduled with ${resolvedRoles.join(", ")}.`,
+        {
+          meetingId,
+          attendees: resolvedRoles,
+          unresolvedAttendees: unresolvedRoles,
+          status: "scheduled",
+        },
+      ),
+      `${MEETINGS_BASE}/${meetingId}`,
+    );
+  });
 }

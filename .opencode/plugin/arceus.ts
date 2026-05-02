@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, relative } from "node:path";
 
 interface BeatContext {
   beatId: string;
@@ -205,6 +205,29 @@ export const ArceusPlugin: Plugin = async () => {
         .map(([k]) => k.split("::")[1]);
       if (causes.length > 0) {
         throw new Error(`[arceus-circuit] tool=${input.tool} tripped on cause(s)=${causes.join(",")}`);
+      }
+
+      // ── Path guard: reject file operations that escape the workspace ──
+      const WORKSPACE_ROOT = process.cwd();
+      const FILE_TOOLS = new Set(["edit", "write", "create"]);
+      if (FILE_TOOLS.has(input.tool) && output.args?.filePath) {
+        const target = resolve(WORKSPACE_ROOT, output.args.filePath);
+        const rel = relative(WORKSPACE_ROOT, target);
+        // Escapes: relative path starts with ".." or is absolute (different drive on Windows)
+        if (rel.startsWith("..") || resolve(rel) === rel) {
+          throw new Error(
+            `[arceus-path-guard] Blocked '${input.tool}' — path "${output.args.filePath}" resolves outside workspace.`
+          );
+        }
+      }
+      if (input.tool === "bash" && output.args?.command) {
+        const cmd: string = output.args.command;
+        // Block obvious path escapes in shell commands targeting parent dirs
+        if (/(?:^|\s)(?:cd|cat|rm|mv|cp|mkdir|touch|tee|>|>>)\s+[^\s]*\.\.\//.test(cmd)) {
+          throw new Error(
+            `[arceus-path-guard] Blocked bash — command references parent directory ("../"): ${truncate(cmd, 80)}`
+          );
+        }
       }
 
       pendingCalls.set(input.callID, { tool: input.tool, startedAt: Date.now() });

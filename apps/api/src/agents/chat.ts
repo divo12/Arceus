@@ -4,17 +4,18 @@ import { appendChatMessage } from "../persistence/mutations/index.js";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { ensureDeployment } from "../config/index.js";
-import { getCeoSession, openOpencodeEventStream, postOpencodeJson } from "../infra/opencode.js";
+import { getCeoChatSession, openOpencodeEventStream, postOpencodeJson } from "../infra/opencode.js";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { recordCeoCardMeeting } from "../meetings/recording.js";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import { emitBeatEvent } from "@arceus/company-runtime";
-
-/** Guard: set while CEO is streaming a live chat response. */
-let ceoStreaming = false;
-/** Returns whether the CEO agent is currently streaming a response. */
-export function isCeoStreaming(): boolean { return ceoStreaming; }
+import { chatModeToolFilter, type ChatMode } from "./chat-modes.js";
+import { chatModeAllowedTools } from "./chat-modes.js";
+import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
+import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
+import { publishChatEvent } from "./chat-events.js";
+import { consumeChatCardEmitted } from "./chat-card-tracker.js";
 
 interface OpenCodeEvent {
   type: string;
@@ -79,7 +80,7 @@ async function readSseEvent(reader: ReadableStreamDefaultReader<Uint8Array>, buf
   };
 }
 
-function appendConversationMessage(snapshot: CompanySnapshot, role: ChatMessage["role"], content: string, card: CeoCard | null = null) {
+function appendConversationMessage(snapshot: CompanySnapshot, role: ChatMessage["role"], content: string, card: CeoCard | null = null, mode: ChatMode | null = null) {
   return appendChatMessage({
     id: `chat_${crypto.randomUUID()}`,
     companyId: snapshot.company.id,
@@ -90,17 +91,25 @@ function appendConversationMessage(snapshot: CompanySnapshot, role: ChatMessage[
     cardType: card?.card_type ?? null,
     cardData: card ? card : null,
     createdAt: new Date().toISOString(),
+    mode,
+    parentMessageId: null,
+    cardDecision: null,
+    cardDecidedAt: null,
+    cardDecidedBy: null,
   });
 }
 
-async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot) {
-  const session = await getCeoSession();
+async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot, mode: ChatMode) {
+  const session = await getCeoChatSession();
   const deployment = ensureDeployment("ceoDeployment");
+  const baseAllowed = getAllowedArceusTools("ceo");
+  const tools = chatModeToolFilter(mode, baseAllowed);
 
   await postOpencodeJson(`/session/${session.id}/prompt_async`, {
     model: { providerID: "azure", modelID: deployment },
     agent: "ceo",
     system: buildCeoOperatingPrompt(snapshot, getExecutionStatus()),
+    tools,
     parts: [{ type: "text", text: message }]
   });
 
@@ -111,25 +120,24 @@ async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot) {
  * Stream a board message to the CEO agent via SSE.
  * Handles bootstrapping, classification, and meeting recording.
  */
-export async function streamBoardMessageToCeo(reply: FastifyReply, message: string) {
+export async function streamBoardMessageToCeo(reply: FastifyReply, message: string, mode: ChatMode = "instruct") {
   const trimmedMessage = message.trim();
   if (!trimmedMessage) {
     throw new Error("CEO chat message cannot be empty.");
   }
 
-  ceoStreaming = true;
-  try {
-    // Spec 31 Phase 7.C.c — bootstrap if needed, then assemble the
-    // snapshot from canonical for CEO prompt context.
-    let snapshot: CompanySnapshot;
-    if (!getActiveCompanyId()) {
-      snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
-    } else {
-      snapshot = await buildSnapshotView(requireActiveCompanyId());
-    }
+  // Spec 31 Phase 7.C.c — bootstrap if needed, then assemble the
+  // snapshot from canonical for CEO prompt context.
+  let snapshot: CompanySnapshot;
+  if (!getActiveCompanyId()) {
+    snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
+  } else {
+    snapshot = await buildSnapshotView(requireActiveCompanyId());
+  }
 
-  await appendConversationMessage(snapshot, "board", trimmedMessage);
+  await appendConversationMessage(snapshot, "board", trimmedMessage, null, mode);
   snapshot = await buildSnapshotView(requireActiveCompanyId());
+  publishChatEvent({ type: "chat.turn_started", companyId: snapshot.company.id });
 
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
@@ -143,7 +151,23 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   const reader = await openOpencodeEventStream();
   let buffer = "";
   let targetMessageId: string | null = null;
-  const sessionId = await startCeoPromptAsync(trimmedMessage, snapshot);
+  const sessionId = await startCeoPromptAsync(trimmedMessage, snapshot, mode);
+  // Spec 35 — register chat session context so MCP tool calls (e.g.
+  // `chat_emit_card`) resolve role=ceo + companyId via session-context.
+  // Allowed tools mirror the prompt's `tools` filter exactly.
+  const baseAllowed = getAllowedArceusTools("ceo");
+  const chatBeatId = `chat_${Date.now()}`;
+  registerSessionContext({
+    beatId: chatBeatId,
+    sessionId,
+    companyId: snapshot.company.id,
+    sprintId: snapshot.company.currentSprintId,
+    role: "ceo",
+    trustBand: "senior",
+    allowedTools: chatModeAllowedTools(mode, baseAllowed),
+    startedAt: new Date().toISOString(),
+    incomingHandoffs: [],
+  });
   let fullText = "";
 
   sseWrite(reply, "status", { phase: "running" });
@@ -175,6 +199,13 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
           fullText = part.text;
           sseWrite(reply, "token", { content: fullText });
         }
+        // Surface tool invocations so the frontend can show a white-box trace.
+        if (part?.sessionID === sessionId && (part.type === "tool-invocation" || part.type === "tool-result" || part.type === "tool")) {
+          const toolName: string = part.toolInvocation?.toolName ?? part.tool ?? part.name ?? "";
+          if (toolName && part.type === "tool-invocation") {
+            sseWrite(reply, "tool_used", { tool: toolName });
+          }
+        }
       }
 
       if (event.type === "session.error" && event.properties?.sessionID === sessionId) {
@@ -190,7 +221,15 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
 
     let nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
     if (fullText) {
-      try {
+      // Spec 35 — if the CEO emitted an interactive card via
+      // `chat_emit_card` during this turn (idea_refine, name_suggest,
+      // hiring_slate, sprint_plan, decision, …) skip the legacy
+      // classifier so the same beat doesn't render two cards.
+      const skipClassifier = consumeChatCardEmitted(chatBeatId);
+      if (skipClassifier) {
+        await appendConversationMessage(nextSnapshot, "ceo", fullText);
+        nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
+      } else try {
         sseWrite(reply, "status", { phase: "classifying" });
         const card = await classifyCeoResponse(fullText, nextSnapshot, getExecutionStatus());
         // Spec 01: No side effects during ideation. Meetings and tasks are only
@@ -231,6 +270,8 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     } catch { /* stream already broken */ }
   } finally {
     reader.releaseLock();
+    unregisterSessionContext(sessionId);
+    publishChatEvent({ type: "chat.turn_ended", companyId: snapshot.company.id });
     try { reply.raw.end(); } catch { /* already ended */ }
   }
 
@@ -242,9 +283,6 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     role: "ceo",
     data: { message: trimmedMessage.slice(0, 200) },
   });
-  } finally {
-    ceoStreaming = false;
-  }
 }
 
 /** Send a board message to the CEO and return a structured strategy card (non-streaming). */

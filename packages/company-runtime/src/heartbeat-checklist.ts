@@ -99,13 +99,24 @@ function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
 function checkRoadmap(ctx: AgentBeatContext): CheckResult {
   // CEO proactive: if sprint is complete or no sprint, propose next
   if (!ctx.currentSprint) {
-    return { status: "action_needed", detail: "No active sprint", suggestedAction: "Propose new sprint" };
-  }
-  if (ctx.currentSprint.status === "completed" || ctx.currentSprint.status === "reviewing") {
     return {
       status: "action_needed",
-      detail: `Sprint ${ctx.currentSprint.number} is ${ctx.currentSprint.status}`,
-      suggestedAction: "Propose next sprint or summarize results",
+      detail: "No active sprint",
+      suggestedAction: "Call sprint_create with a goal and tasks to start the next sprint.",
+    };
+  }
+  if (ctx.currentSprint.status === "reviewing") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${ctx.currentSprint.number} is in review`,
+      suggestedAction: `Call sprint_check_completion for sprint ${ctx.currentSprint.id}; if readyToFinalize, call sprint_finalize, then sprint_create for the next sprint. Otherwise wait for the tester gate.`,
+    };
+  }
+  if (ctx.currentSprint.status === "completed") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${ctx.currentSprint.number} is completed`,
+      suggestedAction: "Call sprint_create with a goal and tasks to start the next sprint.",
     };
   }
   // Detect all tasks terminal even if sprint status hasn't been updated yet
@@ -114,7 +125,7 @@ function checkRoadmap(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `All ${sprintTasks.length} tasks in sprint ${ctx.currentSprint.number} are terminal`,
-      suggestedAction: "Propose next sprint",
+      suggestedAction: `Call sprint_check_completion for sprint ${ctx.currentSprint.id}; if readyToFinalize, call sprint_finalize, then sprint_create for the next sprint.`,
     };
   }
   return { status: "ok", detail: "Sprint in progress" };

@@ -20,6 +20,7 @@
 import { z } from "zod";
 
 export const chatMessageRoleSchema = z.enum(["board", "ceo", "agent", "system"]);
+export const chatMessageModeSchema = z.enum(["ask", "instruct", "store"]);
 export const chatMessageCardTypeSchema = z.enum([
   "welcome_brief",
   "mission_brief",
@@ -30,7 +31,15 @@ export const chatMessageCardTypeSchema = z.enum([
   "review_summary",
   "approval_request",
   "daily_sync_summary",
-  "info"
+  "info",
+  // Spec 35 — CEO Chat 2.0
+  "idea_refine",
+  "name_suggest",
+  "hiring_slate",
+  "sprint_plan",
+  "decision",
+  "meeting_summary",
+  "memory_capture",
 ]);
 
 // Discriminated union of card payloads. Each variant lists the
@@ -76,6 +85,54 @@ export const chatCardSchema = z.discriminatedUnion("cardType", [
     date: z.string().optional(),
   }).passthrough(),
   z.object({ cardType: z.literal("info") }).passthrough(),
+  // Spec 35 — CEO Chat 2.0 card payloads.
+  z.object({
+    cardType: z.literal("idea_refine"),
+    originalIdea: z.string(),
+    reframings: z.array(z.object({ id: z.string(), title: z.string(), summary: z.string() })),
+  }).passthrough(),
+  z.object({
+    cardType: z.literal("name_suggest"),
+    suggestions: z.array(z.object({ name: z.string(), rationale: z.string().optional() })),
+    allowWriteIn: z.boolean().default(true),
+  }).passthrough(),
+  z.object({
+    cardType: z.literal("hiring_slate"),
+    roles: z.array(z.object({
+      role: z.string(),
+      displayName: z.string(),
+      title: z.string().optional(),
+      rationale: z.string().optional(),
+    })),
+  }).passthrough(),
+  z.object({
+    cardType: z.literal("sprint_plan"),
+    sprintNumber: z.number().int().optional(),
+    goal: z.string(),
+    tasks: z.array(z.object({
+      title: z.string(),
+      kind: z.string().optional(),
+      assignedRole: z.string().optional(),
+    })),
+  }).passthrough(),
+  z.object({
+    cardType: z.literal("decision"),
+    question: z.string(),
+    options: z.array(z.object({ id: z.string(), label: z.string(), detail: z.string().optional() })),
+  }).passthrough(),
+  z.object({
+    cardType: z.literal("meeting_summary"),
+    meetingId: z.string(),
+    topic: z.string(),
+    decisions: z.array(z.string()).default([]),
+    actionItems: z.array(z.string()).default([]),
+  }).passthrough(),
+  z.object({
+    cardType: z.literal("memory_capture"),
+    content: z.string(),
+    tier: z.enum(["static", "dynamic"]).default("dynamic"),
+    scope: z.enum(["team", "private"]).default("team"),
+  }).passthrough(),
 ]);
 
 export type ChatCard = z.infer<typeof chatCardSchema>;
@@ -94,7 +151,13 @@ export const chatMessageSchema = z.object({
   // rows; runtime validation happens via `parseChatCard` below when the
   // consumer needs the typed payload.
   cardData: z.record(z.string(), z.unknown()).nullable(),
-  createdAt: z.string()
+  createdAt: z.string(),
+  // Spec 35 — CEO Chat 2.0
+  mode: chatMessageModeSchema.nullable().optional(),
+  parentMessageId: z.string().nullable().optional(),
+  cardDecision: z.record(z.string(), z.unknown()).nullable().optional(),
+  cardDecidedAt: z.string().nullable().optional(),
+  cardDecidedBy: z.string().nullable().optional(),
 });
 
 export type ChatMessage = z.infer<typeof chatMessageSchema>;

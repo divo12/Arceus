@@ -138,11 +138,28 @@ export function setReactiveEventEmitter(
 /** Get the current reactive event emitter (may be null before wiring). */
 export function getReactiveEventEmitter() { return companyRuntime.reactiveEventEmitter; }
 
+// ─── Heartbeat engine ref (wired by server.ts) ──────────────────
+let heartbeatEngineRef: { start(): void; stop(): void } | null = null;
+/** Wire the heartbeat engine instance (called once from server.ts). */
+export function setHeartbeatEngineRef(engine: { start(): void; stop(): void }) { heartbeatEngineRef = engine; }
+/** Get the heartbeat engine (may be null before wiring). */
+export function getHeartbeatEngineRef() { return heartbeatEngineRef; }
+
 // ─── Meeting scheduler ref (wired by server.ts) ──────────────────
 /** Wire the meeting scheduler instance (called once from server.ts). */
 export function setMeetingScheduler(scheduler: MeetingScheduler): void { companyRuntime.meetingSchedulerRef = scheduler; }
 /** Get the meeting scheduler (may be null before wiring). */
 export function getMeetingSchedulerRef(): MeetingScheduler | null { return companyRuntime.meetingSchedulerRef; }
+
+// ─── Meeting pipeline runner (wired by server.ts) ────────────────
+// Spec 35 §5 — async chat-requested meetings need to run the pipeline
+// fire-and-forget from a route handler. We expose just `run(id)` rather
+// than the whole pipeline so callers can't subvert other deps.
+let meetingPipelineRunner: ((meetingId: string) => Promise<void>) | null = null;
+export function setMeetingPipelineRunner(fn: (meetingId: string) => Promise<void>) {
+  meetingPipelineRunner = fn;
+}
+export function getMeetingPipelineRunner() { return meetingPipelineRunner; }
 
 // ─── Convenience getters (for route handlers) ────────────────────
 /** Get the raw agent sessions map (includes internal agents). */

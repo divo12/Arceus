@@ -16,7 +16,7 @@ import { sanitizeError } from "../observability/sanitize.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
-import { resetOpencodeConnection, resetCeoSession } from "../infra/opencode.js";
+import { resetOpencodeConnection, resetCeoChatSession } from "../infra/opencode.js";
 import { getDatabaseHealth } from "@arceus/db";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
@@ -100,7 +100,7 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
 
       resetEmployeeActivityLog();
       clearAllSessionContexts();
-      resetCeoSession();
+      resetCeoChatSession();
       await resetOpencodeConnection();
       clearActiveCompanyId();
       return resetCompany();

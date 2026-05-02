@@ -54,6 +54,7 @@ const TOOL_MAP: Record<string, string> = {
   "GET /api/internal/v1/meetings/:meetingId": "meeting_get",
   "POST /api/internal/v1/meetings/decision": "meeting_request_decision",
   "POST /api/internal/v1/meetings/:meetingId/contributions": "meeting_contribute",
+  "POST /api/internal/v1/meetings/request": "meeting_request",
 
   // company / execution
   "GET /api/internal/v1/company/summary": "company_get_summary",
@@ -73,6 +74,9 @@ const TOOL_MAP: Record<string, string> = {
 
   // beats
   "GET /api/internal/v1/beats/last-progress": "beat_read_last_progress",
+
+  // chat
+  "POST /api/internal/v1/chat/cards": "chat_emit_card",
 
   // workspace
   "POST /api/internal/v1/workspace/checkpoints": "workspace_checkpoint",

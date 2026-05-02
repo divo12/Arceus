@@ -107,6 +107,7 @@ export const ALL_ARCEUS_TOOLS = [
   "meeting_get",
   "meeting_request_decision",
   "meeting_contribute",
+  "meeting_request",
   // Company / execution
   "company_get_summary",
   "agents_list_sessions",
@@ -138,6 +139,8 @@ export const ALL_ARCEUS_TOOLS = [
   "skill_register",
   "skill_update",
   "skill_deprecate",
+  // Spec 35 — chat surface
+  "chat_emit_card",
 ] as const;
 
 const MEMORY_ALL = {
@@ -175,6 +178,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       meeting_get: true,
       meeting_request_decision: true,
       meeting_contribute: true,
+      // Spec 35 §5 — async "check with the team" meetings
+      meeting_request: true,
       sprint_create: true,
       sprint_get_active: true,
       sprint_check_completion: true,
@@ -196,6 +201,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       skill_health_report: true,
       skill_audit_unused: true,
       skill_inspect_history: true,
+      // Spec 35 — CEO is the only role that can emit chat cards
+      chat_emit_card: true,
     }),
   },
   cto: {

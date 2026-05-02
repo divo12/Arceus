@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { ChatMessage as ContractChatMessage } from "@arceus/contracts";
 import { boardMessages } from "../schema/board_messages.js";
 import type { DbClient } from "./_helpers.js";
@@ -53,6 +53,11 @@ export function rowToChatMessage(row: BoardMessage): ContractChatMessage {
     cardType: row.cardType as ContractChatMessage["cardType"],
     cardData: (row.cardData) ?? null,
     createdAt: row.createdAt.toISOString(),
+    mode: (row.mode ?? null) as ContractChatMessage["mode"],
+    parentMessageId: row.parentMessageId ?? null,
+    cardDecision: row.cardDecision ?? null,
+    cardDecidedAt: row.cardDecidedAt?.toISOString() ?? null,
+    cardDecidedBy: row.cardDecidedBy ?? null,
   };
 }
 
@@ -72,6 +77,11 @@ export function chatMessageToInsert(message: ContractChatMessage): NewBoardMessa
     // carry them. Old external-channel writers continue to fill them.
     direction: null,
     sender: null,
+    mode: message.mode ?? null,
+    parentMessageId: message.parentMessageId ? toDbId(message.parentMessageId) : null,
+    cardDecision: message.cardDecision ?? null,
+    cardDecidedAt: message.cardDecidedAt ? new Date(message.cardDecidedAt) : null,
+    cardDecidedBy: message.cardDecidedBy ?? null,
   };
 }
 
@@ -93,4 +103,58 @@ export async function upsertChatMessage(db: DbClient, message: ContractChatMessa
 export async function findByIdHydrated(db: DbClient, id: string): Promise<ContractChatMessage | null> {
   const row = await findBoardMessageById(db, id);
   return row ? rowToChatMessage(row) : null;
+}
+
+// ── Spec 35 — CEO Chat 2.0 helpers ────────────────────────────────
+
+/**
+ * Atomically record a user/agent decision on a card. Returns the
+ * updated row, or `null` if the card was already decided (idempotent
+ * — second click is a no-op rather than an error).
+ */
+export async function markCardDecided(
+  db: DbClient,
+  cardMessageId: string,
+  decision: Record<string, unknown>,
+  decidedBy: string,
+): Promise<BoardMessage | null> {
+  const id = toDbId(cardMessageId);
+  const [row] = await db
+    .update(boardMessages)
+    .set({
+      cardDecision: decision,
+      cardDecidedAt: new Date(),
+      cardDecidedBy: decidedBy,
+    })
+    .where(
+      and(
+        eq(boardMessages.id, id),
+        isNotNull(boardMessages.cardType),
+        isNull(boardMessages.cardDecidedAt),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}
+
+/**
+ * Cards awaiting user action — used by the chat surface to render
+ * pending interactives at the top of a session and by the CEO context
+ * builder to show "still waiting on you".
+ */
+export async function listPendingCards(
+  db: DbClient,
+  companyId: string,
+): Promise<BoardMessage[]> {
+  return db
+    .select()
+    .from(boardMessages)
+    .where(
+      and(
+        eq(boardMessages.companyId, toDbId(companyId)),
+        isNotNull(boardMessages.cardType),
+        isNull(boardMessages.cardDecidedAt),
+      ),
+    )
+    .orderBy(asc(boardMessages.createdAt));
 }

@@ -27,12 +27,12 @@ import { flush } from "../persistence/mutations/index.js";
 import { ensureAgentSession } from "../prompts/llm.js";
 import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
-import { isCeoStreaming } from "../agents/chat.js";
 import { applyGovernanceToMutation } from "../skills/governance.js";
 import { eventBridgeOnce } from "../orchestration/state.js";
+import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
+import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { createWorkflowTask } from "@arceus/task-engine";
 import { upsertTask } from "../persistence/mutations/index.js";
-import { checkSprintCompletion } from "../sprints/lifecycle.js";
 import { finalizeSprintCompletion } from "../sprints/lifecycle.js";
 import {
   executeSprintReviewVerification, executeSprintFinalGate,
@@ -82,15 +82,6 @@ const DISPATCH_HANDLERS: Record<ChecklistDispatch["kind"], ChecklistHandler> = {
 };
 
 /**
- * Free-form fallback for English checklist suggestedAction strings (no dispatch set).
- * Currently the only freeform action is "Propose new/next sprint" → planning task.
- */
-function matchesProposeSprint(a: ChecklistAction): boolean {
-  return /\bpropose (next|new) sprint\b/i.test(a.suggestedAction)
-    || /^plan sprint\b/i.test(a.suggestedAction);
-}
-
-/**
  * Execute a checklist-driven action when no task is assigned.
  * Dispatches by typed `dispatch.kind` (machine-routed) or falls back to
  * regex / LLM for freeform English actions. The orchestrator stays
@@ -132,12 +123,10 @@ export async function executeChecklistAction(
     return handler(ctx, action, beatId, finish);
   }
 
-  // ── Freeform fallback: regex match for "propose sprint" English text ──
-  if (matchesProposeSprint(action)) {
-    return handleCreateSprintPlanningTask(ctx, action, beatId, finish);
-  }
-
   // ── Strategic roles reason about freeform actions via LLM ──
+  // Per plans/agent-redesign/00-vision.md: the orchestrator does NOT spawn
+  // tasks. It wakes the agent with context and lets the agent decide via
+  // tools. The CEO uses sprint_check_completion / sprint_finalize / sprint_create.
   if (ROLE_CAPABILITIES[role].respondsToFreeformChecklistActions) {
     return handleFreeformLlmAction(ctx, action, beatId, finish);
   }
@@ -152,58 +141,6 @@ export async function executeChecklistAction(
 }
 
 // ── Action handlers ───────────────────────────────────────────────────────
-
-/** Create a governance task so the responsible agent plans the next sprint. */
-async function handleCreateSprintPlanningTask(
-  _ctx: AgentBeatContext,
-  _action: ChecklistAction,
-  beatId: string,
-  finish: FinishFn,
-): Promise<HandlerResult> {
-  if (isCeoStreaming()) {
-    emitEmployeeActivity("ceo", "info", `${shortBeat(beatId)}: skipped — live chat active`, { beatId });
-    finish("completed", "CEO skipped — streaming", 0);
-    return { summary: "CEO skipped — live chat streaming in progress", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-  }
-
-  // Ensure any finished sprint is properly marked complete first
-  await checkSprintCompletion();
-
-  // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
-  const companyId = requireActiveCompanyId();
-  const snapshot = await buildSnapshotView(companyId);
-  const nextNum = (snapshot.company.currentSprintNumber ?? 0) + 1;
-
-  // Guard: don't create duplicate planning tasks
-  const alreadyExists = snapshot.tasks.some(
-    (t) => t.assignedRole === "ceo" && t.title.startsWith("Plan Sprint") &&
-      ["created", "planned", "in_progress"].includes(t.status),
-  );
-  if (alreadyExists) {
-    finish("completed", "Sprint planning task already exists", 0);
-    return { summary: "Sprint planning task already exists — CEO will pick it up", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
-  }
-
-  const task = createWorkflowTask(
-    snapshot, "implementation", "ceo",
-    `Plan Sprint ${nextNum}`,
-    `Analyze company state, previous sprint results, and team capacity. Use the sprint_create tool to create Sprint ${nextNum} with a clear goal and actionable tasks assigned to the right roles.`,
-    "The company needs a new sprint plan.",
-    "A new sprint created via sprint_create with goal, tasks, dependencies, and role assignments.",
-    [`Sprint ${nextNum} created with sprint_create tool`, "All tasks have assigned roles", "Dependencies are specified"],
-    "critical",
-    "planned",
-    null, // no sprint yet
-  );
-  await upsertTask(task);
-
-  emitEmployeeActivity("ceo", "transition", `${shortBeat(beatId)}: created task "${task.title}"`, { beatId, taskId: task.id });
-  finish("completed", `Created sprint planning task: ${task.title}`, 0);
-  return {
-    summary: `Created governance task "${task.title}" for CEO — agent will reason and call sprint_create`,
-    tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 0,
-  };
-}
 
 /**
  * Resolve a blocked/failed task by spawning a single, role-targeted
@@ -384,12 +321,32 @@ async function handleFreeformLlmAction(
   finish: FinishFn,
 ): Promise<HandlerResult> {
   const role = _ctx.role;
+  // Spec 35 — chat and heartbeat sessions are physically separate
+  // (`getCeoChatSession` vs per-role `agentSessions`); the legacy
+  // `isCeoStreaming()` skip-guard was removed alongside the rename.
+  let registeredSessionId: string | null = null;
   try {
     // Spec 31 Phase 7.B.4 — view used for ensureAgentSession's
     // snapshot input and downstream agent lookups.
     const snapshot = await buildSnapshotView(_ctx.company.id);
     const soul = getRoleSoul(role);
     const session = await ensureAgentSession(snapshot, role);
+
+    // Register session context so MCP tool calls can resolve identity
+    // via findSoleActiveSessionContext / findActiveSessionContextByRole.
+    registeredSessionId = session.sessionId;
+    registerSessionContext({
+      beatId,
+      sessionId: session.sessionId,
+      companyId: _ctx.company.id,
+      sprintId: _ctx.currentSprint?.id ?? null,
+      role,
+      trustBand: "standard",
+      allowedTools: getAllowedArceusTools(role),
+      startedAt: new Date().toISOString(),
+      incomingHandoffs: [],
+    });
+
     touchAgentSession(role, "working");
     emitEmployeeActivity(role, "working", `${shortBeat(beatId)}: ${action.suggestedAction}`, { beatId });
 
@@ -414,6 +371,8 @@ async function handleFreeformLlmAction(
       summary: `${role} checklist action failed: ${err instanceof Error ? err.message : String(err)}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
     };
+  } finally {
+    if (registeredSessionId) unregisterSessionContext(registeredSessionId);
   }
 }
 

@@ -20,6 +20,8 @@ import {
   setExecutionStatus,
   eventBridgeOnce,
   setActiveExecution,
+  getHeartbeatEngineRef,
+  getMeetingSchedulerRef,
 } from "../orchestration/state.js";
 import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js";
 
@@ -247,11 +249,15 @@ async function beginSprintExecution(
         { companyId, detail: { context: "sprint_proposal_execute" } });
     }
 
-    emitEmployeeActivity(
-      "system",
-      "info",
-      "Sprint execution ready — heartbeat engine will pick up planned tasks.",
-    );
+    // Start the heartbeat engine + meeting scheduler so agents begin working
+    const hbEngine = getHeartbeatEngineRef();
+    if (hbEngine) {
+      hbEngine.start();
+      getMeetingSchedulerRef()?.start();
+      emitEmployeeActivity("system", "info", "Sprint execution ready — heartbeat engine started.");
+    } else {
+      emitEmployeeActivity("system", "info", "Sprint execution ready — heartbeat engine will pick up planned tasks.");
+    }
   } catch (err) {
     setExecutionStatus("error");
     const msg = err instanceof Error ? err.message : "Unknown error";

@@ -60,7 +60,7 @@ async function cleanup() {
   const db = getDb();
   await db.execute(sql`DELETE FROM memory_units WHERE company_id = ${TEST_COMPANY_ID}`);
   await db.execute(sql`DELETE FROM habits WHERE company_id = ${TEST_COMPANY_ID}`);
-  await db.execute(sql`DELETE FROM priming_state WHERE company_id = ${TEST_COMPANY_ID}`);
+  await db.execute(sql`DELETE FROM priming_states WHERE company_id = ${TEST_COMPANY_ID}`);
   await db.execute(sql`DELETE FROM agents WHERE id = ${TEST_AGENT_ID}`);
   await db.execute(sql`DELETE FROM companies WHERE id = ${TEST_COMPANY_ID}`);
 }
@@ -76,7 +76,7 @@ async function run() {
     const db = getDb();
     await db.execute(sql`SELECT 1 FROM memory_units LIMIT 0`);
     await db.execute(sql`SELECT 1 FROM habits LIMIT 0`);
-    await db.execute(sql`SELECT 1 FROM priming_state LIMIT 0`);
+    await db.execute(sql`SELECT 1 FROM priming_states LIMIT 0`);
   } catch (err: any) {
     console.log(`⏭ Skipping — tables not created yet. Run migration 001 first. (${err.message})`);
     return;
@@ -267,6 +267,80 @@ async function run() {
     const storedVec = JSON.parse(storedStr.replace(/^\[/, "[").replace(/\]$/, "]"));
     assert(storedVec.length === EMBEDDING_DIM, `Expected ${EMBEDDING_DIM}-dim stored vector, got ${storedVec.length}`);
     console.log(`   ✓ Embedding stored as ${EMBEDDING_DIM}-dim vector and retrievable`);
+
+    // ---------------------------------------------------------------
+    // Test 9: Spec 35 — team-visibility cross-agent reads
+    // ---------------------------------------------------------------
+    console.log("\n9. Team visibility (Spec 35)...");
+    const TEAMMATE_AGENT_ID = "00000000-0000-4000-a000-000000000003";
+    await db.execute(sql`
+      INSERT INTO agents (id, company_id, name, role, status)
+      VALUES (${TEAMMATE_AGENT_ID}, ${TEST_COMPANY_ID}, 'Test Teammate', 'tester', 'idle')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Direct insert with kind='team' so we don't depend on service layer.
+    const TEAM_MEM_ID = "00000000-0000-4000-a000-000000000030";
+    await db.execute(sql`
+      INSERT INTO memory_units (id, company_id, agent_id, content, type, kind, container, tags, confidence, relevance_score)
+      VALUES (
+        ${TEAM_MEM_ID},
+        ${TEST_COMPANY_ID},
+        ${TEST_AGENT_ID},
+        'Team-shared decision: ship Friday',
+        'static',
+        'team',
+        ${`company:${TEST_COMPANY_ID}:agent:${TEST_AGENT_ID}`},
+        '{}'::jsonb,
+        0.9,
+        1.0
+      )
+    `);
+    const teamEmb = await embed("Team-shared decision: ship Friday");
+    await setMemoryEmbedding(TEAM_MEM_ID, teamEmb);
+
+    // Teammate (different agent_id) should see the team memory in list().
+    const teammateList = await staticStore.list(TEAMMATE_AGENT_ID);
+    assert(
+      teammateList.some((m) => m.id === TEAM_MEM_ID),
+      `Expected teammate to see team memory in list(), got ids: ${teammateList.map((m) => m.id).join(",")}`,
+    );
+
+    // And in searchByEmbedding().
+    const teamQuery = await embed("when do we ship");
+    const teammateSearch = await staticStore.searchByEmbedding(TEAMMATE_AGENT_ID, teamQuery, 10);
+    assert(
+      teammateSearch.some((m) => m.id === TEAM_MEM_ID),
+      "Expected teammate to see team memory in searchByEmbedding()",
+    );
+    console.log("   ✓ Team memories visible to other agents in same company");
+
+    // Negative: a private memory by TEST_AGENT_ID is NOT visible to teammate.
+    const PRIVATE_MEM_ID = "00000000-0000-4000-a000-000000000031";
+    await db.execute(sql`
+      INSERT INTO memory_units (id, company_id, agent_id, content, type, kind, container, tags, confidence, relevance_score)
+      VALUES (
+        ${PRIVATE_MEM_ID},
+        ${TEST_COMPANY_ID},
+        ${TEST_AGENT_ID},
+        'Private note: I am unsure about the deadline',
+        'static',
+        NULL,
+        ${`company:${TEST_COMPANY_ID}:agent:${TEST_AGENT_ID}`},
+        '{}'::jsonb,
+        0.9,
+        1.0
+      )
+    `);
+    const teammateAfterPrivate = await staticStore.list(TEAMMATE_AGENT_ID);
+    assert(
+      !teammateAfterPrivate.some((m) => m.id === PRIVATE_MEM_ID),
+      "Private memory leaked to teammate",
+    );
+    console.log("   ✓ Private memories remain agent-scoped");
+
+    // Cleanup: remove the extra agent (cleanup() already drops memory_units by company).
+    await db.execute(sql`DELETE FROM agents WHERE id = ${TEAMMATE_AGENT_ID}`);
 
     console.log("\n=== All pgvector tests passed ===");
   } finally {
