@@ -17,6 +17,7 @@ const ROLE_AGENT_MAP: Record<RoleSoul["role"], string[]> = {
   cto: ["backend-architect", "devops-automator", "ai-engineer"],
   pm: ["sprint-prioritizer", "feedback-synthesizer"],
   developer: ["frontend-developer", "rapid-prototyper", "backend-architect"],
+  senior_developer: ["code-reviewer", "backend-architect", "test-results-analyzer"],
   tester: ["test-writer-fixer", "test-results-analyzer", "api-tester"],
   ui_designer: ["ui-designer", "brand-guardian", "whimsy-injector", "ux-researcher"],
   marketing: ["content-creator", "growth-hacker", "app-store-optimizer"],
