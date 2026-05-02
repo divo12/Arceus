@@ -229,6 +229,11 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       if (skipClassifier) {
         await appendConversationMessage(nextSnapshot, "ceo", fullText);
         nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
+        // Emit the most recent card from the snapshot so the frontend renders it.
+        const latestCard = [...nextSnapshot.chatMessages].reverse().find(m => m.cardType && m.cardData);
+        if (latestCard) {
+          sseWrite(reply, "card", { id: latestCard.id, type: latestCard.cardType, data: latestCard.cardData });
+        }
       } else try {
         sseWrite(reply, "status", { phase: "classifying" });
         const card = await classifyCeoResponse(fullText, nextSnapshot, getExecutionStatus());

@@ -216,8 +216,7 @@ code, pre, .mono {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   line-height: 1;
   color: var(--ink-3);
 }
@@ -362,4 +361,23 @@ code, pre, .mono {
 .pulse-dot.live {
   background: var(--green);
   animation: breathe 2.6s ease-in-out infinite;
+}
+
+/* ── VC-polish extras ─────────────────────────────────── */
+
+/* Subtle shadow on elevated cards / sections */
+.shadow-card {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02);
+}
+
+/* Smooth transitions globally */
+a, button, [role="button"] {
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+/* Soften badge outlines */
+[data-slot="badge"] {
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+  text-transform: lowercase;
 }

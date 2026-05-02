@@ -195,11 +195,20 @@ type SprintProposalCard = {
 
 type CeoCard = WelcomeBriefCard | MissionBriefCard | StrategyProposalCard | ClarifyingQuestionCard | StatusUpdateCard | SprintProposalCard;
 
+/** Spec 35 — new interactive cards emitted by CEO via chat_emit_card MCP tool. */
+type InteractiveCard = {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+  decided?: boolean;
+};
+
 type ChatBubble = {
   id: string;
   role: "board" | "ceo" | "system";
   content: string;
   card?: CeoCard;
+  interactiveCard?: InteractiveCard;
 };
 
 type StreamDonePayload = {
@@ -656,6 +665,182 @@ function MeetingIntentSummary({ meeting }: { meeting: MeetingIntentBlock }) {
             </div>
           ))}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InteractiveCardView({ card, disabled, onDecide }: { card: InteractiveCard; disabled: boolean; onDecide: (cardId: string, decision: Record<string, unknown>, label: string) => void }) {
+  if (card.type === "idea_refine") {
+    const reframings = (card.data.reframings ?? []) as Array<{ id: string; title: string; summary: string }>;
+    return (
+      <div className="space-y-3">
+        <div className="swiss-caption text-[var(--swiss-gray-400)]">choose a direction</div>
+        <div className="grid gap-2">
+          {reframings.map((r) => (
+            <button
+              key={r.id}
+              className="rounded-md border border-[var(--swiss-gray-100)] px-3 py-2 text-left text-[0.8125rem] transition-colors hover:border-[var(--swiss-black)] hover:bg-[var(--bg-secondary)] disabled:opacity-50"
+              disabled={disabled || card.decided}
+              onClick={() => onDecide(card.id, { choice: r.id, title: r.title }, r.title)}
+            >
+              <div className="font-medium">{r.title}</div>
+              <div className="mt-0.5 text-[var(--swiss-gray-400)]">{r.summary}</div>
+            </button>
+          ))}
+        </div>
+        {card.decided ? <div className="swiss-caption text-[var(--green)]">decided</div> : null}
+      </div>
+    );
+  }
+
+  if (card.type === "name_suggest") {
+    const suggestions = (card.data.suggestions ?? []) as Array<{ name: string; rationale: string }>;
+    return (
+      <div className="space-y-3">
+        <div className="swiss-caption text-[var(--swiss-gray-400)]">pick a name</div>
+        <div className="grid gap-2">
+          {suggestions.map((s) => (
+            <button
+              key={s.name}
+              className="rounded-md border border-[var(--swiss-gray-100)] px-3 py-2 text-left text-[0.8125rem] transition-colors hover:border-[var(--swiss-black)] hover:bg-[var(--bg-secondary)] disabled:opacity-50"
+              disabled={disabled || card.decided}
+              onClick={() => onDecide(card.id, { choice: s.name }, s.name)}
+            >
+              <div className="font-medium">{s.name}</div>
+              <div className="mt-0.5 text-[var(--swiss-gray-400)]">{s.rationale}</div>
+            </button>
+          ))}
+        </div>
+        {card.decided ? <div className="swiss-caption text-[var(--green)]">decided</div> : null}
+      </div>
+    );
+  }
+
+  if (card.type === "hiring_slate") {
+    const roles = (card.data.roles ?? []) as Array<{ role: string; title: string; rationale: string; displayName: string }>;
+    return (
+      <div className="space-y-3">
+        <div className="swiss-caption text-[var(--swiss-gray-400)]">proposed team</div>
+        <div className="grid gap-2">
+          {roles.map((r) => (
+            <div key={r.role} className="rounded-md border border-[var(--swiss-gray-100)] px-3 py-2 text-[0.8125rem]">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{r.displayName ?? r.role}</span>
+                <span className="font-mono text-[0.6875rem] text-[var(--swiss-gray-300)]">{r.role}</span>
+              </div>
+              <div className="mt-0.5 text-[var(--swiss-gray-400)]">{r.title}</div>
+              {r.rationale ? <div className="mt-1 text-[0.75rem] text-[var(--swiss-gray-300)]">{r.rationale}</div> : null}
+            </div>
+          ))}
+        </div>
+        {!card.decided ? (
+          <button
+            className="w-full rounded-md border border-[var(--swiss-black)] bg-[var(--swiss-black)] px-3 py-2 text-[0.8125rem] font-medium text-white transition-colors hover:bg-[var(--swiss-gray-600)] disabled:opacity-50"
+            disabled={disabled}
+            onClick={() => onDecide(card.id, { approved: true }, "Approve hiring slate")}
+          >
+            Approve team
+          </button>
+        ) : (
+          <div className="swiss-caption text-[var(--green)]">team approved</div>
+        )}
+      </div>
+    );
+  }
+
+  if (card.type === "sprint_plan") {
+    const tasks = (card.data.tasks ?? []) as Array<{ id?: string; title: string; assignedRole?: string; priority?: string }>;
+    const sprintTitle = (card.data.title ?? card.data.sprintTitle ?? "Sprint") as string;
+    return (
+      <div className="space-y-3">
+        <div className="swiss-caption text-[var(--swiss-gray-400)]">{sprintTitle}</div>
+        <div className="grid gap-1.5">
+          {tasks.map((t, i) => (
+            <div key={t.id ?? i} className="flex items-start gap-2 rounded-md border border-[var(--swiss-gray-100)] px-3 py-2 text-[0.8125rem]">
+              <span className="mt-0.5 font-mono text-[0.6875rem] text-[var(--swiss-gray-300)]">{i + 1}</span>
+              <div className="flex-1">
+                <div className="font-medium">{t.title}</div>
+                {t.assignedRole ? <span className="font-mono text-[0.6875rem] text-[var(--swiss-gray-300)]">{t.assignedRole}</span> : null}
+              </div>
+              {t.priority ? <span className="font-mono text-[0.6875rem] text-[var(--swiss-gray-300)]">{t.priority}</span> : null}
+            </div>
+          ))}
+        </div>
+        {!card.decided ? (
+          <div className="flex gap-2">
+            <button
+              className="flex-1 rounded-md border border-[var(--swiss-black)] bg-[var(--swiss-black)] px-3 py-2 text-[0.8125rem] font-medium text-white transition-colors hover:bg-[var(--swiss-gray-600)] disabled:opacity-50"
+              disabled={disabled}
+              onClick={() => onDecide(card.id, { approved: true }, "Approve sprint plan")}
+            >
+              Approve
+            </button>
+            <button
+              className="flex-1 rounded-md border border-[var(--swiss-gray-200)] px-3 py-2 text-[0.8125rem] transition-colors hover:border-[var(--swiss-black)] disabled:opacity-50"
+              disabled={disabled}
+              onClick={() => onDecide(card.id, { approved: false }, "Reject sprint plan")}
+            >
+              Reject
+            </button>
+          </div>
+        ) : (
+          <div className="swiss-caption text-[var(--green)]">decided</div>
+        )}
+      </div>
+    );
+  }
+
+  if (card.type === "decision") {
+    const question = (card.data.question ?? card.data.prompt ?? "") as string;
+    const options = (card.data.options ?? []) as Array<string | { id: string; label: string; description?: string }>;
+    return (
+      <div className="space-y-3">
+        {question ? <div className="text-[0.8125rem] font-medium">{question}</div> : null}
+        <div className="grid gap-2">
+          {options.map((opt, i) => {
+            const label = typeof opt === "string" ? opt : opt.label;
+            const desc = typeof opt === "string" ? null : opt.description;
+            const id = typeof opt === "string" ? opt : opt.id;
+            return (
+              <button
+                key={id ?? i}
+                className="rounded-md border border-[var(--swiss-gray-100)] px-3 py-2 text-left text-[0.8125rem] transition-colors hover:border-[var(--swiss-black)] hover:bg-[var(--bg-secondary)] disabled:opacity-50"
+                disabled={disabled || card.decided}
+                onClick={() => onDecide(card.id, { choice: id }, label)}
+              >
+                <div className="font-medium">{label}</div>
+                {desc ? <div className="mt-0.5 text-[var(--swiss-gray-400)]">{desc}</div> : null}
+              </button>
+            );
+          })}
+        </div>
+        {card.decided ? <div className="swiss-caption text-[var(--green)]">decided</div> : null}
+      </div>
+    );
+  }
+
+  // Fallback for unknown card types — still structured, not raw JSON
+  const entries = Object.entries(card.data).filter(([k]) => k !== "type");
+  return (
+    <div className="space-y-2 rounded-md border border-[var(--swiss-gray-100)] px-3 py-2 text-[0.8125rem]">
+      <div className="swiss-caption text-[var(--swiss-gray-400)]">{card.type}</div>
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <div className="font-mono text-[0.6875rem] text-[var(--swiss-gray-300)]">{key}</div>
+          <div className="mt-0.5 text-[var(--swiss-gray-400)]">
+            {typeof value === "string" ? value : <pre className="overflow-x-auto text-[0.75rem]">{JSON.stringify(value, null, 2)}</pre>}
+          </div>
+        </div>
+      ))}
+      {!card.decided ? (
+        <button
+          className="w-full rounded-md border border-[var(--swiss-black)] bg-[var(--swiss-black)] px-3 py-2 text-[0.8125rem] font-medium text-white transition-colors hover:bg-[var(--swiss-gray-600)] disabled:opacity-50"
+          disabled={disabled}
+          onClick={() => onDecide(card.id, { acknowledged: true }, `Acknowledge ${card.type}`)}
+        >
+          Acknowledge
+        </button>
       ) : null}
     </div>
   );
@@ -1387,6 +1572,13 @@ export default function Page() {
       );
     });
 
+    eventSource.addEventListener("card", (event) => {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as InteractiveCard;
+      setMessages((current) =>
+        current.map((msg) => (msg.id === ceoBubbleId ? { ...msg, interactiveCard: payload } : msg))
+      );
+    });
+
     eventSource.addEventListener("meeting", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as MeetingEventPayload;
       setMessages((current) => [
@@ -1423,15 +1615,73 @@ export default function Page() {
 
     eventSource.onerror = async () => {
       eventSource.close();
-      await loadState().catch(() => undefined);
-      setIsStreaming(false);
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === ceoBubbleId && !message.content
-            ? { ...message, role: "system", content: "The CEO runtime failed before returning a response." }
-            : message
-        )
-      );
+
+      // Check if the API is reachable before blaming the CEO.
+      let apiAlive = false;
+      try {
+        const healthRes = await fetch(apiUrl("/health"), { signal: AbortSignal.timeout(3000) });
+        apiAlive = healthRes.ok;
+      } catch { /* unreachable */ }
+
+      if (!apiAlive) {
+        // API is down — show actionable message, no retry.
+        setIsStreaming(false);
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === ceoBubbleId && !message.content
+              ? { ...message, role: "system", content: "Cannot reach the API server. Check that it's running (npm run dev:api) and try again." }
+              : message
+          )
+        );
+        return;
+      }
+
+      // API is alive — retry the stream once before giving up.
+      try {
+        const retrySource = new EventSource(`${apiUrl("/chat/ceo/stream")}?message=${encodeURIComponent(trimmed)}`);
+        let retryGotData = false;
+
+        retrySource.addEventListener("token", (ev) => {
+          retryGotData = true;
+          const payload = JSON.parse((ev as MessageEvent<string>).data) as { content?: string };
+          setMessages((current) =>
+            current.map((msg) => (msg.id === ceoBubbleId ? { ...msg, content: payload.content ?? msg.content } : msg))
+          );
+        });
+
+        retrySource.addEventListener("done", async (ev) => {
+          const payload = JSON.parse((ev as MessageEvent<string>).data) as StreamDonePayload;
+          if (payload.snapshot) setSnapshot(payload.snapshot);
+          await loadState().catch(() => undefined);
+          setIsStreaming(false);
+          retrySource.close();
+        });
+
+        retrySource.onerror = async () => {
+          retrySource.close();
+          await loadState().catch(() => undefined);
+          setIsStreaming(false);
+          if (!retryGotData) {
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === ceoBubbleId && !message.content
+                  ? { ...message, role: "system", content: "The CEO stream failed after retry. The API is up but OpenCode may be unresponsive." }
+                  : message
+              )
+            );
+          }
+        };
+      } catch {
+        await loadState().catch(() => undefined);
+        setIsStreaming(false);
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === ceoBubbleId && !message.content
+              ? { ...message, role: "system", content: "The CEO runtime failed before returning a response." }
+              : message
+          )
+        );
+      }
     };
   }
 
@@ -1546,6 +1796,27 @@ export default function Page() {
     startTransition(() => {
       void sendMessage(option);
     });
+  }
+
+  async function handleCardDecide(cardId: string, decision: Record<string, unknown>, label: string) {
+    try {
+      await fetch(apiUrl(`/chat/cards/${cardId}/decide`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, decidedBy: "user", label }),
+      });
+      setMessages((current) =>
+        current.map((msg) =>
+          msg.interactiveCard?.id === cardId
+            ? { ...msg, interactiveCard: { ...msg.interactiveCard, decided: true } }
+            : msg
+        )
+      );
+      // Send the decision as a follow-up message so the CEO continues
+      void sendMessage(`[user decided ${label}]`);
+    } catch {
+      // silent
+    }
   }
 
   async function handleQuickExecute() {
@@ -1886,40 +2157,39 @@ export default function Page() {
   return (
     <div className="flex h-full flex-col">
       {/* ── Status bar (compact) ────────────────────────── */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-5">
-        <div className="flex items-center gap-2">
-          <span className="text-[0.75rem] font-semibold text-[var(--text-primary)]">
-            {!snapshot.company.id ? "Arceus" : snapshot.company.name}
+      <header className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-5">
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[0.6875rem] font-medium tracking-tight text-[var(--text-primary)]">
+            {!snapshot.company.id ? "arceus" : snapshot.company.name.toLowerCase()}
           </span>
           {currentSprint ? (
-            <Badge variant="outline" className="text-[0.625rem]">Sprint {currentSprint.number}</Badge>
+            <span className="font-mono text-[0.625rem] text-[var(--ink-3)]">sprint {currentSprint.number}</span>
           ) : null}
-          <Badge
-            variant={executionStatus === "done" ? "secondary" : executionStatus === "error" ? "destructive" : "outline"}
-            className="text-[0.625rem]"
-          >
+          <span className="font-mono text-[0.625rem] text-[var(--ink-3)]">
             {executionStatus}
-          </Badge>
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={runtime?.chatReady ? "outline" : "warning"} className="text-[0.625rem]">
-            {runtime?.chatReady ? "CEO ready" : "CEO needs config"}
-          </Badge>
-          <Button variant="ghost" size="sm" onClick={() => void handleReset()} disabled={isResetting}>
-            {isResetting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-            Reset
-          </Button>
+        <div className="flex items-center gap-3">
+          <span className={`font-mono text-[0.625rem] ${runtime?.chatReady ? "text-[var(--green)]" : "text-[var(--amber)]"}`}>
+            {runtime?.chatReady ? "ceo ready" : "ceo needs config"}
+          </span>
+          <button
+            className="font-mono text-[0.625rem] text-[var(--ink-3)] hover:text-[var(--ink)] transition-colors"
+            onClick={() => void handleReset()}
+            disabled={isResetting}
+          >
+            {isResetting ? <LoaderCircle className="inline h-3 w-3 animate-spin mr-1" /> : null}
+            reset
+          </button>
           {!["idle", "done", "error", "paused"].includes(executionStatus) ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-[var(--status-error)]"
+            <button
+              className="font-mono text-[0.625rem] text-[var(--status-error)] hover:text-[var(--red)] transition-colors"
               onClick={() => void handleStopExecution()}
               disabled={stoppingExecution}
             >
-              {stoppingExecution ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-              Stop
-            </Button>
+              {stoppingExecution ? <LoaderCircle className="inline h-3 w-3 animate-spin mr-1" /> : <X className="inline h-3 w-3 mr-0.5" />}
+              stop
+            </button>
           ) : null}
         </div>
       </header>
@@ -1971,6 +2241,16 @@ export default function Page() {
                     );
                   }
 
+                  if (message.role === "ceo" && message.interactiveCard) {
+                    return (
+                      <div key={message.id} className="space-y-2 rounded-lg border border-[var(--swiss-gray-100)] px-4 py-3 text-[0.8125rem]">
+                        <div className="swiss-caption opacity-70">ceo</div>
+                        {message.content ? <p className="whitespace-pre-wrap leading-6 text-[var(--swiss-gray-400)]">{message.content}</p> : null}
+                        <InteractiveCardView card={message.interactiveCard} disabled={isStreaming} onDecide={handleCardDecide} />
+                      </div>
+                    );
+                  }
+
                   return (
                     <div
                       key={message.id}
@@ -1983,7 +2263,7 @@ export default function Page() {
                       }
                     >
                       <div className="swiss-caption mb-1 opacity-70">
-                        {message.role === "board" ? "Board" : message.role === "ceo" ? "CEO" : "System"}
+                        {message.role === "board" ? "board" : message.role === "ceo" ? "ceo" : "system"}
                       </div>
                       <p className="whitespace-pre-wrap leading-6">{message.content}</p>
                     </div>
@@ -2100,8 +2380,8 @@ export default function Page() {
               <section className="overflow-hidden rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]">
                 <div className="flex items-center justify-between border-b border-[var(--swiss-gray-100)] px-5 py-3">
                   <div className="flex items-center gap-2">
-                    <Monitor className="h-4 w-4 text-[var(--swiss-gray-400)]" />
-                    <span className="text-[0.8125rem] font-semibold">Product Preview</span>
+                    <Monitor className="h-3.5 w-3.5 text-[var(--swiss-gray-400)]" />
+                    <span className="font-mono text-[0.6875rem] font-medium">product preview</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {productOverview.preview.framework ? (
@@ -2151,8 +2431,8 @@ export default function Page() {
                   onClick={() => setSprintOpen((prev) => !prev)}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-[0.8125rem] font-semibold">
-                      {currentSprint ? `Sprint ${currentSprint.number}` : "Current Workload"}
+                    <span className="font-mono text-[0.6875rem] font-medium">
+                      {currentSprint ? `sprint ${currentSprint.number}` : "current workload"}
                     </span>
                     {currentSprint ? (
                       <Badge
@@ -2235,15 +2515,15 @@ export default function Page() {
                 <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] px-5 py-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <Zap className="h-3.5 w-3.5 text-[var(--swiss-gray-400)]" />
-                      <span className="text-[0.8125rem] font-semibold">Heartbeat</span>
+                      <Zap className="h-3 w-3 text-[var(--swiss-gray-400)]" />
+                      <span className="font-mono text-[0.6875rem] font-medium">heartbeat</span>
                       {heartbeatStatus.running ? (
-                        <span className="flex items-center gap-1 text-[0.6875rem] text-[var(--status-success)]">
+                        <span className="flex items-center gap-1 font-mono text-[0.625rem] text-[var(--status-success)]">
                           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--status-success)]" />
-                          Running
+                          running
                         </span>
                       ) : (
-                        <span className="text-[0.6875rem] text-[var(--swiss-gray-400)]">Idle</span>
+                        <span className="font-mono text-[0.625rem] text-[var(--swiss-gray-400)]">idle</span>
                       )}
                     </div>
                     {heartbeatStatus.totalBeats > 0 ? (
