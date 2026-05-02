@@ -69,7 +69,7 @@ Use the AskUserQuestion tool to gather missing information. Ask between 3-10 que
 
 **IMPORTANT:** Only ask questions for information you truly need. Don't ask for information you can already infer from the user's initial message.
 
-### 3. Analyze Market Entry Strategy
+### 4. Analyze Market Entry Strategy
 Based on the context gathered, analyze:
 
 1. **Product-Market Fit Status:** Do they have it? How do you know?
