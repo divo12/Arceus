@@ -61,7 +61,7 @@ export const agents = pgTable(
     uniqueIndex("agents_friendly_id_idx").on(table.friendlyId).where(sql`${table.friendlyId} IS NOT NULL`),
     check(
       "agents_role_check",
-      sql`${table.role} IN ('ceo','cto','pm','developer','tester','ui_designer','marketing','skills_lead') OR ${table.isInternal} = true`,
+      sql`${table.role} IN ('ceo','cto','pm','developer','senior_developer','tester','ui_designer','marketing','skills_lead') OR ${table.isInternal} = true`,
     )
   ],
 );

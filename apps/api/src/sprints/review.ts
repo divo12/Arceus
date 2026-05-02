@@ -698,7 +698,7 @@ export async function executeSeniorDeveloperCodeReview(
   }
 
   const reviewState: SprintReviewState | null = sprint.reviewState ?? null;
-  if (!reviewState || reviewState.phase !== "senior_developer_review") {
+  if (reviewState?.phase !== "senior_developer_review") {
     return { summary: "Sprint not in senior_developer_review phase", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
@@ -776,11 +776,11 @@ export async function executeSeniorDeveloperCodeReview(
           { temperature: 0 },
         );
       } catch (extractErr) {
-        emitEmployeeActivity(role, "error", `Code review extraction failed: ${extractErr instanceof Error ? extractErr.message : "unknown"} — treating as pass`, { beatId });
+        emitEmployeeActivity(role, "error", `Code review extraction failed: ${extractErr instanceof Error ? extractErr.message : "unknown"} — treating as fail`, { beatId });
       }
     }
 
-    const verdict = reviewReport?.verdict ?? "pass";
+    const verdict = reviewReport?.verdict ?? "fail";
 
     await persistRuntimeArtifact(snapshot.company.id, {
       id: `artifact_${crypto.randomUUID()}`,

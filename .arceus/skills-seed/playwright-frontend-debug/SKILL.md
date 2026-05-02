@@ -92,13 +92,13 @@ Focus on:
 - Status `>= 400` on API calls → the data never arrived
 - Status `404` on `.js`, `.css`, `.png` → broken import or missing public asset
 - Status `200` but the component still shows empty → the response shape is wrong (check the response body)
-- A request made twice → double-effect in `useEffect`, missing dependency array
+- A request made twice in **production** → double-effect in `useEffect` (missing or unstable dependency array); in **development** with React StrictMode this is normal — effects run twice intentionally to surface side effects
 
 ## Heuristics
 
 - **Reproduce before fixing.** If you can't reproduce with playwright tools, you can't verify the fix either.
 - **Console errors first.** They point directly to the throw site. Read them before touching code.
-- **Network 404 on an API call means the fix is not in the component.** The component rendered correctly — the data fetch failed. Look at the API route, auth headers, or env vars.
+- **Network 404 on an API call means the data fetch failed.** Check the API route, auth headers, and env vars first — but also inspect the request URL the component constructed: a misinterpolated path segment or undefined variable can produce a 404 on the client side.
 - **Browser state persists between tool calls.** You don't need to reload the page between `browser_click` and `browser_snapshot`. Use this to inspect state mid-interaction.
 - **Prefer fresh navigation after a fix.** `browser_navigate` with the same URL will fully reload, clearing stale state.
 

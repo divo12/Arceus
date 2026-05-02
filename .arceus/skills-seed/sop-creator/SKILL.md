@@ -140,7 +140,6 @@ Before you start, make sure:
 
 ### Step 1: [Action Title]
 1. [Do this specific action]
-2. [Do this specific action]
 
 **What you should see:** [Expected result or outcome]
 
