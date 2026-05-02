@@ -76,6 +76,7 @@ export const checklistDispatchSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("sprint_review.retest_after_rework") }),
   z.object({ kind: z.literal("sprint_review.cto_escalation_review") }),
   z.object({ kind: z.literal("sprint_review.cto_escalation_force_complete") }),
+  z.object({ kind: z.literal("sprint_review.run_senior_developer_review") }),
   z.object({ kind: z.literal("skills_lead.mutate_underperformer") }),
   z.object({ kind: z.literal("skills_lead.deprecate_unused") }),
   z.object({ kind: z.literal("skills_lead.fill_skill_gap") }),

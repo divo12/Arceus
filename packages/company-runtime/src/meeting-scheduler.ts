@@ -463,6 +463,7 @@ const MANAGER_ROLE_MAP: Record<AgentIdentity["role"], AgentIdentity["role"] | nu
   marketing: "ceo",
   pm: "cto",
   developer: "cto",
+  senior_developer: "cto",
   tester: "cto",
   ui_designer: "cto",
   skills_lead: "cto",

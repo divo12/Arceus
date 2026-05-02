@@ -662,6 +662,212 @@ export async function executeSprintFinalGate(
   }
 }
 
+// ── Senior Developer Code Review ────────────────────────────────
+
+const CodeReviewReportSchema = z.object({
+  verdict: z.enum(["pass", "fail"]),
+  summary: z.string(),
+  findings: z.array(z.object({
+    severity: z.enum(["critical", "high", "medium", "low"]),
+    category: z.enum(["security", "type_safety", "error_handling", "race_condition", "architecture", "code_quality", "sql_injection", "logic_error"]),
+    file: z.string(),
+    description: z.string(),
+    suggestion: z.string(),
+  })),
+  pass1_checks: z.array(z.object({
+    check: z.string(),
+    status: z.enum(["pass", "fail"]),
+    note: z.string(),
+  })),
+});
+
+/**
+ * Run the senior developer's code review beat for a sprint in the
+ * senior_developer_review phase. Reads the implementation, runs a two-pass
+ * checklist, and either advances to tester_verification (pass) or creates
+ * bug_fix tasks back to developer (fail).
+ */
+export async function executeSeniorDeveloperCodeReview(
+  ctx: AgentBeatContext,
+  beatId: string,
+): Promise<BeatResult> {
+  const snapshot = await buildSnapshotView(ctx.company.id);
+  const sprint = ctx.currentSprint;
+  if (sprint?.status !== "reviewing") {
+    return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const reviewState: SprintReviewState | null = sprint.reviewState ?? null;
+  if (!reviewState || reviewState.phase !== "senior_developer_review") {
+    return { summary: "Sprint not in senior_developer_review phase", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
+  }
+
+  const sprintId = sprint.id;
+  const role = ctx.role;
+  const soul = getRoleSoul(role);
+
+  const reviewBeatId = `code_review_${beatId}`;
+  const reviewBeatStart = Date.now();
+  emitGraphBeatStarted(sprintId, sprintId, reviewBeatId, role, "code_review", `Sprint ${sprint.number} code review`);
+
+  const completedTasks = snapshot.tasks.filter(
+    (t) => t.sprintId === sprintId && t.status === "completed" && t.kind !== "bug_fix" && t.kind !== "follow_up",
+  );
+
+  const taskLines = completedTasks.map((t) =>
+    `- [${t.id}] ${t.title}\n  Description: ${t.description?.slice(0, 300) ?? "(none)"}\n  DoD: ${t.definitionOfDone.join(", ")}`
+  ).join("\n");
+
+  const prompt = [
+    `You are conducting a pre-QA code review for Sprint ${sprint.number}: "${sprint.goal}".`,
+    "",
+    "## Completed Tasks to Review",
+    taskLines || "(No completed tasks)",
+    "",
+    "## Your Review Instructions",
+    `1. Use your shell and file tools to inspect the implementation in ${productDir}.`,
+    "   - Run `git diff HEAD~1 -- . ':(exclude)node_modules' ':(exclude)*.lock'` (or adjust depth) to see what changed.",
+    "   - Read key source files to understand the implementation.",
+    "2. Run Pass 1 (Critical) checks — FAIL on ANY of these:",
+    "   - SQL injection: user input concatenated into queries",
+    "   - Race conditions: shared mutable state accessed without synchronisation",
+    "   - Shell injection: unsanitised user input in exec/spawn calls",
+    "   - LLM output trust: LLM-generated strings used directly in SQL/shell/eval",
+    "   - Enum exhaustiveness: switch statements missing cases for known enum values",
+    "3. Run Pass 2 (Quality) checks — note findings but weigh for overall verdict:",
+    "   - Async/sync mixing: .then() chains mixed with await, missing await on async calls",
+    "   - Type safety: explicit `any` casts, missing null checks at system boundaries",
+    "   - Error handling: uncaught promise rejections, empty catch blocks",
+    "   - Dead code: unreachable branches, unused imports/variables",
+    "   - Magic values: hardcoded secrets, tokens, or environment-specific URLs",
+    "4. Produce your code review report.",
+    "",
+    "## Verdict Rules",
+    "FAIL if: any Pass 1 critical issue found, OR 3+ high-severity Pass 2 issues.",
+    "PASS if: no critical issues and at most 2 high-severity issues (note them for the developer).",
+    "",
+    "Be concrete — cite the actual file path and describe what you found. Do not invent findings.",
+  ].join("\n");
+
+  try {
+    const session = await ensureAgentSession(snapshot, role);
+    touchAgentSession(role, "working");
+    emitEmployeeActivity(role, "working", `Beat ${beatId}: running code review for Sprint ${sprint.number}`, { beatId });
+
+    const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt);
+    touchAgentSession(role, "idle");
+
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+
+    let reviewReport: z.infer<typeof CodeReviewReportSchema> | null = null;
+    if (output) {
+      try {
+        reviewReport = await structuredCompletion(
+          "workerDeployment",
+          [
+            {
+              role: "system",
+              content: "Extract a structured code review report from the senior developer's analysis below. Only record findings the reviewer stated as concrete, file-backed issues — do NOT fabricate findings from vague prose. Preserve the reviewer's verdict exactly.",
+            },
+            { role: "user", content: output },
+          ],
+          CodeReviewReportSchema,
+          "code_review_extract",
+          { temperature: 0 },
+        );
+      } catch (extractErr) {
+        emitEmployeeActivity(role, "error", `Code review extraction failed: ${extractErr instanceof Error ? extractErr.message : "unknown"} — treating as pass`, { beatId });
+      }
+    }
+
+    const verdict = reviewReport?.verdict ?? "pass";
+
+    await persistRuntimeArtifact(snapshot.company.id, {
+      id: `artifact_${crypto.randomUUID()}`,
+      agent: role,
+      kind: "specification",
+      title: `Sprint ${sprint.number} Code Review — ${verdict.toUpperCase()}`,
+      content: output ?? "Code review completed",
+      createdAt: nowIso(),
+      sprintId,
+      taskId: null,
+      fileReferences: [],
+    });
+
+    if (verdict === "pass") {
+      emitEmployeeActivity(role, "transition", `Sprint ${sprint.number} code review: PASS — advancing to tester verification`, { beatId });
+      emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} Code Review: PASS`, reviewReport?.summary ?? "No critical issues found", role, 1.0);
+
+      await updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? { ...s.reviewState, phase: "tester_verification" as const } : s.reviewState,
+      }));
+
+      emitReactive("tester", "task_assigned");
+      emitGraphBeatCompleted(sprintId, sprintId, reviewBeatId, "completed", `Code Review PASS — Sprint ${sprint.number}`, 1, Date.now() - reviewBeatStart);
+      return { summary: `Senior developer code review PASS for Sprint ${sprint.number}`, tokensUsed, actionsCount: 1, toolCalls: 1 };
+
+    } else {
+      const criticalFindings = reviewReport?.findings.filter((f) => f.severity === "critical" || f.severity === "high") ?? [];
+      emitEmployeeActivity(role, "transition", `Sprint ${sprint.number} code review: FAIL — ${criticalFindings.length} critical/high finding(s)`, { beatId });
+      emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} Code Review: FAIL`, reviewReport?.summary ?? "Critical issues found", role, 0);
+
+      const newBugTaskIds: string[] = [...reviewState.bugTaskIds];
+
+      for (const finding of criticalFindings.slice(0, 5)) {
+        const bugTask = createWorkflowTask(
+          snapshot, "bug_fix", "developer",
+          `Code review fix: ${finding.description.slice(0, 80)}`,
+          `Senior developer code review found a ${finding.severity} issue.\n\nFile: ${finding.file}\nCategory: ${finding.category}\nDescription: ${finding.description}\nSuggestion: ${finding.suggestion}`,
+          `Code review finding: ${finding.description}`,
+          `The ${finding.category} issue in ${finding.file} is resolved`,
+          [`Fix the ${finding.category} issue in ${finding.file}`, `Verify the fix does not introduce regressions`],
+          finding.severity === "critical" ? "critical" : "high",
+          "planned",
+          sprintId,
+        );
+        await persistTask(bugTask);
+        newBugTaskIds.push(bugTask.id);
+        emitGraphNodeAdded(sprintId, bugTask);
+      }
+
+      const nextCycleCount = reviewState.reworkCycleCount + 1;
+      const willEscalate = nextCycleCount >= reviewState.maxReworkCycles;
+
+      await updateSprint(sprintId, (s) => ({
+        ...s,
+        reviewState: s.reviewState ? {
+          ...s.reviewState,
+          phase: willEscalate ? "escalated" as const : "rework" as const,
+          reworkCycleCount: nextCycleCount,
+          bugTaskIds: newBugTaskIds,
+          escalatedToCto: willEscalate ? true : s.reviewState.escalatedToCto,
+          escalatedAt: willEscalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
+        } : s.reviewState,
+      }));
+
+      if (willEscalate) {
+        emitReactive("cto", "escalation_received");
+      } else {
+        emitReactive("developer", "bug_reported");
+      }
+
+      emitGraphBeatCompleted(sprintId, sprintId, reviewBeatId, "completed", `Code Review FAIL — Sprint ${sprint.number}`, 1, Date.now() - reviewBeatStart);
+      return {
+        summary: `Senior developer code review FAIL for Sprint ${sprint.number} — ${newBugTaskIds.length - reviewState.bugTaskIds.length} bug(s) filed`,
+        tokensUsed, actionsCount: 1, toolCalls: 1,
+      };
+    }
+
+  } catch (err) {
+    touchAgentSession(role, "idle");
+    const tokensUsed = drainBeatTokenAccumulator(beatId);
+    emitEmployeeActivity(role, "error", `Beat ${beatId}: code review failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
+    emitGraphBeatCompleted(sprintId, sprintId, reviewBeatId, "failed", `Code Review error`, 0, Date.now() - reviewBeatStart);
+    return { summary: `Senior developer code review error: ${err instanceof Error ? err.message : String(err)}`, tokensUsed, actionsCount: 0, toolCalls: 0 };
+  }
+}
+
 // ── Retest After Rework ─────────────────────────────────────────
 
 /** Advance from rework to tester re-verification after all bug fixes resolve. */

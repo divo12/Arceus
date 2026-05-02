@@ -423,7 +423,7 @@ export class HeartbeatEngine {
 
   /** Role priority weights: lower = higher priority. */
   private static readonly ROLE_PRIORITY: Record<AgentIdentity["role"], number> = {
-    ceo: 0, cto: 1, pm: 2, developer: 3, tester: 4, ui_designer: 5, marketing: 6, skills_lead: 7,
+    ceo: 0, cto: 1, pm: 2, developer: 3, senior_developer: 4, tester: 5, ui_designer: 6, marketing: 7, skills_lead: 8,
   };
 
   /**

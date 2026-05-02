@@ -37,6 +37,7 @@ import { finalizeSprintCompletion } from "../sprints/lifecycle.js";
 import {
   executeSprintReviewVerification, executeSprintFinalGate,
   executeRetestAfterRework, executeCtoBeatEscalationReview,
+  executeSeniorDeveloperCodeReview,
 } from "../sprints/review.js";
 import { startEventBridge } from "./event-bridge.js";
 
@@ -74,6 +75,7 @@ const DISPATCH_HANDLERS: Record<ChecklistDispatch["kind"], ChecklistHandler> = {
   "sprint_review.run_tester_verification": handleRunTesterVerification,
   "sprint_review.run_final_gate": handleRunFinalGate,
   "sprint_review.retest_after_rework": handleRetestAfterRework,
+  "sprint_review.run_senior_developer_review": handleRunSeniorDeveloperReview,
   "skills_lead.mutate_underperformer": handleSkillsLeadMutateUnderperformer,
   "skills_lead.deprecate_unused": handleSkillsLeadDeprecateUnused,
   "skills_lead.fill_skill_gap": handleSkillsLeadFillSkillGap,
@@ -359,6 +361,19 @@ async function handleRetestAfterRework(
   startBeatTokenAccumulator(beatId);
   const res = await executeRetestAfterRework(ctx, beatId);
   finish("completed", "retest after rework", res.toolCalls);
+  return res;
+}
+
+/** Senior developer code review beat (pre-QA quality gate). */
+async function handleRunSeniorDeveloperReview(
+  ctx: AgentBeatContext,
+  _action: ChecklistAction,
+  beatId: string,
+  finish: FinishFn,
+): Promise<HandlerResult> {
+  startBeatTokenAccumulator(beatId);
+  const res = await executeSeniorDeveloperCodeReview(ctx, beatId);
+  finish("completed", "senior developer code review", res.toolCalls);
   return res;
 }
 

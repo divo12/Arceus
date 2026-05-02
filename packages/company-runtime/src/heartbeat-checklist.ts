@@ -424,6 +424,26 @@ function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   return { status: "ok", detail: "No pending escalation" };
 }
 
+/** Senior Developer check: fire when the sprint is in reviewing and phase is senior_developer_review. */
+function checkCodeReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
+  const sprint = ctx.currentSprint;
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+
+  const reviewState = sprint.reviewState;
+  if (!reviewState) return { status: "ok", detail: "No review state" };
+
+  if (reviewState.phase === "senior_developer_review") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${sprint.number} awaiting senior developer code review (cycle ${reviewState.reworkCycleCount})`,
+      suggestedAction: `Run code review for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.run_senior_developer_review" },
+    };
+  }
+
+  return { status: "ok", detail: `Review phase: ${reviewState.phase}` };
+}
+
 /** UI Designer check: find actionable design tasks. */
 function checkDesignQueue(ctx: AgentBeatContext): CheckResult {
   const designTasks = ctx.tasks.filter(
@@ -563,6 +583,7 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
+  senior_developer: [checkMeetingContribution, checkCodeReviewPhaseActive, checkSprintHealth, checkAssignedTasks],
   // Tester only fires at sprint-end now. Per-task verifying is handled by
   // the developer's self-test (bash + task_complete with evidence). The
   // legacy checkTestQueue would have routed verifying-status tasks here;

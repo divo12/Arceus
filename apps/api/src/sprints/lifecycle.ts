@@ -143,31 +143,40 @@ export async function checkSprintCompletion(): Promise<boolean> {
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
   } else {
-    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — awaiting tester verification`, {
-      detail: { gateResult },
-    });
-    reviewState.phase = "tester_verification";
-
-    // Surface the preview URL to the user as soon as the gate passes — this
-    // is the "ship it" moment from the user's POV. Tester still needs to
-    // verify, but the user can poke at the preview now.
-    const preview = getLocalPreviewState();
-    const previewUrl = preview.url ?? preview.entryUrl ?? preview.validationUrl;
-    if (previewUrl) {
-      await appendChatMessage({
-        id: `chat_${crypto.randomUUID()}`,
-        companyId: snapshot.company.id,
-        sprintId: currentSprintId,
-        agentId: null,
-        role: "system",
-        content: `🚀 Preview ready for Sprint ${currentSprint.number}: ${previewUrl} — tester verifying now.`,
-        cardType: "status_update",
-        cardData: { previewUrl, sprintNumber: currentSprint.number, phase: "pre_review_passed" },
-        createdAt: nowIso(),
+    const hasSeniorDev = getAgentByRole(snapshot, "senior_developer") !== null;
+    if (hasSeniorDev) {
+      emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — awaiting senior developer code review`, {
+        detail: { gateResult },
       });
-    }
+      reviewState.phase = "senior_developer_review";
+      emitReactive("senior_developer", "task_assigned");
+    } else {
+      emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — awaiting tester verification`, {
+        detail: { gateResult },
+      });
+      reviewState.phase = "tester_verification";
 
-    emitReactive("tester", "task_assigned");
+      // Surface the preview URL to the user as soon as the gate passes — this
+      // is the "ship it" moment from the user's POV. Tester still needs to
+      // verify, but the user can poke at the preview now.
+      const preview = getLocalPreviewState();
+      const previewUrl = preview.url ?? preview.entryUrl ?? preview.validationUrl;
+      if (previewUrl) {
+        await appendChatMessage({
+          id: `chat_${crypto.randomUUID()}`,
+          companyId: snapshot.company.id,
+          sprintId: currentSprintId,
+          agentId: null,
+          role: "system",
+          content: `🚀 Preview ready for Sprint ${currentSprint.number}: ${previewUrl} — tester verifying now.`,
+          cardType: "status_update",
+          cardData: { previewUrl, sprintNumber: currentSprint.number, phase: "pre_review_passed" },
+          createdAt: nowIso(),
+        });
+      }
+
+      emitReactive("tester", "task_assigned");
+    }
   }
 
   await updateSprint(currentSprintId, (sprint) => ({

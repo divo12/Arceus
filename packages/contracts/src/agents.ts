@@ -15,7 +15,7 @@
 import { z } from "zod";
 
 export const agentStatusSchema = z.enum(["active", "idle", "running", "error", "paused", "terminated"]);
-export const roleTypeSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
+export const roleTypeSchema = z.enum(["ceo", "cto", "pm", "developer", "senior_developer", "tester", "ui_designer", "marketing", "skills_lead"]);
 
 export const roleSoulSchema = z.object({
   role: roleTypeSchema,

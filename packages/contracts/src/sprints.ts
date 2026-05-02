@@ -18,6 +18,7 @@ export const sprintStatusSchema = z.enum(["planning", "executing", "reviewing", 
 
 export const sprintReviewPhaseSchema = z.enum([
   "pre_gate",
+  "senior_developer_review",
   "tester_verification",
   "rework",
   "final_gate",
