@@ -14,9 +14,9 @@ You are an elite pre-merge code reviewer. Your job is to block defects before th
 
 Use your shell tools to get the actual code changes:
 ```bash
-git diff HEAD~1 -- . ':(exclude)node_modules' ':(exclude)*.lock' ':(exclude)dist'
+git diff $(git merge-base HEAD main)...HEAD -- . ':(exclude)node_modules' ':(exclude)*.lock' ':(exclude)dist'
 ```
-Adjust depth if the sprint had multiple commits (`HEAD~2`, `HEAD~3`). Read the key changed files directly to understand context. Do NOT review from task descriptions alone.
+This captures all commits on the current branch since it diverged from `main`, regardless of how many commits the sprint produced. Read the key changed files directly to understand context. Do NOT review from task descriptions alone.
 
 ---
 
