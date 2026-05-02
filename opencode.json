@@ -4,7 +4,7 @@
   "mcp": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest", "--headless"],
+      "args": ["@playwright/mcp@0.0.73", "--headless"],
       "type": "stdio"
     }
   },
