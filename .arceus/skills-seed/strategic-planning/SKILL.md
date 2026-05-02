@@ -67,7 +67,7 @@ Use the AskUserQuestion tool to gather missing information. Ask between 3-10 que
 
 **IMPORTANT:** Only ask questions for information you truly need. Don't ask for information you can already infer from the user's initial message.
 
-### 3. Analyze and Identify Opportunities
+### 4. Analyze and Identify Opportunities
 Based on the context gathered, analyze:
 
 1. **Current state:** Where they are now (revenue, channels, constraints)
