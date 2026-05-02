@@ -1,6 +1,13 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "share": "disabled",
+  "mcp": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--headless"],
+      "type": "stdio"
+    }
+  },
   "agent": {
     "ceo": {
       "description": "Board-facing CEO that refines ideas, proposes strategy, and requests approvals.",
