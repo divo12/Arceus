@@ -1,5 +1,11 @@
-import Link from "next/link";
+"use client";
+
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AgentNetworkVisual, MemoryTiersVisual, GovernanceVisual, EvolutionVisual } from "./feature-visuals";
+
+const CREDS = { username: "admin", password: "arceus" };
+const AUTH_KEY = "arceus_auth";
 
 const HOW_IT_WORKS = [
   {
@@ -63,7 +69,184 @@ const FEATURES = [
   },
 ];
 
-export default function LandingPage() {
+function LoginModal({
+  onSuccess,
+  onClose,
+}: {
+  onSuccess: () => void;
+  onClose: () => void;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (username === CREDS.username && password === CREDS.password) {
+      localStorage.setItem(AUTH_KEY, "1");
+      document.cookie = "arceus_auth=1; path=/; max-age=86400";
+      onSuccess();
+    } else {
+      setError("Invalid username or password.");
+    }
+  }
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 200,
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          background: "rgba(0,0,0,0.35)",
+        }}
+      />
+
+      {/* Modal */}
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 201,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "24px",
+        }}
+      >
+        <div
+          style={{
+            background: "#ffffff",
+            borderRadius: "16px",
+            padding: "40px",
+            width: "100%",
+            maxWidth: "400px",
+            boxShadow: "0 24px 64px rgba(0,0,0,0.18)",
+          }}
+        >
+          {/* Logo */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "28px" }}>
+            <svg viewBox="0 0 100 100" fill="currentColor" style={{ width: "20px", height: "20px" }}>
+              <path d="M 39 18 C 34 22 24 18 19 11 C 14 16 8 30 7 50 C 8 70 14 84 19 89 C 24 82 34 78 39 82 C 42 72 38 60 40 50 C 38 40 42 28 39 18 Z" />
+              <path d="M 61 18 C 66 22 76 18 81 11 C 86 16 92 30 93 50 C 92 70 86 84 81 89 C 76 82 66 78 61 82 C 58 72 62 60 60 50 C 62 40 58 28 61 18 Z" />
+              <circle cx="50" cy="50" r="9" />
+            </svg>
+            <span style={{ fontWeight: 500, fontSize: "16px" }}>arceus</span>
+          </div>
+
+          <h2
+            style={{
+              fontFamily: "system-ui, -apple-system, 'SF Pro Rounded', sans-serif",
+              fontSize: "22px",
+              fontWeight: 500,
+              marginBottom: "6px",
+              color: "#000000",
+            }}
+          >
+            Sign in
+          </h2>
+          <p style={{ fontSize: "14px", color: "#737373", marginBottom: "28px" }}>
+            Enter your credentials to continue.
+          </p>
+
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", fontWeight: 500, color: "#404040" }}>Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setError(""); }}
+                autoFocus
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  border: "1px solid #d4d4d4",
+                  fontSize: "15px",
+                  outline: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", fontWeight: 500, color: "#404040" }}>Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setError(""); }}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  border: "1px solid #d4d4d4",
+                  fontSize: "15px",
+                  outline: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+
+            {error && (
+              <p style={{ fontSize: "13px", color: "#dc2626", margin: 0 }}>{error}</p>
+            )}
+
+            <button
+              type="submit"
+              style={{
+                marginTop: "4px",
+                background: "#000000",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "9999px",
+                padding: "12px",
+                fontSize: "15px",
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              Sign in
+            </button>
+          </form>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function LandingPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [showLogin, setShowLogin] = useState(false);
+  const [pendingPath, setPendingPath] = useState("/home");
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    const authed = localStorage.getItem(AUTH_KEY) === "1";
+    setIsLoggedIn(authed);
+    if (!authed && searchParams.get("login") === "1") {
+      setShowLogin(true);
+    }
+  }, [searchParams]);
+
+  function requireAuth(path: string) {
+    if (isLoggedIn) {
+      router.push(path);
+    } else {
+      setPendingPath(path);
+      setShowLogin(true);
+    }
+  }
+
+  function handleLoginSuccess() {
+    setIsLoggedIn(true);
+    setShowLogin(false);
+    router.push(pendingPath);
+  }
+
   return (
     <div
       style={{
@@ -76,6 +259,13 @@ export default function LandingPage() {
         WebkitFontSmoothing: "antialiased",
       }}
     >
+      {showLogin && (
+        <LoginModal
+          onSuccess={handleLoginSuccess}
+          onClose={() => setShowLogin(false)}
+        />
+      )}
+
       {/* ── Nav ── */}
       <nav
         style={{
@@ -124,8 +314,8 @@ export default function LandingPage() {
               {label}
             </a>
           ))}
-          <Link
-            href="/home"
+          <button
+            onClick={() => requireAuth("/home")}
             style={{
               background: "#000000",
               color: "#ffffff",
@@ -133,12 +323,13 @@ export default function LandingPage() {
               borderRadius: "9999px",
               fontSize: "16px",
               fontWeight: 500,
-              textDecoration: "none",
-              display: "inline-block",
+              border: "none",
+              cursor: "pointer",
+              fontFamily: "inherit",
             }}
           >
-            Open app
-          </Link>
+            {isLoggedIn ? "Open app" : "Login"}
+          </button>
         </div>
       </nav>
 
@@ -208,8 +399,8 @@ export default function LandingPage() {
         </p>
 
         <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
-          <Link
-            href="/home"
+          <button
+            onClick={() => requireAuth("/home")}
             style={{
               background: "#000000",
               color: "#ffffff",
@@ -217,14 +408,15 @@ export default function LandingPage() {
               borderRadius: "9999px",
               fontSize: "18px",
               fontWeight: 500,
-              textDecoration: "none",
-              display: "inline-block",
+              border: "none",
+              cursor: "pointer",
+              fontFamily: "inherit",
             }}
           >
             Start building
-          </Link>
-          <Link
-            href="/dashboard"
+          </button>
+          <button
+            onClick={() => requireAuth("/dashboard")}
             style={{
               background: "#ffffff",
               color: "#404040",
@@ -233,12 +425,12 @@ export default function LandingPage() {
               fontSize: "18px",
               fontWeight: 400,
               border: "1px solid #d4d4d4",
-              textDecoration: "none",
-              display: "inline-block",
+              cursor: "pointer",
+              fontFamily: "inherit",
             }}
           >
             View dashboard
-          </Link>
+          </button>
         </div>
       </section>
 
@@ -473,7 +665,6 @@ export default function LandingPage() {
                 gap: "0",
               }}
             >
-              {/* Grey text card — 60% */}
               <div
                 style={{
                   flex: "0 0 60%",
@@ -522,7 +713,6 @@ export default function LandingPage() {
                 </p>
               </div>
 
-              {/* Visual — floats in the remaining 40%, centered, no box */}
               <div
                 style={{
                   flex: "0 0 40%",
@@ -672,8 +862,8 @@ export default function LandingPage() {
         >
           Set a goal, meet your CEO agent, and watch the company take shape.
         </p>
-        <Link
-          href="/home"
+        <button
+          onClick={() => requireAuth("/home")}
           style={{
             background: "#000000",
             color: "#ffffff",
@@ -681,12 +871,13 @@ export default function LandingPage() {
             borderRadius: "9999px",
             fontSize: "18px",
             fontWeight: 500,
-            textDecoration: "none",
-            display: "inline-block",
+            border: "none",
+            cursor: "pointer",
+            fontFamily: "inherit",
           }}
         >
           Start building
-        </Link>
+        </button>
       </section>
 
       {/* ── Footer ── */}
@@ -722,5 +913,13 @@ export default function LandingPage() {
         </span>
       </footer>
     </div>
+  );
+}
+
+export default function LandingPage() {
+  return (
+    <Suspense>
+      <LandingPageInner />
+    </Suspense>
   );
 }
