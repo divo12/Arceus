@@ -288,10 +288,53 @@ export async function structuredCompletion<T>(
         );
       }
 
-      return schema.parse(JSON.parse(raw));
+      return schema.parse(parseJsonTolerant(raw, schemaName));
     },
     { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
   );
+}
+
+/**
+ * Tolerant JSON parser for LLM structured output. Some Azure deployments
+ * (notably gpt-5.x and reasoning models) ignore `strict: true` and append
+ * commentary like `}\n\nThis strategy will...` after the closing brace,
+ * causing JSON.parse to throw "Unexpected non-whitespace character after
+ * JSON". This walks the string from the first `{`/`[` and slices at the
+ * matching close brace, ignoring trailing text. String literals are
+ * tracked so braces inside strings don't fool the depth counter.
+ */
+function parseJsonTolerant(raw: string, schemaName: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = raw.search(/[{[]/);
+    if (start === -1) {
+      throw new Error(`Azure OpenAI returned non-JSON content (${schemaName}): ${raw.slice(0, 200)}`);
+    }
+    const open = raw[start] as "{" | "[";
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < raw.length; i++) {
+      const ch = raw[i];
+      if (escape) { escape = false; continue; }
+      if (inString) {
+        if (ch === "\\") escape = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === open) depth++;
+      else if (ch === close) {
+        depth--;
+        if (depth === 0) {
+          return JSON.parse(raw.slice(start, i + 1));
+        }
+      }
+    }
+    throw new Error(`Azure OpenAI returned unbalanced JSON (${schemaName}): ${raw.slice(0, 200)}`);
+  }
 }
 
 /** Stream a chat completion response from Azure OpenAI, returning the raw byte stream. */

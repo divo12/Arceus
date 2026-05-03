@@ -140,8 +140,10 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
   reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("X-Accel-Buffering", "no");
   reply.raw.setHeader("Access-Control-Allow-Origin", reply.request.headers.origin || "*");
   reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+  reply.raw.flushHeaders?.();
 
   sseWrite(reply, "board", { content: trimmedMessage });
   sseWrite(reply, "status", { phase: "connecting" });

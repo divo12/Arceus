@@ -15,6 +15,7 @@
     "@arceus/contracts": "file:../../packages/contracts",
     "@arceus/db": "file:../../packages/db",
     "@arceus/hippocampus": "file:../../packages/hippocampus",
+    "@arceus/mcp": "file:../../packages/arceus-mcp",
     "@arceus/runtime-shared": "file:../../packages/runtime-shared",
     "@arceus/task-engine": "file:../../packages/task-engine",
     "@fastify/cors": "^10.0.2",
