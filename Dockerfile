@@ -39,7 +39,9 @@ COPY packages/runtime-shared/package.json packages/runtime-shared/
 COPY packages/task-engine/package.json packages/task-engine/
 COPY packages/arceus-mcp/package.json packages/arceus-mcp/
 
-RUN npm ci --include=dev
+RUN npm ci --include=dev \
+    || (echo "[deps] lockfile out of sync — falling back to npm install" \
+        && npm install --include=dev --no-audit --no-fund)
 
 # ── build ────────────────────────────────────────────────────────
 FROM deps AS build
