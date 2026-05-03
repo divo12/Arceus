@@ -39,13 +39,9 @@ COPY packages/runtime-shared/package.json packages/runtime-shared/
 COPY packages/task-engine/package.json packages/task-engine/
 COPY packages/arceus-mcp/package.json packages/arceus-mcp/
 
-RUN npm ci --include=dev \
+RUN npm ci --include=dev --include=optional \
     || (echo "[deps] lockfile out of sync — falling back to npm install" \
-        && npm install --include=dev --no-audit --no-fund)
-
-# Lockfiles regenerated on macOS only pin @img/sharp-darwin-* binaries.
-# Force the linux-x64 native module so 'require sharp' works at runtime.
-RUN npm install --no-save --no-audit --no-fund --os=linux --cpu=x64 sharp
+        && npm install --include=dev --include=optional --os=linux --cpu=x64 --no-audit --no-fund)
 
 # ── build ────────────────────────────────────────────────────────
 FROM deps AS build
