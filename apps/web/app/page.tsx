@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AgentNetworkVisual, MemoryTiersVisual, GovernanceVisual, EvolutionVisual } from "./feature-visuals";
 
+const CREDS = { username: "admin", password: "arceus" };
 const AUTH_KEY = "arceus_auth";
 
 const HOW_IT_WORKS = [
@@ -75,32 +76,18 @@ function LoginModal({
   onSuccess: () => void;
   onClose: () => void;
 }) {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (res.ok) {
-        localStorage.setItem(AUTH_KEY, "1");
-        onSuccess();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setError((data as { error?: string }).error ?? "Invalid email or password.");
-      }
-    } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
+    if (username === CREDS.username && password === CREDS.password) {
+      localStorage.setItem(AUTH_KEY, "1");
+      document.cookie = "arceus_auth=1; path=/; max-age=86400";
+      onSuccess();
+    } else {
+      setError("Invalid username or password.");
     }
   }
 
@@ -168,11 +155,11 @@ function LoginModal({
 
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <label style={{ fontSize: "13px", fontWeight: 500, color: "#404040" }}>Email</label>
+              <label style={{ fontSize: "13px", fontWeight: 500, color: "#404040" }}>Username</label>
               <input
-                type="email"
-                value={email}
-                onChange={(e) => { setEmail(e.target.value); setError(""); }}
+                type="text"
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setError(""); }}
                 autoFocus
                 style={{
                   padding: "10px 14px",
@@ -208,7 +195,6 @@ function LoginModal({
 
             <button
               type="submit"
-              disabled={loading}
               style={{
                 marginTop: "4px",
                 background: "#000000",
@@ -218,12 +204,11 @@ function LoginModal({
                 padding: "12px",
                 fontSize: "15px",
                 fontWeight: 500,
-                cursor: loading ? "not-allowed" : "pointer",
-                opacity: loading ? 0.6 : 1,
+                cursor: "pointer",
                 fontFamily: "inherit",
               }}
             >
-              {loading ? "Signing in…" : "Sign in"}
+              Sign in
             </button>
           </form>
         </div>

@@ -148,13 +148,6 @@
       "when": 1777668711991,
       "tag": "0021_chat2_board_messages_extension",
       "breakpoints": true
-    },
-    {
-      "idx": 21,
-      "version": "7",
-      "when": 1778187111000,
-      "tag": "0022_users_password_hash",
-      "breakpoints": true
     }
   ]
 }
