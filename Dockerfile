@@ -28,7 +28,9 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
-COPY apps/tui/package.json apps/tui/
+# apps/tui is intentionally omitted — it's an ink/React CLI we don't ship
+# in the API image, and its postinstall script (`fix-ink-react.mjs`) only
+# runs if its package.json is present.
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
 COPY packages/hippocampus/package.json packages/hippocampus/
@@ -57,7 +59,7 @@ RUN npm run build --workspace @arceus/contracts --if-present \
  && npm run build --workspace @arceus/hippocampus --if-present \
  && npm run build --workspace @arceus/company-runtime --if-present \
  && npm run build --workspace @arceus/task-engine --if-present \
- && npm run build --workspace @arceus/arceus-mcp --if-present \
+ && npm run build --workspace @arceus/mcp --if-present \
  && npm run build --workspace @arceus/api
 
 # Strip dev deps from the runtime layer.
