@@ -26,7 +26,7 @@ export function middleware(req: NextRequest) {
   const url = req.nextUrl.clone();
 
   if (host === APP_HOST) {
-    if (url.pathname === "/") {
+    if (url.pathname === "/" && !url.searchParams.has("login")) {
       url.pathname = "/home";
       return NextResponse.redirect(url);
     }
