@@ -201,7 +201,8 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
         }
         // Surface tool invocations so the frontend can show a white-box trace.
         if (part?.sessionID === sessionId && (part.type === "tool-invocation" || part.type === "tool-result" || part.type === "tool")) {
-          const toolName: string = part.toolInvocation?.toolName ?? part.tool ?? part.name ?? "";
+          const p = part as Record<string, unknown>;
+          const toolName: string = (p.toolInvocation as Record<string, unknown> | undefined)?.toolName as string ?? p.tool as string ?? p.name as string ?? "";
           if (toolName && part.type === "tool-invocation") {
             sseWrite(reply, "tool_used", { tool: toolName });
           }
