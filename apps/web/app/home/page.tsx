@@ -1323,6 +1323,7 @@ export default function Page() {
   const setMessages = setRawMessages as React.Dispatch<React.SetStateAction<ChatBubble[]>>;
   const [isPending, startTransition] = useTransition();
   const [isStreaming, setIsStreaming] = useState(false);
+  const [decidingCardId, setDecidingCardId] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [activityEvents, setActivityEvents] = useState<EmployeeActivityEvent[]>([]);
   const [executionStatus, setExecutionStatus] = useState<string>("idle");
@@ -1792,6 +1793,8 @@ export default function Page() {
   }
 
   async function handleCardDecide(cardId: string, decision: Record<string, unknown>, label: string) {
+    if (decidingCardId === cardId) return;
+    setDecidingCardId(cardId);
     try {
       await fetch(apiUrl(`/chat/cards/${cardId}/decide`), {
         method: "POST",
@@ -1809,6 +1812,8 @@ export default function Page() {
       void sendMessage(`[user decided ${label}]`);
     } catch {
       // silent
+    } finally {
+      setDecidingCardId(null);
     }
   }
 
@@ -2213,7 +2218,11 @@ export default function Page() {
                         <div className="swiss-caption opacity-70">ceo</div>
                         {message.content ? <div className="prose prose-sm max-w-none leading-6 text-[var(--swiss-gray-400)]"><ReactMarkdown>{message.content}</ReactMarkdown></div> : null}
                         {message.interactiveCard ? (
-                          <InteractiveCardView card={message.interactiveCard} disabled={isStreaming} onDecide={handleCardDecide} />
+                          <InteractiveCardView
+                            card={message.interactiveCard}
+                            disabled={decidingCardId === message.interactiveCard.id || Boolean(message.interactiveCard.decided)}
+                            onDecide={handleCardDecide}
+                          />
                         ) : (
                           <div className="space-y-3 rounded-lg border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-4">
                             <div className="h-4 w-1/3 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
