@@ -102,6 +102,9 @@ COPY --from=build --chown=arceus:arceus /app/.opencode ./.opencode
 RUN mkdir -p /var/lib/arceus/workspaces /app/workspace \
     && chown -R arceus:arceus /var/lib/arceus /app/workspace
 
+COPY --chown=arceus:arceus docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 USER arceus
 
 ENV NODE_ENV=production \
@@ -127,4 +130,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # process itself. With npm as PID 1, any SIGTERM forwarded through the
 # wrapper bounces the container — the API saw graceful-shutdown +
 # container restart loops with double OpenCode warm-ups as a result.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["tsx", "apps/api/src/server.ts"]

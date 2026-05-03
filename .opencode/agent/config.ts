@@ -160,7 +160,7 @@ const denyRest = (allowed: ToolVisibility): ToolVisibility => {
 export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   ceo: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Board-facing CEO that refines ideas, proposes strategy, and requests approvals.",
     promptFile: "./.opencode/prompts/ceo-soul.txt",
     permission: { edit: "deny", bash: { "*": "deny" }, webfetch: "allow" },
@@ -207,7 +207,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   cto: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Technical lead that decomposes strategy into architecture and execution plans.",
     promptFile: "./.opencode/prompts/cto-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
@@ -241,7 +241,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   pm: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Product manager focused on scope control, backlog discipline, and meeting synthesis.",
     promptFile: "./.opencode/prompts/pm-soul.txt",
     permission: { edit: "deny", bash: { "*": "deny" }, webfetch: "allow" },
@@ -276,7 +276,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   developer: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Execution-focused builder that produces a runnable local workspace.",
     promptFile: "./.opencode/prompts/developer-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
@@ -309,7 +309,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   tester: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Quality specialist that validates apps and services through browser, accessibility, and smoke testing workflows.",
     promptFile: "./.opencode/prompts/tester-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
@@ -343,7 +343,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   ui_designer: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Design specialist that creates visual direction, UX guidance, and interface critique.",
     promptFile: "./.opencode/prompts/ui-designer-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "deny" }, webfetch: "allow" },
@@ -367,7 +367,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   marketing: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Launch specialist that prepares positioning, campaigns, and distribution-ready copy.",
     promptFile: "./.opencode/prompts/marketing-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "deny" }, webfetch: "allow" },
@@ -391,7 +391,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   skills_lead: {
     mode: "primary",
-    model: "azure/gpt-4.1",
+    model: "azure/gpt-5.4-mini",
     description: "Operational specialist that authors and maintains reusable skills for the company.",
     promptFile: "./.opencode/prompts/skills-lead-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
