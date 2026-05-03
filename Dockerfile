@@ -43,6 +43,10 @@ RUN npm ci --include=dev \
     || (echo "[deps] lockfile out of sync — falling back to npm install" \
         && npm install --include=dev --no-audit --no-fund)
 
+# Lockfiles regenerated on macOS only pin @img/sharp-darwin-* binaries.
+# Force the linux-x64 native module so 'require sharp' works at runtime.
+RUN npm install --no-save --no-audit --no-fund --os=linux --cpu=x64 sharp
+
 # ── build ────────────────────────────────────────────────────────
 FROM deps AS build
 WORKDIR /app
