@@ -1,92 +1,114 @@
-# ============================================================
-# Arceus API — Multi-stage Docker build for Railway
-# ============================================================
-# Includes: Fastify API + OpenCode agent runtime + git
-# External deps: Supabase (Postgres + Storage), Azure OpenAI
-# ============================================================
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────
+# Arceus API — single common Dockerfile.
+#
+# Used by:
+#   • Railway (per railway.toml: dockerfilePath = "Dockerfile")
+#   • Any other generic container host (Fly, Render, Cloud Run, etc.)
+#
+# NOT used by Vercel — the web app deploys directly via apps/web/vercel.json.
+# This image only ships the API.
+# ─────────────────────────────────────────────────────────────────
 
-# ── Stage 1: Install dependencies + build ──────────────────
-FROM node:22-slim AS build
+ARG NODE_VERSION=22.12-slim
+
+# ── deps ─────────────────────────────────────────────────────────
+FROM node:${NODE_VERSION} AS deps
 WORKDIR /app
 
-# git needed for workspace manager at runtime AND for npm ci (some deps)
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# git is required at install + runtime by the workspace manager.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy package files first (layer caching)
+# Copy ONLY package manifests of workspaces that actually exist on disk,
+# so Docker can cache the install plan. apps/web2 is in workspaces glob
+# but has no package.json — npm tolerates, but Dockerfile COPY does not,
+# so it's omitted intentionally.
 COPY package.json package-lock.json ./
-COPY apps/api/package.json ./apps/api/
-COPY apps/web/package.json ./apps/web/
-COPY packages/contracts/package.json ./packages/contracts/
-COPY packages/company-runtime/package.json ./packages/company-runtime/
-COPY packages/db/package.json ./packages/db/
-COPY packages/hippocampus/package.json ./packages/hippocampus/
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/tui/package.json apps/tui/
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/db/package.json packages/db/
+COPY packages/hippocampus/package.json packages/hippocampus/
+COPY packages/company-runtime/package.json packages/company-runtime/
+COPY packages/runtime-shared/package.json packages/runtime-shared/
+COPY packages/task-engine/package.json packages/task-engine/
+COPY packages/arceus-mcp/package.json packages/arceus-mcp/
 
-RUN npm ci
+RUN npm ci --include=dev
 
-# Copy source (only API + packages, skip web app — it deploys to Vercel)
-COPY apps/api/ ./apps/api/
-COPY packages/ ./packages/
+# ── build ────────────────────────────────────────────────────────
+FROM deps AS build
+WORKDIR /app
+
 COPY tsconfig.base.json ./
-COPY opencode.json ./
+COPY packages/ ./packages/
+COPY apps/api/ ./apps/api/
+COPY opencode.json* ./
 COPY .opencode/ ./.opencode/
 
-# Build only API and its dependencies (not web)
-RUN npm run build --workspace @arceus/contracts --if-present && \
-    npm run build --workspace @arceus/db --if-present && \
-    npm run build --workspace @arceus/hippocampus --if-present && \
-    npm run build --workspace @arceus/company-runtime --if-present && \
-    npm run build --workspace @arceus/api
+# Compile every workspace the API imports from. `--if-present` keeps it
+# tolerant of packages without a build script.
+RUN npm run build --workspace @arceus/contracts --if-present \
+ && npm run build --workspace @arceus/runtime-shared --if-present \
+ && npm run build --workspace @arceus/db --if-present \
+ && npm run build --workspace @arceus/hippocampus --if-present \
+ && npm run build --workspace @arceus/company-runtime --if-present \
+ && npm run build --workspace @arceus/task-engine --if-present \
+ && npm run build --workspace @arceus/arceus-mcp --if-present \
+ && npm run build --workspace @arceus/api
 
-# Prune dev dependencies
-RUN npm prune --production
+# Strip dev deps from the runtime layer.
+RUN npm prune --omit=dev
 
-# ── Stage 2: Production runtime ────────────────────────────
-FROM node:22-slim AS production
+# ── runtime ──────────────────────────────────────────────────────
+FROM node:${NODE_VERSION} AS production
 WORKDIR /app
 
-# git required at runtime for workspace manager (git init, commit, bundle)
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# git: workspace manager (init/commit/tag/bundle).
+# tar: local-fallback exportTarball path (Spec 36 Phase A.2).
+# curl: HEALTHCHECK probe.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git tar curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN groupadd -g 1001 arceus && useradd -u 1001 -g arceus -m arceus
+# Non-root user for the running process.
+RUN groupadd -g 1001 arceus && useradd -u 1001 -g arceus -m -s /bin/bash arceus
 
-# Install OpenCode CLI + tsx globally
-RUN npm install -g opencode-ai@1.3.17 tsx@4.19.3
+# Pin the OpenCode CLI version the API spawns at runtime.
+ARG OPENCODE_VERSION=1.3.17
+RUN npm install -g opencode-ai@${OPENCODE_VERSION}
 
-# Copy production node_modules (hoisted at root)
+# Copy hoisted node_modules + workspace tree + compiled API.
 COPY --from=build --chown=arceus:arceus /app/node_modules ./node_modules
-
-# Copy API source + compiled output
-COPY --from=build --chown=arceus:arceus /app/apps/api/src ./apps/api/src
-COPY --from=build --chown=arceus:arceus /app/apps/api/dist ./apps/api/dist
-COPY --from=build --chown=arceus:arceus /app/apps/api/package.json ./apps/api/
-COPY --from=build --chown=arceus:arceus /app/apps/api/tsconfig.json ./apps/api/
-
-# Copy packages (source + compiled, imported via file: links)
-COPY --from=build --chown=arceus:arceus /app/packages ./packages
-
-# Copy root package.json + tsconfig (workspace resolution)
 COPY --from=build --chown=arceus:arceus /app/package.json ./
 COPY --from=build --chown=arceus:arceus /app/tsconfig.base.json ./
-
-# Copy OpenCode config + agent prompts
-COPY --from=build --chown=arceus:arceus /app/opencode.json ./
+COPY --from=build --chown=arceus:arceus /app/packages ./packages
+COPY --from=build --chown=arceus:arceus /app/apps/api ./apps/api
+COPY --from=build --chown=arceus:arceus /app/opencode.json ./opencode.json
 COPY --from=build --chown=arceus:arceus /app/.opencode ./.opencode
 
-# Create workspace directories (both legacy and configured)
-RUN mkdir -p /tmp/workspaces /app/workspace && \
-    chown -R arceus:arceus /tmp/workspaces /app/workspace
+# Per-company workspace root + bundle cache.
+RUN mkdir -p /var/lib/arceus/workspaces \
+    && chown -R arceus:arceus /var/lib/arceus
 
 USER arceus
 
-ENV NODE_ENV=production
-ENV PORT=4000
-ENV HOST=0.0.0.0
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=4000 \
+    ARCEUS_WORKSPACE_ROOT=/var/lib/arceus/workspaces
+
+VOLUME ["/var/lib/arceus"]
 
 EXPOSE 4000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1
+# /api/control-plane/status returns 200 with healthy:true once bootstrap
+# completes, even before any company exists. /health is also acceptable
+# but its presence varies by branch — control-plane status is safer.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:${PORT}/api/control-plane/status > /dev/null || exit 1
 
-# tsx handles ESM module resolution (import without .js extensions)
-CMD ["npx", "tsx", "apps/api/src/server.ts"]
+CMD ["node", "apps/api/dist/server.js"]
