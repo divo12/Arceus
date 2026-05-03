@@ -1,125 +1,141 @@
 # Deploying Arceus
 
-Arceus runs as **three pieces**: a Postgres database, the API on Railway, and the web app on Vercel. They depend on each other in a fixed order — set them up in this sequence and each step verifies before you move on.
+Two services in **one Railway project** + the web app on **Vercel**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Vercel (web app)                                               │
-│  Next.js · apps/web/vercel.json                                 │
-│  baked at build time: NEXT_PUBLIC_API_URL                       │
+│  Vercel  ·  apps/web  ·  Next.js                                │
+│  build-time:  NEXT_PUBLIC_API_URL = <railway api URL>           │
 └────────────────────┬────────────────────────────────────────────┘
                      │  HTTPS to API
                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Railway (api service)                                          │
-│  Dockerfile · railway.toml                                      │
-│  reads at runtime: ARCEUS_AZURE_OPENAI_*, DATABASE_URL,         │
-│                    ARCEUS_TOKEN, ARCEUS_ALLOWED_ORIGINS         │
-└────────────────────┬────────────────────────────────────────────┘
-                     │  postgres connection
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Postgres + pgvector                                            │
-│  Provision: Railway PG add-on, Supabase, or Neon                │
-│  Required extensions: vector, pgcrypto, pg_trgm                 │
+│  Railway project: "arceus"                                      │
+│                                                                 │
+│   ┌─ service: api ─────────────┐    ┌─ service: db ───────────┐ │
+│   │  Dockerfile + entrypoint   │◀──▶│  pgvector/pgvector:pg17 │ │
+│   │  reads at runtime:         │    │  exposes DATABASE_URL   │ │
+│   │   DATABASE_URL (from db)   │    │  via reference variable │ │
+│   │   ARCEUS_AZURE_OPENAI_*    │    └──────────────────────────┘ │
+│   │   ARCEUS_ALLOWED_ORIGINS   │                                 │
+│   │   ARCEUS_TOKEN              │                                │
+│   └─────────────────────────────┘                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Set them up in this order — each step verifies before the next.
+
 ---
 
-## Phase 1 — Postgres first
+## Phase 1 — Postgres on Railway
 
-API can't boot without `DATABASE_URL`. Web can't show anything without API. So database goes first.
+### 1.1 Create the Railway project
 
-### 1.1 Provision
+1. https://railway.app → New Project → **Empty Project** (we'll add services next).
+2. Name it `arceus` (or whatever).
 
-Pick one. **Supabase is the recommended path** because pgvector is one toggle and you get Storage for free (workspace bundle sync).
+### 1.2 Add the Postgres service with pgvector
 
-| Provider | Steps | Notes |
-|---|---|---|
-| **Supabase** (recommended) | 1. Create project at https://supabase.com<br>2. Project settings → Database → Connection string → URI mode → copy the `Direct connection` URL<br>3. Project settings → API → copy `service_role key` and `Project URL`<br>4. Database → Extensions → enable `vector`, `pg_trgm` (`pgcrypto` is on by default) | Free tier is enough to start |
-| **Railway Postgres** | Inside your Railway project → "+" → Database → PostgreSQL. The `DATABASE_URL` becomes a service variable you can reference. | Need to install `vector` + `pg_trgm` manually via psql |
-| **Neon** | https://neon.tech → Create project → Branches → main → Copy connection string | pgvector available |
+Railway's stock `Postgres` template doesn't include pgvector. Use the official `pgvector/pgvector:pg17` Docker image instead:
 
-### 1.2 Apply migrations
+1. Inside the project → **+ Create** → **Database** → search for `pgvector` template **OR** **+ Create** → **Empty Service** → Settings → Source → "Image" → enter `pgvector/pgvector:pg17`.
+2. In the new service → **Variables** tab, set:
 
-From your local machine, with `DATABASE_URL` pointing at the production DB:
+   | Variable | Value |
+   |---|---|
+   | `POSTGRES_USER` | `arceus` |
+   | `POSTGRES_PASSWORD` | run `openssl rand -hex 24` and paste |
+   | `POSTGRES_DB` | `arceus` |
+
+3. **Networking** → enable a TCP proxy on port `5432`. This generates a public host:port pair (e.g. `containers-us-west-1.railway.app:7842`) you can connect to from your laptop for migrations.
+4. **Volumes** → New Volume, mount path `/var/lib/postgresql/data`, size `5 GB`. Without this every redeploy wipes the DB.
+
+Wait for the deploy to go green (~1 minute).
+
+### 1.3 Enable extensions
+
+Railway's pgvector image has `vector` baked in but NOT `pgcrypto` or `pg_trgm`. Connect with the public TCP proxy URL from step 1.2 and install them:
 
 ```bash
-DATABASE_URL='<production_url>' \
-ARCEUS_HIPPOCAMPUS_POSTGRES_URL='<production_url>' \
-SUPABASE_DB_URL='<production_url>' \
+PG_PUBLIC=postgres://arceus:<password>@containers-us-west-1.railway.app:7842/arceus
+
+psql "$PG_PUBLIC" <<SQL
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+\dx
+SQL
+```
+
+You should see `vector`, `pgcrypto`, `pg_trgm` listed.
+
+### 1.4 Apply migrations
+
+From your laptop, against the public TCP URL:
+
+```bash
+DATABASE_URL="$PG_PUBLIC" \
+ARCEUS_HIPPOCAMPUS_POSTGRES_URL="$PG_PUBLIC" \
+SUPABASE_DB_URL="$PG_PUBLIC" \
   npm --workspace @arceus/db run db:migrate
 ```
 
-The migrate script runs all of `packages/db/src/migrations/*.sql` in order. Idempotent — safe to re-run.
+The script runs all of `packages/db/src/migrations/*.sql` in order. Idempotent — safe to re-run.
 
-### 1.3 Verify
-
-Connect with psql and check the extensions exist plus the schema landed:
+Verify the schema landed:
 
 ```bash
-psql '<production_url>' -c "\dx"
-# Should list: vector, pgcrypto, pg_trgm
-
-psql '<production_url>' -c "\dt"
-# Should list ~25 tables: companies, agents, tasks, sprints, heartbeat_runs, …
+psql "$PG_PUBLIC" -c "\dt" | head -20
+# Expect: companies, agents, tasks, sprints, heartbeat_runs, memory_units, …
 ```
-
-If `vector` is missing, the API will boot but hippocampus inserts will fail. Don't proceed until `\dx` shows it.
 
 ---
 
-## Phase 2 — Railway (API)
+## Phase 2 — API on Railway
 
-`railway.toml` already declares `dockerfilePath = "Dockerfile"`. Railway will build the API image automatically once the repo is connected.
+### 2.1 Add the API service
 
-### 2.1 Connect the repo
+Inside the same Railway project:
 
-1. https://railway.app → New Project → Deploy from GitHub repo → pick `divo12/Arceus`.
-2. Railway picks up `railway.toml` automatically. Build will start immediately — let it run while you set env vars.
+1. **+ Create** → **GitHub Repo** → pick `divo12/Arceus`.
+2. Railway picks up `railway.toml` automatically, sees `dockerfilePath = "Dockerfile"`, and starts building.
+3. While the build runs, set env vars (next step).
 
 ### 2.2 Set environment variables
 
-In Railway → service → Variables tab, paste these. Values come from your local `.env` for the most part.
+In Railway → api service → **Variables** tab. Use **reference variables** to pull `DATABASE_URL` from the db service so they stay linked:
 
 **Required:**
 
-| Variable | Value | Purpose |
+| Variable | Value | Notes |
 |---|---|---|
-| `DATABASE_URL` | The Postgres URL from Phase 1 | Drizzle main DB |
-| `ARCEUS_HIPPOCAMPUS_POSTGRES_URL` | Same as `DATABASE_URL` | Memory layer; aliased fallback path |
-| `ARCEUS_AZURE_OPENAI_API_KEY` | from `.env` | Azure key for both API + OpenCode |
-| `ARCEUS_AZURE_OPENAI_ENDPOINT` | from `.env` (`https://…cognitiveservices.azure.com/`) | Foundry endpoint |
-| `ARCEUS_AZURE_OPENAI_RESOURCE_NAME` | from `.env` (`pranj-mfvfs2fg-swedencentral`) | Resource name (used by some SDK paths) |
+| `DATABASE_URL` | `${{db.DATABASE_URL}}` | Reference variable — Railway substitutes the internal DB URL automatically |
+| `ARCEUS_HIPPOCAMPUS_POSTGRES_URL` | `${{db.DATABASE_URL}}` | Same value, alias path |
+| `SUPABASE_DB_URL` | leave **unset** (empty) | Codebase falls through to `DATABASE_URL` cleanly |
+| `ARCEUS_AZURE_OPENAI_API_KEY` | from your `.env` | |
+| `ARCEUS_AZURE_OPENAI_ENDPOINT` | from your `.env` (`https://…cognitiveservices.azure.com/`) | |
+| `ARCEUS_AZURE_OPENAI_RESOURCE_NAME` | from your `.env` | |
 | `ARCEUS_AZURE_OPENAI_API_VERSION` | `2025-04-01-preview` | API's chat-completions calls |
-| `ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT` | `gpt-5.4-mini` | CEO agent model deployment |
-| `ARCEUS_AZURE_OPENAI_WORKER_DEPLOYMENT` | `gpt-5.4-mini` | Worker agent model deployment |
-| `ARCEUS_TOKEN` | run `openssl rand -hex 32` and paste | Bearer token gating mutating routes |
-| `ARCEUS_REQUIRE_AUTH` | `1` | Force auth on (defaults off in dev) |
-| `ARCEUS_ALLOWED_ORIGINS` | _set in Phase 4_ | CORS allow-list — Vercel domain goes here |
+| `ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT` | `gpt-5.4-mini` | Match an actual Azure deployment |
+| `ARCEUS_AZURE_OPENAI_WORKER_DEPLOYMENT` | `gpt-5.4-mini` | Same |
+| `ARCEUS_TOKEN` | run `openssl rand -hex 32` and paste | Bearer for mutating routes |
+| `ARCEUS_REQUIRE_AUTH` | `1` | Force auth on |
+| `ARCEUS_ALLOWED_ORIGINS` | _set in Phase 4_ | CORS allow-list — Vercel domain |
 | `NODE_ENV` | `production` | Disables debug routes |
 
-**Optional (Supabase Storage for workspace bundle sync):**
-
-| Variable | Value |
-|---|---|
-| `SUPABASE_URL` | from Supabase project settings |
-| `SUPABASE_SERVICE_ROLE_KEY` | from Supabase project settings |
-| `SUPABASE_STORAGE_BUCKET` | `arceus-workspaces` (create the bucket as private) |
-| `SUPABASE_ASSETS_BUCKET` | `arceus-assets` |
+The reference variable `${{db.DATABASE_URL}}` resolves to the **internal** Railway URL (`postgres.railway.internal:5432`), not the public TCP proxy. The api service talks to db over Railway's private network, no egress fee, no public exposure.
 
 ### 2.3 Volume for per-company workspaces
 
-Railway → service → Settings → Volumes → New Volume:
+Railway → api service → Settings → Volumes → New Volume:
 - Mount path: `/var/lib/arceus`
 - Size: 5 GB to start
 
-Without this, every deploy wipes per-company git history.
+Without this, every redeploy wipes per-company git history and bundles.
 
 ### 2.4 Generate a public domain
 
-Railway → service → Settings → Networking → Generate Domain. You'll get something like `https://arceus-api-production.up.railway.app`. Copy this — Vercel needs it next.
+Railway → api service → Settings → Networking → Generate Domain. You'll get something like `https://arceus-api-production.up.railway.app`. Copy this — Vercel needs it next.
 
 ### 2.5 Verify
 
@@ -128,19 +144,22 @@ curl -s https://arceus-api-production.up.railway.app/api/control-plane/status
 # Expect: { "healthy": true, "version": …, "components": {…} }
 ```
 
-If you see a 502/503, check the deploy logs — most likely `DATABASE_URL` is wrong or the Azure key is missing.
+If you get a 502/503: open the api service's deploy logs. Most common causes:
+- `DATABASE_URL` reference variable wasn't substituted → check Variables tab, the resolved value should look like `postgres://arceus:…@postgres.railway.internal:5432/arceus`.
+- Migrations not applied → re-run Phase 1.4 against the public TCP URL.
+- Azure key wrong → `[STARTUP] Azure OpenAI not configured` will appear in logs.
 
 ---
 
-## Phase 3 — Vercel (web)
+## Phase 3 — Web on Vercel
 
-`apps/web/vercel.json` already declares the framework + build commands. Vercel picks it up automatically.
+`apps/web/vercel.json` already declares the framework + build commands.
 
 ### 3.1 Connect the repo
 
 1. https://vercel.com → Add New → Project → Import `divo12/Arceus`.
-2. **Critical**: Framework Preset → Next.js, Root Directory → `apps/web`. Vercel may auto-detect this from `apps/web/vercel.json` but verify.
-3. Build Command and Install Command come from `apps/web/vercel.json` — leave the defaults.
+2. **Critical:** Root Directory → `apps/web`. Vercel may auto-detect this from `apps/web/vercel.json`, but verify.
+3. Framework Preset → Next.js. Build Command + Install Command come from `apps/web/vercel.json` — leave defaults.
 
 ### 3.2 Set environment variables
 
@@ -150,7 +169,7 @@ In Vercel → project → Settings → Environment Variables:
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | The Railway URL from Phase 2.4 (e.g. `https://arceus-api-production.up.railway.app`) | Production + Preview |
 
-**`NEXT_PUBLIC_*` is baked into the bundle at build time.** If you change the Railway URL later, you must redeploy the web app to pick it up.
+`NEXT_PUBLIC_*` is **baked into the bundle at build time**. If you change the Railway URL later, you must redeploy the web app.
 
 ### 3.3 Deploy + verify
 
@@ -169,40 +188,60 @@ Open the site in a browser. The landing page should render.
 
 ### 4.1 Tell Railway about the Vercel domain
 
-Back in Railway → service → Variables:
+Back in Railway → api service → Variables:
 
 ```
 ARCEUS_ALLOWED_ORIGINS=https://your-vercel-domain.vercel.app
 ```
 
-Railway redeploys automatically. Wait for the green checkmark.
+Railway auto-redeploys the api. Wait for green.
 
 ### 4.2 End-to-end smoke test
 
-1. Open the Vercel domain in your browser.
-2. Navigate to `/home` (the chat board) — middleware should redirect to `/?login=1` if you haven't bypassed auth.
-3. If you bypassed auth or set `arceus_auth=1` cookie: send a chat message in the CEO chat.
-4. CEO should respond inside 10 seconds.
+1. Open the Vercel domain.
+2. Navigate to `/home` (the chat board) — middleware redirects to `/?login=1` if you haven't bypassed auth.
+3. Set the auth cookie manually for now (browser devtools → Application → Cookies → `arceus_auth=1` for your Vercel domain).
+4. Reload `/home`. Send a chat message in the CEO chat.
+5. CEO should respond inside 10 seconds. First request takes ~30–45s because OpenCode is cold-starting inside the container.
 
-If the CEO stream errors with "OpenCode may be unresponsive":
-- Check Railway logs for `[OpenCode] Warm — server ready at`. Should appear once at boot.
-- Check the `ERROR …service=llm` line in OpenCode logs (`/home/arceus/.local/share/opencode/log/*.log` inside the container) for the actual error.
+If the CEO stream errors:
+- Railway api logs should show `[OpenCode] Warm — server ready at http://127.0.0.1:4096` once at boot.
+- If you see `DeploymentNotFound` → your Azure deployment name doesn't match `ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT`. Check Azure Portal → resource → Deployments.
+- If you see `API version not supported` → endpoint domain mismatch. Verify `ARCEUS_AZURE_OPENAI_ENDPOINT` is the `cognitiveservices.azure.com` host.
 
 ---
 
-## Where to start
+## Where to start — the practical order
 
-**Today, in this order:**
+Each step depends on the prior. Don't skip ahead.
 
-1. **Right now** — Phase 1.1: provision Supabase (15 min). Click through the project creation, enable extensions, copy the connection string and service-role key.
-2. **Right after** — Phase 1.2: run the migrations against it from your laptop (1 min — the migration script does the rest).
-3. **Then** — Phase 2: connect Railway, paste the env vars, generate the domain, wait for the build to go green (10–15 min).
-4. **Then** — Phase 3: connect Vercel with the Railway URL as `NEXT_PUBLIC_API_URL` (5 min).
-5. **Last** — Phase 4: set `ARCEUS_ALLOWED_ORIGINS` and smoke-test.
+| # | Step | Time | Blocker for |
+|---|---|---|---|
+| **1** | **Create Railway project + add pgvector service (Phase 1.1, 1.2)** | ~5 min | Everything else — API can't boot without DB |
+| 2 | Enable extensions + run migrations (Phase 1.3, 1.4) | ~3 min | API will hydration-error without these |
+| 3 | Add API service from GitHub, set env vars (Phase 2.1, 2.2) | ~5 min clicking + 5 min build | — |
+| 4 | Mount volume on API service (Phase 2.3) | 30 sec | Per-company git history persistence |
+| 5 | Generate API public domain (Phase 2.4) | 10 sec | Web app needs this URL |
+| 6 | Verify API responds (Phase 2.5) | 30 sec | Catch failures before pulling in Vercel |
+| 7 | Connect Vercel, set `NEXT_PUBLIC_API_URL` (Phase 3) | ~5 min | — |
+| 8 | Set `ARCEUS_ALLOWED_ORIGINS` on Railway (Phase 4.1) | 30 sec | Without this, every browser request 502s |
+| 9 | Smoke test the chat (Phase 4.2) | 1 min | — |
 
-**Total: ~45 min of clicking + waiting, mostly on the Railway build.**
+**Total: ~25 active minutes + ~10 min of waiting for Railway/Vercel builds.**
 
-The single point of failure that wastes the most time when skipped: **applying migrations before the API tries to boot**. If the API boots against an empty DB, hydration fires errors that look like Azure issues but aren't. Always run Phase 1.2 first.
+The single thing that costs the most time if skipped: **running migrations before the API tries to boot**. Hydration errors look like Azure issues but aren't. Always run Phase 1.4 first.
+
+---
+
+## What ships per platform
+
+| | Built from | Runtime | Includes | Excludes |
+|---|---|---|---|---|
+| **Railway · db** | `pgvector/pgvector:pg17` Docker image | Postgres 17 + pgvector | DB + the 3 extensions installed in Phase 1.3 | n/a |
+| **Railway · api** | root `Dockerfile` | tsx + node 22 + opencode-ai CLI + git/tar/curl | API + OpenCode runtime + per-company workspace | Web app, TUI, apps/web2 |
+| **Vercel · web** | `apps/web/vercel.json` runs `npm run build --workspace @arceus/web` | Next.js standalone server | The web app only | API, OpenCode, packages not transpiled by Next |
+
+All three pull from the same `main` branch. Pushes auto-deploy both Railway services + Vercel.
 
 ---
 
@@ -210,22 +249,13 @@ The single point of failure that wastes the most time when skipped: **applying m
 
 | Symptom | Most likely cause | Fix |
 |---|---|---|
-| Railway build fails with `Cannot find module '/app/apps/api/dist/server.js'` | You're on a stale branch — the current Dockerfile uses `tsx` directly, not compiled output | `git pull origin main` and redeploy |
-| API logs `database "arceus" does not exist` | `DATABASE_URL` points at the wrong DB or migrations weren't applied | Verify `DATABASE_URL` in Railway, re-run migrations |
-| API logs `Failed to hydrate trust scores` | Migration `0020_trust_scores_table.sql` not applied | Re-run `npm --workspace @arceus/db run db:migrate` |
-| CEO stream returns "OpenCode CEO session failed" with `DeploymentNotFound` | `ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT` doesn't match a real Azure deployment | Check Azure portal → resource → Deployments → use the exact name there |
-| CEO stream returns "OpenCode CEO session failed" with `API version not supported` | OpenCode is hitting wrong endpoint variant | Verify `ARCEUS_AZURE_OPENAI_ENDPOINT` is the `cognitiveservices.azure.com` host (not `openai.azure.com`); the entrypoint script will configure baseURL automatically |
-| Web shows landing page but `/home` redirects in a loop | `arceus_auth` cookie not set | Login flow is gated by middleware; bypass by setting the cookie manually for now or wire up the actual login |
-| CORS errors in browser console | `ARCEUS_ALLOWED_ORIGINS` doesn't include your Vercel domain (including `https://`) | Update on Railway, wait for redeploy |
-| API responds to `/api/control-plane/status` but slowly | Cold-starting OpenCode (~30–45s on first request) | Wait. Subsequent requests are instant. |
-
----
-
-## What ships per platform
-
-| | Built from | Includes | Excludes |
-|---|---|---|---|
-| **Railway image** | root `Dockerfile` | API + OpenCode runtime + Postgres client + git + tar | Web app, TUI, web2 |
-| **Vercel build** | `apps/web/vercel.json` runs `npm run build --workspace @arceus/web` | Next.js standalone output | API, OpenCode, packages not transpiled by Next |
-
-Both pull from the same `main` branch. Pushes auto-deploy both.
+| Railway build fails with `Cannot find module '/app/apps/api/dist/server.js'` | You're on a stale branch — current Dockerfile uses `tsx` directly, not compiled output | `git pull origin main` and redeploy |
+| API logs `database "arceus" does not exist` | `DATABASE_URL` not pointing where you think OR `POSTGRES_DB` doesn't match | Check the resolved value of `${{db.DATABASE_URL}}` in api service Variables |
+| API logs `Failed to hydrate trust scores` | Migration `0020_trust_scores_table.sql` not applied | Re-run Phase 1.4 from your laptop |
+| API logs `extension "vector" is not available` | pgvector image didn't load OR you're using stock postgres | Verify db service image is `pgvector/pgvector:pg17`, not just `postgres:17` |
+| CEO stream returns "OpenCode CEO session failed" with `DeploymentNotFound` | `ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT` doesn't match a real Azure deployment | Check Azure Portal → resource → Deployments → use the exact name there |
+| CEO stream returns "API version not supported" | OpenCode hitting wrong endpoint variant | Verify `ARCEUS_AZURE_OPENAI_ENDPOINT` is the `cognitiveservices.azure.com` host (not legacy `openai.azure.com`); the `docker-entrypoint.sh` baked into the image configures `baseURL` automatically when the endpoint is set |
+| Web shows landing page but `/home` redirects in a loop | `arceus_auth` cookie not set | Set it manually via browser devtools, or wire up the actual login |
+| CORS errors in browser console | `ARCEUS_ALLOWED_ORIGINS` doesn't include your Vercel domain (with `https://`) | Update on Railway api service, wait for auto-redeploy |
+| API responds slowly to first chat request (~30-45s) | OpenCode cold-starting inside the container | Wait. Subsequent requests are instant. Pre-warming runs at boot but the FIRST agent session has additional warm-up. |
+| Per-company git history disappears after redeploy | No volume mounted on api service | Phase 2.3 — add the `/var/lib/arceus` volume |
