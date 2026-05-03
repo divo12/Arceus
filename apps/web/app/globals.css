@@ -9,23 +9,23 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Paper palette */
-  --paper:        #FAFAF7;
-  --paper-2:      #F3F1EA;
-  --rail:         #F2F0E9;
-  --ink:          #111111;
-  --ink-2:        #555555;
-  --ink-3:        #8A8A85;
-  --ink-4:        #B5B3AD;
-  --rule:         #E6E3DB;
-  --rule-2:       #D6D3CB;
+  /* Paper palette — neutral white/gray to match landing page */
+  --paper:        #ffffff;
+  --paper-2:      #f5f5f5;
+  --rail:         #fafafa;
+  --ink:          #000000;
+  --ink-2:        #404040;
+  --ink-3:        #737373;
+  --ink-4:        #a3a3a3;
+  --rule:         #e5e5e5;
+  --rule-2:       #d4d4d4;
 
   /* Functional aliases (used by pages) */
   --bg-primary:    var(--paper);
   --bg-secondary:  var(--rail);
   --bg-tertiary:   var(--paper-2);
   --border:        var(--rule);
-  --border-subtle: #EFEDE6;
+  --border-subtle: #eeeeee;
   --text-primary:  var(--ink);
   --text-secondary:var(--ink-2);
   --text-muted:    var(--ink-3);
@@ -33,7 +33,7 @@
   /* Legacy "swiss" aliases */
   --swiss-black:   var(--ink);
   --swiss-white:   var(--paper);
-  --swiss-gray-50: #F7F5EE;
+  --swiss-gray-50: #f9f9f9;
   --swiss-gray-100:var(--paper-2);
   --swiss-gray-200:var(--rule);
   --swiss-gray-300:var(--rule-2);

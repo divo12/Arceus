@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Source_Serif_4, JetBrains_Mono } from "next/font/google";
 import { ChatProvider } from "../components/chat/chat-context";
 import { ThemeProvider } from "../components/theme-provider";
-import { LayoutShell } from "../components/layout/layout-shell";
+import { ConditionalShell } from "../components/layout/conditional-shell";
 import "./globals.css";
 
 const inter = Inter({
@@ -35,9 +35,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <ThemeProvider>
           <ChatProvider>
-            <LayoutShell>
+            <ConditionalShell>
               {children}
-            </LayoutShell>
+            </ConditionalShell>
           </ChatProvider>
         </ThemeProvider>
       </body>

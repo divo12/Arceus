@@ -26,7 +26,7 @@ const NAV_GROUPS: ReadonlyArray<{
   {
     label: "company",
     items: [
-      { href: "/", icon: MessageSquare, label: "chat" },
+      { href: "/home", icon: MessageSquare, label: "chat" },
       { href: "/dashboard", icon: LayoutDashboard, label: "dashboard" },
       { href: "/tasks", icon: CheckSquare, label: "tasks" },
       { href: "/agents", icon: Users, label: "agents" },
@@ -68,9 +68,7 @@ export function Sidebar() {
           <div key={group.label} className="mb-1">
             <div className="mono px-2 pt-3 pb-1 text-[9.5px] uppercase tracking-[0.1em] text-[var(--ink-3)]">{group.label}</div>
             {group.items.map((item) => {
-              const isActive = item.href === "/"
-                ? pathname === "/"
-                : pathname.startsWith(item.href);
+              const isActive = pathname.startsWith(item.href);
               const Icon = item.icon;
               return (
                 <Link
