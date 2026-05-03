@@ -1,5 +1,6 @@
 import type { Task, CompanySnapshot, AgentIdentity } from "@arceus/contracts";
 import { getAgentByRole, uniqueStrings } from "./task-helpers";
+import { MAX_INCOMING_ARTIFACT_IDS } from "./limits";
 
 // ---------------------------------------------------------------------------
 // Dependency-injection interface
@@ -17,8 +18,8 @@ export interface AuditEntry {
 }
 
 export interface TaskStatusCallbacks {
-  /** Read current state. */
-  getSnapshot: () => CompanySnapshot;
+  /** Read current state. Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   /** Mutate a task in the store. */
   updateTask: (id: string, updater: (t: Task) => Task) => void;
   /** Resolve the active sprint ID (may differ from company.currentSprintId during transitions). */
@@ -73,13 +74,16 @@ export interface TaskStatusCallbacks {
  * - Dependency promotion (created → planned) on "completed"
  * - Terminal-status hook for downstream integrations
  */
-export function setTaskStatus(
+export async function setTaskStatus(
   cb: TaskStatusCallbacks,
   taskId: string,
   status: Task["status"],
   feedback?: string | null,
-): void {
-  const prev = cb.getSnapshot().tasks.find((t) => t.id === taskId);
+): Promise<void> {
+  // Spec 31 Phase 7.C.b — async because cb.getSnapshot is async.
+  // Single read at the top; reused throughout instead of refetching.
+  const initialSnapshot = await cb.getSnapshot();
+  const prev = initialSnapshot.tasks.find((t) => t.id === taskId);
   const prevStatus = prev?.status ?? "unknown";
 
   // 1. Apply the status update
@@ -107,7 +111,7 @@ export function setTaskStatus(
 
   // 3. Audit the transition
   cb.audit({
-    companyId: prev?.companyId ?? cb.getSnapshot().company.id,
+    companyId: prev?.companyId ?? initialSnapshot.company.id,
     category: "task_lifecycle",
     severity: status === "failed" ? "warn" : "info",
     eventType: `task_${status}`,
@@ -125,9 +129,11 @@ export function setTaskStatus(
     );
   }
 
-  // 5. Cascading on completion — artifact propagation + dependency promotion
+  // 5. Cascading on completion — artifact propagation + dependency promotion.
+  // Re-read here because step 1's updateTask landed since `initialSnapshot`,
+  // and we want the post-update view of the completed task.
   if (status === "completed") {
-    const snapshot = cb.getSnapshot();
+    const snapshot = await cb.getSnapshot();
     const completedTask = snapshot.tasks.find((t) => t.id === taskId);
 
     // Propagate artifacts from the completed task to its direct children
@@ -137,7 +143,7 @@ export function setTaskStatus(
           ...t,
           incomingArtifactIds: uniqueStrings(
             [...t.incomingArtifactIds, ...completedTask.artifactIds],
-            20,
+            MAX_INCOMING_ARTIFACT_IDS,
           ),
         }));
         const sid = completedTask.sprintId ?? cb.resolveActiveSprintId();
@@ -175,10 +181,10 @@ export function setTaskStatus(
         }
         cb.updateTask(task.id, (t) => ({
           ...t,
-          status: "planned" as Task["status"],
+          status: "planned",
           incomingArtifactIds: uniqueStrings(
             [...t.incomingArtifactIds, ...upstreamArtifactIds],
-            20,
+            MAX_INCOMING_ARTIFACT_IDS,
           ),
         }));
         // Reactive: wake the assignee — their dependency is now met
@@ -191,7 +197,7 @@ export function setTaskStatus(
 
   // 6. Terminal-status hook (hippocampus, skill evolution, patterns)
   if (["completed", "failed", "cancelled"].includes(status)) {
-    const snapshot = cb.getSnapshot();
+    const snapshot = await cb.getSnapshot();
     const task = snapshot.tasks.find((t) => t.id === taskId);
     if (task) {
       const agent = getAgentByRole(snapshot, task.assignedRole);

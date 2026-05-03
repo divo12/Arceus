@@ -1,4 +1,5 @@
 import type { Task, Sprint, CompanySnapshot } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
 import { createSprintObject, createWorkflowTask, nowIso, getAgentByRole } from "./task-helpers";
 import type { AuditEntry } from "./task-state-machine";
 
@@ -7,13 +8,17 @@ import type { AuditEntry } from "./task-state-machine";
 // ---------------------------------------------------------------------------
 
 export interface CreateSprintCallbacks {
-  upsertSprint: (sprint: Sprint) => void;
-  updateCompanySprint: (sprintId: string, number: number) => void;
+  /** Spec 31 Phase 7.C.d — async to write to canonical. */
+  upsertSprint: (sprint: Sprint) => Promise<Sprint> | Sprint;
+  /** Caller passes companyId via closure since this deps object is
+   *  request-scoped and the company is fixed for the operation. */
+  updateCompanySprint: (sprintId: string, number: number) => Promise<void> | void;
   emitReactiveBroadcast: (event: string) => void;
 }
 
 export interface CheckSprintCompletionCallbacks {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   emitEmployeeActivity: (role: string, type: string, message: string, detail: { detail: Record<string, unknown>; taskId?: string | null }) => void;
   emitGraphDecision?: (sprintId: string, taskId: string | null, type: string, title: string, detail: string, role: string, confidence: number) => void;
   emitGraphNodeAdded?: (sprintId: string, task: Task) => void;
@@ -37,7 +42,8 @@ export interface CheckSprintCompletionCallbacks {
 }
 
 export interface FinalizeSprintCallbacks {
-  getSnapshot: () => CompanySnapshot;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
   stopLocalPreview: () => Promise<void>;
   emitEmployeeActivity: (role: string, type: string, message: string, detail: { detail: Record<string, unknown>; taskId?: string | null }) => void;
   updateSprint: (id: string, updater: (s: Sprint) => Sprint) => void;
@@ -55,7 +61,6 @@ export interface FinalizeSprintCallbacks {
     cardData: null;
     createdAt: string;
   }) => void;
-  triggerCeoSprintProposal: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,16 +71,16 @@ export interface FinalizeSprintCallbacks {
  * Create and persist a new sprint record.
  * Side effects (store, event) are injected via callbacks.
  */
-export function createSprintRecord(
+export async function createSprintRecord(
   cb: CreateSprintCallbacks,
   snapshot: CompanySnapshot,
   title: string,
   goal: string,
-): Sprint {
+): Promise<Sprint> {
   const sprint = createSprintObject(snapshot, title, goal);
 
-  cb.upsertSprint(sprint);
-  cb.updateCompanySprint(sprint.id, sprint.number);
+  await cb.upsertSprint(sprint);
+  await cb.updateCompanySprint(sprint.id, sprint.number);
   cb.emitReactiveBroadcast("sprint_started");
 
   return sprint;
@@ -119,7 +124,7 @@ export async function checkSprintCompletion(
 ): Promise<boolean> {
   if (guard.triggered) return false;
 
-  const snapshot = cb.getSnapshot();
+  const snapshot = await cb.getSnapshot();
   const currentSprintId = snapshot.company.currentSprintId;
   if (!currentSprintId) return false;
 
@@ -152,7 +157,7 @@ export async function checkSprintCompletion(
 
   cb.updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
-    status: "reviewing" as Sprint["status"],
+    status: "reviewing",
     reviewState: reviewState as Sprint["reviewState"],
   }));
 
@@ -176,8 +181,11 @@ export async function checkSprintCompletion(
 
     const bugFields = cb.buildGateFailureBugFields(gateResult, currentSprintId);
     if (bugFields) {
+      // Reuse the snapshot we already fetched at the top of this function
+      // — `createWorkflowTask` only reads fields that are stable across the
+      // intervening operations (verification gate). One read per beat.
       const bugTask = createWorkflowTask(
-        cb.getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        snapshot, bugFields.kind, bugFields.assignedRole,
         bugFields.title, bugFields.description, bugFields.problemStatement,
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
@@ -215,7 +223,7 @@ export async function finalizeSprintCompletion(
   cb: FinalizeSprintCallbacks,
   sprintId: string,
 ): Promise<void> {
-  const snapshot = cb.getSnapshot();
+  const snapshot = await cb.getSnapshot();
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
 
@@ -235,7 +243,7 @@ export async function finalizeSprintCompletion(
 
   cb.updateSprint(sprintId, (s) => ({
     ...s,
-    status: "completed" as Sprint["status"],
+    status: "completed",
     completedAt: nowIso(),
     summary: `Sprint ${s.number} completed — ${completedCount}/${sprintTasks.length} tasks delivered.`,
     reviewState: s.reviewState ? { ...s.reviewState, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
@@ -245,13 +253,24 @@ export async function finalizeSprintCompletion(
 
   await cb.tagCurrentSprintSnapshot();
 
-  // Spec 14 Phase 6: cross-sprint pattern transfer (fire-and-forget)
-  cb.runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
+  // Spec 14 Phase 6 / Audit C3.1 (F-377): cross-sprint pattern transfer
+  // is fire-and-forget; route the failure through observability.logEvent
+  // so a clustering/embedding crash surfaces to operators instead of
+  // becoming a console.warn. task-engine can't reach apps/api's
+  // swallowAndAudit, but the contracts-level error sink is wired in
+  // production via the multi-sink (pino + activity-log + OTEL).
+  void cb.runCrossSprintTransfer(snapshot.company.id, sprintId).then((result) => {
     if (result.candidatesFound > 0) {
       console.log(`[CrossSprintTransfer] Sprint ${sprint.number}: ${result.candidatesFound} candidates, ${result.mutationsProposed} proposed, ${result.mutationsRefused} refused`);
     }
-  }).catch((err) => {
-    console.warn(`[CrossSprintTransfer] Sprint transfer error: ${err instanceof Error ? err.message : err}`);
+  }).catch((err: unknown) => {
+    observability.logEvent({
+      event: "error",
+      where: "cross_sprint.transfer",
+      message: `Sprint ${sprint.number} transfer failed: ${err instanceof Error ? err.message : String(err)}`,
+      ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
+      ts: Date.now(),
+    });
   });
 
   const ceoAgent = getAgentByRole(snapshot, "ceo");
@@ -261,11 +280,9 @@ export async function finalizeSprintCompletion(
     sprintId,
     agentId: ceoAgent?.id ?? null,
     role: "ceo",
-    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. Preparing next sprint proposal now.`,
+    content: `Sprint ${sprint.number} is complete. ${completedCount} tasks delivered, ${failedCount} failed. CEO will plan the next sprint.`,
     cardType: "status_update",
     cardData: null,
     createdAt: nowIso(),
   });
-
-  await cb.triggerCeoSprintProposal();
 }

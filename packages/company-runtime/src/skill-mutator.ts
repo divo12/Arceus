@@ -64,6 +64,12 @@ export function hasSkillMutatorDeps(): boolean {
   return deps !== null;
 }
 
+/** Spec 29 Phase F — orchestrator-only direct access to wired LLM primitives. */
+export function getSkillMutatorDeps(): SkillMutatorDeps {
+  if (!deps) throw new Error("[SkillMutator] deps not configured");
+  return deps;
+}
+
 // ── Constants ────────────────────────────────────────────
 
 const CONFIDENCE_THRESHOLD = 0.6;
@@ -152,7 +158,7 @@ async function createSkillMutation(
     : null;
 
   if (!original) {
-    throw new Error(`[SkillMutator] Skill ${attribution.attributedSkillId} not found for mutation`);
+    throw new Error(`[SkillMutator] Skill ${attribution.attributedSkillId ?? "(unknown)"} not found for mutation`);
   }
 
   const result = await deps!.proposeSkillMutation(original, attribution);
@@ -168,6 +174,7 @@ async function createSkillMutation(
     trigger: result.description || result.trigger || original.trigger,
     content: result.content,
     testCases: [],
+    resources: [],
     successRate: original.successRate,
     usageCount: 0,
     lastUsedAt: null,
@@ -216,6 +223,7 @@ async function createDiscoveryMutation(
     trigger: result.description || result.trigger,
     content: result.content,
     testCases: [],
+    resources: [],
     successRate: 0.5,
     usageCount: 0,
     lastUsedAt: null,

@@ -13,6 +13,14 @@
  * - SnapshotVersion — version checkpoint for optimistic concurrency
  */
 import { z } from "zod";
+import { taskSchema, transitionSchema, taskStatusSchema } from "./tasks";
+import { sprintSchema, sprintStatusSchema } from "./sprints";
+import { meetingSchema } from "./meetings";
+import { approvalSchema } from "./approvals";
+import { chatMessageSchema } from "./chat";
+import { agentStatusSchema } from "./agents";
+import { companyStatusSchema } from "./company";
+import { taskProgressSchema } from "./beats";
 
 export const actorTypeSchema = z.enum(["board", "agent", "system", "runtime"]);
 
@@ -71,27 +79,27 @@ export type AuditEvent = z.infer<typeof auditEventSchema>;
 // ── Control Plane types (Spec 11 Phase 2) ──────────────────
 
 export const stateMutationSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("task_status"),     taskId: z.string(), status: z.string(), summary: z.string().optional() }),
-  z.object({ type: z.literal("task_assign"),      taskId: z.string(), agentId: z.string() }),
-  z.object({ type: z.literal("task_create"),      task: z.record(z.string(), z.unknown()) }),
-  z.object({ type: z.literal("sprint_status"),    sprintId: z.string(), status: z.string() }),
-  z.object({ type: z.literal("sprint_create"),    sprint: z.record(z.string(), z.unknown()) }),
-  z.object({ type: z.literal("meeting_record"),   meeting: z.record(z.string(), z.unknown()) }),
-  z.object({ type: z.literal("approval_create"),  approval: z.record(z.string(), z.unknown()) }),
-  z.object({ type: z.literal("approval_resolve"), approvalId: z.string(), status: z.enum(["approved", "rejected"]), summary: z.string() }),
-  z.object({ type: z.literal("chat_message"),     message: z.record(z.string(), z.unknown()) }),
-  z.object({ type: z.literal("agent_status"),     agentId: z.string(), status: z.string() }),
-  z.object({ type: z.literal("company_status"),   status: z.string() }),
-  z.object({ type: z.literal("transition_append"), transition: z.record(z.string(), z.unknown()) }),
+  z.object({ type: z.literal("task_status"),       taskId: z.string(), status: taskStatusSchema, summary: z.string().optional() }),
+  z.object({ type: z.literal("task_assign"),       taskId: z.string(), agentId: z.string() }),
+  z.object({ type: z.literal("task_create"),       task: taskSchema }),
+  z.object({ type: z.literal("sprint_status"),     sprintId: z.string(), status: sprintStatusSchema }),
+  z.object({ type: z.literal("sprint_create"),     sprint: sprintSchema }),
+  z.object({ type: z.literal("meeting_record"),    meeting: meetingSchema }),
+  z.object({ type: z.literal("approval_create"),   approval: approvalSchema }),
+  z.object({ type: z.literal("approval_resolve"),  approvalId: z.string(), status: z.enum(["approved", "rejected"]), summary: z.string() }),
+  z.object({ type: z.literal("chat_message"),      message: chatMessageSchema }),
+  z.object({ type: z.literal("agent_status"),      agentId: z.string(), status: agentStatusSchema }),
+  z.object({ type: z.literal("company_status"),    status: companyStatusSchema }),
+  z.object({ type: z.literal("transition_append"), transition: transitionSchema }),
   z.object({ type: z.literal("transition_update"), transitionId: z.string(), changes: z.record(z.string(), z.unknown()) }),
-  z.object({ type: z.literal("task_progress"),     taskId: z.string(), progress: z.record(z.string(), z.unknown()) }),
+  z.object({ type: z.literal("task_progress"),     taskId: z.string(), progress: taskProgressSchema }),
 ]);
 
 export type StateMutation = z.infer<typeof stateMutationSchema>;
 
 /** Summary of a snapshot version checkpoint */
 export const snapshotVersionSchema = z.object({
-  companyId: z.string(),
+  companyId: z.string().nullable(),
   version: z.number().int(),
   updatedAt: z.string(),
   mutationCount: z.number().int(),

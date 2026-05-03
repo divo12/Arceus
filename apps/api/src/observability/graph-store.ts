@@ -9,7 +9,7 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export interface StatusTransition {
+interface StatusTransition {
   from: string;
   to: string;
   triggeredBy: string;
@@ -17,24 +17,24 @@ export interface StatusTransition {
   timestamp: string;
 }
 
-export interface StateDiff {
-  taskChanges: Array<{
+interface StateDiff {
+  taskChanges: {
     taskId: string;
     field: string;
     before: string | null;
     after: string | null;
-  }>;
-  sprintChanges: Array<{
+  }[];
+  sprintChanges: {
     field: string;
     before: string | null;
     after: string | null;
-  }>;
-  memoryChanges: Array<{
+  }[];
+  memoryChanges: {
     agentRole: string;
     field: string;
     action: "added" | "removed" | "updated";
     value: string;
-  }>;
+  }[];
 }
 
 export interface FileChange {
@@ -64,7 +64,7 @@ export interface DecisionEntry {
   sourceRole: string;
 }
 
-export interface ToolCallEntry {
+interface ToolCallEntry {
   name: string;
   status: "invoked" | "completed" | "error";
   summary: string | null;
@@ -91,14 +91,14 @@ export interface BeatNode {
 
 export interface ReworkGroup {
   taskId: string;
-  iterations: Array<{
+  iterations: {
     cycle: number;
     beatIds: string[];
     verdict: "pass" | "fail" | "error";
     reason: string;
     startedAt: string;
     completedAt: string | null;
-  }>;
+  }[];
   maxCycles: number;
   escalated: boolean;
 }
@@ -164,7 +164,7 @@ export interface GraphEdge {
   artifactId: string | null;
 }
 
-export interface ExecutionGraph {
+interface ExecutionGraph {
   sprintId: string;
   sprintNumber: number;
   sprintGoal: string;
@@ -179,9 +179,10 @@ export interface ExecutionGraph {
 // Graph events — emitted by orchestrator, consumed by store + SSE
 // ---------------------------------------------------------------------------
 
-export type GraphEvent =
+type GraphEvent =
   | { type: "sprint_started"; sprintId: string; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: "node_added"; sprintId: string; node: GraphNode; edges: GraphEdge[] }
+  | { type: "edge_added"; sprintId: string; edge: GraphEdge }
   | { type: "status_changed"; sprintId: string; nodeId: string; transition: StatusTransition }
   | { type: "beat_started"; sprintId: string; nodeId: string; beat: BeatNode }
   | { type: "beat_completed"; sprintId: string; nodeId: string; beatId: string; patch: Partial<BeatNode> }
@@ -205,7 +206,7 @@ type GraphEventListener = (event: GraphEvent) => void;
  * In-memory store for execution graph data.
  * Manages sprint graphs, nodes, edges, beats, and emits events to SSE subscribers.
  */
-export class ExecutionGraphStore {
+class ExecutionGraphStore {
   private graphs = new Map<string, ExecutionGraph>();
   private listeners = new Set<GraphEventListener>();
 
@@ -318,7 +319,7 @@ export class ExecutionGraphStore {
   /** Append a rework iteration to an existing rework group. */
   addReworkIteration(sprintId: string, nodeId: string, cycle: number, verdict: string, reason: string): void {
     const node = this.findNode(sprintId, nodeId);
-    if (!node || !node.reworkGroup) return;
+    if (!node?.reworkGroup) return;
     node.reworkGroup.iterations.push({
       cycle,
       beatIds: [],
@@ -363,8 +364,10 @@ export class ExecutionGraphStore {
     if (!graph) return;
     if (graph.edges.some((e) => e.id === edge.id)) return;
     graph.edges.push(edge);
-    // Re-use node_added event with null node to push edges via SSE
-    this.notify({ type: "node_added", sprintId, node: null as unknown as GraphNode, edges: [edge] });
+    // F-397 fix: dedicated edge_added variant. Used to be a `node_added`
+    // with `null as unknown as GraphNode` which masked an invariant
+    // violation (an edge_added event was claiming to add a node).
+    this.notify({ type: "edge_added", sprintId, edge });
   }
 
   // ── Queries ──
@@ -375,7 +378,7 @@ export class ExecutionGraphStore {
   }
 
   /** List all tracked sprints with id, number, and status. */
-  listSprints(): Array<{ sprintId: string; number: number; status: string }> {
+  listSprints(): { sprintId: string; number: number; status: string }[] {
     return Array.from(this.graphs.values()).map((g) => ({
       sprintId: g.sprintId,
       number: g.sprintNumber,

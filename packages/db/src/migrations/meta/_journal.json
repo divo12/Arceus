@@ -1,0 +1,153 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1777052961934,
+      "tag": "0000_initial_normalized_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777054298288,
+      "tag": "0001_fk_covering_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777121240273,
+      "tag": "0002_tasks_bridge_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777193334172,
+      "tag": "0003_companies_bridge_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777196226396,
+      "tag": "0004_sprints_artifacts_meetings_bridge",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777197240188,
+      "tag": "0005_approvals_board_messages_bridge",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777198325976,
+      "tag": "0006_phase5_governance_runtime_bridge",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777199283315,
+      "tag": "0007_phase5_skills_friendly_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777231800000,
+      "tag": "0009_tasks_kind_check_expand",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777286464930,
+      "tag": "0010_tasks_status_kind_zod_aligned",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777289724645,
+      "tag": "0011_narrow_active_claim_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777293908405,
+      "tag": "0012_pr13a_memory_units_legacy_id_bridge",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1777380000000,
+      "tag": "0013_pr13c_memory_units_dynamic_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1777380120000,
+      "tag": "0014_pr13d_habits_canonical",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1777380240000,
+      "tag": "0015_phase7_drop_legacy_hippocampus",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1777300494829,
+      "tag": "0016_phase7a_unmigrated_schemas",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1777380360000,
+      "tag": "0017_phase7_drop_legacy_runtime_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1777380480000,
+      "tag": "0018_phase7_sprint_snapshots_data_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777380600000,
+      "tag": "0019_phase7_skill_mutations_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1777390000000,
+      "tag": "0020_trust_scores_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1777668711991,
+      "tag": "0021_chat2_board_messages_extension",
+      "breakpoints": true
+    }
+  ]
+}

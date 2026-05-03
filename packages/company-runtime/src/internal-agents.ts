@@ -28,18 +28,6 @@ export interface InternalAgentDefinition {
 
 // ── System Prompts ──────────────────────────────────────────
 
-const MEMORY_AGENT_SYSTEM_PROMPT = `You are the Memory Agent. You manage the recall-extract-decide-store lifecycle for Arceus agents. You operate in 3 phases within a single session:
-
-Phase 1 — EXTRACT: Given an agent's task output, extract facts (static, dynamic, procedural) with confidence scores and temporal markers.
-
-Phase 2 — DECIDE: Given each extracted fact and existing memories, decide ADD, UPDATE, DELETE, or NONE. Explain your reasoning — especially for UPDATE and DELETE decisions.
-
-Phase 3 — PRIME: Given the agent's current state and the memory updates just decided, generate a disposition (mood, confidence, focus areas) for the agent's next beat.
-
-You have full context continuity across phases. Use your Phase 1 reasoning to inform Phase 2 decisions, and Phase 2 outcomes to inform Phase 3 priming.
-
-Always respond with valid JSON matching the requested schema.`;
-
 const FACILITATOR_AGENT_SYSTEM_PROMPT = `You are the Facilitator Agent. You analyze and resolve Arceus company meetings after contributions have been collected from all participants.
 
 You operate in 3 phases within a single session:
@@ -52,37 +40,9 @@ Phase 3 — BRIEF: Generate a concise daily sync brief summarizing company statu
 
 You have full context continuity. Phase 2 sees your Phase 1 reasoning. Phase 3 sees everything.`;
 
-const SKILL_EVOLUTION_AGENT_SYSTEM_PROMPT = `You are the Skill Evolution Agent. You run the full ATA (Automated Test-driven Approval) pipeline for skill mutations and discoveries.
-
-You operate in up to 6 phases within a single session:
-
-Phase 1 — ATTRIBUTE: Analyze the task failure. Identify which skill failed (or identify a skill gap). Assign confidence and failure mode.
-
-Phase 2 — PROPOSE: Based on your attribution, propose either a skill mutation (rewrite existing skill) or skill discovery (create new skill).
-
-Phase 3 — TEST (TGA): Generate test scenarios that validate your proposed change would have prevented the original failure.
-
-Phase 4 — EVALUATE (EAA): Dry-run the proposed skill against your test scenarios. Report pass/fail for each.
-
-Phase 5 — REVIEW (ROA): Review the evaluation results. Approve, reject, or request revision. Explain your reasoning.
-
-Phase 6 — REVISE (if needed): If revision requested in Phase 5, apply feedback and re-run from Phase 3.
-
-Each phase builds on the reasoning from previous phases. Do not discard context between phases.
-
-Always respond with valid JSON matching the requested schema.`;
-
 // ── Registry ────────────────────────────────────────────────
 
 export const INTERNAL_AGENTS: Record<string, InternalAgentDefinition> = {
-  memory_agent: {
-    key: "memory_agent",
-    name: "Mnemo",
-    systemPrompt: MEMORY_AGENT_SYSTEM_PROMPT,
-    deployment: "workerDeployment",
-    sessionPersistence: "per-beat",
-    allowedTools: [],
-  },
   facilitator_agent: {
     key: "facilitator_agent",
     name: "Synth",
@@ -90,14 +50,6 @@ export const INTERNAL_AGENTS: Record<string, InternalAgentDefinition> = {
     deployment: "ceoDeployment",
     sessionPersistence: "per-beat",
     allowedTools: ["arceus_record_meeting", "arceus_create_task"],
-  },
-  skill_evolution_agent: {
-    key: "skill_evolution_agent",
-    name: "Darwin",
-    systemPrompt: SKILL_EVOLUTION_AGENT_SYSTEM_PROMPT,
-    deployment: "workerDeployment",
-    sessionPersistence: "per-beat",
-    allowedTools: ["arceus_propose_skill_mutation"],
   },
 };
 

@@ -1,212 +1,89 @@
-import type { AgentIdentity, Approval, Task } from "@arceus/contracts";
-import { getAgentByRole, uniqueStrings } from "@arceus/task-engine";
-import { getSnapshot, upsertApproval, updateApproval } from "../persistence/store.js";
-import { enrichRoleMemory } from "./operations.js";
+import type { AgentIdentity, Approval } from "@arceus/contracts";
+import { parseRoleStrict } from "@arceus/contracts";
+import { getDb, type DbClient } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as approvalsRepo from "@arceus/db/src/repos/approvals.js";
 import { emitReactive } from "../orchestration/reactive.js";
-import { artifacts } from "../orchestration/state.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Post-specialist memory handoffs
+// Generic approval request — Spec 31 Phase 7.B.1: DB-direct, no snapshot.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Inject UI Designer design specs into developer and tester memory after delivery. */
-export function deliverUiDesignerMemoryHandoff(task: Task, artifactId: string) {
-  const artifact = artifacts.find((a) => a.id === artifactId);
-  const designContent = artifact?.content
-    ? artifact.content.slice(0, 4000)
-    : `(Design artifact ${artifactId} content not available — request review from UI Designer.)`;
-
-  const guidance = [
-    `UI Designer delivered design direction for "${task.title}".`,
-    `IMPORTANT: Follow these design specs exactly when implementing UI components.`,
-    `--- BEGIN DESIGN SPECS ---`,
-    designContent,
-    `--- END DESIGN SPECS ---`,
-  ].join("\n");
-
-  const qaGuidance = `Verify UI implementation matches the design direction in artifact ${artifactId} for ${task.title}. Check: layout structure, color tokens, component states, responsive behavior.`;
-
-  enrichRoleMemory("developer", {
-    currentFocus: [guidance],
-    recentLearnings: [guidance],
-    activePatterns: ["Follow UI Designer design specs exactly — use specified colors, spacing, typography, and component hierarchy."],
-  });
-  enrichRoleMemory("tester", {
-    currentFocus: [qaGuidance],
-    recentLearnings: [qaGuidance],
-    activePatterns: ["QA should include design-direction checks alongside functional verification."],
-  });
+/** Input for {@link requestApproval} — generalised board approval request. */
+export interface RequestApprovalInput {
+  type: Approval["type"];
+  requestedByRole: AgentIdentity["role"];
+  title: string;
+  description: string;
+  meetingId?: string | null;
+  agendaItemId?: string | null;
 }
 
-/** Inject Skills Lead skill-package availability into CTO, developer, and tester memory. */
-export function deliverSkillsLeadMemoryHandoff(task: Task, artifactId: string, skillPath: string) {
-  const handoff = `Reusable skill package ${skillPath} was authored from ${task.title}. Supporting artifact: /api/artifacts/${artifactId}.`;
-
-  enrichRoleMemory("cto", {
-    currentFocus: [handoff],
-    recentLearnings: [handoff],
-    activePatterns: ["Codify repeated specialist work into reusable internal skills before scaling execution."],
-  });
-  enrichRoleMemory("developer", {
-    recentLearnings: [handoff],
-    activePatterns: ["Check .arceus/skills for reusable delivery workflows before starting implementation."],
-  });
-  enrichRoleMemory("tester", {
-    recentLearnings: [handoff],
-    activePatterns: ["Check .arceus/skills for reusable QA workflows before verification."],
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Marketing external approval flow
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Create a pending board approval for marketing external/outbound actions. */
-export function createMarketingExternalApproval(task: Task, artifactId: string, meetingId: string | null) {
-  const snapshot = getSnapshot();
-  const marketingAgent = getAgentByRole(snapshot, "marketing");
-  if (!marketingAgent) {
-    return null;
-  }
+/**
+ * Create a pending board approval on behalf of any role. Looks up the
+ * requesting agent by `(companyId, role)` and persists the approval
+ * via `approvalsRepo.upsertApproval`. Returns `null` if the role has
+ * no provisioned agent for the company.
+ *
+ * `db` is optional — defaults to `getDb()` for the common case;
+ * override only when you need a transaction-scoped client.
+ */
+export async function requestApproval(
+  companyId: string,
+  input: RequestApprovalInput,
+  db: DbClient = getDb(),
+): Promise<Approval | null> {
+  const requestor = await agentsRepo.findAgentByRole(db, companyId, input.requestedByRole);
+  if (!requestor) return null;
 
   const approval: Approval = {
     id: `approval_${crypto.randomUUID()}`,
-    companyId: snapshot.company.id,
-    type: "external_action",
+    companyId,
+    type: input.type,
     status: "pending",
-    title: `Board approval required for ${task.title}`,
-    description: `Marketing prepared outbound launch or distribution recommendations in /api/artifacts/${artifactId}. No external action has been executed. Board approval is required before any distribution proceeds.`,
-    requestedByAgentId: marketingAgent.id,
-    meetingId,
-    agendaItemId: null,
+    title: input.title,
+    description: input.description,
+    requestedByAgentId: requestor.id,
+    meetingId: input.meetingId ?? null,
+    agendaItemId: input.agendaItemId ?? null,
     resolutionSummary: null,
   };
 
-  upsertApproval(approval);
+  await approvalsRepo.upsertApproval(db, approval);
   return approval;
 }
 
-/** Approve all pending board approvals and emit reactive events to requestors. */
-export function approvePendingBoardApprovals() {
-  const pendingApprovals = getSnapshot().approvals.filter((approval) => approval.status === "pending");
+/**
+ * Approve all pending board approvals for a company and emit
+ * reactive events to the requestors. Returns the list of approvals
+ * that were transitioned (status was `pending` at the start).
+ */
+export async function approvePendingBoardApprovals(
+  companyId: string,
+  db: DbClient = getDb(),
+): Promise<Approval[]> {
+  const pendingRows = await approvalsRepo.listApprovalsByCompany(db, companyId, "pending");
+  const pending = pendingRows.map(approvalsRepo.rowToApproval);
 
-  for (const approval of pendingApprovals) {
-    updateApproval(approval.id, (current) => ({
-      ...current,
-      status: current.type === "external_action" ? "approved" : "applied",
-      resolutionSummary: current.type === "external_action"
-        ? "Board approved the recommended external action. No automated outbound action was executed by Arceus."
-        : "Board approved the pending request during CTO handoff review.",
-    }));
+  for (const approval of pending) {
+    const nextStatus: Approval["status"] = approval.type === "external_action" ? "approved" : "applied";
+    const resolutionSummary = approval.type === "external_action"
+      ? "Board approved the recommended external action. No automated outbound action was executed by Arceus."
+      : "Board approved the pending request during CTO handoff review.";
 
-    const snap = getSnapshot();
-    const requestor = snap.agents.find((a: { id: string; role: AgentIdentity["role"] }) => a.id === approval.requestedByAgentId);
-    if (requestor) {
-      emitReactive(requestor.role, "approval_granted");
+    await approvalsRepo.upsertApproval(db, {
+      ...approval,
+      status: nextStatus,
+      resolutionSummary,
+    });
+
+    if (approval.requestedByAgentId) {
+      const requestor = await agentsRepo.findAgentById(db, approval.requestedByAgentId);
+      if (requestor) {
+        emitReactive(parseRoleStrict(requestor.role), "approval_granted");
+      }
     }
   }
 
-  return pendingApprovals;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Specialist meeting context (shapes data for recordMeeting after specialist)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Build participant roles and learning entries for a post-specialist handoff meeting. */
-export function getSpecialistMeetingContext(role: AgentIdentity["role"], task: Task, artifactId: string) {
-  if (role === "ui_designer") {
-    return {
-      participantRoles: uniqueStrings([role, "developer", "tester", "cto"]) as AgentIdentity["role"][],
-      managerRole: "cto" as const,
-      learnings: [
-        {
-          role: "developer" as const,
-          content: `UI Designer attached design direction artifact /api/artifacts/${artifactId} for ${task.title}.`,
-        },
-        {
-          role: "tester" as const,
-          content: `QA should verify ${task.title} against UI direction artifact /api/artifacts/${artifactId}.`,
-        },
-        {
-          role: "cto" as const,
-          content: `Design direction artifact /api/artifacts/${artifactId} is available for downstream implementation and QA.`,
-        },
-      ],
-    };
-  }
-
-  if (role === "marketing") {
-    return {
-      participantRoles: uniqueStrings([role, "pm", "ceo"]) as AgentIdentity["role"][],
-      managerRole: "ceo" as const,
-      learnings: [
-        {
-          role: "pm" as const,
-          content: `Marketing attached launch-readiness artifact /api/artifacts/${artifactId} for ${task.title}.`,
-        },
-        {
-          role: "ceo" as const,
-          content: task.kind === "distribution_campaign"
-            ? `Outbound distribution recommendations in /api/artifacts/${artifactId} require board approval before execution.`
-            : `Launch-readiness content in /api/artifacts/${artifactId} is ready for release planning review.`,
-        },
-      ],
-    };
-  }
-
-  if (role === "skills_lead") {
-    return {
-      participantRoles: uniqueStrings([role, "cto", "developer", "tester"]) as AgentIdentity["role"][],
-      managerRole: "cto" as const,
-      learnings: [
-        {
-          role: "cto" as const,
-          content: `Skills Lead authored a reusable skill package for ${task.title}.`,
-        },
-        {
-          role: "developer" as const,
-          content: `A new reusable skill package is available for downstream implementation support from ${task.title}.`,
-        },
-        {
-          role: "tester" as const,
-          content: `A new reusable skill package is available for downstream QA support from ${task.title}.`,
-        },
-      ],
-    };
-  }
-
-  if (role === "tester") {
-    const participantRoles = uniqueStrings([role, "developer", "pm", "cto"]) as AgentIdentity["role"][];
-    return {
-      participantRoles,
-      managerRole: "cto" as const,
-      learnings: [
-        {
-          role: "developer" as const,
-          content: `Tester attached verification artifact /api/artifacts/${artifactId} for ${task.title}.`,
-        },
-        {
-          role: "pm" as const,
-          content: `Tester produced verification evidence for ${task.title} and highlighted release readiness implications.`,
-        },
-        {
-          role: "cto" as const,
-          content: `Tester verification artifact /api/artifacts/${artifactId} is available for technical review.`,
-        },
-      ],
-    };
-  }
-
-  const managerRole: AgentIdentity["role"] = "cto";
-  return {
-    participantRoles: [role, managerRole],
-    managerRole,
-    learnings: [
-      {
-        role: managerRole,
-        content: `${role.replace(/_/g, " ")} delivered artifact ${task.title} for downstream review.`,
-      },
-    ],
-  };
+  return pending;
 }

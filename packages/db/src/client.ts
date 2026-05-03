@@ -1,21 +1,17 @@
 /**
  * @module db/client
- * Database connection management and adapter layer.
+ * Database connection management.
  *
- * Provides Drizzle ORM (postgres.js) and Supabase clients, plus a
- * NoopDatabaseAdapter for in-memory testing/development. Reads connection
- * config from env vars with multiple alias fallbacks.
+ * Provides Drizzle ORM (postgres.js) and Supabase clients with lazy
+ * singletons. Reads connection config from env vars with multiple
+ * alias fallbacks.
  */
 import "./load-env";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
-import type { DatabaseAdapter, DatabaseConnectionConfig, DatabaseHealth, EntityName, EntityRecordMap } from "./types";
-
-function cloneRecord<T>(value: T): T {
-  return structuredClone(value);
-}
+import type { DatabaseConnectionConfig, DatabaseHealth } from "./types";
 
 /** Reads the first non-empty value from a list of env var names. */
 function readAliasedEnv(names: string[]) {
@@ -38,21 +34,21 @@ function getDatabaseRuntimeMode(databaseUrl: string): DatabaseConnectionConfig["
   return process.env.SUPABASE_DB_URL?.trim() ? "direct" : "fallback";
 }
 
-export type DbClient = PostgresJsDatabase<Record<string, never>>;
+export type DbClient = PostgresJsDatabase;
 
 let dbClient: DbClient | null = null;
 let sqlClient: postgres.Sql | null = null;
 let supabaseClient: SupabaseClient | null = null;
 
-/** Builds a DatabaseConnectionConfig from env vars, or null if unconfigured. */
+/** Builds a DatabaseConnectionConfig from env vars, or null if DATABASE_URL is missing.
+ *  Supabase-specific fields are optional and only consulted by `getSupabaseClient`. */
 export function getDatabaseConnectionConfig(): DatabaseConnectionConfig | null {
-  const supabaseUrl = readAliasedEnv(["SUPABASE_URL", "PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL"]);
-  const supabaseServiceRoleKey = readAliasedEnv(["SUPABASE_SERVICE_ROLE_KEY", "PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY"]);
   const databaseUrl = readAliasedEnv(["SUPABASE_DB_URL", "ARCEUS_HIPPOCAMPUS_POSTGRES_URL", "DATABASE_URL"]);
-
-  if (!supabaseUrl || !supabaseServiceRoleKey || !databaseUrl) {
+  if (!databaseUrl) {
     return null;
   }
+  const supabaseUrl = readAliasedEnv(["SUPABASE_URL", "PAPERCLIP_STORAGE_SUPABASE_PROJECT_URL"]);
+  const supabaseServiceRoleKey = readAliasedEnv(["SUPABASE_SERVICE_ROLE_KEY", "PAPERCLIP_STORAGE_SUPABASE_SERVICE_ROLE_KEY"]);
 
   return {
     supabaseUrl,
@@ -73,16 +69,64 @@ export function isDatabaseConfigured() {
   return Boolean(getDatabaseConnectionConfig()?.databaseUrl);
 }
 
-/** Returns the singleton Drizzle client, creating it on first call. Throws if DB not configured. */
-export function getDb() {
+/**
+ * Default pool size when `ARCEUS_DB_POOL_SIZE` isn't set.
+ *
+ * Sizing guidance (Spec 31 §Phase 8.5): scale to ~`(api replicas × 10)`
+ * connections so a single pod restart doesn't exhaust the Postgres
+ * connection pool. Raise via `ARCEUS_DB_POOL_SIZE` in production; ensure
+ * `max_connections` on the DB is sized appropriately
+ * (`max_connections >= replicas × pool_size + headroom`).
+ */
+const DEFAULT_POOL_SIZE = 10;
+
+function readPoolSize(): number {
+  const raw = process.env.ARCEUS_DB_POOL_SIZE?.trim();
+  if (!raw) return DEFAULT_POOL_SIZE;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    console.warn(
+      `[@arceus/db] ARCEUS_DB_POOL_SIZE="${raw}" is not a positive integer; falling back to ${DEFAULT_POOL_SIZE}.`,
+    );
+    return DEFAULT_POOL_SIZE;
+  }
+  return parsed;
+}
+
+/**
+ * Validate the database URL at first `getDb()` call. Production:
+ * fail-loud with a clear error so the deploy crashes before serving
+ * traffic. Dev: soft-warn so a misconfigured `.env.local` still
+ * boots into a sensible default for local hacking.
+ *
+ * Same pattern as `bearer.resolveBearerToken` (spec 25 §3.5) — known
+ * good for "must be set in prod, optional in dev".
+ */
+function resolveDatabaseUrl(): string {
   const config = getDatabaseConnectionConfig();
-  if (!config?.databaseUrl) {
-    throw new Error("Database is not configured. Set SUPABASE_DB_URL or a supported fallback URL.");
+  if (config?.databaseUrl) return config.databaseUrl;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "[@arceus/db] DATABASE_URL (or SUPABASE_DB_URL / ARCEUS_HIPPOCAMPUS_POSTGRES_URL) " +
+        "is required in production. Refusing to start with no persistence.",
+    );
   }
 
+  console.warn(
+    "[@arceus/db] No DATABASE_URL set; falling back to local default postgresql://localhost:5432/arceus_dev. " +
+      "This is dev-only — set DATABASE_URL before deploying.",
+  );
+  return "postgresql://localhost:5432/arceus_dev";
+}
+
+/** Returns the singleton Drizzle client, creating it on first call. Throws in production
+ *  if DB not configured (dev falls back to localhost with a warning). */
+export function getDb() {
   if (!sqlClient) {
-    sqlClient = postgres(config.databaseUrl, {
-      max: 5,
+    const databaseUrl = resolveDatabaseUrl();
+    sqlClient = postgres(databaseUrl, {
+      max: readPoolSize(),
       prepare: false,
       idle_timeout: 20,
       connect_timeout: 10,
@@ -153,51 +197,3 @@ export async function closeDbConnections() {
   supabaseClient = null;
 }
 
-/**
- * In-memory DatabaseAdapter for dev/test. All data lives in Maps.
- * Replace with the real Drizzle adapter for production persistence.
- */
-export class NoopDatabaseAdapter implements DatabaseAdapter {
-  readonly kind = "noop" as const;
-
-  private readonly store = new Map<EntityName, Map<string, unknown>>();
-
-  async list<K extends EntityName>(entity: K): Promise<Array<EntityRecordMap[K]>> {
-    return Array.from(this.getEntityStore(entity).values()).map((record) => cloneRecord(record as EntityRecordMap[K]));
-  }
-
-  async getById<K extends EntityName>(entity: K, id: string): Promise<EntityRecordMap[K] | null> {
-    const record = this.getEntityStore(entity).get(id);
-    return record ? cloneRecord(record as EntityRecordMap[K]) : null;
-  }
-
-  async upsert<K extends EntityName>(entity: K, record: EntityRecordMap[K] & { id: string }): Promise<EntityRecordMap[K]> {
-    this.getEntityStore(entity).set(record.id, cloneRecord(record));
-    return cloneRecord(record);
-  }
-
-  async delete<K extends EntityName>(entity: K, id: string): Promise<boolean> {
-    return this.getEntityStore(entity).delete(id);
-  }
-
-  async healthCheck(): Promise<DatabaseHealth> {
-    return {
-      ok: true,
-      kind: this.kind,
-      details: "In-memory adapter active. Replace with PostgreSQL/Drizzle in Spec 04."
-    };
-  }
-
-  private getEntityStore(entity: EntityName) {
-    let bucket = this.store.get(entity);
-    if (!bucket) {
-      bucket = new Map<string, unknown>();
-      this.store.set(entity, bucket);
-    }
-    return bucket;
-  }
-}
-
-export function createNoopDatabaseAdapter() {
-  return new NoopDatabaseAdapter();
-}

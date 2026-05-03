@@ -1,0 +1,1 @@
+- workspace scaffolding should be a mcp tool, with parameter as techstack

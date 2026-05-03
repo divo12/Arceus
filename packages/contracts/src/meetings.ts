@@ -14,6 +14,8 @@
  * - MeetingHealthSnapshot — telemetry for the meeting pipeline
  */
 import { z } from "zod";
+import { roleTypeSchema } from "./agents.js";
+import { taskStatusSchema, prioritySchema } from "./tasks.js";
 
 export const meetingTypeSchema = z.enum(["daily_sync", "eval_triggered", "escalation"]);
 export const meetingStatusSchema = z.enum(["scheduled", "collecting", "synthesizing", "resolving", "executing", "learning", "completed", "skipped"]);
@@ -73,10 +75,14 @@ export const resolutionDecisionSchema = z.object({
     type: z.enum(["create", "update", "reassign"]),
     title: z.string().optional(),
     description: z.string().optional(),
-    assigneeRole: z.string().optional(),
+    // Audit C12 (F-365/F-386): tighten the LLM-output enums so the
+    // resolution executor doesn't have to cast through `as Task["..."]`.
+    // Schema parse rejects bad values up front; consumers get pre-narrowed
+    // unions instead of strings smuggled past the type system.
+    assigneeRole: roleTypeSchema.optional(),
     issueId: z.string().optional(),
-    newStatus: z.string().optional(),
-    newPriority: z.string().optional(),
+    newStatus: taskStatusSchema.optional(),
+    newPriority: prioritySchema.optional(),
   }).optional(),
   escalation: z.object({
     question: z.string(),

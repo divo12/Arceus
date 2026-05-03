@@ -1,9 +1,19 @@
 import type { AgentIdentity, CompanySnapshot } from "@arceus/contracts";
+import type { Message, Part, SessionPromptData } from "@opencode-ai/sdk";
+
+/** Element shape of `client.session.messages({...}).data` per OpenCode SDK. */
+interface SessionMessage { info: Message; parts: Part[] }
+
+/** The `body` we send to `client.session.prompt()`. Required = SessionPromptData["body"]. */
+type SessionPromptBody = NonNullable<SessionPromptData["body"]>;
 import { getAgentByRole, nowIso } from "@arceus/task-engine";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
-import { getSnapshot } from "../persistence/store.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { withRetry, isRetryableError } from "../infra/resilience.js";
@@ -12,15 +22,14 @@ import { agentSessions, pendingPromptCompletions, type AgentSessionState } from 
 import { updateAgentSessionState } from "../agents/sessions.js";
 import { formatHippocampusContext } from "../memory/operations.js";
 import { hippocampus } from "../memory/extractors.js";
-import { buildSkillSection } from "../skills/catalog.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent session management
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Create a new OpenCode session for an agent and register it in the session map. */
-export async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
-  const soul = getRoleSoul(agent.role as AgentIdentity["role"]);
+async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
+  const soul = getRoleSoul(agent.role);
   if (!soul) throw new Error(`No SOUL policy for role: ${agent.role}`);
 
   const opencode = await getOpencode();
@@ -76,10 +85,20 @@ export async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentI
 // ─────────────────────────────────────────────────────────────────────────────
 
 let promptCompletionPollerHandle: NodeJS.Timeout | null = null;
-const PROMPT_COMPLETION_POLL_INTERVAL_MS = 8_000;
+// Re-import the canonical value from orchestration/state so the two
+// modules stay in lockstep (was a duplicate `8_000` literal — C17).
+import { PROMPT_COMPLETION_POLL_INTERVAL_MS } from "../orchestration/state.js";
+
+/**
+ * Default ceiling on how long `registerPromptCompletion` waits before
+ * rejecting. Mirrors the longest agent prompt timeout in the system —
+ * keeping it as a named constant means callers that want a different
+ * timeout pass it explicitly rather than leaving the magic 5min inline.
+ */
+const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
-export function registerPromptCompletion(sessionId: string, timeoutMs = 5 * 60 * 1000): Promise<void> {
+export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
   if (existing) {
     clearTimeout(existing.timer);
@@ -123,13 +142,6 @@ function startPromptCompletionPoller() {
   }, PROMPT_COMPLETION_POLL_INTERVAL_MS);
 }
 
-/** Stop the background poller that checks for stalled prompt completions. */
-export function stopPromptCompletionPoller() {
-  if (promptCompletionPollerHandle) {
-    clearInterval(promptCompletionPollerHandle);
-    promptCompletionPollerHandle = null;
-  }
-}
 
 async function pollPendingPromptCompletions() {
   if (pendingPromptCompletions.size === 0) return;
@@ -142,13 +154,13 @@ async function pollPendingPromptCompletions() {
 
     for (const [sessionId, _entry] of pendingPromptCompletions) {
       const sessionStatus = statusMap[sessionId];
-      if (sessionStatus && sessionStatus.type === "idle") {
+      if (sessionStatus?.type === "idle") {
         emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… is idle — resolving completion`);
         resolvePromptCompletion(sessionId);
       } else if (!sessionStatus) {
         try {
           const messagesResult = await opencode.client.session.messages({ path: { id: sessionId } });
-          const messages = messagesResult.data as Array<{ info: any }> | undefined;
+          const messages = messagesResult.data;
           const hasAssistant = messages?.some((m) => m.info?.role === "assistant");
           if (hasAssistant) {
             emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… not in status but has assistant response — resolving`);
@@ -179,18 +191,19 @@ export async function runPromptText(
   systemPrompt: string,
   text: string,
   tools?: Record<string, boolean>,
-  matchedSkillIds?: string[],
 ) {
   const deployment = ensureDeployment("workerDeployment");
-
-  const skillSection = buildSkillSection(role, matchedSkillIds);
 
   let memoryBlock = "";
   let memoryCount = 0;
   let habitCount = 0;
   try {
-    const snapshot = getSnapshot();
-    const agent = getAgentByRole(snapshot, role);
+    // Spec 31 Phase 7.B.1 / 7.C.c — read agent from canonical via repo,
+    // companyId via the seam helper.
+    const companyId = getActiveCompanyId();
+    const agent = companyId
+      ? await agentsRepo.findAgentByRole(getDb(), companyId, role)
+      : null;
     if (agent) {
       const ctx = await hippocampus.prepareAgentContext(agent.id, text);
       memoryBlock = formatHippocampusContext(ctx);
@@ -203,20 +216,18 @@ export async function runPromptText(
     emitEmployeeActivity(role, "error", `Hippocampus memory retrieval failed: ${msg}`);
   }
 
-  const enrichedSystemPrompt = [systemPrompt, skillSection, memoryBlock].filter(Boolean).join("\n");
+  const enrichedSystemPrompt = [systemPrompt, memoryBlock].filter(Boolean).join("\n");
 
-  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch skills=${skillSection.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
+  emitEmployeeActivity(role, "context", `Prompt assembled: system=${systemPrompt.length}ch memory=${memoryBlock.length}ch (${memoryCount} facts, ${habitCount} habits) → total=${enrichedSystemPrompt.length}ch`, {
     detail: {
       systemPromptLen: systemPrompt.length,
-      skillSectionLen: skillSection.length,
-      matchedSkillCount: matchedSkillIds?.length ?? 0,
       memoryBlockLen: memoryBlock.length,
       memoryCount,
       habitCount,
       totalPromptLen: enrichedSystemPrompt.length,
       userPromptLen: text.length,
       model: deployment,
-      tools: tools ? Object.keys(tools).filter(k => (tools as any)[k]) : [],
+      tools: tools ? Object.entries(tools).filter(([, enabled]) => enabled).map(([k]) => k) : [],
     },
   });
 
@@ -232,45 +243,61 @@ export async function runPromptText(
   const output = await withRetry(
     async () => {
       const opencode = await getOpencode();
-      const promptBody: Record<string, unknown> = {
+      const promptBody: SessionPromptBody = {
         model: { providerID: "azure", modelID: deployment },
         agent: role,
         system: enrichedSystemPrompt,
         parts: [{ type: "text", text }],
+        ...(tools ? { tools } : {}),
       };
-      if (tools) promptBody.tools = tools;
 
       const completionPromise = registerPromptCompletion(currentSessionId);
 
-      const promptResult = await opencode.client.session.prompt({
+      // Fire-and-forget: session.prompt() may block until LLM completes inside
+      // OpenCode.  We detect completion via SSE session.idle (primary) or the
+      // polling fallback — both feed into completionPromise.
+      opencode.client.session.prompt({
         path: { id: currentSessionId },
-        body: promptBody as any,
+        body: promptBody,
+      }).catch((err: unknown) => {
+        rejectPromptCompletion(
+          currentSessionId,
+          err instanceof Error ? err : new Error(String(err)),
+        );
       });
+
       await completionPromise;
 
       const messagesResult = await opencode.client.session.messages({
         path: { id: currentSessionId },
       });
 
-      const messages = messagesResult.data as Array<{ info: any; parts: Array<{ type: string; text?: string }> }> | undefined;
+      const messages = messagesResult.data;
       if (!messages || messages.length === 0) {
         return "";
       }
 
-      const assistantMessages = messages.filter((m) => m.info?.role === "assistant");
+      const assistantMessages = messages.filter(
+        (m): m is { info: Extract<Message, { role: "assistant" }>; parts: Part[] } =>
+          m.info?.role === "assistant",
+      );
       const lastAssistant = assistantMessages[assistantMessages.length - 1];
       if (!lastAssistant) return "";
 
-      const infoError = lastAssistant.info?.error;
+      const infoError = lastAssistant.info.error;
       if (infoError) {
-        const errorMsg = infoError.data?.message ?? infoError.name ?? "Unknown OpenCode session error";
+        const errorMsg =
+          ("data" in infoError && typeof infoError.data === "object" && infoError.data !== null && "message" in infoError.data
+            ? String((infoError.data as { message?: unknown }).message)
+            : undefined) ??
+          infoError.name ??
+          "Unknown OpenCode session error";
         throw new Error(`OpenCode ${role} session error: ${errorMsg}`);
       }
 
       return (
         lastAssistant.parts
-          ?.filter((part) => part.type === "text" && part.text)
-          .map((part) => part.text ?? "")
+          ?.flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
           .join("\n")
           .trim() || ""
       );
@@ -281,10 +308,13 @@ export async function runPromptText(
       backoff: 2,
       shouldRetry: isRetryableError,
       onRetry: async (attempt, _error) => {
-        resetOpencodeConnection();
+        await resetOpencodeConnection();
         agentSessions.delete(role);
         emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
-        const snap = getSnapshot();
+        // Spec 31 Phase 7.C.c — canonical-backed view for the retry path.
+        const retryCompanyId = getActiveCompanyId();
+        if (!retryCompanyId) return;
+        const snap = await buildSnapshotView(retryCompanyId);
         const freshSession = await ensureAgentSession(snap, role);
         currentSessionId = freshSession.sessionId;
       },

@@ -16,6 +16,7 @@ import {
   setPatternLearnerDeps,
   setSkillRegistryDeps,
 } from "@arceus/company-runtime";
+import { dbPersistSkill, isSkillsDbWritethroughEnabled } from "./db-writethrough.js";
 import type { TaskOutcomeContext } from "@arceus/company-runtime";
 import type {
   SkillArtifact,
@@ -24,7 +25,23 @@ import type {
   ATATestScenario,
   SkillCandidate,
 } from "@arceus/contracts";
-import { runInternalAgentPrompt } from "../prompts/internal-agent.js";
+import { structuredCompletion } from "../infra/azure-openai.js";
+
+// ── Phase-specific system prompts (no shared session; information
+//     isolation between phases is the design feature — spec 27 §2.5).
+//     Each primitive gets a tight, phase-scoped prompt instead of the old
+//     6-phase Skill Evolution Agent shared-session prompt. Bodies live in
+//     `./prompts/*.md` so they can be edited without churning .ts.
+import {
+  ATTRIBUTION_SYSTEM_PROMPT,
+  MUTATION_SYSTEM_PROMPT,
+  DISCOVERY_SYSTEM_PROMPT,
+  TGA_SYSTEM_PROMPT,
+  EAA_SYSTEM_PROMPT,
+  ROA_SYSTEM_PROMPT,
+  REVISION_SYSTEM_PROMPT,
+  SYNTHESIS_SYSTEM_PROMPT,
+} from "./prompts/loader.js";
 
 // ── Zod schemas for LLM structured output ────────────────
 
@@ -390,101 +407,120 @@ ${feedback}
 - Be specific: include exact values, code snippets, commands where relevant.`;
 }
 
-// ── Initialization (Spec 24 Phase 5 — Skill Evolution Agent) ─
-
-function extractJson(output: string): unknown {
-  const match = output.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Skill Evolution Agent returned no JSON");
-  return JSON.parse(match[0]);
-}
+// ── Initialization (Spec 27 §SE — ATA pipeline as typed primitives) ─
 
 /**
  * Wire all LLM dependencies for skill evolution at startup.
  *
  * Connects the skill mutator (Phase 2), ATA tester (Phase 3), pattern
- * learner (Phase 5), and registry activation hook so the pure decision
- * logic in company-runtime can call Azure OpenAI via the Skill Evolution Agent.
+ * learner (Phase 5), and registry activation hook. Each primitive is a
+ * stateless `structuredCompletion` call with a phase-specific inline
+ * system prompt — no shared session, no regex JSON extraction. Information
+ * isolation between phases is enforced structurally: each phase sees only
+ * the typed output of its predecessors (spec 27 §SE).
  */
 export function initSkillEvolution(): void {
   setSkillMutatorDeps({
     async analyzeFailure(ctx, matchedSkills) {
-      const prompt = [
-        "Phase 1 — ATTRIBUTE. Analyze this task failure. Respond with JSON: { attributedSkillId, failureMode, confidence, suggestedFix, isSkillGap }",
-        "",
-        buildAttributionPrompt(ctx, matchedSkills),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return failureAttributionResponseSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: ATTRIBUTION_SYSTEM_PROMPT },
+          { role: "user", content: buildAttributionPrompt(ctx, matchedSkills) },
+        ],
+        failureAttributionResponseSchema,
+        "skill_failure_attribution",
+        { temperature: 0.1 },
+      );
     },
 
     async proposeSkillMutation(original, attribution) {
-      const prompt = [
-        "Phase 2 — PROPOSE (mutation). Rewrite this skill. Respond with JSON: { content, trigger, description }",
-        "",
-        buildMutationPrompt(original, attribution),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return skillMutationResponseSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: MUTATION_SYSTEM_PROMPT },
+          { role: "user", content: buildMutationPrompt(original, attribution) },
+        ],
+        skillMutationResponseSchema,
+        "skill_mutation_propose",
+        { temperature: 0.2 },
+      );
     },
 
     async proposeSkillDiscovery(attribution, role) {
-      const prompt = [
-        "Phase 2 — PROPOSE (discovery). Create a new skill. Respond with JSON: { content, trigger, name, description }",
-        "",
-        buildDiscoveryPrompt(attribution, role),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return skillDiscoveryResponseSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: DISCOVERY_SYSTEM_PROMPT },
+          { role: "user", content: buildDiscoveryPrompt(attribution, role) },
+        ],
+        skillDiscoveryResponseSchema,
+        "skill_discovery_propose",
+        { temperature: 0.2 },
+      );
     },
   });
 
-  console.log("[SkillEvolution] Skill Evolution Agent wired for failure attribution + skill mutation");
+  console.log("[SkillEvolution] Attribution + propose primitives wired via structuredCompletion");
 
   // ── Phase 3: ATA Pipeline deps ─────────────────────────
 
   setSkillTesterDeps({
     async generateTestScenarios(mutation) {
-      const prompt = [
-        "Phase 3 — TEST (TGA). Generate test scenarios. Respond with JSON: { scenarios: [...] }",
-        "",
-        buildTGAPrompt(mutation),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return tgaTestScenarioSchema.parse(extractJson(output)).scenarios;
+      const result = await structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: TGA_SYSTEM_PROMPT },
+          { role: "user", content: buildTGAPrompt(mutation) },
+        ],
+        tgaTestScenarioSchema,
+        "skill_tga_generate_scenarios",
+        { temperature: 0.2 },
+      );
+      return result.scenarios;
     },
 
     async executeDryRun(skill, scenario) {
-      const prompt = [
-        "Phase 4 — EVALUATE (EAA). Dry-run this scenario. Respond with JSON: { testId, agentPlan, outcomeMatches, edgeCaseMatches, notes }",
-        "",
-        buildEAAPrompt(skill, scenario),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return eaaDryRunSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: EAA_SYSTEM_PROMPT },
+          { role: "user", content: buildEAAPrompt(skill, scenario) },
+        ],
+        eaaDryRunSchema,
+        "skill_eaa_dry_run",
+        { temperature: 0.1 },
+      );
     },
 
     async reviewResults(mutation, scenarios, results) {
-      const prompt = [
-        "Phase 5 — REVIEW (ROA). Evaluate this mutation. Respond with JSON: { verdict, overallScore, fixesOriginalFailure, coreOutcomesPassing, edgeCasesPassing, securityConcerns, revisionGuidance }",
-        "",
-        buildROAPrompt(mutation, scenarios, results),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return roaVerdictSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: ROA_SYSTEM_PROMPT },
+          { role: "user", content: buildROAPrompt(mutation, scenarios, results) },
+        ],
+        roaVerdictSchema,
+        "skill_roa_verdict",
+        { temperature: 0.1 },
+      );
     },
 
     async reviseSkill(mutation, feedback) {
-      const prompt = [
-        "Phase 6 — REVISE. Apply feedback and rewrite. Respond with JSON: { content, trigger, description }",
-        "",
-        buildRevisionPrompt(mutation, feedback),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return skillRevisionSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: REVISION_SYSTEM_PROMPT },
+          { role: "user", content: buildRevisionPrompt(mutation, feedback) },
+        ],
+        skillRevisionSchema,
+        "skill_mutation_revise",
+        { temperature: 0.2 },
+      );
     },
   });
 
-  console.log("[SkillEvolution] ATA pipeline wired via Skill Evolution Agent (TGA + EAA + ROA)");
+  console.log("[SkillEvolution] ATA pipeline wired (TGA + EAA + ROA via structuredCompletion)");
 
   // ── Phase 5: Pattern Learning deps ─────────────────────
 
@@ -494,13 +530,16 @@ export function initSkillEvolution(): void {
     },
 
     async synthesizeSkill(candidate) {
-      const prompt = [
-        "Synthesize a reusable skill from recurring agent behavior. Respond with JSON: { name, trigger, content, description }",
-        "",
-        buildSkillSynthesisPrompt(candidate),
-      ].join("\n");
-      const output = await runInternalAgentPrompt("skill_evolution_agent", null, prompt);
-      return skillSynthesisResponseSchema.parse(extractJson(output));
+      return structuredCompletion(
+        "workerDeployment",
+        [
+          { role: "system", content: SYNTHESIS_SYSTEM_PROMPT },
+          { role: "user", content: buildSkillSynthesisPrompt(candidate) },
+        ],
+        skillSynthesisResponseSchema,
+        "skill_pattern_synthesize",
+        { temperature: 0.2 },
+      );
     },
   });
 
@@ -516,13 +555,26 @@ export function initSkillEvolution(): void {
   //
   // `onSkillActivated` is kept as a fire-and-forget hook for downstream
   // audit/telemetry when new skills are activated at runtime.
+  //
+  // Pass 3 (Spec 23): when ARCEUS_SKILLS_DB_WRITETHROUGH=1, also wire
+  // upsert/usage/EMA callbacks so skills survive restart.
+  const writethrough = isSkillsDbWritethroughEnabled();
   setSkillRegistryDeps({
     onSkillActivated(skill) {
       console.log(
         `[SkillRegistry] Skill activated: ${skill.id} (${skill.name} v${skill.version}) for ${skill.companyId}/${skill.role}`,
       );
     },
+    ...(writethrough
+      ? {
+          onSkillUpserted: dbPersistSkill,
+          onSkillUsageRecorded: dbPersistSkill,
+          onSkillSuccessRateChanged: dbPersistSkill,
+        }
+      : {}),
   });
 
-  console.log("[SkillEvolution] Skill registry activation hook wired (no embedding matcher — LLM classifier in orchestrator)");
+  console.log(
+    `[SkillEvolution] Skill registry activation hook wired (no embedding matcher \u2014 LLM classifier in orchestrator)${writethrough ? "; DB write-through ENABLED" : ""}`,
+  );
 }

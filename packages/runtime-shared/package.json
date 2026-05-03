@@ -1,0 +1,17 @@
+{
+  "name": "@arceus/runtime-shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@arceus/contracts": "file:../contracts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

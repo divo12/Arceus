@@ -10,12 +10,12 @@ type PreviewTargetKind = "browser" | "service";
 type PreviewRuntime = "node" | "python" | "static" | "unknown";
 type ValidationStrategy = "entry-url" | "health-url" | "root-url";
 
-type ReportedPreviewCandidate = {
+interface ReportedPreviewCandidate {
   url: string;
   reportedAt: string;
-};
+}
 
-export type LocalPreviewState = {
+interface LocalPreviewState {
   status: PreviewStatus;
   url: string | null;
   entryUrl: string | null;
@@ -29,7 +29,7 @@ export type LocalPreviewState = {
   port: number;
   lastError: string | null;
   startedAt: string | null;
-};
+}
 
 let previewProcess: ChildProcess | null = null;
 let previewStaticServer: Server | null = null;
@@ -59,7 +59,7 @@ async function exists(path: string) {
   }
 }
 
-type LaunchCommand = {
+interface LaunchCommand {
   command: string;
   args: string[];
   kind: "npm-preview" | "npm-start" | "npm-dev" | "static-http" | "python-uvicorn";
@@ -70,11 +70,11 @@ type LaunchCommand = {
   targetKind: PreviewTargetKind;
   runtime: PreviewRuntime;
   framework: string | null;
-};
+}
 
-type CandidatePreference = {
+interface CandidatePreference {
   preferredTargetPath?: string | null;
-};
+}
 
 const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -92,11 +92,11 @@ const contentTypes: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-type CandidateWorkspace = {
+interface CandidateWorkspace {
   dir: string;
   modifiedAtMs: number;
   depth: number;
-};
+}
 
 const ignoredDirectories = new Set(previewConfig.ignoredDirectories);
 
@@ -106,7 +106,7 @@ function detectNodePreviewProfile(parsed: { dependencies?: Record<string, string
     ...Object.keys(parsed.devDependencies ?? {}),
   ]);
 
-  const browserFrameworks: Array<[string, string]> = [
+  const browserFrameworks: [string, string][] = [
     ["next", "Next.js"],
     ["vite", "Vite"],
     ["react", "React"],
@@ -114,7 +114,7 @@ function detectNodePreviewProfile(parsed: { dependencies?: Record<string, string
     ["svelte", "Svelte"],
     ["astro", "Astro"],
   ];
-  const serviceFrameworks: Array<[string, string]> = [
+  const serviceFrameworks: [string, string][] = [
     ["fastify", "Fastify"],
     ["express", "Express"],
     ["koa", "Koa"],
@@ -280,7 +280,7 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
         devDependencies?: Record<string, string>;
       };
       try {
-        parsed = JSON.parse(raw);
+        parsed = JSON.parse(raw) as typeof parsed;
       } catch {
         // Malformed package.json (e.g. developer wrote comments) — skip this candidate
         continue;
@@ -379,10 +379,6 @@ export function hasReportedPreviewCandidate() {
   return reportedPreviewCandidate !== null;
 }
 
-/** Discard the agent-reported preview URL candidate. */
-export function clearReportedPreviewCandidate() {
-  reportedPreviewCandidate = null;
-}
 
 /** Register an agent-reported preview URL, stopping any existing preview first. */
 export async function registerReportedPreviewUrl(url: string) {
@@ -428,7 +424,7 @@ export async function probePreviewHealth(timeoutMs = 5000): Promise<{
   }
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => { controller.abort(); }, timeoutMs);
     const res = await fetch(url, { method: "GET", signal: controller.signal, headers: { "Accept": "text/html,*/*" } });
     clearTimeout(timer);
 
@@ -476,7 +472,7 @@ async function terminatePreviewProcessTree(childProcess: ChildProcess) {
 
   if (process.platform === "win32") {
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => resolve(), 5000);
+      const timeout = setTimeout(() => { resolve(); }, 5000);
       const killer = spawn("taskkill", ["/PID", String(processId), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
@@ -500,7 +496,7 @@ export async function stopLocalPreview() {
 
   if (previewStaticServer) {
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => resolve(), 3000);
+      const timeout = setTimeout(() => { resolve(); }, 3000);
       previewStaticServer?.close((error) => {
         clearTimeout(timeout);
         resolve();
@@ -524,7 +520,9 @@ export async function stopLocalPreview() {
 }
 
 async function startStaticPreviewServer(rootDir: string) {
-  const server = createServer(async (request, response) => {
+  // Node's createServer expects a sync handler; wrap the async body so
+  // floating-promise lint stays satisfied. Errors land in the inner catch.
+  const server = createServer((request, response) => { void (async () => {
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? previewConfig.publicHost}`);
       const requestPath = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
@@ -545,11 +543,11 @@ async function startStaticPreviewServer(rootDir: string) {
       response.statusCode = 404;
       response.end("Not found");
     }
-  });
+  })(); });
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(previewState.port, previewConfig.host, () => resolve());
+    server.listen(previewState.port, previewConfig.host, () => { resolve(); });
   });
 
   previewStaticServer = server;
@@ -578,7 +576,7 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
   if (launch.runtime === "node" && !existsSync(join(launch.cwd, "node_modules"))) {
     const runner = detectNodeRunner();
     try {
-      execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: 120_000 });
+      execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: previewConfig.installTimeoutMs });
     } catch (err) {
       previewState.status = "error";
       previewState.lastError = `Dependency installation failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -631,7 +629,7 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
   previewProcess.on("exit", (code) => {
     if (previewState.status !== "ready") {
       previewState.status = "error";
-      previewState.lastError = `Preview process exited with code ${code}`;
+      previewState.lastError = `Preview process exited with code ${code ?? "null"}`;
     }
   });
 

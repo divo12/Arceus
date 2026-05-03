@@ -1,12 +1,12 @@
 import { z } from "zod";
-import type { AgentIdentity, AgentBeatContext, SprintReviewState, Task, DefectArea } from "@arceus/contracts";
+import type { AgentIdentity, AgentBeatContext, SprintReviewState, SprintReviewPhase, Task, DefectArea } from "@arceus/contracts";
 import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import {
-  getSnapshot,
-  upsertTask,
   updateSprint,
-} from "../persistence/store.js";
+} from "../persistence/mutations/index.js";
+import { persistTask } from "../persistence/domain-persistence.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import {
   persistRuntimeArtifact,
   listPersistedArtifacts,
@@ -17,7 +17,7 @@ import {
   emitGraphNodeAdded,
   emitGraphBeatStarted,
   emitGraphBeatCompleted,
-} from "../observability/graph-emitter.js";
+} from "../observability/graph-emitter/index.js";
 import {
   structuredCompletion,
   startBeatTokenAccumulator,
@@ -50,12 +50,12 @@ interface QAFinding {
 
 interface QAReport {
   verdict: "pass" | "fail";
-  tasks: Array<{
+  tasks: {
     taskId: string;
     verdict: "pass" | "fail";
     findings: QAFinding[];
-    dodChecklist: Array<{ item: string; status: "pass" | "fail"; evidence: string }>;
-  }>;
+    dodChecklist: { item: string; status: "pass" | "fail"; evidence: string }[];
+  }[];
   testFilesWritten: string[];
   buildStatus: "pass" | "fail" | "skipped";
   testSuiteStatus: "pass" | "fail" | "skipped" | "no_tests";
@@ -94,8 +94,8 @@ function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QARep
       verdict: t.verdict,
       findings: t.findings.map((f) => ({
         taskId: t.taskId,
-        defectArea: f.defect_area as DefectArea,
-        severity: f.severity as Task["priority"],
+        defectArea: f.defect_area,
+        severity: f.severity,
         description: f.description,
         expected: f.expected,
         actual: f.actual,
@@ -119,12 +119,14 @@ function qaSchemaResultToQAReport(result: z.infer<typeof QAReportSchema>): QARep
 const ctoEscalationDecisionSchema = z.object({
   decision: z.enum(["fix", "skip", "abort"]),
   reasoning: z.string(),
-  criticalBugs: z.array(z.string()).optional(),
+  // LLMs frequently emit `null` instead of omitting the field; accept both
+  // so the entire CTO escalation beat doesn't fail zod validation.
+  criticalBugs: z.array(z.string()).nullish(),
 });
 
 // ── Beat return type ────────────────────────────────────────────
 
-type BeatResult = { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number };
+interface BeatResult { summary: string; tokensUsed: number; actionsCount: number; toolCalls: number }
 
 // ── Sprint Review Verification (Spec 21) ────────────────────────
 
@@ -139,13 +141,14 @@ export async function executeSprintReviewVerification(
   ctx: AgentBeatContext,
   beatId: string,
 ): Promise<BeatResult> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — task-engine call sites use canonical view.
+  const snapshot = await buildSnapshotView(ctx.company.id);
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") {
+  if (sprint?.status !== "reviewing") {
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
-  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  const reviewState: SprintReviewState | null = sprint.reviewState ?? null;
   if (!reviewState) {
     return { summary: "No review state found", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
@@ -171,7 +174,7 @@ export async function executeSprintReviewVerification(
   const previewUrl = getLocalPreviewState().validationUrl ?? getLocalPreviewState().entryUrl ?? getLocalPreviewState().url;
 
   if (!previewProbe.reachable) {
-    emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error}) — auto-failing sprint verification`, { beatId });
+    emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error ?? "unknown"}) — auto-failing sprint verification`, { beatId });
   }
 
   const sprintEntryCheck = checkEntryPointImports();
@@ -228,9 +231,9 @@ export async function executeSprintReviewVerification(
     `Preview status: ${previewProbe.reachable ? "REACHABLE" : "UNREACHABLE"}`,
     `Preview URL: ${previewUrl ?? "none"}`,
     previewProbe.reachable
-      ? `HTTP status: ${previewProbe.statusCode}`
+      ? `HTTP status: ${previewProbe.statusCode ?? "?"}`
       : `Error: ${previewProbe.error ?? "unknown"}`,
-    previewProbe.reachable ? `Content length: ${previewProbe.contentLength} bytes` : "",
+    previewProbe.reachable ? `Content length: ${previewProbe.contentLength ?? 0} bytes` : "",
     previewProbe.reachable ? `Has product content: ${previewProbe.hasProductContent}` : "",
     previewProbe.bodySnippet ? `Page text snippet: ${previewProbe.bodySnippet}` : "",
     "",
@@ -275,7 +278,7 @@ export async function executeSprintReviewVerification(
 
     // Emit CYCLE_DIFF line (Fix #5)
     if (output && reviewState.reworkCycleCount > 0) {
-      const diffMatch = output.match(/CYCLE_DIFF:\s*resolved=(\d+)\s+recurring=(\d+)\s+new=(\d+)/i);
+      const diffMatch = /CYCLE_DIFF:\s*resolved=(\d+)\s+recurring=(\d+)\s+new=(\d+)/i.exec(output);
       if (diffMatch) {
         emitEmployeeActivity(
           "tester",
@@ -321,7 +324,7 @@ export async function executeSprintReviewVerification(
       emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} tester verdict: PASS — advancing to final gate`, { beatId });
       emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: PASS`, "Tester verified all tasks pass their Definition of Done", "tester", 1.0);
 
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? { ...s.reviewState, testerVerdict: "pass" as const, phase: "final_gate" as const } : s.reviewState,
       }));
@@ -343,7 +346,7 @@ export async function executeSprintReviewVerification(
 
     } else if (effectiveVerdict === "fail") {
       const failReason = !previewProbe.reachable
-        ? `Preview unreachable: ${previewProbe.error}`
+        ? `Preview unreachable: ${previewProbe.error ?? "unknown"}`
         : !sprintEntryCheck.pass
           ? `Entry-point disconnected: ${sprintEntryCheck.reason}`
           : "Tester QA report verdict: FAIL";
@@ -351,7 +354,7 @@ export async function executeSprintReviewVerification(
       emitGraphDecision(sprintId, null, "cto_review", `Sprint ${sprint.number} QA: FAIL`, failReason, "tester", 0);
 
       const updatedReviewState: SprintReviewState = {
-        ...(reviewState as SprintReviewState),
+        ...(reviewState),
         testerVerdict: "fail",
         phase: "rework",
         reworkCycleCount: reviewState.reworkCycleCount + 1,
@@ -362,7 +365,7 @@ export async function executeSprintReviewVerification(
 
       if (!previewProbe.reachable && (!qaReport || qaReport.tasks.length === 0)) {
         const bugTask = createWorkflowTask(
-          getSnapshot(), "bug_fix", "developer",
+          snapshot, "bug_fix", "developer",
           "Fix preview — app unreachable",
           `The product preview is not reachable. Error: ${previewProbe.error ?? "unknown"}. The app must start and respond to HTTP requests before the sprint can pass.`,
           `Preview URL ${previewUrl ?? "(none)"} returns error: ${previewProbe.error ?? "no response"}.`,
@@ -370,7 +373,7 @@ export async function executeSprintReviewVerification(
           ["Preview URL responds with HTTP 200", "App renders without connection errors"],
           "critical", "planned", sprintId,
         );
-        upsertTask(bugTask);
+        await persistTask(bugTask);
         newBugTaskIds.push(bugTask.id);
         rolesWithBugs.add("developer");
         emitGraphNodeAdded(sprintId, bugTask);
@@ -404,7 +407,7 @@ export async function executeSprintReviewVerification(
           : "";
 
         const entryBug = createWorkflowTask(
-          getSnapshot(), "bug_fix", "developer",
+          snapshot, "bug_fix", "developer",
           "Wire entry file to product modules",
           `Entry file ${sprintEntryCheck.entryFile ?? "(not found)"} does not import this sprint's components. ${sprintEntryCheck.reason}${orphanList} Components exist on disk but are never rendered.${prescriptionSection}`,
           "Entry file is disconnected from the product modules this sprint produced.",
@@ -416,7 +419,7 @@ export async function executeSprintReviewVerification(
           ],
           "critical", "planned", sprintId,
         );
-        upsertTask(entryBug);
+        await persistTask(entryBug);
         newBugTaskIds.push(entryBug.id);
         rolesWithBugs.add("developer");
         emitGraphNodeAdded(sprintId, entryBug);
@@ -428,7 +431,7 @@ export async function executeSprintReviewVerification(
       for (const taskReport of taskReports) {
         if (taskReport.verdict !== "fail") continue;
         const hiredRoles = new Set(
-          getSnapshot().agents.map((a) => a.role as AgentIdentity["role"]),
+          snapshot.agents.map((a) => a.role),
         );
         const actionableFindings = taskReport.findings
           .filter((f) => f.severity === "critical" || f.severity === "high")
@@ -444,13 +447,17 @@ export async function executeSprintReviewVerification(
             hiredRoles,
           });
           const bugTask = createWorkflowTask(
-            getSnapshot(), bugFields.kind, bugFields.assignedRole,
+            snapshot, bugFields.kind, bugFields.assignedRole,
             bugFields.title, bugFields.description, bugFields.problemStatement,
             bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
             bugFields.sprintId,
           );
           bugTask.parentTaskId = bugFields.parentTaskId;
-          upsertTask(bugTask);
+          // persistTask wraps the upsert in try/catch + 23503 backfill so
+          // an unresolvable parent_task_id FK only logs a `[persist:tasks]
+          // skip` rather than producing an unhandled rejection that the
+          // top-level handler keeps the process alive for.
+          await persistTask(bugTask);
           newBugTaskIds.push(bugTask.id);
           rolesWithBugs.add(bugFields.assignedRole);
           emitGraphNodeAdded(sprintId, bugTask);
@@ -471,7 +478,7 @@ export async function executeSprintReviewVerification(
           "tester", 0);
       }
 
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: updatedReviewState,
       }));
@@ -510,7 +517,7 @@ export async function executeSprintReviewVerification(
         emitReactive("cto", "escalation_received");
       }
 
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? {
           ...s.reviewState,
@@ -567,18 +574,19 @@ export async function executeSprintFinalGate(
   _ctx: AgentBeatContext,
   beatId: string,
 ): Promise<BeatResult> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — task-engine call sites use canonical view.
+  const snapshot = await buildSnapshotView(_ctx.company.id);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
-  if (!sprint || sprint.status !== "reviewing") {
+  if (sprint?.status !== "reviewing") {
     return { summary: "Sprint not in reviewing state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
-  const reviewState: SprintReviewState | null = (sprint as any).reviewState ?? null;
+  const reviewState: SprintReviewState | null = sprint.reviewState ?? null;
   if (!reviewState) {
     return { summary: "No review state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
@@ -598,7 +606,7 @@ export async function executeSprintFinalGate(
   if (gateResult.passed) {
     emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} final gate PASSED — completing sprint`, { beatId, detail: { gateResult } });
 
-    updateSprint(sprintId, (s) => ({
+    await updateSprint(sprintId, (s) => ({
       ...s,
       reviewState: s.reviewState ? { ...s.reviewState, gateResults: updatedGateResults, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
     }));
@@ -616,12 +624,12 @@ export async function executeSprintFinalGate(
     const newBugIds = [...reviewState.bugTaskIds];
     if (bugFields) {
       const bugTask = createWorkflowTask(
-        getSnapshot(), bugFields.kind, bugFields.assignedRole,
+        snapshot, bugFields.kind, bugFields.assignedRole,
         bugFields.title, bugFields.description, bugFields.problemStatement,
         bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
         bugFields.sprintId,
       );
-      upsertTask(bugTask);
+      await persistTask(bugTask);
       newBugIds.push(bugTask.id);
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
@@ -629,14 +637,14 @@ export async function executeSprintFinalGate(
     const newReworkCount = reviewState.reworkCycleCount + 1;
     const escalate = newReworkCount >= reviewState.maxReworkCycles;
 
-    updateSprint(sprintId, (s) => ({
+    await updateSprint(sprintId, (s) => ({
       ...s,
       reviewState: s.reviewState ? {
         ...s.reviewState,
         gateResults: updatedGateResults,
         bugTaskIds: newBugIds,
         reworkCycleCount: newReworkCount,
-        phase: (escalate ? "escalated" : "rework") as any,
+        phase: (escalate ? "escalated" : "rework") satisfies SprintReviewPhase,
         escalatedToCto: escalate || s.reviewState.escalatedToCto,
         escalatedAt: escalate && !s.reviewState.escalatedAt ? nowIso() : s.reviewState.escalatedAt,
       } : s.reviewState,
@@ -661,7 +669,8 @@ export async function executeRetestAfterRework(
   _ctx: AgentBeatContext,
   beatId: string,
 ): Promise<BeatResult> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — canonical view replaces in-memory snapshot.
+  const snapshot = await buildSnapshotView(_ctx.company.id);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
@@ -669,7 +678,7 @@ export async function executeRetestAfterRework(
 
   emitEmployeeActivity("tester", "transition", `Bug fixes resolved — advancing to tester re-verification`, { beatId });
 
-  updateSprint(sprintId, (s) => ({
+  await updateSprint(sprintId, (s) => ({
     ...s,
     reviewState: s.reviewState ? {
       ...s.reviewState,
@@ -693,7 +702,8 @@ export async function executeCtoBeatEscalationReview(
   beatId: string,
 ): Promise<BeatResult> {
   startBeatTokenAccumulator(beatId);
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4.2 — canonical view replaces in-memory snapshot.
+  const snapshot = await buildSnapshotView(_ctx.company.id);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
     return { summary: "No active sprint", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
@@ -701,7 +711,7 @@ export async function executeCtoBeatEscalationReview(
 
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   const reviewState = sprint?.reviewState;
-  if (!sprint || !reviewState || !reviewState.escalatedToCto) {
+  if (!sprint || !reviewState?.escalatedToCto) {
     return { summary: "No escalation pending", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
@@ -755,7 +765,7 @@ export async function executeCtoBeatEscalationReview(
       beatId, detail: { decision, reasoning: result.reasoning },
     });
 
-    updateSprint(sprintId, (s) => ({
+    await updateSprint(sprintId, (s) => ({
       ...s,
       reviewState: s.reviewState ? {
         ...s.reviewState,
@@ -764,7 +774,7 @@ export async function executeCtoBeatEscalationReview(
     }));
 
     if (decision === "fix") {
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? {
           ...s.reviewState,
@@ -779,7 +789,7 @@ export async function executeCtoBeatEscalationReview(
       }
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO granted extra rework cycle — Sprint ${sprint.number} back to rework`, { beatId });
     } else if (decision === "skip") {
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         reviewState: s.reviewState ? {
           ...s.reviewState,
@@ -790,7 +800,7 @@ export async function executeCtoBeatEscalationReview(
       await finalizeSprintCompletion(sprintId);
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO shipped Sprint ${sprint.number} with known defects`, { beatId });
     } else if (decision === "abort") {
-      updateSprint(sprintId, (s) => ({
+      await updateSprint(sprintId, (s) => ({
         ...s,
         status: "completed" as const,
         completedAt: new Date().toISOString(),

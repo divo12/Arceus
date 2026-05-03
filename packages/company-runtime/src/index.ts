@@ -3,7 +3,13 @@ export { HeartbeatEngine } from "./heartbeat";
 export type { HeartbeatConfig, BeatRequest, BeatExecutor, BeatDependencies } from "./heartbeat";
 export { runChecklist } from "./heartbeat-checklist";
 export type { ChecklistResult } from "./heartbeat-checklist";
-export { ROLE_SOULS, MANDATORY_ROLES, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
+export {
+  loadChecklistConfig,
+  DEFAULT_CHECKLIST_CONFIG,
+} from "./checklist-config";
+export type { ChecklistConfig } from "./checklist-config";
+export { ROLE_SOULS, MANDATORY_ROLES, ROLE_DISPLAY_NAMES, ROLE_CAPABILITIES, ROLE_DEPLOYMENT_MODEL, ROLE_INITIAL_AGENT_STATUS, assertRoleHierarchy, canManageRole, getRoleSoul } from "./roles";
+export type { RoleRuntimeCapabilities } from "./roles";
 export { getAgentSkills, getFullAgentPrompt, listAvailableAgents } from "./agent-skills";
 export { emitBeatEvent, onBeatEvent, getBeatEventSubscriberCount } from "./beat-event-bus";
 export type { BeatEvent, BeatEventHandler } from "./beat-event-bus";
@@ -32,6 +38,7 @@ export type { DeniedTool, FilterResult } from "./governance-gateway";
 // Spec 14: Skill Registry
 export {
   registerSkill,
+  hydrateSkill,
   updateSkill,
   deprecateSkill,
   getSkillById,
@@ -48,6 +55,9 @@ export {
   getUnusedSkills,
   getUnderperformingSkills,
   seedExistingSkills,
+  seedExistingSkillsDetailed,
+  type SeedSkillsOptions,
+  type SeedSkillsResult,
   isSeeded as isSkillRegistrySeeded,
   resetRegistry as resetSkillRegistry,
   getRegistrySize,
@@ -67,6 +77,7 @@ export {
   processTaskOutcome,
   setSkillMutatorDeps,
   hasSkillMutatorDeps,
+  getSkillMutatorDeps,
 } from "./skill-mutator";
 export type { SkillMutatorDeps, TaskOutcomeContext } from "./skill-mutator";
 export type { SkillRegistryDeps } from "./skill-registry";
@@ -76,6 +87,7 @@ export {
   runATAPipeline,
   setSkillTesterDeps,
   hasSkillTesterDeps,
+  getSkillTesterDeps,
 } from "./skill-tester";
 export type { SkillTesterDeps } from "./skill-tester";
 
@@ -89,6 +101,7 @@ export {
   applyEma,
   setPatternLearnerDeps,
   hasPatternLearnerDeps,
+  getPatternLearnerDeps,
   getPatternById,
   getPatternsForCompany,
   getPatternCount,

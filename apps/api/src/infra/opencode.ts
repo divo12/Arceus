@@ -1,26 +1,89 @@
 import { resolve, dirname } from "node:path";
 import { readFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, writeFileSync } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
+import { platform } from "node:os";
 import { createServer } from "node:net";
+import { Agent as UndiciAgent, setGlobalDispatcher, getGlobalDispatcher } from "undici";
 import { createOpencodeClient, type Session } from "@opencode-ai/sdk";
-import { ensureDeployment, runtimeConfig } from "../config/index.js";
-import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 
-type OpencodeInstance = {
+// Beat prompts can run for the full HARD_CAP_MS (15 min) — e.g. a dev beat
+// scaffolding a Vite app and running `npm install`. Node's global fetch is
+// backed by undici whose default headers/body idle timeout is 5 min, which
+// produces a `TypeError: fetch failed` mid-beat and orphans the claim.
+// Replace the global dispatcher once with timeouts well above HARD_CAP_MS.
+const OPENCODE_FETCH_TIMEOUT_MS = 30 * 60_000; // 30 min
+let __opencodeDispatcherInstalled = false;
+function ensureLongFetchTimeouts() {
+  if (__opencodeDispatcherInstalled) return;
+  __opencodeDispatcherInstalled = true;
+  const existing = getGlobalDispatcher();
+  setGlobalDispatcher(
+    new UndiciAgent({
+      headersTimeout: OPENCODE_FETCH_TIMEOUT_MS,
+      bodyTimeout: OPENCODE_FETCH_TIMEOUT_MS,
+      keepAliveTimeout: 60_000,
+      keepAliveMaxTimeout: 10 * 60_000,
+    }),
+  );
+  // Best effort cleanup on shutdown. The existing dispatcher is typed as
+  // `unknown` from undici's symbol indexing — narrow to a `close`-having
+  // object before calling.
+  process.once("beforeExit", () => {
+    try {
+      const closeable = existing as { close?: () => void };
+      closeable.close?.();
+    } catch {
+      // silent: process is exiting, no observer left to log to.
+    }
+  });
+}
+import { ensureDeployment, runtimeConfig } from "../config/index.js";
+import { serverConfig } from "../config/index.js";
+import { resilientCall, breakers, isRetryableError } from "./resilience.js";
+import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../../.opencode/agent/config.js";
+import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
+
+interface OpencodeInstance {
   server: { url: string; close(): void };
   client: ReturnType<typeof createOpencodeClient>;
-};
+}
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
-let ceoSessionPromise: Promise<Session> | null = null;
-// Project root — where opencode.json lives (used to load agent definitions)
-const projectRoot = process.cwd();
+let ceoChatSessionPromise: Promise<Session> | null = null;
+
+/**
+ * Resolve the monorepo root.  process.cwd() varies by runner:
+ *   • `npm run dev` inside apps/api → cwd = apps/api
+ *   • Docker                        → cwd = /app (monorepo root)
+ *   • repo-level scripts            → cwd = monorepo root
+ *
+ * We walk up from __dirname (apps/api/src/infra) until we find the root
+ * opencode.json, which only exists at the monorepo root.
+ */
+function findMonorepoRoot(): string {
+  // __dirname equivalent for ESM: resolve from the import.meta-derived path,
+  // or fall back to a known relative path from this file's location.
+  let dir = resolve(import.meta.dirname ?? dirname(new URL(import.meta.url).pathname));
+  // On Windows, URL pathname may start with /C:/… — strip leading slash
+  if (process.platform === "win32" && dir.startsWith("/")) dir = dir.slice(1);
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(resolve(dir, "opencode.json")) && existsSync(resolve(dir, "packages"))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Fallback: assume process.cwd() is the monorepo root (Docker case)
+  return process.cwd();
+}
+
+const projectRoot = findMonorepoRoot();
+console.log(`[OpenCode] Monorepo root resolved: ${projectRoot} (cwd=${process.cwd()})`);
 // Product workspace — where agents write code. OpenCode spawns with this as cwd
 // so that all file tools (write, edit, bash) resolve relative to it.
-const repoRoot = resolve(projectRoot, "..", "..");
-const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !projectRoot.startsWith("/app")
-  ? resolve(repoRoot, "workspace")
-  : resolve(projectRoot, "workspace");
+export const productWorkspace = resolve(projectRoot, "workspace");
 
 /**
  * Load the opencode.json agent definitions from project root and merge
@@ -28,10 +91,10 @@ const productWorkspace = existsSync(resolve(repoRoot, "workspace")) || !projectR
  * OpenCode can run with cwd = productWorkspace while keeping agent defs.
  */
 function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, unknown> {
-  const configPath = resolve(repoRoot, "opencode.json");
+  const configPath = resolve(projectRoot, "opencode.json");
   try {
     const raw = readFileSync(configPath, "utf8");
-    const base = JSON.parse(raw);
+    const base = JSON.parse(raw) as Record<string, unknown>;
     return { ...base, ...overrides };
   } catch {
     // If opencode.json is missing, pass overrides only (OpenCode falls back to defaults)
@@ -44,8 +107,48 @@ function loadOpencodeConfig(overrides: Record<string, unknown>): Record<string, 
  * the OpenCode server (which runs with cwd = productWorkspace) can discover
  * the custom agent definitions. OPENCODE_CONFIG_CONTENT is not supported by
  * the CLI, so the config must live at its cwd.
+ *
+ * Always injects the MCP wiring + plugin reference so agents can reach the
+ * Arceus control-plane tools regardless of which call site triggers the sync.
  */
 function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
+  // Ensure MCP wiring is always present
+  const arceusApi = `http://127.0.0.1:${serverConfig.port}`;
+  const arceusToken = process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "arceus-dev-token";
+  // Use absolute path because OpenCode runs with cwd=productWorkspace which
+  // differs from the repo root where node_modules lives.
+  const mcpTransport = resolve(projectRoot, "node_modules", "@arceus", "mcp", "src", "transport-stdio.ts");
+  // Use "node --import tsx" instead of "npx tsx" because OpenCode spawns MCP
+  // servers via child_process.spawn() without shell:true — on Windows, npx is
+  // a .cmd shim that spawn() cannot resolve without a shell.
+  mergedConfig.mcp = {
+    arceus: {
+      type: "local",
+      command: ["node", "--import", "tsx", mcpTransport],
+      environment: { ARCEUS_API: arceusApi, ARCEUS_TOKEN: arceusToken },
+      enabled: true,
+    },
+  };
+  mergedConfig.plugin = ["./.opencode/plugin/arceus.ts"];
+
+  // Per-agent MCP tool scoping (OpenCode docs pattern):
+  // Globally deny arceus MCP tools, then re-enable per agent based on ROLE_CONFIGS.
+  // OpenCode names MCP tools as "<server>_<toolname>", so arceus tools become "arceus_*".
+  mergedConfig.tools = { "arceus_*": false };
+
+  // Inject per-agent tools scoping into agent definitions
+  const agentConfig = (mergedConfig.agent ?? {}) as Record<string, Record<string, unknown>>;
+  for (const role of ROLES) {
+    if (agentConfig[role]) {
+      const allowedMcp = getAllowedArceusTools(role);
+      if (allowedMcp.length > 0) {
+        // Enable all arceus MCP tools for this role (plugin governs per-tool)
+        agentConfig[role].tools = { "arceus_*": true };
+      }
+    }
+  }
+  mergedConfig.agent = agentConfig;
+
   // Write resolved config
   writeFileSync(
     resolve(productWorkspace, "opencode.json"),
@@ -54,7 +157,7 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   );
 
   // Copy .opencode/prompts/ so {file:...} references resolve
-  const srcPrompts = resolve(projectRoot, "..", "..", ".opencode", "prompts");
+  const srcPrompts = resolve(projectRoot, ".opencode", "prompts");
   const dstPrompts = resolve(productWorkspace, ".opencode", "prompts");
   if (existsSync(srcPrompts)) {
     mkdirSync(dstPrompts, { recursive: true });
@@ -77,7 +180,7 @@ function ensureAzureRuntimeEnvironment() {
 /** Probe whether an OpenCode server is already listening at the given URL. */
 async function detectExistingOpencodeServer(url: string) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
+  const timeout = setTimeout(() => { controller.abort(); }, 2000);
 
   try {
     const response = await fetch(`${url}/event`, {
@@ -202,16 +305,49 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
   // Sync config + prompt files into workspace so OpenCode picks them up
   syncOpencodeConfigToWorkspace(mergedConfig);
 
+  // Audit C5 (F-063): default to shell:false so node spawns the binary
+  // directly without /bin/sh -c interpolation. Args are already in argv
+  // form so no shell parsing is needed. This is defense in depth — today
+  // hostname/port are admin-controlled (env), not user-controlled, but the
+  // shell:true flag is a footgun for any future change that adds a flag
+  // from a user-facing input. Argv mode makes the spawn injection-proof.
+  //
+  // Windows still needs `shell: true` because `opencode` (and `npm`/`npx`)
+  // arrive as `.cmd` shims that node's spawn() can't resolve without a
+  // shell. Arceus is developed and deployed on POSIX; if Windows becomes
+  // a target, switch to cross-spawn or pre-resolve via `which`.
+  const useShell = platform() === "win32";
   const proc = spawn("opencode", args, {
-    shell: true,
+    shell: useShell,
     cwd: productWorkspace,
     env: {
       ...process.env,
+      // Custom tools + plugin read these from the OpenCode process env
+      ARCEUS_API: `http://127.0.0.1:${serverConfig.port}`,
+      ARCEUS_TOKEN: process.env.ARCEUS_INTERNAL_TOKEN ?? process.env.ARCEUS_TOKEN ?? "arceus-dev-token",
     }
   });
 
   return new Promise((resolve, reject) => {
+    // Audit C7 (F-066): SIGTERM the child on timeout so we don't leak an
+    // orphan `opencode serve` process that holds the port. Without this,
+    // a slow boot leaves a zombie that the next getOpencode() call
+    // detects via detectExistingOpencodeServer and reuses indefinitely.
     const timeout = setTimeout(() => {
+      try {
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill("SIGTERM");
+          // Escalate to SIGKILL after 5s grace period if SIGTERM was ignored.
+          setTimeout(() => {
+            if (proc.exitCode === null && proc.signalCode === null) {
+              proc.kill("SIGKILL");
+            }
+          }, 5000).unref();
+        }
+      } catch {
+        // silent: process may have died between exitCode check and kill;
+        // either way it's gone — fall through to reject.
+      }
       reject(new Error("Timeout waiting for OpenCode server to start after 45000ms"));
     }, 45000);
 
@@ -222,7 +358,7 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
       const lines = output.split("\n");
       for (const line of lines) {
         if (line.startsWith("opencode server listening")) {
-          const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
+          const match = /on\s+(https?:\/\/[^\s]+)/.exec(line);
           if (match) {
             clearTimeout(timeout);
             resolve({ url: match[1], proc });
@@ -238,11 +374,19 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
 
     proc.on("exit", (code) => {
       clearTimeout(timeout);
-      reject(new Error(`OpenCode server exited with code ${code}\n${output}`));
+      reject(new Error(`OpenCode server exited with code ${code ?? "null"}\n${output}`));
     });
 
     proc.on("error", (error) => {
       clearTimeout(timeout);
+      // SIGTERM the child on spawn error too — same orphan-prevention.
+      try {
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill("SIGTERM");
+        }
+      } catch {
+        // silent: see above.
+      }
       reject(error);
     });
   });
@@ -251,12 +395,14 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
 /** Get (or lazily create) the singleton OpenCode server instance. */
 export async function getOpencode() {
   ensureAzureRuntimeEnvironment();
+  ensureLongFetchTimeouts();
 
   if (!opencodePromise) {
-    // Always sync config so OpenCode's cwd has agent defs
-    syncOpencodeConfigToWorkspace(loadOpencodeConfig({ share: "disabled" }));
-
     const attempt = (async () => {
+      // Always write full config (plugin, agent defs, opencode.json) so
+      // a freshly-spawned server picks up the latest plugin and agent files.
+      await writeSharedOpencodeConfig();
+
       const existingUrl = `http://${runtimeConfig.opencodeHost}:${runtimeConfig.opencodePort}`;
 
       if (await detectExistingOpencodeServer(existingUrl)) {
@@ -289,11 +435,50 @@ export async function getOpencode() {
 
 /**
  * Invalidate the cached OpenCode instance so the next `getOpencode()` call
- * will reconnect to an existing server or launch a new one.  Call this when
- * a "fetch failed" or similar network error indicates the server died.
+ * will reconnect to an existing server or launch a new one.  Also kills
+ * the spawned server process so it picks up fresh plugin + agent files.
  */
-export function resetOpencodeConnection() {
+export async function resetOpencodeConnection() {
+  if (opencodePromise) {
+    try {
+      const instance = await opencodePromise;
+      instance.server.close();
+    } catch {
+      // Instance never resolved — nothing to kill
+    }
+  }
   opencodePromise = null;
+}
+
+/** Clear the cached CEO chat session so the next chat turn creates a fresh one. */
+export function resetCeoChatSession() {
+  ceoChatSessionPromise = null;
+}
+
+/**
+ * Write all boot-time OpenCode configuration into the product workspace.
+ * Idempotent — safe to call on every startup. Must complete BEFORE the
+ * OpenCode server is spawned so it picks up plugin, agent defs, and MCP wiring.
+ *
+ * Phase 6.5 — Package E.
+ */
+async function writeSharedOpencodeConfig(): Promise<void> {
+  // 1. Copy plugin into productWorkspace
+  const pluginSrc = resolve(projectRoot, ".opencode", "plugin", "arceus.ts");
+  const pluginDst = resolve(productWorkspace, ".opencode", "plugin", "arceus.ts");
+  await fsPromises.mkdir(dirname(pluginDst), { recursive: true });
+  if (existsSync(pluginSrc)) {
+    await fsPromises.copyFile(pluginSrc, pluginDst);
+  }
+
+  // 2. Write all agent files
+  for (const role of ROLES) {
+    await writeBeatAgent(role, productWorkspace);
+  }
+
+  // 3. Sync merged config (agents + MCP wiring + plugin) into workspace.
+  //    syncOpencodeConfigToWorkspace injects MCP + plugin automatically.
+  syncOpencodeConfigToWorkspace(loadOpencodeConfig({ share: "disabled" }));
 }
 
 /**
@@ -303,6 +488,8 @@ export function resetOpencodeConnection() {
  */
 export async function warmUpOpencode(): Promise<boolean> {
   try {
+    console.log("[OpenCode] Writing shared config (plugin, agents, opencode.json)…");
+    await writeSharedOpencodeConfig();
     console.log("[OpenCode] Pre-warming server (this may take 30-45s on first run)…");
     const instance = await getOpencode();
     console.log(`[OpenCode] Warm — server ready at ${instance.server.url}`);
@@ -359,39 +546,48 @@ export async function openOpencodeEventStream() {
   );
 }
 
-/** Get (or lazily create) the singleton CEO session on OpenCode. */
-export async function getCeoSession() {
-  if (!ceoSessionPromise) {
+/**
+ * Get (or lazily create) the singleton CEO **chat** session on OpenCode.
+ *
+ * Spec 35 — this session is owned exclusively by the user-facing chat
+ * surface (`apps/api/src/agents/chat.ts`). The CEO heartbeat path uses
+ * `ensureAgentSession("ceo")` (per-role persistent session in
+ * `agentSessions`) which is physically separate, so chat and beats no
+ * longer collide — the legacy `isCeoStreaming()` skip-guard was removed
+ * once these were named distinctly.
+ */
+export async function getCeoChatSession() {
+  if (!ceoChatSessionPromise) {
     const attempt = (async () => {
       const opencode = await getOpencode();
       ensureDeployment("ceoDeployment");
 
       const sessionResponse = await opencode.client.session.create({
-        body: { title: "Arceus CEO" }
+        body: { title: "Arceus CEO chat" }
       });
 
       if (!sessionResponse.data) {
-        throw new Error("OpenCode did not return a CEO session.");
+        throw new Error("OpenCode did not return a CEO chat session.");
       }
 
       return sessionResponse.data;
     })();
 
-    ceoSessionPromise = attempt;
+    ceoChatSessionPromise = attempt;
 
     attempt.catch(() => {
-      if (ceoSessionPromise === attempt) {
-        ceoSessionPromise = null;
+      if (ceoChatSessionPromise === attempt) {
+        ceoChatSessionPromise = null;
       }
     });
   }
 
-  return ceoSessionPromise;
+  return ceoChatSessionPromise;
 }
 
 /**
  * Create an ephemeral session for a single beat execution.
- * Unlike getCeoSession(), this creates a fresh session each time
+ * Unlike getCeoChatSession(), this creates a fresh session each time
  * to avoid context bleed across beats (Spec 12 Phase 4).
  */
 export async function createBeatSession(role: string, beatId: string): Promise<Session> {

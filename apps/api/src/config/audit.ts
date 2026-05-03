@@ -3,10 +3,20 @@
  * Reads from environment variables with JSON-file defaults.
  */
 import { readOptionalEnv, readNumberEnv } from "./env";
-import { createRequire } from "node:module";
+import defaultsRaw from "./audit.json" with { type: "json" };
 
-const require = createRequire(import.meta.url);
-const defaults = require("./audit.json");
+interface AuditDefaults {
+  memoryBufferSize: number;
+  dbFlushIntervalMs: number;
+  dbFlushBatchSize: number;
+  dbEnabled: boolean;
+  sseKeepAliveMs: number;
+  logViewerEnabled: boolean;
+  logViewerMaxEvents: number;
+  severityFilter: "debug" | "info" | "warn" | "error";
+  categories: string[];
+}
+const defaults = defaultsRaw as AuditDefaults;
 
 export const auditConfig = {
   /** Max events to keep in the in-memory ring buffer. */
@@ -34,5 +44,5 @@ export const auditConfig = {
   severityFilter: readOptionalEnv("ARCEUS_AUDIT_SEVERITY_FILTER", defaults.severityFilter) as "debug" | "info" | "warn" | "error",
 
   /** Which categories to record. Empty = all. */
-  categories: defaults.categories as string[],
+  categories: defaults.categories,
 };

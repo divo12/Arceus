@@ -38,7 +38,7 @@ const DEFECT_ROUTE: Record<DefectArea, AgentIdentity["role"]> = {
 };
 
 /** Map a defect area to the role best suited to fix it. */
-export function routeDefect(area: DefectArea): AgentIdentity["role"] {
+function routeDefect(area: DefectArea): AgentIdentity["role"] {
   return DEFECT_ROUTE[area] ?? "developer";
 }
 
@@ -56,7 +56,7 @@ const DEFECT_FALLBACK: Partial<Record<AgentIdentity["role"], AgentIdentity["role
  * Falls back through DEFECT_FALLBACK until it finds a hired role.
  * Last-resort is "developer" — every company has one.
  */
-export function resolveDefectRole(
+function resolveDefectRole(
   area: DefectArea,
   hiredRoles: Set<AgentIdentity["role"]>,
 ): AgentIdentity["role"] {
@@ -91,7 +91,7 @@ export function createReviewState(maxReworkCycles = 3): SprintReviewState {
 
 // ── Tester QA report parsing ────────────────────────────────
 
-export interface QAFinding {
+interface QAFinding {
   taskId: string;
   defectArea: DefectArea;
   severity: Task["priority"];
@@ -102,62 +102,77 @@ export interface QAFinding {
   fixSuggestion: string;
 }
 
-export interface QAReport {
+interface QAReport {
   verdict: "pass" | "fail";
-  tasks: Array<{
+  tasks: {
     taskId: string;
     verdict: "pass" | "fail";
     findings: QAFinding[];
-    dodChecklist: Array<{ item: string; status: "pass" | "fail"; evidence: string }>;
-  }>;
+    dodChecklist: { item: string; status: "pass" | "fail"; evidence: string }[];
+  }[];
   testFilesWritten: string[];
   buildStatus: "pass" | "fail" | "skipped";
   testSuiteStatus: "pass" | "fail" | "skipped" | "no_tests";
 }
 
-/** Try to extract a structured QA report from tester LLM output. */
-export function parseQAReport(raw: string): QAReport | null {
-  // Look for JSON block in the tester output
-  const jsonMatch = raw.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
-  if (!jsonMatch) return null;
-
-  try {
-    const parsed = JSON.parse(jsonMatch[0]);
-    // Minimal validation
-    if (!parsed.verdict || !Array.isArray(parsed.tasks)) return null;
-    return {
-      verdict: parsed.verdict === "pass" ? "pass" : "fail",
-      tasks: (parsed.tasks ?? []).map((t: any) => ({
-        taskId: t.taskId ?? t.task_id ?? "",
-        verdict: t.verdict === "pass" ? "pass" : "fail",
-        findings: (t.findings ?? []).map((f: any) => ({
-          taskId: t.taskId ?? t.task_id ?? "",
-          defectArea: f.defect_area ?? f.defectArea ?? "logic_error",
-          severity: f.severity ?? "high",
-          description: f.description ?? "",
-          expected: f.expected ?? "",
-          actual: f.actual ?? "",
-          file: f.file ?? "",
-          fixSuggestion: f.fix_suggestion ?? f.fixSuggestion ?? "",
-        })),
-        dodChecklist: (t.dod_checklist ?? t.dodChecklist ?? []).map((c: any) => ({
-          item: c.item ?? "",
-          status: c.status === "pass" ? "pass" : "fail",
-          evidence: c.evidence ?? "",
-        })),
-      })),
-      testFilesWritten: parsed.test_files_written ?? parsed.testFilesWritten ?? [],
-      buildStatus: parsed.build_status ?? parsed.buildStatus ?? "skipped",
-      testSuiteStatus: parsed.test_suite_status ?? parsed.testSuiteStatus ?? "skipped",
-    };
-  } catch {
-    return null;
-  }
+// ── Defensive types for LLM-produced QA report JSON ─────────────
+//
+// The tester agent emits JSON that may use camelCase OR snake_case keys
+// depending on which LLM family produced the output. These interfaces
+// accept BOTH spellings so the mapper below can coalesce without `any`.
+// Unknown fields are tolerated — we only read what we need.
+interface RawQAFinding {
+  defect_area?: unknown;
+  defectArea?: unknown;
+  severity?: unknown;
+  description?: unknown;
+  expected?: unknown;
+  actual?: unknown;
+  file?: unknown;
+  fix_suggestion?: unknown;
+  fixSuggestion?: unknown;
 }
+interface RawQADodItem {
+  item?: unknown;
+  status?: unknown;
+  evidence?: unknown;
+}
+interface RawQATask {
+  taskId?: unknown;
+  task_id?: unknown;
+  verdict?: unknown;
+  findings?: unknown;
+  dod_checklist?: unknown;
+  dodChecklist?: unknown;
+}
+interface RawQAReport {
+  verdict?: unknown;
+  tasks?: unknown;
+  test_files_written?: unknown;
+  testFilesWritten?: unknown;
+  build_status?: unknown;
+  buildStatus?: unknown;
+  test_suite_status?: unknown;
+  testSuiteStatus?: unknown;
+}
+
+const asString = (v: unknown, fallback = ""): string =>
+  typeof v === "string" ? v : fallback;
+
+const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+const asPassFail = (v: unknown): "pass" | "fail" =>
+  v === "pass" ? "pass" : "fail";
+
+const asBuildStatus = (v: unknown): "pass" | "fail" | "skipped" =>
+  v === "pass" || v === "fail" ? v : "skipped";
+
+const asTestSuiteStatus = (v: unknown): "pass" | "fail" | "skipped" | "no_tests" =>
+  v === "pass" || v === "fail" || v === "no_tests" ? v : "skipped";
 
 // ── Bug-fix task builder ────────────────────────────────────
 
-export interface BugFixTaskInput {
+interface BugFixTaskInput {
   finding: QAFinding;
   sprintId: string;
   parentTaskId: string;
@@ -255,25 +270,13 @@ export function buildGateFailureBugFields(
 /**
  * Check if all bug_fix tasks in the sprint are terminal (completed/cancelled/failed).
  */
-export function allBugFixesResolved(tasks: Task[], bugTaskIds: string[]): boolean {
+function allBugFixesResolved(tasks: Task[], bugTaskIds: string[]): boolean {
   if (bugTaskIds.length === 0) return true;
   return bugTaskIds.every((id) => {
     const task = tasks.find((t) => t.id === id);
     if (!task) return true; // missing task counts as resolved
     return ["completed", "cancelled", "failed"].includes(task.status);
   });
-}
-
-/**
- * Determine if the review should advance from rework → tester_verification.
- * True when all bug_fix tasks are resolved.
- */
-export function shouldRetestAfterRework(
-  reviewState: SprintReviewState,
-  tasks: Task[],
-): boolean {
-  if (reviewState.phase !== "rework") return false;
-  return allBugFixesResolved(tasks, reviewState.bugTaskIds);
 }
 
 /**

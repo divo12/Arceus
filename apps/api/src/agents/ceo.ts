@@ -12,7 +12,7 @@ const coreStrategyRoles = ["ceo", "cto", "pm", "developer", "tester", "skills_le
 type CoreStrategyRole = (typeof coreStrategyRoles)[number];
 const ceoMeetingTypeSchema = z.enum(["ad_hoc", "sync", "escalation"]);
 /** Valid CEO conversation stages. */
-export const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
+const ceoStageSchema = z.enum(["welcome", "idea_refinement", "team_design", "kickoff", "execution", "between_sprints"]);
 
 const ceoTaskDeltaSchema = z.object({
   action: z.enum(["create", "reprioritize", "reassign", "cancel"]),
@@ -47,8 +47,14 @@ const ceoMeetingIntentSchema = z.object({
   }
 });
 
+// Roles arrive here already parsed against `strategyRoleSchema` (see the
+// outer object schema below), so use the inferred type rather than a
+// stringly-typed widener — that way `getRoleSoul` / `allowedDirectReports`
+// accept the values without an `as any` cast at every call site.
+type StrategyRole = z.infer<typeof strategyRoleSchema>;
+
 function validateStrategyRoles(
-  roles: Array<{ role: string; parent_role: string | null }>,
+  roles: { role: StrategyRole; parent_role: StrategyRole | null }[],
   ctx: z.RefinementCtx,
 ) {
   const seen = new Set<string>();
@@ -83,8 +89,8 @@ function validateStrategyRoles(
 
     // Enforce allowed reporting lines from ROLE_SOULS
     if (entry.parent_role !== null) {
-      const parentSoul = getRoleSoul(entry.parent_role as any);
-      if (parentSoul && !parentSoul.allowedDirectReports.includes(entry.role as any)) {
+      const parentSoul = getRoleSoul(entry.parent_role);
+      if (parentSoul && !parentSoul.allowedDirectReports.includes(entry.role)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: [index, "parent_role"],
@@ -118,7 +124,7 @@ export const strategyOutputSchema = z.object({
 });
 
 export type StrategyOutput = z.infer<typeof strategyOutputSchema>;
-export type CeoStage = z.infer<typeof ceoStageSchema>;
+type CeoStage = z.infer<typeof ceoStageSchema>;
 
 type StrategyRoleEntry = StrategyOutput["roles"][number];
 
@@ -141,7 +147,7 @@ const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRoleEntry, 
  * (and the other core roles) are present regardless of what the LLM produced.
  * Called after every strategy generation / classification path.
  */
-export function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
+function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
   const present = new Set(roles.map((r) => r.role));
   const result = [...roles];
   for (const core of coreStrategyRoles) {
@@ -215,7 +221,7 @@ const sprintProposalBlockSchema = z.object({
 });
 
 /** Schema for structured CEO boardroom cards sent to the UI. */
-export const ceoCardSchema = z.object({
+const ceoCardSchema = z.object({
   card_type: z.enum(["welcome_brief", "mission_brief", "clarifying_question", "strategy_proposal", "status_update", "sprint_proposal"]),
   stage: ceoStageSchema,
   title: z.string(),
@@ -291,14 +297,15 @@ function summarizeMeetings(snapshot: CompanySnapshot) {
 }
 
 /** Infer the current CEO conversation stage from company snapshot state. */
-export function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
-  if (snapshot.company.id === "company_pending") {
+function inferCeoStage(snapshot: CompanySnapshot, executionStatus?: string): CeoStage {
+  if (!snapshot.company.id) {
     return "welcome";
   }
 
-  // Between sprints: execution is done AND current sprint is completed AND we have agents
+  // Between sprints: execution is done AND current sprint is completed (or no sprint yet) AND we have agents
   const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
-  if (currentSprint?.status === "completed" && snapshot.agents.length > 0 && executionStatus === "done") {
+  const noSprintYet = !snapshot.company.currentSprintId && snapshot.sprints.length === 0;
+  if ((currentSprint?.status === "completed" || noSprintYet) && snapshot.agents.length > 0 && executionStatus === "done") {
     return "between_sprints";
   }
 
@@ -407,17 +414,39 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStat
     "",
     "Operate like a strong founder-CEO with full visibility into company state, team shape, backlog posture, approvals, meetings, and recent board conversation.",
     "You do not answer like a plain chatbot. You guide the board through staged decisions and package decisions as crisp, interactive cards.",
+    "",
+    "Spec 35 — Interactive cards via `chat_emit_card`:",
+    "Use `chat_emit_card` for ALL structured interactive output. Available card types: idea_refine, name_suggest, hiring_slate, sprint_plan, decision, approval_request, memory_capture, meeting_summary.",
+    "Emit ONE card per turn. The user's button click arrives as a synthetic user message before your next turn.",
+    "",
+    "Bootstrap sequence (when the company has no agents and no sprints yet):",
+    "Drive the company from idea to first sprint by emitting cards IN THIS EXACT ORDER. You MUST NOT skip any step. Each step requires board approval before proceeding to the next:",
+    "  1. Board gives you a raw idea → IMMEDIATELY call `chat_emit_card` with type `idea_refine`. Do not ask clarifying questions first. Reframe the idea into 2-3 concrete product directions and let the board pick.",
+    "  2. Board picks a direction → call `chat_emit_card` with type `name_suggest`.",
+    "  3. Board picks a name → call `chat_emit_card` with type `hiring_slate`. You MUST propose a team before any sprint. A sprint cannot exist without agents.",
+    "  4. Board approves the team → ONLY THEN call `chat_emit_card` with type `sprint_plan`. NEVER emit sprint_plan if there are 0 agents in the company.",
+    "",
+    "Card type reference:",
+    "  - `idea_refine` — call when the user describes a raw idea. Payload: { originalIdea, reframings: [{id,title,summary}, ...] }. ALWAYS emit this on the FIRST message containing a product idea.",
+    "  - `name_suggest` — call after the idea is locked. Payload: { suggestions: [{name, rationale?}, ...], allowWriteIn: true }.",
+    "  - `hiring_slate` — call after strategy/team is discussed. Payload: { roles: [{role, displayName, title?, rationale?}, ...] }.",
+    "  - `sprint_plan` — call after hiring is approved. Payload: { sprintNumber, goal, tasks: [{title, kind?, assignedRole?}, ...] }.",
+    "  - `decision` — call when you need the board to pick from options. Payload: { question, options: [{id, label, description?}, ...] }.",
+    "Do NOT narrate the card payload in plaintext — emit it via the tool. A short conversational sentence in the chat reply is fine ('Here's how I'm reading it:'), but the card carries the structured content.",
+    "When you DO call chat_emit_card, keep your plaintext reply to ONE short sentence of framing — never restate the question or the options that the card already shows.",
+    "For everything else (status updates, questions, strategy discussion, mission briefings) — just reply in plaintext. Your text is rendered as markdown, so use headings, lists, bold, etc. for structure.",
+    "",
     "Conversation rules:",
     "- Welcome stage: orient the board quickly and help them express the product clearly.",
     "- Idea refinement: synthesize the mission, identify assumptions, and ask only the highest-leverage question.",
     "- Team design: pressure-test scope and the minimum org needed to ship.",
     "- Kickoff: propose the first release, team shape, execution sequence, risks, and board checkpoints.",
     "- Execution: report like an operator. Reference real team, tasks, approvals, meetings, and blockers.",
-    "- Between sprints: the prior sprint is complete. Analyze what was built, what failed, what the Board said, and what follow-up tasks the planner suggested. Propose Sprint N+1 using a sprint_proposal card. Assign tasks to specific roles. Define dependencies between tasks. The system will automatically add a CTO review step at the end of the pipeline.",
+    "- Between sprints: the prior sprint is complete. Analyze what was built, what failed, what the Board said, and what follow-up tasks the planner suggested. Propose Sprint N+1 using `chat_emit_card` with type `sprint_plan`. Assign tasks to specific roles. Define dependencies between tasks. The system will automatically add a CTO review step at the end of the pipeline.",
     "- Avoid generic filler. Be concise, opinionated, and operationally sharp.",
     "- Prefer tradeoffs and recommendations over vague brainstorming.",
     "- Never invent implementation details that are not grounded in company state.",
-    "- Convergence: after 2-3 clarifying exchanges, stop asking and propose a strategy_proposal. Do not ask more than 3 clarifying questions total. If the board has given enough direction, converge immediately. The goal is a demoable first release, not perfect requirements.",
+    "- Convergence: after 2-3 clarifying exchanges, stop asking and propose a strategy. Do not ask more than 3 clarifying questions total. If the board has given enough direction, converge immediately. The goal is a demoable first release, not perfect requirements.",
     "- One intent per response: either ASK a question or PROPOSE a strategy — never both. If you want board confirmation before proceeding, stop after the question. Do not answer your own question in the same message.",
     "",
     "Current company intelligence:",
@@ -624,12 +653,12 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
 }
 
 /** Extract Zod issues from a thrown error, whether direct ZodError or wrapped. */
-function extractZodIssues(err: unknown): Array<{ path: Array<string | number>; message: string }> {
+function extractZodIssues(err: unknown): { path: (string | number)[]; message: string }[] {
   if (err && typeof err === "object") {
     const anyErr = err as { issues?: unknown; cause?: { issues?: unknown } };
-    const issues = (anyErr.issues ?? anyErr.cause?.issues) as unknown;
+    const issues = (anyErr.issues ?? anyErr.cause?.issues);
     if (Array.isArray(issues)) {
-      return issues as Array<{ path: Array<string | number>; message: string }>;
+      return issues as { path: (string | number)[]; message: string }[];
     }
   }
   return [];

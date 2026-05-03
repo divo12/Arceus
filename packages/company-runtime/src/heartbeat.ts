@@ -23,6 +23,7 @@ import type {
   BeatEventTrigger,
 } from "@arceus/contracts";
 import { runChecklist, type ChecklistResult } from "./heartbeat-checklist";
+import { swallowAndAudit } from "./swallow.js";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -56,19 +57,21 @@ export type BeatExecutor = (request: BeatRequest, beatId: string) => Promise<Bea
  * so the API layer supplies these callbacks at construction time.
  */
 export interface BeatDependencies {
+  /** Spec 31 Phase 7.C.d-cp — async to read from canonical via buildSnapshotView. */
   loadAgentContext: (
     agentId: string, beatId: string, beatNumber: number, trigger: BeatTrigger,
     config: { beatTokenBudget: number; beatCostCeilingCents: number }
-  ) => AgentBeatContext | null;
+  ) => Promise<AgentBeatContext | null>;
 
   getSnapshotVersion: () => number;
 
+  /** Spec 31 Phase 7.C.d-cp — async to write through canonical mutators. */
   applyMutations: (
     companyId: string,
-    mutations: Array<{ type: string; [key: string]: unknown }>,
+    mutations: { type: string; [key: string]: unknown }[],
     causation?: { eventId?: string; summary?: string },
     expectedVersion?: number
-  ) => { version: number; applied: number; errors: string[] };
+  ) => Promise<{ version: number; applied: number; errors: string[] }>;
 
   commitBeatRecord: (record: BeatRecord) => Promise<boolean>;
   flushStore: () => Promise<void>;
@@ -79,8 +82,12 @@ export interface BeatDependencies {
     auditError: (companyId: string, eventType: string, summary: string, error?: unknown, opts?: Record<string, unknown>) => void;
   };
 
-  /** Execute specialist task work. Stub in Phase 2 — real execution in Phase 3. */
-  executeTask?: (ctx: AgentBeatContext, taskId: string, beatId: string) => Promise<{
+  /**
+   * Wake the agent for this beat. The agent reads the rendered state, claims a
+   * task via `task_claim` (if any are open), and acts via tools. The orchestrator
+   * does NOT pre-select a task — see plans/agent-redesign/00-vision.md.
+   */
+  executeTask?: (ctx: AgentBeatContext, beatId: string) => Promise<{
     summary: string; tokensUsed: number; actionsCount: number; toolCalls: number; completed: boolean;
   }>;
 
@@ -90,7 +97,8 @@ export interface BeatDependencies {
   }>;
 
   /** Return list of agents for the scheduler to iterate. */
-  getAgentRoster?: () => Array<{ agentId: string; role: AgentIdentity["role"]; companyId: string }>;
+  /** Spec 31 Phase 7.C.c — async to read from canonical via repos. */
+  getAgentRoster?: () => Promise<{ agentId: string; role: AgentIdentity["role"]; companyId: string }[]>;
 
   /** Emit beat lifecycle events for SSE streaming. */
   emitBeatEvent?: (event: { type: string; beatId: string; agentId: string; role: string; data?: Record<string, unknown> }) => void;
@@ -169,12 +177,12 @@ export class HeartbeatEngine {
 
   // ── Reactive event queue (Spec 12 Phase 3) ───────────────
   // Events queued while an agent is locked (mid-beat). Drained after beat completion.
-  private readonly eventQueue = new Map<string, Array<{ companyId: string; role: AgentIdentity["role"]; event: BeatEventTrigger }>>();
+  private readonly eventQueue = new Map<string, { companyId: string; role: AgentIdentity["role"]; event: BeatEventTrigger }[]>();
 
   // ── Staged mutations (P4.3) ──────────────────────────────
   // Beats stage mutations during Phase 3 (Execute) and flush
   // them atomically in Phase 4 (Serialize).
-  private stagedMutations: Array<{ type: string; [key: string]: unknown }> = [];
+  private stagedMutations: { type: string; [key: string]: unknown }[] = [];
 
   /** Stage a mutation to be flushed at the end of the current beat. */
   stageMutation(mutation: { type: string; [key: string]: unknown }) {
@@ -182,15 +190,15 @@ export class HeartbeatEngine {
   }
 
   /** Flush all staged mutations via applyMutations, then clear. */
-  private flushStagedMutations(
+  private async flushStagedMutations(
     companyId: string,
     causation: { eventId?: string; summary?: string },
     expectedVersion?: number,
-  ): { version: number; applied: number; errors: string[] } {
+  ): Promise<{ version: number; applied: number; errors: string[] }> {
     if (this.stagedMutations.length === 0 || !this.deps) {
       return { version: expectedVersion ?? 0, applied: 0, errors: [] };
     }
-    const result = this.deps.applyMutations(companyId, this.stagedMutations, causation, expectedVersion);
+    const result = await this.deps.applyMutations(companyId, this.stagedMutations, causation, expectedVersion);
     this.stagedMutations = [];
     return result;
   }
@@ -232,7 +240,7 @@ export class HeartbeatEngine {
       return;
     }
     this.running = true;
-    this.schedulerTimer = setInterval(() => this.tick(), this.config.schedulerIntervalMs);
+    this.schedulerTimer = setInterval(() => void this.tick(), this.config.schedulerIntervalMs);
     console.log(
       `[HEARTBEAT] Engine started (interval=${this.config.schedulerIntervalMs}ms, maxConcurrent=${this.config.maxConcurrentBeats})`
     );
@@ -286,9 +294,19 @@ export class HeartbeatEngine {
       const record = await this.executor(request, beatId);
       this.lastBeatAt.set(request.agentId, Date.now());
       this.recordHistory(record);
-      // Persist to DB (fire-and-forget — don't block the caller)
+      // Persist to DB (fire-and-forget — don't block the caller).
+      // C3 sweep: surface the failure rather than swallow it. The beat is
+      // still in `lastBeatAt` and recordHistory regardless, so a missed DB
+      // write doesn't break the runtime — but it should be visible in logs
+      // so we notice if the beats DB is failing systematically.
       if (this.deps) {
-        this.deps.commitBeatRecord(record).catch(() => {});
+        // Audit C2.3 (F-112/F-217): commitBeatRecord failure means the
+        // beat audit trail is dropping rows. Surface to the typed error
+        // sink so monitoring catches systematic DB failures.
+        swallowAndAudit("heartbeat.commit_beat_record", () =>
+          this.deps!.commitBeatRecord(record),
+          { companyId: record.companyId, beatId: record.id, detail: { agentId: record.agentId } },
+        );
       }
       return record;
     } finally {
@@ -315,13 +333,15 @@ export class HeartbeatEngine {
       return;
     }
 
-    // Agent is idle — trigger immediately (fire-and-forget)
-    this.triggerBeat({
-      companyId, agentId, role,
-      trigger: { type: "event", event },
-    }).catch((err) => {
-      console.error(`[HEARTBEAT] Reactive beat failed for ${role} (${event}):`, err instanceof Error ? err.message : err);
-    });
+    // Agent is idle — trigger immediately (fire-and-forget). Audit-routed
+    // so a reactive beat that crashes lands in the error sink.
+    swallowAndAudit("heartbeat.reactive_beat", () =>
+      this.triggerBeat({
+        companyId, agentId, role,
+        trigger: { type: "event", event },
+      }),
+      { companyId, detail: { agentId, role, event } },
+    );
   }
 
   /** Drain queued events for an agent after its beat completes. */
@@ -337,14 +357,15 @@ export class HeartbeatEngine {
       this.eventQueue.set(agentId, queue);
     }
 
-    this.triggerBeat({
-      companyId: next.companyId,
-      agentId,
-      role: next.role,
-      trigger: { type: "event", event: next.event },
-    }).catch((err) => {
-      console.error(`[HEARTBEAT] Queued reactive beat failed for ${next.role} (${next.event}):`, err instanceof Error ? err.message : err);
-    });
+    swallowAndAudit("heartbeat.queued_reactive_beat", () =>
+      this.triggerBeat({
+        companyId: next.companyId,
+        agentId,
+        role: next.role,
+        trigger: { type: "event", event: next.event },
+      }),
+      { companyId: next.companyId, detail: { agentId, role: next.role, event: next.event } },
+    );
   }
 
   // ── Status ───────────────────────────────────────────────
@@ -409,7 +430,7 @@ export class HeartbeatEngine {
    * Called every schedulerIntervalMs. Expires stale locks, then auto-dispatches
    * beats for agents whose role interval has elapsed, in priority order.
    */
-  private tick(): void {
+  private async tick(): Promise<void> {
     const expired = this.locks.expireStale(this.config.beatTimeoutMs);
     if (expired.length > 0) {
       console.warn("[HEARTBEAT] Expired stale locks for agents:", expired.join(", "));
@@ -418,15 +439,25 @@ export class HeartbeatEngine {
     // Need agent roster to auto-schedule
     if (!this.deps?.getAgentRoster) return;
 
-    const roster = this.deps.getAgentRoster();
+    const roster = await this.deps.getAgentRoster();
     if (roster.length === 0) return;
 
-    // Sort by role priority (CEO first)
-    const sorted = [...roster].sort(
-      (a, b) => (HeartbeatEngine.ROLE_PRIORITY[a.role] ?? 99) - (HeartbeatEngine.ROLE_PRIORITY[b.role] ?? 99)
-    );
-
     const now = Date.now();
+
+    // Sort by overdue-ness (most overdue first), then by static priority as
+    // tiebreaker. Static priority alone starves lower-priority roles like
+    // ui_designer when maxConcurrentBeats=1 and higher-priority roles keep
+    // becoming due — they win every tick. Sorting by (now - lastBeat -
+    // interval) descending guarantees fairness while still preferring CEO
+    // when all overdue ratios are equal.
+    const sorted = [...roster].sort((a, b) => {
+      const intA = this.config.roleIntervals[a.role] ?? this.config.schedulerIntervalMs * 10;
+      const intB = this.config.roleIntervals[b.role] ?? this.config.schedulerIntervalMs * 10;
+      const overdueA = now - (this.lastBeatAt.get(a.agentId) ?? 0) - intA;
+      const overdueB = now - (this.lastBeatAt.get(b.agentId) ?? 0) - intB;
+      if (overdueA !== overdueB) return overdueB - overdueA;
+      return (HeartbeatEngine.ROLE_PRIORITY[a.role] ?? 99) - (HeartbeatEngine.ROLE_PRIORITY[b.role] ?? 99);
+    });
     for (const agent of sorted) {
       // Skip paused roles
       if (this.config.pauseRoles.includes(agent.role)) continue;
@@ -442,15 +473,17 @@ export class HeartbeatEngine {
       // Skip if at capacity
       if (this.semaphore.available <= 0) break;
 
-      // Fire and forget — triggerBeat handles lock + semaphore
-      this.triggerBeat({
-        companyId: agent.companyId,
-        agentId: agent.agentId,
-        role: agent.role,
-        trigger: { type: "interval", scheduledAt: new Date(now).toISOString() },
-      }).catch((err) => {
-        console.error(`[HEARTBEAT] Auto-schedule beat failed for ${agent.role}:`, err instanceof Error ? err.message : err);
-      });
+      // Fire and forget — triggerBeat handles lock + semaphore.
+      // Audit-routed so a scheduled beat crash lands in the error sink.
+      swallowAndAudit("heartbeat.auto_schedule_beat", () =>
+        this.triggerBeat({
+          companyId: agent.companyId,
+          agentId: agent.agentId,
+          role: agent.role,
+          trigger: { type: "interval", scheduledAt: new Date(now).toISOString() },
+        }),
+        { companyId: agent.companyId, detail: { agentId: agent.agentId, role: agent.role } },
+      );
     }
   }
 
@@ -461,237 +494,269 @@ export class HeartbeatEngine {
     const startedAt = new Date().toISOString();
     const phases: BeatPhases = {};
     let totalTokens = 0;
-    let outcome: BeatOutcome = "HEARTBEAT_OK";
-    let status: BeatStatus = "completed";
-    let errorMessage: string | null = null;
-    let summary: string | null = null;
-    let snapshotVersionRead: number | null = null;
     let snapshotVersionWritten: number | null = null;
 
     // Clear any leftover staged mutations from prior beat
     this.clearStagedMutations();
 
-    let timedOut = false;
-    const timeoutHandle = setTimeout(() => { timedOut = true; }, this.config.beatTimeoutMs);
+    const timeout = { tripped: false };
+    const timeoutHandle = setTimeout(() => { timeout.tripped = true; }, this.config.beatTimeoutMs);
 
     try {
       // ── Phase 1: Wake ──────────────────────────────────
-      const wakeStart = Date.now();
-
-      deps.audit.auditAgent(
-        request.companyId, request.role,
-        "beat_started", `Beat ${beatId} started for ${request.role}`,
-        { beatId }
-      );
-
-      deps.emitBeatEvent?.({ type: "beat_started", beatId, agentId: request.agentId, role: request.role });
-
-      snapshotVersionRead = deps.getSnapshotVersion();
-      const ctx = deps.loadAgentContext(
-        request.agentId, beatId, this.beatCounter, request.trigger,
-        { beatTokenBudget: this.config.beatTokenBudget, beatCostCeilingCents: this.config.beatCostCeilingCents }
-      );
-
-      if (!ctx) {
-        outcome = "SKIPPED";
-        summary = `Agent ${request.agentId} not found in snapshot`;
-        status = "skipped";
-        phases.contextAssembly = { durationMs: Date.now() - wakeStart, tokensUsed: 0 };
-        return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
+      const wake = await this.executeWakePhase(request, beatId, phases);
+      const snapshotVersionRead = wake.snapshotVersionRead;
+      if (wake.kind === "skip") {
+        return this.buildRecord(beatId, request, startedAt, phases, wake.status, wake.outcome, 0, null, wake.summary, snapshotVersionRead, null);
       }
-
-      // Leadership roles (ceo, cto, pm) must always beat — they create sprints, assign tasks, plan work.
-      // Only worker roles pause when no sprint exists.
-      const leadershipRoles = ["ceo", "cto", "pm"];
-      const isLeadership = leadershipRoles.includes(request.role);
-
-      if (this.config.pauseWhenNoActiveSprint && !ctx.currentSprint && !isLeadership) {
-        outcome = "SKIPPED";
-        summary = "No active sprint — paused";
-        status = "skipped";
-        phases.contextAssembly = { durationMs: Date.now() - wakeStart, tokensUsed: 0 };
-        return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
-      }
-
-      if (this.config.pauseWhenBudgetExhausted && ctx.companyBudgetRemainingCents <= 0) {
-        outcome = "BUDGET_EXCEEDED";
-        summary = "Company budget exhausted";
-        status = "skipped";
-        phases.contextAssembly = { durationMs: Date.now() - wakeStart, tokensUsed: 0 };
-        return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
-      }
-
-      phases.contextAssembly = { durationMs: Date.now() - wakeStart, tokensUsed: 0 };
+      const { ctx } = wake;
 
       // ── Phase 2: Observe ─────────────────────────────────
-      if (timedOut) {
-        return this.buildRecord(beatId, request, startedAt, phases, "timed_out", "TIMED_OUT", totalTokens, "Beat timed out in observe phase", null, snapshotVersionRead, snapshotVersionWritten);
+      if (timeout.tripped) {
+        return this.buildRecord(beatId, request, startedAt, phases, "timed_out", "TIMED_OUT", 0, "Beat timed out in observe phase", null, snapshotVersionRead, null);
       }
-
-      const observeStart = Date.now();
-      const checklist: ChecklistResult = runChecklist(ctx);
-
-      phases.observation = {
-        durationMs: Date.now() - observeStart,
-        tokensUsed: 0,
-        checkResults: checklist.results,
-      };
-
-      if (!checklist.hasActionNeeded && !checklist.hasBlocked) {
-        outcome = "HEARTBEAT_OK";
-        summary = `Idle beat for ${request.role} — all checks OK`;
-        deps.audit.auditAgent(request.companyId, request.role, "beat_idle", summary, { beatId });
-        deps.emitBeatEvent?.({ type: "beat_idle", beatId, agentId: request.agentId, role: request.role, data: { outcome } });
-        return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
+      const observe = this.executeObservePhase(ctx, request, beatId, phases);
+      if (observe.kind === "exit") {
+        return this.buildRecord(beatId, request, startedAt, phases, observe.status, observe.outcome, 0, null, observe.summary, snapshotVersionRead, null);
       }
-
-      if (checklist.hasBlocked && !checklist.hasActionNeeded) {
-        outcome = "SKIPPED";
-        const blockDetail = checklist.results.find((r) => r.status === "blocked");
-        summary = `Blocked: ${blockDetail?.detail ?? "unknown"}`;
-        status = "skipped";
-        deps.audit.auditAgent(request.companyId, request.role, "beat_blocked", summary, { beatId });
-        return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
-      }
+      const { checklist } = observe;
 
       // ── Phase 3: Execute ─────────────────────────────────
-      if (timedOut) {
-        return this.buildRecord(beatId, request, startedAt, phases, "timed_out", "TIMED_OUT", totalTokens, "Beat timed out before execute phase", null, snapshotVersionRead, snapshotVersionWritten);
+      if (timeout.tripped) {
+        return this.buildRecord(beatId, request, startedAt, phases, "timed_out", "TIMED_OUT", 0, "Beat timed out before execute phase", null, snapshotVersionRead, null);
       }
-
-      const execStart = Date.now();
-      let execTokens = 0;
-      let execActions = 0;
-      let execToolCalls = 0;
-
-      if (deps.executeTask) {
-        const actionableTask = this.selectTask(ctx);
-        if (actionableTask) {
-          deps.audit.auditAgent(
-            request.companyId, request.role,
-            "beat_executing", `Executing task: ${actionableTask.title}`,
-            { beatId, detail: { taskId: actionableTask.id } }
-          );
-
-          const result = await deps.executeTask(ctx, actionableTask.id, beatId);
-          execTokens = result.tokensUsed;
-          execActions = result.actionsCount;
-          execToolCalls = result.toolCalls;
-          totalTokens += execTokens;
-          outcome = "WORK_DONE";
-          summary = result.summary;
-
-          // P4.4: budget enforcement — mark if token budget exceeded
-          if (totalTokens > this.config.beatTokenBudget) {
-            outcome = "BUDGET_EXCEEDED";
-            summary = `${summary} [token budget exceeded: ${totalTokens}/${this.config.beatTokenBudget}]`;
-          }
-        } else if (deps.executeChecklistAction && checklist.primaryAction) {
-          // No task but checklist says action_needed — dispatch to role-specific handler
-          deps.audit.auditAgent(
-            request.companyId, request.role,
-            "beat_checklist_action", `Checklist action: ${checklist.primaryAction.suggestedAction}`,
-            { beatId, detail: { action: checklist.primaryAction } }
-          );
-
-          const actionResult = await deps.executeChecklistAction(
-            ctx,
-            { detail: checklist.primaryAction.detail ?? "", suggestedAction: checklist.primaryAction.suggestedAction ?? "" },
-            beatId
-          );
-          execTokens = actionResult.tokensUsed;
-          execActions = actionResult.actionsCount;
-          execToolCalls = actionResult.toolCalls;
-          totalTokens += execTokens;
-          outcome = "WORK_DONE";
-          summary = actionResult.summary;
-        } else {
-          outcome = "WORK_DONE";
-          summary = checklist.primaryAction?.suggestedAction ?? "Action needed but no specific task";
-        }
-      } else {
-        outcome = "WORK_DONE";
-        summary = `[stub] Would execute: ${checklist.primaryAction?.suggestedAction ?? "unknown action"}`;
-      }
-
-      phases.execution = {
-        durationMs: Date.now() - execStart,
-        tokensUsed: execTokens,
-        toolCalls: execToolCalls,
-        actionsCount: execActions,
-      };
+      const exec = await this.executeActPhase(ctx, request, beatId, phases, checklist);
+      totalTokens += exec.tokens;
 
       // ── Phase 4: Serialize ───────────────────────────────
-      if (timedOut) {
-        return this.buildRecord(beatId, request, startedAt, phases, "timed_out", "TIMED_OUT", totalTokens, "Beat timed out before serialize phase", null, snapshotVersionRead, snapshotVersionWritten);
+      if (timeout.tripped) {
+        return this.buildRecord(beatId, request, startedAt, phases, "timed_out", "TIMED_OUT", totalTokens, "Beat timed out before serialize phase", null, snapshotVersionRead, null);
       }
-
-      const serializeStart = Date.now();
-      let mutationCount = 0;
-
-      // Stage the heartbeat status mutation
-      this.stageMutation({ type: "agent_status", agentId: request.agentId, status: "active" });
-
-      // Flush all staged mutations atomically (beat work + heartbeat status)
-      const heartbeatResult = this.flushStagedMutations(
-        request.companyId,
-        { eventId: beatId, summary: `Beat ${beatId} serialize` },
-        snapshotVersionRead ?? undefined
-      );
-
-      mutationCount += heartbeatResult.applied;
-      snapshotVersionWritten = heartbeatResult.version;
-
-      await deps.flushStore();
-
-      phases.serialization = { durationMs: Date.now() - serializeStart, mutationCount };
+      const serialize = await this.executeSerializePhase(request, beatId, phases, snapshotVersionRead);
+      snapshotVersionWritten = serialize.snapshotVersionWritten;
 
       deps.audit.auditAgent(
         request.companyId, request.role,
         "beat_completed",
-        `Beat ${beatId} completed: ${outcome} — ${summary}`,
-        { beatId, detail: { outcome, totalTokens, phases } }
+        `Beat ${beatId} completed: ${exec.outcome} — ${exec.summary}`,
+        { beatId, detail: { outcome: exec.outcome, totalTokens, phases } }
       );
+      deps.emitBeatEvent?.({ type: "beat_completed", beatId, agentId: request.agentId, role: request.role, data: { outcome: exec.outcome, totalTokens, summary: exec.summary } });
 
-      deps.emitBeatEvent?.({ type: "beat_completed", beatId, agentId: request.agentId, role: request.role, data: { outcome, totalTokens, summary } });
-
-      return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
+      return this.buildRecord(beatId, request, startedAt, phases, "completed", exec.outcome, totalTokens, null, exec.summary, snapshotVersionRead, snapshotVersionWritten);
 
     } catch (err) {
-      outcome = "ERROR";
-      status = "failed";
-      errorMessage = err instanceof Error ? err.message : String(err);
-      summary = `Beat failed: ${errorMessage}`;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const summary = `Beat failed: ${errorMessage}`;
       this.clearStagedMutations();
       deps.audit.auditError(request.companyId, "beat_failed", summary, err, { beatId });
       deps.emitBeatEvent?.({ type: "beat_failed", beatId, agentId: request.agentId, role: request.role, data: { error: errorMessage } });
-      return this.buildRecord(beatId, request, startedAt, phases, status, outcome, totalTokens, errorMessage, summary, snapshotVersionRead, snapshotVersionWritten);
+      return this.buildRecord(beatId, request, startedAt, phases, "failed", "ERROR", totalTokens, errorMessage, summary, null, snapshotVersionWritten);
     } finally {
       clearTimeout(timeoutHandle);
     }
   }
 
-  // ── Task selection ───────────────────────────────────────
+  // ── Phase 1: Wake — load context + early-exit guards ─────────────
+  private async executeWakePhase(
+    request: BeatRequest,
+    beatId: string,
+    phases: BeatPhases,
+  ): Promise<
+    | { kind: "continue"; ctx: AgentBeatContext; snapshotVersionRead: number }
+    | { kind: "skip"; snapshotVersionRead: number; status: BeatStatus; outcome: BeatOutcome; summary: string }
+  > {
+    const deps = this.deps!;
+    const wakeStart = Date.now();
 
-  private selectTask(ctx: AgentBeatContext) {
-    const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-    const statusOrder = { in_progress: 0, planned: 1, created: 2 };
-    type ActionableStatus = keyof typeof statusOrder;
+    deps.audit.auditAgent(
+      request.companyId, request.role,
+      "beat_started", `Beat ${beatId} started for ${request.role}`,
+      { beatId }
+    );
+    deps.emitBeatEvent?.({ type: "beat_started", beatId, agentId: request.agentId, role: request.role });
 
-    const actionable = ctx.tasks.filter(
-      (t): t is typeof t & { status: ActionableStatus } =>
+    const snapshotVersionRead = deps.getSnapshotVersion();
+    const ctx = await deps.loadAgentContext(
+      request.agentId, beatId, this.beatCounter, request.trigger,
+      { beatTokenBudget: this.config.beatTokenBudget, beatCostCeilingCents: this.config.beatCostCeilingCents }
+    );
+
+    const stamp = (): void => {
+      phases.contextAssembly = { durationMs: Date.now() - wakeStart, tokensUsed: 0 };
+    };
+
+    if (!ctx) {
+      stamp();
+      return { kind: "skip", snapshotVersionRead, status: "skipped", outcome: "SKIPPED", summary: `Agent ${request.agentId} not found in snapshot` };
+    }
+
+    // Leadership roles (ceo, cto, pm) must always beat — they create sprints, assign tasks, plan work.
+    // Only worker roles pause when no sprint exists.
+    const isLeadership = ["ceo", "cto", "pm"].includes(request.role);
+
+    if (this.config.pauseWhenNoActiveSprint && !ctx.currentSprint && !isLeadership) {
+      stamp();
+      return { kind: "skip", snapshotVersionRead, status: "skipped", outcome: "SKIPPED", summary: "No active sprint — paused" };
+    }
+
+    if (this.config.pauseWhenBudgetExhausted && ctx.companyBudgetRemainingCents <= 0) {
+      stamp();
+      return { kind: "skip", snapshotVersionRead, status: "skipped", outcome: "BUDGET_EXCEEDED", summary: "Company budget exhausted" };
+    }
+
+    stamp();
+    return { kind: "continue", ctx, snapshotVersionRead };
+  }
+
+  // ── Phase 2: Observe — run checklist, decide idle/blocked/proceed ──
+  private executeObservePhase(
+    ctx: AgentBeatContext,
+    request: BeatRequest,
+    beatId: string,
+    phases: BeatPhases,
+  ):
+    | { kind: "continue"; checklist: ChecklistResult }
+    | { kind: "exit"; status: BeatStatus; outcome: BeatOutcome; summary: string }
+  {
+    const deps = this.deps!;
+    const observeStart = Date.now();
+    const checklist: ChecklistResult = runChecklist(ctx);
+
+    phases.observation = {
+      durationMs: Date.now() - observeStart,
+      tokensUsed: 0,
+      checkResults: checklist.results,
+    };
+
+    if (!checklist.hasActionNeeded && !checklist.hasBlocked) {
+      const summary = `Idle beat for ${request.role} — all checks OK`;
+      deps.audit.auditAgent(request.companyId, request.role, "beat_idle", summary, { beatId });
+      deps.emitBeatEvent?.({ type: "beat_idle", beatId, agentId: request.agentId, role: request.role, data: { outcome: "HEARTBEAT_OK" } });
+      return { kind: "exit", status: "completed", outcome: "HEARTBEAT_OK", summary };
+    }
+
+    if (checklist.hasBlocked && !checklist.hasActionNeeded) {
+      const blockDetail = checklist.results.find((r) => r.status === "blocked");
+      const summary = `Blocked: ${blockDetail?.detail ?? "unknown"}`;
+      deps.audit.auditAgent(request.companyId, request.role, "beat_blocked", summary, { beatId });
+      return { kind: "exit", status: "skipped", outcome: "SKIPPED", summary };
+    }
+
+    return { kind: "continue", checklist };
+  }
+
+  // ── Phase 3: Execute — task work or checklist action ───────────────
+  private async executeActPhase(
+    ctx: AgentBeatContext,
+    request: BeatRequest,
+    beatId: string,
+    phases: BeatPhases,
+    checklist: ChecklistResult,
+  ): Promise<{ outcome: BeatOutcome; summary: string | null; tokens: number }> {
+    const deps = this.deps!;
+    const execStart = Date.now();
+    let execTokens = 0;
+    let execActions = 0;
+    let execToolCalls = 0;
+    let outcome: BeatOutcome = "WORK_DONE";
+    let summary: string | null = null;
+
+    if (!deps.executeTask) {
+      summary = `[stub] Would execute: ${checklist.primaryAction?.suggestedAction ?? "unknown action"}`;
+      phases.execution = { durationMs: Date.now() - execStart, tokensUsed: 0, toolCalls: 0, actionsCount: 0 };
+      return { outcome, summary, tokens: 0 };
+    }
+
+    // Vision: orchestrator does NOT pick the task. We wake the agent and
+    // let it claim a task (or run a checklist action) via its own tools.
+    // The legacy `executeChecklistAction` path is preserved for non-task
+    // work (e.g. CEO sprint creation) when the agent has no claimable
+    // tasks AND the checklist surfaced a primary action.
+    const hasClaimableTask = ctx.tasks.some(
+      (t) =>
         (t.status === "in_progress" || t.status === "planned" || t.status === "created") &&
         (t.assignedRole === ctx.role || !t.assignedRole)
     );
-    if (actionable.length === 0) return null;
 
-    actionable.sort((a, b) => {
-      const sDiff = statusOrder[a.status] - statusOrder[b.status];
-      if (sDiff !== 0) return sDiff;
-      return priorityOrder[a.priority] - priorityOrder[b.priority];
-    });
-    return actionable[0];
+    if (!hasClaimableTask && deps.executeChecklistAction && checklist.primaryAction) {
+      // No task but checklist says action_needed — dispatch to role-specific handler
+      deps.audit.auditAgent(
+        request.companyId, request.role,
+        "beat_checklist_action", `Checklist action: ${checklist.primaryAction.suggestedAction ?? "(none)"}`,
+        { beatId, detail: { action: checklist.primaryAction } }
+      );
+
+      const actionResult = await deps.executeChecklistAction(
+        ctx,
+        { detail: checklist.primaryAction.detail ?? "", suggestedAction: checklist.primaryAction.suggestedAction ?? "" },
+        beatId
+      );
+      execTokens = actionResult.tokensUsed;
+      execActions = actionResult.actionsCount;
+      execToolCalls = actionResult.toolCalls;
+      summary = actionResult.summary;
+    } else {
+      deps.audit.auditAgent(
+        request.companyId, request.role,
+        "beat_executing", `Waking ${request.role} for beat`,
+        { beatId, detail: { hasClaimableTask } }
+      );
+
+      const result = await deps.executeTask(ctx, beatId);
+      execTokens = result.tokensUsed;
+      execActions = result.actionsCount;
+      execToolCalls = result.toolCalls;
+      summary = result.summary;
+
+      // P4.4: budget enforcement — mark if token budget exceeded
+      if (execTokens > this.config.beatTokenBudget) {
+        outcome = "BUDGET_EXCEEDED";
+        summary = `${summary} [token budget exceeded: ${execTokens}/${this.config.beatTokenBudget}]`;
+      }
+    }
+
+    phases.execution = {
+      durationMs: Date.now() - execStart,
+      tokensUsed: execTokens,
+      toolCalls: execToolCalls,
+      actionsCount: execActions,
+    };
+
+    return { outcome, summary, tokens: execTokens };
   }
+
+  // ── Phase 4: Serialize — flush staged mutations + heartbeat marker ──
+  private async executeSerializePhase(
+    request: BeatRequest,
+    beatId: string,
+    phases: BeatPhases,
+    snapshotVersionRead: number | null,
+  ): Promise<{ snapshotVersionWritten: number; mutationCount: number }> {
+    const deps = this.deps!;
+    const serializeStart = Date.now();
+
+    // Stage the heartbeat status mutation
+    this.stageMutation({ type: "agent_status", agentId: request.agentId, status: "active" });
+
+    // Flush all staged mutations atomically (beat work + heartbeat status)
+    const heartbeatResult = await this.flushStagedMutations(
+      request.companyId,
+      { eventId: beatId, summary: `Beat ${beatId} serialize` },
+      snapshotVersionRead ?? undefined
+    );
+
+    await deps.flushStore();
+
+    phases.serialization = { durationMs: Date.now() - serializeStart, mutationCount: heartbeatResult.applied };
+
+    return { snapshotVersionWritten: heartbeatResult.version, mutationCount: heartbeatResult.applied };
+  }
+
+  // ── Task selection ───────────────────────────────────────
+  // Removed: orchestrator no longer pre-selects tasks for the agent.
+  // Agents see their open tasks in the rendered state and call `task_claim`
+  // themselves. See plans/agent-redesign/00-vision.md.
 
   // ── Build BeatRecord ─────────────────────────────────────
 

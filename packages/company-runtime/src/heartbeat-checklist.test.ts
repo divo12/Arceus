@@ -157,7 +157,7 @@ describe("CTO checklist — checkEscalationPending", () => {
     const result = runChecklist(ctx);
     assert.equal(result.hasActionNeeded, true);
     const escalationAction = result.results.find(
-      (r) => r.suggestedAction === "sprint_review:cto_escalation_review"
+      (r) => r.dispatch?.kind === "sprint_review.cto_escalation_review"
     );
     assert.ok(escalationAction, "Should have escalation action");
     assert.equal(escalationAction.status, "action_needed");
@@ -185,7 +185,7 @@ describe("CTO checklist — checkEscalationPending", () => {
     });
     const result = runChecklist(ctx);
     const escalationAction = result.results.find(
-      (r) => r.suggestedAction === "sprint_review:cto_escalation_review"
+      (r) => r.dispatch?.kind === "sprint_review.cto_escalation_review"
     );
     assert.equal(escalationAction, undefined);
   });
@@ -214,6 +214,6 @@ describe("CTO checklist — checkEscalationPending", () => {
     });
     const result = runChecklist(ctx);
     assert.ok(result.primaryAction);
-    assert.equal(result.primaryAction.suggestedAction, "sprint_review:cto_escalation_review");
+    assert.equal(result.primaryAction.dispatch?.kind, "sprint_review.cto_escalation_review");
   });
 });

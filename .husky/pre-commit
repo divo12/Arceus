@@ -1,0 +1,30 @@
+#!/usr/bin/env sh
+# Arceus pre-commit gate.
+#
+# Runs in this order:
+#   1. lint-staged   → eslint --fix on staged TS/JS files (fast, scoped)
+#   2. silent-catch  → repo-wide grep for bare swallows (fast, ~1s)
+#   3. typecheck     → tsc --noEmit across all workspaces (slow, ~10–30s)
+#   4. drift test    → schema-vs-snapshot agreement (fast, <1s)
+#
+# Order matters: cheap fast checks first so the slow typecheck doesn't
+# run if a basic lint fails.
+#
+# Bypass for genuine emergencies: `git commit --no-verify`. CI catches
+# anything that slips through. Don't make a habit of it.
+
+set -e
+
+echo "[1/4] lint-staged…"
+npx lint-staged
+
+echo "[2/4] silent-catch lint…"
+bun scripts/check-no-silent-catch.ts
+
+echo "[3/4] workspace typecheck…"
+npm run typecheck
+
+echo "[4/4] schema drift test…"
+bun test packages/db/tests/drift.test.ts
+
+echo "✓ pre-commit checks passed."

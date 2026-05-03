@@ -1,0 +1,13 @@
+import postgres from "postgres";
+import { config } from "dotenv";
+config({ path: ".env.local" });
+const sql = postgres(process.env.DATABASE_URL);
+const r = {};
+r.companies = (await sql`select count(*)::int c from companies`)[0].c;
+r.agents = (await sql`select count(*)::int c from agents`)[0].c;
+r.sprints = (await sql`select count(*)::int c from sprints`)[0].c;
+r.tasks = (await sql`select count(*)::int c from tasks`)[0].c;
+console.log(r);
+const ag = await sql`select id, friendly_id, role from agents order by created_at desc limit 10`;
+console.log("recent agents:", ag);
+await sql.end();

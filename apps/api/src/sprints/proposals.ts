@@ -1,225 +1,150 @@
 import type { AgentIdentity, Sprint, Task } from "@arceus/contracts";
-import { createWorkflowTask, getAgentByRole, nowIso } from "@arceus/task-engine";
+import { parseRoleStrict } from "@arceus/contracts";
+import { createWorkflowTask, nowIso } from "@arceus/task-engine";
 import { createSprintRecord } from "@arceus/task-engine";
 import {
-  getSnapshot,
-  appendChatMessage,
-  upsertTask,
   updateTask,
   updateSprint,
   upsertSprint,
   updateCompanySprint,
-} from "../persistence/store.js";
+} from "../persistence/mutations/index.js";
+import { requireActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
-import { emitGraphSprintStarted } from "../observability/graph-emitter.js";
+import { emitGraphSprintStarted } from "../observability/graph-emitter/index.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { emitReactiveBroadcast } from "../orchestration/reactive.js";
-import { classifyCeoResponse, type CeoCard } from "../agents/ceo.js";
-import { getRoleSoul } from "@arceus/company-runtime";
-import { orchestratorConfig } from "../config/index.js";
+import { persistSprint, persistTask } from "../persistence/domain-persistence.js";
 import { workspaceManager } from "../workspace/manager.js";
-import { checkSprintCompletion } from "./lifecycle.js";
-import { ensureAgentSession, runPromptText } from "../prompts/llm.js";
-import { CEO_SPRINT_PROPOSAL_USER_PROMPT } from "../prompts/ceo-sprint.js";
 import {
-  executionStatus,
   setExecutionStatus,
-  ceoProposalInFlight,
-  setCeoProposalInFlight,
-  ceoProposalFailureCount,
-  setCeoProposalFailureCount,
-  ceoProposalCooldownUntilMs,
-  setCeoProposalCooldownUntilMs,
-  eventBridgeStarted,
-  setEventBridgeStarted,
-  activeExecution,
+  eventBridgeOnce,
   setActiveExecution,
-  CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN,
-  CEO_PROPOSAL_COOLDOWN_MS,
+  getHeartbeatEngineRef,
+  getMeetingSchedulerRef,
 } from "../orchestration/state.js";
+import type { SprintCreateInput } from "../routes/internal-mcp/sprints.routes.js";
 
 /**
- * Trigger the CEO to generate a sprint proposal via LLM.
+ * Topologically order tasks so each task comes after its intra-batch
+ * parent and dependencies. Used to avoid 23503 FK violations when a
+ * batch of related tasks is inserted in one shot.
  *
- * Guarded against concurrent calls, cooldown after repeated failures, and
- * duplicate proposals. Auto-approves unless board review is due.
+ * Edges considered:
+ *   - `parentTaskId` (when it points at another task in the batch)
+ *   - `dependsOnTaskIds` (entries that point at other tasks in the batch)
+ *
+ * Tasks with FK targets outside the batch are treated as roots; cycles
+ * (which shouldn't occur but are cheap to defend against) fall back to
+ * input order so persistence still proceeds.
  */
-export async function triggerCeoSprintProposal(): Promise<void> {
-  if (ceoProposalInFlight) {
-    emitEmployeeActivity(
-      "ceo",
-      "info",
-      "CEO proposal already in flight — skipping duplicate trigger.",
-    );
-    return;
-  }
-  if (Date.now() < ceoProposalCooldownUntilMs) {
-    const remainingSec = Math.ceil((ceoProposalCooldownUntilMs - Date.now()) / 1000);
-    emitEmployeeActivity(
-      "ceo",
-      "info",
-      `CEO proposal in cooldown after ${ceoProposalFailureCount} failures — retrying in ${remainingSec}s. Board can send a message to request a proposal manually.`,
-    );
-    return;
-  }
-  setCeoProposalInFlight(true);
-  try {
-    // Ensure the current sprint is marked complete before proposing a new one
-    await checkSprintCompletion();
+function topoSortTasksByDependency(tasks: Task[]): Task[] {
+  const ids = new Set(tasks.map((t) => t.id));
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  const indegree = new Map<string, number>(tasks.map((t) => [t.id, 0]));
+  const children = new Map<string, string[]>();
 
-    const snapshot = getSnapshot();
-
-    // Wait gate: don't propose a new sprint while the current one is still in-flight
-    const inFlightSprint = snapshot.company.currentSprintId
-      ? snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId)
-      : null;
-    if (inFlightSprint && inFlightSprint.status !== "completed") {
-      emitEmployeeActivity(
-        "ceo",
-        "info",
-        `CEO waiting — Sprint ${inFlightSprint.number} is "${inFlightSprint.status}". Next proposal will fire once it closes.`,
-      );
-      return;
+  for (const task of tasks) {
+    const parents = new Set<string>();
+    if (task.parentTaskId && ids.has(task.parentTaskId)) parents.add(task.parentTaskId);
+    for (const dep of task.dependsOnTaskIds ?? []) {
+      if (ids.has(dep)) parents.add(dep);
     }
-
-    // Duplicate guard: if a sprint_proposal card already exists for the current sprint,
-    // try to auto-approve it instead of generating a new one.
-    const existingProposal = snapshot.chatMessages.find(
-      (m) => m.cardType === "sprint_proposal" && m.sprintId === snapshot.company.currentSprintId,
-    );
-    if (existingProposal) {
-      const card = existingProposal.cardData as CeoCard | null;
-      if (card?.sprint_proposal && orchestratorConfig.sprint.autoApproveProposals) {
-        const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
-        const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
-        const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
-        if (!needsBoardReview) {
-          setExecutionStatus("done");
-          emitEmployeeActivity("ceo", "info", `Re-approving existing Sprint ${nextSprintNumber} proposal.`);
-          await approveSprintProposal(card);
-        }
-      }
-      return;
+    indegree.set(task.id, parents.size);
+    for (const p of parents) {
+      const list = children.get(p) ?? [];
+      list.push(task.id);
+      children.set(p, list);
     }
-
-    // Set execution status so CEO stage infers as "between_sprints"
-    setExecutionStatus("done");
-
-    try {
-      // Route through the CEO's existing agent session — Spec 24
-      const ceoSession = await ensureAgentSession(snapshot, "ceo");
-      const ceoSoul = getRoleSoul("ceo");
-      const ceoText = await runPromptText(
-        "ceo",
-        ceoSession.sessionId,
-        ceoSoul.systemPrompt,
-        CEO_SPRINT_PROPOSAL_USER_PROMPT,
-      );
-
-      const card = await classifyCeoResponse(ceoText, snapshot, executionStatus);
-
-      appendChatMessage({
-        id: `chat_${crypto.randomUUID()}`,
-        companyId: snapshot.company.id,
-        sprintId: snapshot.company.currentSprintId,
-        agentId: getAgentByRole(snapshot, "ceo")?.id ?? null,
-        role: "ceo",
-        content: ceoText,
-        cardType: card.card_type,
-        cardData: card,
-        createdAt: nowIso(),
-      });
-
-      const nextSprintNumber = (snapshot.company.currentSprintNumber ?? 0) + 1;
-      const cadence = orchestratorConfig.sprint.boardReviewEveryNSprints;
-      const needsBoardReview = cadence > 0 && nextSprintNumber % cadence === 0;
-
-      if (orchestratorConfig.sprint.autoApproveProposals && !needsBoardReview && card.sprint_proposal) {
-        emitEmployeeActivity(
-          "ceo",
-          "info",
-          `CEO proposed Sprint ${nextSprintNumber}. Auto-approving (board review scheduled for Sprint ${Math.ceil(nextSprintNumber / cadence) * cadence}).`,
-        );
-        await approveSprintProposal(card);
-      } else {
-        const reason = needsBoardReview
-          ? `CEO proposed Sprint ${nextSprintNumber}. Board review required (every ${cadence} sprints). Awaiting board approval.`
-          : `CEO proposed Sprint ${nextSprintNumber}. Board can approve or provide feedback.`;
-        emitEmployeeActivity("ceo", "info", reason);
-      }
-      setCeoProposalFailureCount(0);
-      setCeoProposalCooldownUntilMs(0);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      console.error("[Sprint] CEO sprint proposal generation failed:", message);
-      const newCount = ceoProposalFailureCount + 1;
-      setCeoProposalFailureCount(newCount);
-      const hitCooldown = newCount >= CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN;
-      if (hitCooldown) {
-        setCeoProposalCooldownUntilMs(Date.now() + CEO_PROPOSAL_COOLDOWN_MS);
-      }
-      emitEmployeeActivity(
-        "system",
-        "error",
-        hitCooldown
-          ? `CEO sprint proposal failed ${newCount}x in a row (last: ${message}). Backing off for ${Math.round(CEO_PROPOSAL_COOLDOWN_MS / 60000)}m. Board can message the CEO directly to request a proposal.`
-          : `Failed to auto-generate sprint proposal (attempt ${newCount}/${CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN}): ${message}. Board can message the CEO directly to request a proposal.`,
-      );
-    }
-  } finally {
-    setCeoProposalInFlight(false);
   }
+
+  const ready: string[] = [];
+  for (const [id, deg] of indegree) {
+    if (deg === 0) ready.push(id);
+  }
+
+  const ordered: Task[] = [];
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    const task = byId.get(id);
+    if (task) ordered.push(task);
+    for (const child of children.get(id) ?? []) {
+      const next = (indegree.get(child) ?? 0) - 1;
+      indegree.set(child, next);
+      if (next === 0) ready.push(child);
+    }
+  }
+
+  // Cycle fallback: append any tasks the topo pass missed in input order.
+  if (ordered.length < tasks.length) {
+    const seen = new Set(ordered.map((t) => t.id));
+    for (const t of tasks) {
+      if (!seen.has(t.id)) ordered.push(t);
+    }
+  }
+  return ordered;
 }
 
 /**
- * Approve a CEO sprint proposal: create the sprint record, build the task
- * graph (with dependency wiring and integration task), and kick off execution.
+ * Create a sprint with tasks — called by the sprint_create MCP tool.
+ *
+ * Pure mechanical work: create records, wire dependencies, activate sprint.
+ * All reasoning about WHAT to build comes from the CEO agent.
  */
-export async function approveSprintProposal(card: CeoCard) {
-  if (!card.sprint_proposal) {
-    throw new Error("No sprint_proposal data in the provided card.");
-  }
+export async function createSprintWithTasks(input: SprintCreateInput) {
+  // Spec 31 Phase 7.B.4 — snapshot reads now go through the
+  // canonical-backed view. The store remains authoritative for
+  // mutations until B.4.2 swaps the mutators.
+  const companyId = requireActiveCompanyId();
+  const snapshot = await buildSnapshotView(companyId);
 
-  if (executionStatus !== "done") {
-    throw new Error(`Cannot approve sprint proposal while execution is "${executionStatus}". Must be "done".`);
-  }
-
-  const proposal = card.sprint_proposal;
-
-  if (!proposal.key_tasks || proposal.key_tasks.length === 0) {
-    throw new Error("Sprint proposal has no key_tasks. Ask CEO to repropose with tasks.");
-  }
-
-  const snapshot = getSnapshot();
+  // Guard: can't start a new sprint while one is active
   const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
-  if (currentSprint && currentSprint.status !== "completed") {
-    throw new Error(`Current sprint (${currentSprint.number}) is still "${currentSprint.status}". Cannot start a new sprint.`);
+  if (currentSprint && !["completed", "cancelled"].includes(currentSprint.status)) {
+    throw new Error(`Sprint ${currentSprint.number} is still "${currentSprint.status}". Complete it first.`);
   }
 
   // Create Sprint N+1
-  const sprint = createSprintRecord(
-    { upsertSprint, updateCompanySprint, emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void },
+  // Spec 31 Phase 7.C.d — updateCompanySprint mutator is now
+  // (companyId, sprintId, number); the task-engine helper passes only
+  // (sprintId, number), so close over companyId here.
+  const sprint = await createSprintRecord(
+    {
+      upsertSprint,
+      updateCompanySprint: (sprintId, number) => updateCompanySprint(companyId, sprintId, number),
+      emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void,
+    },
     snapshot,
-    `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${proposal.sprint_goal}`,
-    proposal.sprint_goal,
+    `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${input.goal}`,
+    input.goal,
   );
-  let freshSnapshot = getSnapshot();
+  // Barrier: ensure the sprint row reaches Postgres before we attempt to
+  // insert task rows that FK-reference it. upsertSprint fires the dual-write
+  // async; without this await, persistTask's INSERT can race ahead of
+  // persistSprint's INSERT and trigger 23503 (foreign_key_violation), after
+  // which the tasks never reach the DB and tasksRepo.claimTask returns
+  // not_found indefinitely.
+  await persistSprint(sprint);
+  // Re-fetch the view after the sprint write so createWorkflowTask sees
+  // the new sprint id when it computes task dependencies.
+  const freshSnapshot = await buildSnapshotView(companyId);
 
-  // Create tasks from key_tasks
+  // Create tasks from agent-provided list
   const taskTitleToId = new Map<string, string>();
   const createdTasks: Task[] = [];
 
-  for (const kt of proposal.key_tasks) {
-    const role = kt.assigned_role as AgentIdentity["role"];
+  for (const kt of input.tasks) {
+    const role = parseRoleStrict(kt.assigned_role);
     const task = createWorkflowTask(
       freshSnapshot,
       "implementation",
       role,
       kt.title,
-      kt.rationale || kt.title,
-      kt.rationale || kt.title,
+      kt.description || kt.title,
+      kt.description || kt.title,
       kt.title,
       [`${kt.title} completed`],
-      kt.priority as Task["priority"] || "medium",
+      kt.priority,
       "created",
       sprint.id,
     );
@@ -227,8 +152,8 @@ export async function approveSprintProposal(card: CeoCard) {
     createdTasks.push(task);
   }
 
-  // Resolve explicit dependencies by title
-  for (const kt of proposal.key_tasks) {
+  // Resolve dependencies by title
+  for (const kt of input.tasks) {
     const taskId = taskTitleToId.get(kt.title);
     if (!taskId) continue;
     const depIds = (kt.depends_on || [])
@@ -246,144 +171,53 @@ export async function approveSprintProposal(card: CeoCard) {
     }
   }
 
-  // Collect implementation task IDs (developer + ui_designer produce code artifacts)
-  const implementationTaskIds = createdTasks
-    .filter((t) => t.assignedRole === "developer" || t.assignedRole === "ui_designer")
-    .map((t) => t.id);
-
-  // Auto-add integration task: wire component work into the app entry file
-  let integrationTaskId: string | null = null;
-  if (implementationTaskIds.length >= 2) {
-    const implementationTitles = createdTasks
-      .filter((t) => implementationTaskIds.includes(t.id))
-      .map((t) => `- ${t.title}`);
-    const integrationDescription = [
-      "Wire every component produced in this sprint into the application entry file (src/App.tsx or equivalent).",
-      "",
-      "Why: individual components must be imported and rendered by the app shell — existing on disk is not enough.",
-      "",
-      "Components produced in this sprint:",
-      ...implementationTitles,
-      "",
-      "Steps:",
-      "1. Open the entry file (src/App.tsx or whichever exists for this stack).",
-      "2. Import each sprint component by its relative path.",
-      "3. Render every imported component inside the app's JSX tree in a coherent layout.",
-      "4. If routing is required, wire it here using the project's router.",
-      "5. Pass realistic props — no placeholder-only renders.",
-    ].join("\n");
-
-    const integrationTask = createWorkflowTask(
-      freshSnapshot,
-      "implementation",
-      "developer",
-      "Wire sprint components into app entry (App.tsx)",
-      integrationDescription,
-      integrationDescription,
-      "Every sprint component is imported and rendered by the entry file.",
-      [
-        "Entry file imports every component produced this sprint",
-        "Entry file renders every component in a coherent layout",
-        "App builds and the main view shows the integrated components",
-      ],
-      "critical",
-      "created",
-      sprint.id,
-    );
-    integrationTask.dependsOnTaskIds = [...implementationTaskIds];
-    integrationTask.parentTaskId = implementationTaskIds[0];
-    createdTasks.push(integrationTask);
-    integrationTaskId = integrationTask.id;
+  // Persist all tasks. Two ordering constraints, both critical:
+  //
+  //   1. parent_task_id (and depends_on_task_ids) FK-reference other tasks
+  //      in the SAME batch. A parallel `Promise.all(persistTask)` lets a
+  //      child INSERT race ahead of its parent and trigger pgCode 23503
+  //      (`tasks_parent_task_id_tasks_id_fk`). persistTask's retry only
+  //      heals company/sprint FKs, not task→task ones.
+  //
+  //   2. The previous unawaited `for (...) upsertTask(task)` loop fired a
+  //      duplicate write per task, generating ~4 unhandled rejections per
+  //      sprint_create. persistTask already covers the canonical write.
+  //
+  // Topo-sort by intra-batch parent/dependency edges, then await
+  // sequentially so each parent is durable before its children INSERT.
+  const sortedTasks = topoSortTasksByDependency(createdTasks);
+  for (const task of sortedTasks) {
+    await persistTask(task);
   }
 
-  // Implicit ordering: tester/QA tasks must wait for implementation AND integration
-  const preTestDepIds = integrationTaskId
-    ? [...implementationTaskIds, integrationTaskId]
-    : implementationTaskIds;
-  if (preTestDepIds.length > 0) {
-    for (let i = 0; i < createdTasks.length; i++) {
-      if (createdTasks[i].assignedRole !== "tester") continue;
-      const existing = new Set(createdTasks[i].dependsOnTaskIds);
-      const merged = [...createdTasks[i].dependsOnTaskIds];
-      for (const depId of preTestDepIds) {
-        if (!existing.has(depId)) merged.push(depId);
-      }
-      createdTasks[i] = {
-        ...createdTasks[i],
-        dependsOnTaskIds: merged,
-        parentTaskId: createdTasks[i].parentTaskId || merged[0],
-      };
-    }
-  }
-
-  // Find leaf tasks (tasks that no other task depends on)
-  const allDepIds = new Set(createdTasks.flatMap((t) => t.dependsOnTaskIds));
-  const leafTaskIds = createdTasks
-    .filter((t) => !allDepIds.has(t.id))
-    .map((t) => t.id);
-
-  // Auto-add CTO board_handoff review as final task
-  const reviewTask = createWorkflowTask(
-    freshSnapshot,
-    "board_handoff",
-    "cto",
-    "CTO Sprint Review",
-    "Review the sprint deliverables and prepare handoff summary.",
-    "Verify all sprint work and produce review summary.",
-    "Sprint review summary",
-    ["All sprint deliverables reviewed", "Summary produced"],
-    "medium",
-    "created",
-    sprint.id,
-  );
-  reviewTask.dependsOnTaskIds = leafTaskIds;
-  reviewTask.parentTaskId = leafTaskIds[0] || null;
-  createdTasks.push(reviewTask);
-
-  // Add child links for leaf → review
-  for (const leafId of leafTaskIds) {
-    const idx = createdTasks.findIndex((t) => t.id === leafId);
-    if (idx >= 0) {
-      createdTasks[idx] = {
-        ...createdTasks[idx],
-        childTaskIds: [...createdTasks[idx].childTaskIds, reviewTask.id],
-      };
-    }
-  }
-
-  // Persist all tasks
-  for (const task of createdTasks) {
-    upsertTask(task);
-  }
-
-  // ── Graph instrumentation (Spec 22) — Sprint N+1 graph ──
+  // Graph instrumentation
   emitGraphSprintStarted(sprint.id, sprint.number, sprint.goal, createdTasks, "ceo_proposal");
 
   // Auto-promote tasks with no dependencies to "planned"
   for (const task of createdTasks) {
     if (task.dependsOnTaskIds.length === 0 && task.status === "created") {
-      updateTask(task.id, (t) => ({ ...t, status: "planned" as Task["status"] }));
+      await updateTask(task.id, (t) => ({ ...t, status: "planned" }));
     }
   }
 
   // Mark sprint as active
-  updateSprint(sprint.id, (s) => ({
+  await updateSprint(sprint.id, (s) => ({
     ...s,
-    status: "executing" as Sprint["status"],
+    status: "executing",
     startedAt: nowIso(),
   }));
 
   emitEmployeeActivity(
     "system",
     "info",
-    `Sprint ${sprint.number} approved with ${createdTasks.length} tasks. Starting execution.`,
+    `Sprint ${sprint.number} created by CEO with ${createdTasks.length} tasks. Execution starting.`,
   );
 
   setActiveExecution({
-    companyId: freshSnapshot.company.id,
+    companyId,
     buildTaskId: "",
     previewTaskId: "",
-    reviewTaskId: reviewTask.id,
+    reviewTaskId: "",
   });
 
   await beginSprintExecution();
@@ -392,43 +226,38 @@ export async function approveSprintProposal(card: CeoCard) {
 }
 
 /**
- * Rejects a sprint proposal — resets to "done" so the board can re-chat with CEO.
+ * Sprint execution entry — ensures workspace is ready and sets status.
  */
-export function rejectSprintProposal() {
-  setExecutionStatus("done");
-  emitEmployeeActivity(
-    "system",
-    "info",
-    "Sprint proposal rejected by board. CEO awaits further direction via chat.",
-  );
-  return { executionStatus };
-}
-
-/**
- * Lighter execution entry for Sprint 2+ — uses tasks already created by approveSprintProposal.
- * Accepts an optional `onStartEventBridge` callback to start the event bridge without
- * creating a circular dependency with the heartbeat module.
- */
-export async function beginSprintExecution(
+async function beginSprintExecution(
   onStartEventBridge?: () => Promise<void>,
 ): Promise<void> {
-  const snapshot = getSnapshot();
+  // Spec 31 Phase 7.B.4 — only reads `company.id` from the snapshot
+  // bridge; full snapshot view not needed for this entry point.
+  const companyId = requireActiveCompanyId();
 
   setExecutionStatus("executing");
 
   try {
-    await workspaceManager.ensureLocal(snapshot.company.id);
+    await workspaceManager.ensureLocal(companyId);
 
-    if (!eventBridgeStarted && onStartEventBridge) {
-      onStartEventBridge().catch(() => {});
-      setEventBridgeStarted(true);
+    if (onStartEventBridge) {
+      // C6 — `eventBridgeOnce` dedups concurrent starts so this is safe
+      // to call unconditionally. The previous `if (!eventBridgeStarted)`
+      // had a check-then-act race against checklist-executor.
+      swallowAndAudit("event_bridge.start.from_sprint", () =>
+        eventBridgeOnce.run(() => onStartEventBridge()),
+        { companyId, detail: { context: "sprint_proposal_execute" } });
     }
 
-    emitEmployeeActivity(
-      "system",
-      "info",
-      "Sprint execution ready — heartbeat engine will pick up planned tasks.",
-    );
+    // Start the heartbeat engine + meeting scheduler so agents begin working
+    const hbEngine = getHeartbeatEngineRef();
+    if (hbEngine) {
+      hbEngine.start();
+      getMeetingSchedulerRef()?.start();
+      emitEmployeeActivity("system", "info", "Sprint execution ready — heartbeat engine started.");
+    } else {
+      emitEmployeeActivity("system", "info", "Sprint execution ready — heartbeat engine will pick up planned tasks.");
+    }
   } catch (err) {
     setExecutionStatus("error");
     const msg = err instanceof Error ? err.message : "Unknown error";

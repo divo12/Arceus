@@ -5,6 +5,7 @@ import {
   runATAPipeline,
 } from "@arceus/company-runtime";
 import { applyGovernanceToMutation } from "./governance.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 
 /**
  * Spec 14 Phase 6: Cross-sprint pattern transfer.
@@ -56,13 +57,17 @@ export async function runCrossSprintTransfer(
         `[CrossSprintTransfer] Promoted cluster ${candidate.clusterId} → mutation ${mutation.id} ` +
         `(${candidate.memberCount} members, success=${candidate.combinedSuccessRate.toFixed(2)})`,
       );
-      runATAPipeline(mutation.id).then((result) => {
+      // Audit C3.2 (F-279): emergent ATA pipeline is fire-and-forget but
+      // failures must land in the audit trail — without this a refused
+      // mutation looks identical to a crashed pipeline at the operator level.
+      swallowAndAudit("ata.pipeline_emergent", async () => {
+        const result = await runATAPipeline(mutation.id);
         console.log(`[ATA] Emergent ${result.verdict.toUpperCase()} for ${mutation.id} (score=${result.reviewVerdict.overallScore})`);
-      }).catch((err) => {
-        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
-      });
+      },
+        { companyId, detail: { mutationId: mutation.id, clusterId: candidate.clusterId } },
+      );
     } catch (err) {
-      console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[CrossSprintTransfer] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -83,11 +88,13 @@ export async function runPatternPromotionSweep(companyId: string): Promise<{
     try {
       const mutation = await proposeSkillFromCluster(candidate);
       mutationsProposed++;
-      runATAPipeline(mutation.id).catch((err) => {
-        console.warn(`[ATA] Emergent pipeline error for ${mutation.id}: ${err instanceof Error ? err.message : err}`);
+      swallowAndAudit("ata.pipeline.emergent", () => runATAPipeline(mutation.id), {
+        companyId,
+        agentRole: "skills_lead",
+        detail: { mutationId: mutation.id, clusterId: candidate.clusterId },
       });
     } catch (err) {
-      console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[PatternLearner] proposeSkillFromCluster failed for ${candidate.clusterId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return { candidatesFound: candidates.length, mutationsProposed };

@@ -3,17 +3,28 @@ import zodToJsonSchema from "zod-to-json-schema";
 import { runtimeConfig, ensureDeployment } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { audit } from "../observability/audit-ledger.js";
+import { recordLlmCost } from "../observability/cost-recorder.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+interface ChatMessage { role: "system" | "user" | "assistant"; content: string }
 
 /** Optional context for audit logging LLM calls. */
-export type LlmAuditContext = {
+interface LlmAuditContext {
   companyId: string;
   agentRole?: string;
   correlationId?: string;
   /** Caller label for the summary, e.g. "ceo_classification" */
   label?: string;
-};
+  /**
+   * Spec 31 Phase 6 — cost-event routing. When set, the cost_events row
+   * inserted by `auditLlmCall` populates these FKs so dashboards can
+   * group spend by beat or by task. Both accept friendly ids (e.g.
+   * "beat_abc...", "tsk_xyz...") — they're hashed to the matching DB
+   * uuids via the same uuidv5 boundary used elsewhere.
+   */
+  runId?: string;
+  taskId?: string;
+}
 
 /** Build the Azure OpenAI chat completions URL for a given deployment. */
 function deploymentUrl(deployment: string) {
@@ -21,7 +32,7 @@ function deploymentUrl(deployment: string) {
   return `${base}/openai/deployments/${deployment}/chat/completions?api-version=${runtimeConfig.azureApiVersion}`;
 }
 
-type AzureOpenAIUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+interface AzureOpenAIUsage { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 
 // ── Per-beat token accumulator ─────────────────────────────
 // Tracks total tokens consumed during a beat window so the heartbeat
@@ -101,10 +112,25 @@ function auditLlmCall(
     },
     correlationId: ctx?.correlationId ?? null,
   });
+
+  // Spec 31 Phase 6 — durable cost mirror. Single fan-out point covers
+  // every structuredCompletion + chatCompletion caller (the audit log
+  // already had to be uniform). Skipped for system-scoped calls where
+  // ctx.companyId is missing/_system (recordLlmCost no-ops in that case).
+  void recordLlmCost({
+    provider: "azure",
+    model: deployment,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    companyId: ctx?.companyId,
+    agentRole: ctx?.agentRole,
+    runId: ctx?.runId,
+    taskId: ctx?.taskId,
+  }).catch(() => { /* recordLlmCost already swallows + warns */ });
 }
 
 /** Send a chat completion request to Azure OpenAI with resilience and audit logging. */
-export async function chatCompletion(
+async function chatCompletion(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
   auditCtx?: LlmAuditContext,
@@ -121,7 +147,8 @@ export async function chatCompletion(
           "Content-Type": "application/json",
           "api-key": runtimeConfig.azureApiKey
         },
-        body: JSON.stringify({ messages, temperature: 0.7 })
+        body: JSON.stringify({ messages, temperature: 0.7 }),
+        signal: AbortSignal.timeout(AZURE_OPENAI_REQUEST_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -130,7 +157,7 @@ export async function chatCompletion(
       }
 
       const json = (await response.json()) as {
-        choices: Array<{ message: { content: string } }>;
+        choices: { message: { content: string } }[];
         usage?: AzureOpenAIUsage;
       };
       const latencyMs = Math.round(performance.now() - start);
@@ -178,6 +205,15 @@ export class LlmTruncatedOutputError extends Error {
  * hit deployment defaults and produce truncated JSON. */
 const DEFAULT_STRUCTURED_MAX_TOKENS = 12000;
 
+/**
+ * Per-request timeout for Azure OpenAI calls. Used by both the streaming
+ * chat completion path and `structuredCompletion`. 90s is well above p99
+ * for sprint proposal / strategy generation prompts (~30-40s) but short
+ * enough that a stuck deployment fails the beat instead of hanging the
+ * whole heartbeat loop.
+ */
+const AZURE_OPENAI_REQUEST_TIMEOUT_MS = 90_000;
+
 export async function structuredCompletion<T>(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
@@ -209,7 +245,7 @@ export async function structuredCompletion<T>(
         body: JSON.stringify({
           messages,
           temperature: options?.temperature ?? 0.7,
-          max_tokens: maxTokens,
+          max_completion_tokens: maxTokens,
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -219,6 +255,7 @@ export async function structuredCompletion<T>(
             },
           },
         }),
+        signal: AbortSignal.timeout(AZURE_OPENAI_REQUEST_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -227,7 +264,7 @@ export async function structuredCompletion<T>(
       }
 
       const json = (await response.json()) as {
-        choices: Array<{ message: { content: string }; finish_reason?: string }>;
+        choices: { message: { content: string }; finish_reason?: string }[];
         usage?: AzureOpenAIUsage;
       };
       const latencyMs = Math.round(performance.now() - start);
@@ -258,7 +295,7 @@ export async function structuredCompletion<T>(
 }
 
 /** Stream a chat completion response from Azure OpenAI, returning the raw byte stream. */
-export async function chatCompletionStream(
+async function chatCompletionStream(
   deploymentKey: "ceoDeployment" | "workerDeployment",
   messages: ChatMessage[],
   auditCtx?: LlmAuditContext,
@@ -275,7 +312,16 @@ export async function chatCompletionStream(
           "Content-Type": "application/json",
           "api-key": runtimeConfig.azureApiKey
         },
-        body: JSON.stringify({ messages, temperature: 0.7, stream: true })
+        // Spec 31 Phase 6 — request the trailing usage chunk so we can
+        // record cost_events. Without `include_usage:true`, Azure/OpenAI's
+        // SSE stream omits the final usage object and we can't tell how
+        // many tokens the call consumed.
+        body: JSON.stringify({
+          messages,
+          temperature: 0.7,
+          stream: true,
+          stream_options: { include_usage: true },
+        })
       });
 
       if (!response.ok) {
@@ -287,8 +333,6 @@ export async function chatCompletionStream(
         throw new Error("Azure OpenAI returned no stream body.");
       }
 
-      // For streaming, we can't read usage from the response (it's chunked).
-      // Audit a start event with latency-to-first-byte.
       const latencyMs = Math.round(performance.now() - start);
       audit({
         companyId: auditCtx?.companyId ?? "_system",
@@ -301,9 +345,91 @@ export async function chatCompletionStream(
         correlationId: auditCtx?.correlationId ?? null,
       });
 
-      return response.body;
+      // Tee the stream: the caller consumes one branch as raw bytes,
+      // we consume the other looking for the trailing `usage` chunk
+      // and fire recordLlmCost once we find it. The tee is fully
+      // backpressure-aware — caller's consumption rate isn't blocked
+      // by ours and vice versa.
+      const [forCaller, forUsageWatcher] = response.body.tee();
+      // The usage watcher is best-effort cost telemetry — its failure
+      // shouldn't taint the caller's stream. Route through swallowAndAudit
+      // so the failure surfaces to operators instead of console.
+      swallowAndAudit("openai.usage_watcher", () =>
+        watchForUsageAndRecord(forUsageWatcher, deployment, auditCtx),
+        { detail: { deployment } },
+      );
+      return forCaller;
     },
     { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
   );
+}
+
+/**
+ * Drain a teed copy of the SSE byte stream, parse each `data: {...}`
+ * line, and fire `recordLlmCost` when we find the chunk that carries
+ * the `usage` object (the trailing chunk emitted by Azure/OpenAI when
+ * `stream_options.include_usage=true`).
+ *
+ * Tolerant to:
+ *   - Multi-line buffer splits (we accumulate until newline)
+ *   - The `data: [DONE]` sentinel (skipped, not parsed)
+ *   - Earlier chunks without `usage` (skipped silently)
+ */
+async function watchForUsageAndRecord(
+  stream: ReadableStream<Uint8Array>,
+  deployment: string,
+  auditCtx?: LlmAuditContext,
+): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let recorded = false;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE frames are newline-delimited. Split on `\n` and keep the
+      // trailing partial line in the buffer for the next iteration.
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "" || payload === "[DONE]") continue;
+
+        let parsed: { usage?: AzureOpenAIUsage } | undefined;
+        try {
+          parsed = JSON.parse(payload) as { usage?: AzureOpenAIUsage };
+        } catch {
+          continue; // partial chunk or malformed — skip
+        }
+
+        if (!recorded && parsed?.usage) {
+          recorded = true;
+          const promptTokens = parsed.usage.prompt_tokens ?? 0;
+          const completionTokens = parsed.usage.completion_tokens ?? 0;
+          accumulateBeatTokens(promptTokens + completionTokens);
+          void recordLlmCost({
+            provider: "azure",
+            model: deployment,
+            inputTokens: promptTokens,
+            outputTokens: completionTokens,
+            companyId: auditCtx?.companyId,
+            agentRole: auditCtx?.agentRole,
+            runId: auditCtx?.runId,
+            taskId: auditCtx?.taskId,
+          }).catch(() => { /* recordLlmCost already swallows + warns */ });
+          // Continue draining (we don't break) so the tee'd reader doesn't
+          // back-pressure the caller's branch.
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 

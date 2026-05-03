@@ -5,7 +5,18 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "langfuse": "^3.38.0",
+    "pino": "^9.5.0",
     "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "@opentelemetry/sdk-trace-node": "^1.30.0"
   }
 }

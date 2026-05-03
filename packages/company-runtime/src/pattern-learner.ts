@@ -51,6 +51,12 @@ export function hasPatternLearnerDeps(): boolean {
   return deps !== null;
 }
 
+/** Spec 29 Phase F — orchestrator-only direct access to wired LLM primitives. */
+export function getPatternLearnerDeps(): PatternLearnerDeps {
+  if (!deps) throw new Error("[PatternLearner] deps not configured");
+  return deps;
+}
+
 // ── Constants ────────────────────────────────────────────
 
 /** Cosine similarity threshold for clustering (spec §1063). */
@@ -381,7 +387,7 @@ export function checkSkillCandidates(companyId: string): SkillCandidate[] {
 export function analyzeSprintPatterns(
   companyId: string,
   sprintId: string,
-  minFrequency: number = 3,
+  minFrequency = 3,
 ): SkillCandidate[] {
   // Sprint-scoped patterns with sufficient frequency
   const sprintPatterns = getPatternsForCompany(companyId).filter(
@@ -427,7 +433,7 @@ export function analyzeSprintPatterns(
     // Path B: cross-sprint recurrence — same pattern seen in ≥2 sprints with
     // usageCount ≥ minFrequency. Single pattern repeated across sprint boundaries
     // is the strongest possible signal that a skill is needed.
-    const leadMember = raw.members[0]!;
+    const leadMember = raw.members[0];
     const isCrossSprintRecurrence =
       (leadMember.sprintIds ?? []).length >= 2 &&
       leadMember.usageCount >= minFrequency;
@@ -487,6 +493,7 @@ export async function proposeSkillFromCluster(candidate: SkillCandidate): Promis
     trigger: synthesized.description || synthesized.trigger,
     content: synthesized.content,
     testCases: [],
+    resources: [],
     successRate: candidate.combinedSuccessRate,
     usageCount: 0,
     lastUsedAt: null,

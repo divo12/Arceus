@@ -56,10 +56,43 @@ export const beatTriggerSchema = z.discriminatedUnion("type", [
 
 export const beatStatusSchema = z.enum(["running", "completed", "failed", "skipped", "timed_out"]);
 
+/**
+ * Audit C11 (F-249, F-251, F-275, F-276, F-286): typed discriminator for
+ * machine-routed checklist actions. Replaces the previous colon-string
+ * convention (e.g. `"sprint_review:cto_escalation_review"`,
+ * `"meeting_contribution:<meetingId>"`) which checklist-executor.ts had
+ * to parse via `startsWith` / `split(":")`. Producers now set this when
+ * the action is meant for the dispatch table; `suggestedAction` is
+ * reserved for human-readable display text.
+ *
+ * If you add a new kind here:
+ *   1. add a producer site in `heartbeat-checklist.ts` that sets it
+ *   2. add a `case` arm in `checklist-executor.ts` switch — exhaustiveness
+ *      check fails the build until you do.
+ */
+export const checklistDispatchSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("sprint_review.run_tester_verification") }),
+  z.object({ kind: z.literal("sprint_review.run_final_gate") }),
+  z.object({ kind: z.literal("sprint_review.retest_after_rework") }),
+  z.object({ kind: z.literal("sprint_review.cto_escalation_review") }),
+  z.object({ kind: z.literal("sprint_review.cto_escalation_force_complete") }),
+  z.object({ kind: z.literal("skills_lead.mutate_underperformer") }),
+  z.object({ kind: z.literal("skills_lead.deprecate_unused") }),
+  z.object({ kind: z.literal("skills_lead.fill_skill_gap") }),
+  z.object({ kind: z.literal("meeting_contribution"), meetingId: z.string() }),
+  z.object({ kind: z.literal("task_resolve_blocker"), taskId: z.string() }),
+]);
+
+export type ChecklistDispatch = z.infer<typeof checklistDispatchSchema>;
+export type ChecklistDispatchKind = ChecklistDispatch["kind"];
+
 export const checkResultSchema = z.object({
   status: z.enum(["ok", "action_needed", "blocked"]),
   detail: z.string().optional(),
+  /** Human-readable display text. Free-form; do NOT parse. */
   suggestedAction: z.string().optional(),
+  /** Machine-routed action — checked by checklist-executor.ts. */
+  dispatch: checklistDispatchSchema.optional(),
 });
 
 export const beatPhaseTimingSchema = z.object({

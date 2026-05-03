@@ -17,4 +17,11 @@ export const previewConfig = {
   exactPathPreferenceScore: readNumberEnv("ARCEUS_PREVIEW_EXACT_PATH_SCORE", 1000),
   relatedPathPreferenceScore: readNumberEnv("ARCEUS_PREVIEW_RELATED_PATH_SCORE", 500),
   ignoredDirectories: readListEnv("ARCEUS_PREVIEW_IGNORED_DIRECTORIES", defaultIgnoredDirectories),
+
+  /**
+   * Timeout for `npm/pnpm install` invoked from `scaffold.ts` (initial
+   * workspace bootstrap) and `preview.ts` (lazy install during launch).
+   * Both sites share this so a single env var changes both.
+   */
+  installTimeoutMs: readNumberEnv("ARCEUS_PREVIEW_INSTALL_TIMEOUT_MS", 120_000),
 };

@@ -53,5 +53,6 @@ export const strategyBriefSchema = z.object({
 });
 
 export type Company = z.infer<typeof companySchema>;
+export type CompanyStatus = z.infer<typeof companyStatusSchema>;
 export type FundamentalIdea = z.infer<typeof fundamentalIdeaSchema>;
 export type StrategyBrief = z.infer<typeof strategyBriefSchema>;

@@ -1,0 +1,115 @@
+# ─────────────────────────────────────────────────────────────────
+# Arceus local stack — single-command setup for testing.
+#
+#   db   : Postgres 17 + pgvector + pgcrypto + pg_trgm  (5432)
+#   api  : Fastify + heartbeat engine + OpenCode runtime (4000)
+#   web  : Next.js standalone server                     (3000)
+#
+# Quickstart:
+#   cp .env.docker.example .env.docker
+#   # fill in ARCEUS_AZURE_OPENAI_* (everything else has sane defaults)
+#   docker compose --env-file .env.docker up --build
+#
+# Reset (destructive — wipes pgdata + workspaces):
+#   docker compose down -v
+# ─────────────────────────────────────────────────────────────────
+
+name: arceus
+
+services:
+  db:
+    # pgvector image is the official Postgres image + the vector extension.
+    # Required by hippocampus.memory_embeddings.
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-arceus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arceus}
+      POSTGRES_DB: ${POSTGRES_DB:-arceus}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arceus} -d ${POSTGRES_DB:-arceus}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./pg-init.sql:/docker-entrypoint-initdb.d/00-arceus-init.sql:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-1.3.17}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "4000"
+      ARCEUS_ALLOWED_ORIGINS: "http://localhost:3000,http://web:3000"
+
+      # The codebase reads SUPABASE_DB_URL → ARCEUS_HIPPOCAMPUS_POSTGRES_URL
+      # → DATABASE_URL in that order. Point all three at the local pg
+      # container so any code path resolves consistently.
+      DATABASE_URL: postgres://${POSTGRES_USER:-arceus}:${POSTGRES_PASSWORD:-arceus}@db:5432/${POSTGRES_DB:-arceus}
+      ARCEUS_HIPPOCAMPUS_POSTGRES_URL: postgres://${POSTGRES_USER:-arceus}:${POSTGRES_PASSWORD:-arceus}@db:5432/${POSTGRES_DB:-arceus}
+      # Leave empty unless the user explicitly provided a remote Supabase URL.
+      # When empty, the codebase falls through to ARCEUS_HIPPOCAMPUS_POSTGRES_URL
+      # → DATABASE_URL, both pointing at the local pgvector container above.
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL:-}
+
+      # Azure OpenAI — REQUIRED for the agent runtime to do real work.
+      ARCEUS_AZURE_OPENAI_ENDPOINT: ${ARCEUS_AZURE_OPENAI_ENDPOINT}
+      ARCEUS_AZURE_OPENAI_API_KEY: ${ARCEUS_AZURE_OPENAI_API_KEY}
+      ARCEUS_AZURE_OPENAI_API_VERSION: ${ARCEUS_AZURE_OPENAI_API_VERSION:-2024-10-21}
+      ARCEUS_AZURE_OPENAI_RESOURCE_NAME: ${ARCEUS_AZURE_OPENAI_RESOURCE_NAME}
+      ARCEUS_AZURE_OPENAI_DEPLOYMENT: ${ARCEUS_AZURE_OPENAI_DEPLOYMENT}
+      ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT: ${ARCEUS_AZURE_OPENAI_CEO_DEPLOYMENT}
+      ARCEUS_AZURE_OPENAI_WORKER_DEPLOYMENT: ${ARCEUS_AZURE_OPENAI_WORKER_DEPLOYMENT}
+
+      # OpenCode reads these names directly when building Azure URLs.
+      AZURE_OPENAI_API_KEY: ${ARCEUS_AZURE_OPENAI_API_KEY}
+      AZURE_RESOURCE_NAME: ${ARCEUS_AZURE_OPENAI_RESOURCE_NAME}
+
+      # Optional: Supabase Storage (workspace bundle sync).
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+
+      ARCEUS_TOKEN: ${ARCEUS_TOKEN:?ARCEUS_TOKEN must be set in .env.docker}
+      ARCEUS_REQUIRE_AUTH: ${ARCEUS_REQUIRE_AUTH:-0}
+      ARCEUS_PERSISTENCE_MODE: ${ARCEUS_PERSISTENCE_MODE:-local}
+      ARCEUS_MEETINGS_ENABLED: ${ARCEUS_MEETINGS_ENABLED:-true}
+    volumes:
+      - workspaces:/var/lib/arceus
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        # NEXT_PUBLIC_* is inlined at BUILD time, not runtime. To change,
+        # rebuild the image.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      # Server-side rewrite target — resolves via the compose network DNS.
+      NEXT_PUBLIC_API_URL: http://api:4000
+
+volumes:
+  pgdata:
+  workspaces:

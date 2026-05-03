@@ -1,14 +1,15 @@
 import type { Habit, MemoryUnit, PrimingState } from "@arceus/contracts";
+export type { PrimingState } from "@arceus/contracts";
 
-export type PreparedAgentContext = {
+export interface PreparedAgentContext {
   memories: MemoryUnit[];
   habits: Habit[];
   priming: string;
-};
+}
 
 export type TaskOutcome = "success" | "partial" | "failure";
 
-export type ExtractedFact = {
+export interface ExtractedFact {
   content: string;
   type: "static" | "dynamic" | "procedural";
   confidence: number;
@@ -18,29 +19,26 @@ export type ExtractedFact = {
   trigger?: string;
   /** For procedural facts only: what to do */
   action?: string;
-};
+}
 
 /** LLM-powered fact extractor — injected from the API layer */
 export type FactExtractor = (agentOutput: string, taskTitle: string, role: string) => Promise<ExtractedFact[]>;
 
 /** LLM action decision result for a single fact */
-export type MemoryAction = {
+export interface MemoryAction {
   action: "ADD" | "UPDATE" | "DELETE" | "NONE";
   /** ID of the existing memory to update/delete (null for ADD/NONE) */
   target_id: string | null;
   reason: string;
-};
+}
 
 /** LLM-powered action decider — injected from the API layer */
-export type ActionDecider = (newFact: string, existingMemories: Array<{ id: string; content: string; type: string; confidence: number }>) => Promise<MemoryAction>;
+export type ActionDecider = (newFact: string, existingMemories: { id: string; content: string; type: string; confidence: number }[]) => Promise<MemoryAction>;
 
 /** LLM-powered habit matcher — returns IDs of habits relevant to a task */
 export type HabitMatcher = (taskDescription: string, habits: Habit[]) => Promise<string[]>;
 
-/** LLM-powered priming disposition generator — returns a one-line behavioral instruction */
-export type PrimingGenerator = (state: PrimingState) => Promise<string>;
-
-export type ProcessTaskCompletionInput = {
+export interface ProcessTaskCompletionInput {
   agentId: string;
   taskId: string;
   companyId: string;
@@ -50,13 +48,13 @@ export type ProcessTaskCompletionInput = {
   taskTitle?: string;
   /** Agent role (e.g. "developer", "cto") — used by LLM extractor */
   role?: string;
-};
+}
 
-export type GCResult = {
+export interface GCResult {
   deletedDynamicUnits: number;
   deactivatedHabits: number;
   compactedEvents: number;
-};
+}
 
 export interface HippocampusGateway {
   prepareAgentContext(agentId: string, taskDescription: string): Promise<PreparedAgentContext>;
@@ -75,7 +73,7 @@ export interface StaticMemoryStore {
     agentId: string,
     queryEmbedding: number[],
     limit?: number,
-  ): Promise<Array<MemoryUnit & { similarity: number }>>;
+  ): Promise<(MemoryUnit & { similarity: number })[]>;
 }
 
 export interface DynamicMemoryStore {
@@ -88,14 +86,14 @@ export interface DynamicMemoryStore {
     agentId: string,
     queryEmbedding: number[],
     limit?: number,
-  ): Promise<Array<MemoryUnit & { similarity: number; decayedScore: number }>>;
+  ): Promise<(MemoryUnit & { similarity: number; decayedScore: number })[]>;
 }
 
 // ---------------------------------------------------------------------------
 // Retrieval engine types
 // ---------------------------------------------------------------------------
 
-export type RetrievalOptions = {
+export interface RetrievalOptions {
   /** Number of final memories to return (default: 5) */
   topK: number;
   /** Over-fetch multiplier — fetch topK * overFetch candidates (default: 3) */
@@ -106,7 +104,7 @@ export type RetrievalOptions = {
   tierBoost: { static: number; dynamic: number };
   /** Scope boost when memory container matches the agent's container */
   scopeBoost: number;
-};
+}
 
 export type ScoredMemory = MemoryUnit & {
   /** Raw cosine similarity from pgvector */

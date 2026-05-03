@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Arceus — The Living Company</title>
+<style>
+  /* ---------- Design tokens ---------- */
+  :root{
+    --bg-0:#070a0f;
+    --bg-1:#0c1018;
+    --bg-2:#121826;
+    --bg-3:#1a2235;
+    --line:#1f2a40;
+    --line-2:#2a3756;
+    --text-1:#e6edf7;
+    --text-2:#9aa7bd;
+    --text-3:#5b6680;
+    --accent:#00e5ff;
+    --accent-dim:rgba(0,229,255,.18);
+    --accent-glow:0 0 24px rgba(0,229,255,.35);
+    --warn:#ffb454;
+    --bad:#ff5d6c;
+    --good:#5dffa8;
+    --shadow:0 10px 40px rgba(0,0,0,.45);
+    --r:14px;
+    --r-sm:8px;
+    --mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+    --sans:'Inter',-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg-0);color:var(--text-1);font-family:var(--sans);font-size:14px;letter-spacing:-.005em}
+  body{background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(0,229,255,.06), transparent 60%),
+    radial-gradient(900px 500px at 0% 100%, rgba(0,229,255,.04), transparent 60%),
+    var(--bg-0);
+    overflow:hidden;
+  }
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* ---------- Shell ---------- */
+  .app{display:grid;grid-template-columns:64px 1fr;height:100vh}
+  .rail{background:var(--bg-1);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px}
+  .rail .logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#0091a8);display:grid;place-items:center;color:#001016;font-weight:800;margin-bottom:14px;box-shadow:var(--accent-glow)}
+  .rail button{all:unset;cursor:pointer;width:40px;height:40px;border-radius:10px;display:grid;place-items:center;color:var(--text-3);position:relative;transition:.15s}
+  .rail button:hover{color:var(--text-1);background:var(--bg-2)}
+  .rail button.active{color:var(--accent);background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgba(0,229,255,.35)}
+  .rail button svg{width:18px;height:18px}
+  .rail .spacer{flex:1}
+  .rail .badge{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 8px var(--warn)}
+
+  .main{position:relative;overflow:hidden}
+  .surface{position:absolute;inset:0;display:none;flex-direction:column}
+  .surface.active{display:flex}
+
+  /* ---------- Top bar ---------- */
+  .topbar{display:flex;align-items:center;gap:18px;padding:14px 22px;border-bottom:1px solid var(--line);background:rgba(12,16,24,.6);backdrop-filter:blur(8px)}
+  .status-line{font-size:13.5px;color:var(--text-2);letter-spacing:.01em}
+  .status-line b{color:var(--text-1);font-weight:600}
+  .status-line .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;background:var(--accent-dim);color:var(--accent);font-size:12px;margin-left:6px}
+  .status-line .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:breathe 2.4s ease-in-out infinite}
+  .topbar .grow{flex:1}
+  .cmdk{display:flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-2);color:var(--text-3);font-size:13px;min-width:280px;cursor:pointer}
+  .cmdk:hover{border-color:var(--accent);color:var(--text-1)}
+  .cmdk kbd{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--bg-3);padding:2px 6px;border-radius:4px;margin-left:auto}
+  .autonomy{display:flex;align-items:center;gap:10px;color:var(--text-2);font-size:12.5px}
+  .autonomy .track{width:120px;height:4px;background:var(--bg-3);border-radius:2px;position:relative}
+  .autonomy .fill{position:absolute;left:0;top:0;bottom:0;width:62%;background:linear-gradient(90deg,var(--accent),#0091a8);border-radius:2px;box-shadow:0 0 8px var(--accent-dim)}
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#3a4a6e,#1a2235);display:grid;place-items:center;font-weight:600;color:var(--text-1);font-size:12px;border:1px solid var(--line-2)}
+
+  /* ---------- Pulse ---------- */
+  .pulse{display:grid;grid-template-columns:1fr 360px;flex:1;overflow:hidden}
+  .pulse .stage{position:relative;overflow:hidden;background:
+    radial-gradient(800px 500px at 50% 50%, rgba(0,229,255,.06), transparent 70%);
+  }
+  .pulse svg.graph{position:absolute;inset:0;width:100%;height:100%}
+  .agent{position:absolute;transform:translate(-50%,-50%);text-align:center}
+  .agent .node{width:64px;height:64px;border-radius:50%;background:var(--bg-2);border:1px solid var(--line-2);display:grid;place-items:center;font-weight:700;color:var(--text-1);position:relative;transition:.3s}
+  .agent.active .node{border-color:var(--accent);box-shadow:0 0 0 4px rgba(0,229,255,.08),0 0 24px rgba(0,229,255,.35);animation:breathe 2s ease-in-out infinite}
+  .agent .label{margin-top:8px;font-size:11.5px;color:var(--text-2);letter-spacing:.03em;text-transform:uppercase}
+  .agent .role{font-size:10px;color:var(--text-3);margin-top:2px}
+  .agent.warn .node{border-color:var(--warn);box-shadow:0 0 0 4px rgba(255,180,84,.1)}
+
+  .stream{border-left:1px solid var(--line);background:var(--bg-1);display:flex;flex-direction:column;overflow:hidden}
+  .stream-head{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .stream-head h3{margin:0;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-2);font-weight:600}
+  .stream-head .filters{display:flex;gap:6px;margin-left:auto;font-size:11px}
+  .stream-head .chip{padding:3px 8px;border-radius:999px;background:var(--bg-3);color:var(--text-3);cursor:pointer}
+  .stream-head .chip.on{background:var(--accent-dim);color:var(--accent)}
+  .events{overflow-y:auto;padding:8px 0;flex:1}
+  .event{padding:11px 18px;border-left:2px solid transparent;display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start}
+  .event:hover{background:var(--bg-2)}
+  .event.needs-me{border-left-color:var(--warn);background:linear-gradient(90deg,rgba(255,180,84,.06),transparent)}
+  .event .who{width:24px;height:24px;border-radius:50%;background:var(--bg-3);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--text-1)}
+  .event .body{font-size:13px;color:var(--text-1);line-height:1.45}
+  .event .body em{color:var(--text-3);font-style:normal;font-size:11.5px;display:block;margin-top:2px}
+  .event .body b{color:var(--accent);font-weight:500}
+
+  /* ---------- Atlas ---------- */
+  .atlas{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .atlas-head{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;gap:24px;align-items:end}
+  .atlas-head h2{margin:0;font-size:20px;font-weight:600}
+  .atlas-head .sub{color:var(--text-2);font-size:13px}
+  .atlas-head .meta{margin-left:auto;display:flex;gap:18px;color:var(--text-2);font-size:12.5px}
+  .atlas-head .meta b{color:var(--text-1);font-weight:600;margin-right:4px}
+  .canvas{flex:1;overflow:auto;padding:20px 24px 40px;background:
+    linear-gradient(transparent 39px, var(--line) 40px) 0 0/100% 40px,
+    var(--bg-0);
+  }
+  .swim{display:grid;grid-template-columns:140px repeat(7,1fr);gap:10px;margin-bottom:14px;align-items:center;min-height:88px}
+  .swim .lane{font-size:11px;color:var(--text-3);letter-spacing:.06em;text-transform:uppercase;padding-right:10px;border-right:1px solid var(--line)}
+  .swim .lane b{color:var(--text-1);display:block;font-size:13px;font-weight:600;letter-spacing:0;text-transform:none;margin-bottom:2px}
+  .day-grid{display:grid;grid-template-columns:140px repeat(7,1fr);gap:10px;font-size:11px;color:var(--text-3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+  .day-grid .day{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center}
+  .day-grid .day.today{color:var(--accent);border-bottom-color:var(--accent)}
+  .task{grid-column:span 2;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:10px 12px;font-size:12.5px;cursor:pointer;transition:.15s;position:relative}
+  .task:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:var(--shadow)}
+  .task .t-title{color:var(--text-1);font-weight:500;margin-bottom:4px;line-height:1.3}
+  .task .t-meta{display:flex;gap:8px;align-items:center;color:var(--text-3);font-size:11px}
+  .task .t-meta .who{color:var(--accent)}
+  .task.done{opacity:.55;background:transparent;border-style:dashed}
+  .task.done .t-title{text-decoration:line-through;color:var(--text-3)}
+  .task.flight{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-dim),0 0 18px rgba(0,229,255,.12)}
+  .task.flight::after{content:'';position:absolute;top:8px;right:8px;width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:breathe 2s ease-in-out infinite}
+  .task.blocked{border-color:var(--bad);background:linear-gradient(135deg,rgba(255,93,108,.08),var(--bg-2))}
+  .task.span3{grid-column:span 3}
+  .task.span1{grid-column:span 1}
+
+  /* ---------- Memory ---------- */
+  .memory{flex:1;display:grid;grid-template-columns:1fr 420px;overflow:hidden}
+  .mem-list{overflow-y:auto;padding:24px}
+  .mem-list h2{margin:0 0 4px;font-size:20px;font-weight:600}
+  .mem-list .sub{color:var(--text-2);font-size:13px;margin-bottom:18px}
+  .mem-filters{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .mem-filters .chip{padding:5px 12px;border-radius:999px;background:var(--bg-2);border:1px solid var(--line);color:var(--text-2);font-size:12px;cursor:pointer}
+  .mem-filters .chip.on{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+  .mem{padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-sm);margin-bottom:10px;background:var(--bg-1);cursor:pointer;transition:.15s}
+  .mem:hover{border-color:var(--accent)}
+  .mem .row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .mem .type{font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;border-radius:4px}
+  .mem .type.decision{background:rgba(0,229,255,.14);color:var(--accent)}
+  .mem .type.lesson{background:rgba(255,180,84,.14);color:var(--warn)}
+  .mem .type.constraint{background:rgba(255,93,108,.14);color:var(--bad)}
+  .mem .type.preference{background:rgba(93,255,168,.14);color:var(--good)}
+  .mem .src{margin-left:auto;color:var(--text-3);font-size:11px}
+  .mem .text{color:var(--text-1);font-size:13.5px;line-height:1.45}
+  .mem .meta{margin-top:6px;color:var(--text-3);font-size:11.5px;display:flex;gap:14px}
+
+  .lens{border-left:1px solid var(--line);background:var(--bg-1);overflow-y:auto;padding:24px}
+  .lens-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .lens-head .pill{padding:2px 8px;border-radius:4px;background:var(--accent-dim);color:var(--accent);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .lens-head h3{margin:0;font-size:14px;color:var(--text-2);font-weight:500}
+  .lens .quote{font-size:15px;line-height:1.55;color:var(--text-1);margin:14px 0 18px;padding-left:14px;border-left:2px solid var(--accent)}
+  .lens .by{color:var(--text-3);font-size:12px;margin-bottom:24px}
+  .lens h4{margin:0 0 10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .recall{display:flex;align-items:start;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+  .recall .bar{width:3px;flex-shrink:0;border-radius:2px;background:linear-gradient(to bottom,var(--accent),transparent);height:auto;align-self:stretch}
+  .recall .body{flex:1;font-size:12.5px;color:var(--text-1);line-height:1.45}
+  .recall .body em{color:var(--text-3);font-style:normal;display:block;font-size:11px;margin-top:3px}
+  .recall .sim{font-family:var(--mono);font-size:11px;color:var(--accent)}
+
+  /* ---------- Forge ---------- */
+  .forge{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .forge-head{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;gap:24px;align-items:end}
+  .forge-head h2{margin:0;font-size:20px;font-weight:600}
+  .forge-head .sub{color:var(--text-2);font-size:13px}
+  .forge-body{flex:1;overflow-y:auto;padding:20px 24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px;align-content:start}
+  .skill{border:1px solid var(--line);border-radius:var(--r);padding:16px;background:var(--bg-1);cursor:pointer;transition:.15s}
+  .skill:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .skill .top{display:flex;justify-content:space-between;align-items:start;margin-bottom:10px}
+  .skill h3{margin:0;font-size:14.5px;font-weight:600}
+  .skill .ver{font-family:var(--mono);font-size:12px;color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:4px}
+  .skill .who{color:var(--text-3);font-size:11.5px;margin-bottom:14px}
+  .skill .metric{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+  .skill .metric .v{font-size:22px;font-weight:600;color:var(--text-1);font-family:var(--mono)}
+  .skill .metric .l{font-size:11px;color:var(--text-3);letter-spacing:.05em;text-transform:uppercase}
+  .skill .delta{font-size:12px;font-family:var(--mono)}
+  .skill .delta.up{color:var(--good)}
+  .skill .delta.down{color:var(--bad)}
+  .spark{height:36px;display:flex;align-items:end;gap:3px;margin-bottom:10px}
+  .spark span{flex:1;background:var(--accent);opacity:.4;border-radius:1px}
+  .spark span:last-child{opacity:1;box-shadow:0 0 6px var(--accent)}
+  .skill .note{font-size:11.5px;color:var(--text-3);border-top:1px solid var(--line);padding-top:10px;margin-top:6px}
+  .skill .note b{color:var(--text-2);font-weight:500}
+  .skill.evolving{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-dim),0 0 24px rgba(0,229,255,.1)}
+  .skill.evolving .top::before{content:'evolving';font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);position:absolute;margin-top:-14px;animation:breathe 2s ease-in-out infinite}
+
+  /* ---------- Gate (modal) ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(4,7,12,.78);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:50}
+  .scrim.open{display:flex}
+  .gate{width:560px;max-width:92vw;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+  .gate .g-head{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .gate .g-head .pill{padding:3px 9px;border-radius:4px;background:rgba(255,180,84,.14);color:var(--warn);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .gate .g-head h3{margin:0;font-size:15px;font-weight:600}
+  .gate .g-body{padding:20px 22px}
+  .gate .ask{font-size:16px;line-height:1.5;color:var(--text-1);margin-bottom:18px}
+  .gate .ask b{color:var(--accent);font-weight:600}
+  .gate .row{display:grid;grid-template-columns:110px 1fr;gap:10px;font-size:13px;padding:8px 0;border-top:1px solid var(--line);color:var(--text-2)}
+  .gate .row b{color:var(--text-1);font-weight:500}
+  .gate .reason{margin-top:14px;padding:12px;background:var(--bg-2);border-radius:var(--r-sm);font-size:12.5px;color:var(--text-2);line-height:1.5;border-left:2px solid var(--accent)}
+  .gate .reason em{color:var(--text-3);font-style:normal;font-size:11px;display:block;margin-top:6px}
+  .gate .g-foot{padding:14px 22px;display:flex;gap:10px;border-top:1px solid var(--line);background:var(--bg-2)}
+  .btn{all:unset;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;transition:.15s}
+  .btn.primary{background:var(--accent);color:#001016;font-weight:600}
+  .btn.primary:hover{box-shadow:var(--accent-glow)}
+  .btn.ghost{color:var(--text-2);border:1px solid var(--line-2)}
+  .btn.ghost:hover{color:var(--text-1);border-color:var(--accent)}
+  .btn.warn{background:transparent;color:var(--bad);border:1px solid rgba(255,93,108,.4)}
+  .btn .k{font-family:var(--mono);font-size:11px;color:var(--text-3);margin-left:8px}
+  .btn.primary .k{color:rgba(0,16,22,.5)}
+  .gate .g-foot .grow{flex:1}
+
+  /* ---------- Cmd-K ---------- */
+  .palette{width:560px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+  .palette input{all:unset;width:100%;padding:18px 22px;font-size:15px;color:var(--text-1);border-bottom:1px solid var(--line)}
+  .palette input::placeholder{color:var(--text-3)}
+  .palette .group{padding:8px 0;border-bottom:1px solid var(--line)}
+  .palette .group:last-child{border-bottom:none}
+  .palette .gh{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);padding:6px 22px}
+  .palette .item{padding:10px 22px;font-size:13.5px;color:var(--text-1);display:flex;align-items:center;gap:10px;cursor:pointer}
+  .palette .item:hover,.palette .item.sel{background:var(--accent-dim);color:var(--accent)}
+  .palette .item .hint{margin-left:auto;color:var(--text-3);font-size:11px}
+  .palette .item.sel .hint{color:var(--accent)}
+
+  /* ---------- Animations ---------- */
+  @keyframes breathe{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.7;transform:scale(.95)}}
+  @keyframes flow{from{stroke-dashoffset:40}to{stroke-dashoffset:0}}
+
+  .edge{stroke:var(--line-2);stroke-width:1;fill:none}
+  .edge.live{stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 4;animation:flow 1.2s linear infinite;filter:drop-shadow(0 0 4px var(--accent-dim))}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- =========== LEFT RAIL =========== -->
+  <nav class="rail">
+    <div class="logo">A</div>
+    <button class="active" data-go="pulse" title="Pulse">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
+    </button>
+    <button data-go="atlas" title="Atlas — Sprint">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="11" rx="1.5"/><rect x="3" y="14" width="7" height="6" rx="1.5"/></svg>
+    </button>
+    <button data-go="memory" title="Memory">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a4 4 0 0 0-4 4v1a4 4 0 0 0 0 8 4 4 0 0 0 8 0 4 4 0 0 0 0-8V7a4 4 0 0 0-4-4z"/></svg>
+    </button>
+    <button data-go="forge" title="Skill Forge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3l3 3M3 21l4.5-1.5L20 7l-3-3L4.5 16.5 3 21z"/></svg>
+    </button>
+    <button data-go="gate-list" title="Approvals">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4M12 3l8 4v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z"/></svg>
+      <span class="badge"></span>
+    </button>
+    <div class="spacer"></div>
+    <button title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    <div class="avatar" title="You">P</div>
+  </nav>
+
+  <!-- =========== MAIN =========== -->
+  <main class="main">
+
+    <!-- ============= PULSE ============= -->
+    <section class="surface active" data-id="pulse">
+      <div class="topbar">
+        <div class="status-line">
+          <b>Acme Robotics</b> · Sprint 3 · Day 4 of 7 · <b>12 tasks in flight</b> · 2 need you
+          <span class="pill"><span class="dot"></span>company alive</span>
+        </div>
+        <div class="grow"></div>
+        <div class="autonomy" title="Autonomy level">
+          <span>autonomy</span>
+          <div class="track"><div class="fill"></div></div>
+          <span style="color:var(--text-1)">balanced</span>
+        </div>
+        <div class="cmdk" onclick="openPalette()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <span>Talk to the company…</span>
+          <kbd>⌘K</kbd>
+        </div>
+      </div>
+
+      <div class="pulse">
+        <div class="stage" id="stage">
+          <svg class="graph" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+            <!-- edges (will be re-anchored on resize ideally; static is fine for mockup) -->
+            <path class="edge live"   d="M400,300 C320,220 240,200 180,170"/>
+            <path class="edge live"   d="M400,300 C500,220 580,200 640,170"/>
+            <path class="edge"        d="M400,300 C320,400 240,440 180,470"/>
+            <path class="edge live"   d="M400,300 C500,400 580,440 640,470"/>
+            <path class="edge"        d="M400,300 L400,140"/>
+            <path class="edge"        d="M400,300 L400,470"/>
+            <path class="edge live"   d="M180,170 C260,260 320,280 400,300"/>
+          </svg>
+
+          <div class="agent active" style="left:50%;top:50%"><div class="node">CEO</div><div class="label">Vision</div><div class="role">arc · v8</div></div>
+          <div class="agent active" style="left:22.5%;top:28%"><div class="node">CTO</div><div class="label">Engineering</div><div class="role">claude · v12</div></div>
+          <div class="agent active" style="left:80%;top:28%"><div class="node">DSG</div><div class="label">Design</div><div class="role">gpt · v9</div></div>
+          <div class="agent" style="left:22.5%;top:78%"><div class="node">PM</div><div class="label">Product</div><div class="role">arc · v6</div></div>
+          <div class="agent warn" style="left:80%;top:78%"><div class="node">QA</div><div class="label">Tester</div><div class="role">arc · v4</div></div>
+          <div class="agent" style="left:50%;top:23%"><div class="node">OPS</div><div class="label">Ops</div><div class="role">claude · v3</div></div>
+          <div class="agent" style="left:50%;top:78%"><div class="node">DA</div><div class="label">Data</div><div class="role">gpt · v2</div></div>
+        </div>
+
+        <aside class="stream">
+          <div class="stream-head">
+            <h3>Stream</h3>
+            <div class="filters">
+              <span class="chip on">all</span>
+              <span class="chip">needs me</span>
+              <span class="chip">decisions</span>
+              <span class="chip">progress</span>
+            </div>
+          </div>
+          <div class="events">
+            <div class="event needs-me">
+              <div class="who" style="background:rgba(255,180,84,.2);color:var(--warn)">QA</div>
+              <div class="body">Tester wants to skip e2e for the auth flow this sprint.<em>Wants approval · 2m ago</em></div>
+            </div>
+            <div class="event needs-me">
+              <div class="who" style="background:rgba(0,229,255,.2);color:var(--accent)">OPS</div>
+              <div class="body">Proposed spend: <b>$240/mo Postgres upgrade</b> for vector index.<em>Awaiting you · 11m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">CTO</div>
+              <div class="body">Drafted spec for <b>auth-v2</b>. Recalled 3 prior decisions on session storage.<em>4m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">DSG</div>
+              <div class="body">Shipped onboarding mock revision <b>r3</b>. Designer agent says "tightened copy per CEO note last sprint."<em>9m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">PM</div>
+              <div class="body">Closed task <b>checkout-flow-v1</b> after verification. Marked sprint goal 4/7 complete.<em>14m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">CTO</div>
+              <div class="body">Spec Writer skill auto-evolved <b>v7 → v8</b> after retro lessons.<em>22m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">DA</div>
+              <div class="body">Heartbeat #1,204 — backfilled missing telemetry rows for last week.<em>34m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">OPS</div>
+              <div class="body">Preview probe healthy at <b>localhost:5173</b> for product/twitter-teaser.<em>41m ago</em></div>
+            </div>
+            <div class="event">
+              <div class="who">CEO</div>
+              <div class="body">Locked sprint goal: <b>"Onboarding sub-2-min for first 10 users."</b><em>2h ago</em></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============= ATLAS ============= -->
+    <section class="surface" data-id="atlas">
+      <div class="topbar">
+        <div class="status-line"><b>Sprint 3</b> · "Onboarding sub-2-min for first 10 users" · day 4 of 7</div>
+        <div class="grow"></div>
+        <div class="autonomy" title="Autonomy level"><span>autonomy</span><div class="track"><div class="fill"></div></div><span style="color:var(--text-1)">balanced</span></div>
+        <div class="cmdk" onclick="openPalette()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Talk to the company…</span><kbd>⌘K</kbd></div>
+      </div>
+      <div class="atlas">
+        <div class="atlas-head">
+          <div>
+            <h2>Sprint Atlas</h2>
+            <div class="sub">21 tasks · 8 done · 12 in flight · 1 blocked · planner re-ran 9m ago</div>
+          </div>
+          <div class="meta">
+            <div><b>Velocity</b>+18% vs sprint 2</div>
+            <div><b>Confidence</b>72%</div>
+            <div><b>Risk</b>QA capacity</div>
+          </div>
+        </div>
+        <div class="canvas">
+          <div class="day-grid">
+            <div></div>
+            <div class="day">Mon</div><div class="day">Tue</div><div class="day">Wed</div><div class="day today">Thu · today</div><div class="day">Fri</div><div class="day">Sat</div><div class="day">Sun · ship</div>
+          </div>
+
+          <div class="swim">
+            <div class="lane"><b>Engineering</b>CTO + 2</div>
+            <div class="task done">      <div class="t-title">Scaffold auth-v2 routes</div><div class="t-meta"><span class="who">CTO</span>· 2h</div></div>
+            <div class="task done">      <div class="t-title">Migrate session store</div><div class="t-meta"><span class="who">CTO</span>· 4h</div></div>
+            <div class="task flight">    <div class="t-title">Onboarding API endpoint</div><div class="t-meta"><span class="who">CTO</span>· in flight</div></div>
+            <div class="task">           <div class="t-title">Wire memory recall to agent</div><div class="t-meta"><span class="who">CTO</span>· queued</div></div>
+            <div class="task span1">     <div class="t-title">Cleanup</div><div class="t-meta"><span class="who">CTO</span></div></div>
+          </div>
+
+          <div class="swim">
+            <div class="lane"><b>Design</b>DSG</div>
+            <div class="task done">      <div class="t-title">Onboarding mock r1</div><div class="t-meta"><span class="who">DSG</span></div></div>
+            <div class="task done">      <div class="t-title">Mock r2 — copy tightened</div><div class="t-meta"><span class="who">DSG</span></div></div>
+            <div class="task flight">    <div class="t-title">Mock r3 — empty states</div><div class="t-meta"><span class="who">DSG</span>· in flight</div></div>
+            <div class="task span3">     <div class="t-title">Motion spec for first-load breathe</div><div class="t-meta"><span class="who">DSG</span>· depends on r3</div></div>
+          </div>
+
+          <div class="swim">
+            <div class="lane"><b>Product</b>PM</div>
+            <div class="task done">      <div class="t-title">User-test script</div><div class="t-meta"><span class="who">PM</span></div></div>
+            <div class="task flight">    <div class="t-title">Recruit 10 testers</div><div class="t-meta"><span class="who">PM</span>· 6/10</div></div>
+            <div class="task">           <div class="t-title">Run user tests</div><div class="t-meta"><span class="who">PM</span>· depends</div></div>
+            <div class="task span3">     <div class="t-title">Synth lessons → memory</div><div class="t-meta"><span class="who">PM</span></div></div>
+          </div>
+
+          <div class="swim">
+            <div class="lane"><b>Quality</b>QA</div>
+            <div class="task done">      <div class="t-title">Test plan auth-v2</div><div class="t-meta"><span class="who">QA</span></div></div>
+            <div class="task flight">    <div class="t-title">Run regression suite</div><div class="t-meta"><span class="who">QA</span>· in flight</div></div>
+            <div class="task blocked">   <div class="t-title">E2E onboarding</div><div class="t-meta"><span class="who">QA</span>· blocked: env</div></div>
+            <div class="task span3">     <div class="t-title">Verify ship-readiness</div><div class="t-meta"><span class="who">QA</span></div></div>
+          </div>
+
+          <div class="swim">
+            <div class="lane"><b>Ops</b>OPS</div>
+            <div class="task done">      <div class="t-title">Preview pipeline</div><div class="t-meta"><span class="who">OPS</span></div></div>
+            <div class="task done">      <div class="t-title">Cost guardrails</div><div class="t-meta"><span class="who">OPS</span></div></div>
+            <div class="task flight">    <div class="t-title">Postgres upgrade · awaits gate</div><div class="t-meta"><span class="who">OPS</span></div></div>
+            <div class="task span3">     <div class="t-title">Ship checklist</div><div class="t-meta"><span class="who">OPS</span></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= MEMORY ============= -->
+    <section class="surface" data-id="memory">
+      <div class="topbar">
+        <div class="status-line"><b>Memory</b> · 1,847 entries · 312 decisions · 96 lessons · last write 2m ago</div>
+        <div class="grow"></div>
+        <div class="cmdk" onclick="openPalette()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Ask the company…</span><kbd>⌘K</kbd></div>
+      </div>
+      <div class="memory">
+        <div class="mem-list">
+          <h2>Memory Library</h2>
+          <div class="sub">What the company knows · why it decides what it does · ranked by recency.</div>
+          <div class="mem-filters">
+            <span class="chip on">All</span>
+            <span class="chip">Decisions</span>
+            <span class="chip">Lessons</span>
+            <span class="chip">Constraints</span>
+            <span class="chip">Preferences</span>
+            <span class="chip">User-asserted</span>
+            <span class="chip">Pinned</span>
+          </div>
+
+          <div class="mem">
+            <div class="row"><span class="type decision">Decision</span><span class="src">from sprint-2 retro · 4d ago</span></div>
+            <div class="text">Use Lemon Squeezy for billing instead of Stripe — KYC friction unacceptable for our solo-founder users.</div>
+            <div class="meta"><span>Recalled 11×</span><span>By: CEO, OPS</span><span>Pinned</span></div>
+          </div>
+
+          <div class="mem">
+            <div class="row"><span class="type lesson">Lesson</span><span class="src">post-incident #14 · 6d ago</span></div>
+            <div class="text">When migration scripts assume PG version &gt; 14, always probe before running. Cost us 40 min last sprint.</div>
+            <div class="meta"><span>Recalled 4×</span><span>By: OPS</span></div>
+          </div>
+
+          <div class="mem">
+            <div class="row"><span class="type constraint">Constraint</span><span class="src">user-asserted · 8d ago</span></div>
+            <div class="text">Never use red as a primary brand color. Reserve for destructive/error states only.</div>
+            <div class="meta"><span>Recalled 7×</span><span>By: DSG</span></div>
+          </div>
+
+          <div class="mem">
+            <div class="row"><span class="type preference">Preference</span><span class="src">CEO note · 12d ago</span></div>
+            <div class="text">Prefer shipping a thin slice end-to-end over deep but partial features. "Show motion in every sprint."</div>
+            <div class="meta"><span>Recalled 22×</span><span>By: PM, CEO</span><span>Pinned</span></div>
+          </div>
+
+          <div class="mem">
+            <div class="row"><span class="type decision">Decision</span><span class="src">eng-meeting · 14d ago</span></div>
+            <div class="text">Memory recall fan-out capped at top-5 to keep agent context windows under 8k tokens.</div>
+            <div class="meta"><span>Recalled 38×</span><span>By: CTO</span></div>
+          </div>
+
+          <div class="mem">
+            <div class="row"><span class="type lesson">Lesson</span><span class="src">retro · 18d ago</span></div>
+            <div class="text">Spec Writer skill produced ambiguous acceptance criteria 3× — added "given/when/then" template to v6.</div>
+            <div class="meta"><span>Recalled 9×</span><span>Triggered: skill v5 → v6</span></div>
+          </div>
+        </div>
+
+        <aside class="lens">
+          <div class="lens-head"><span class="pill">Live recall</span><h3>CTO is deciding right now</h3></div>
+          <div class="quote">"Skipping Stripe for billing — we decided last sprint to use Lemon Squeezy because of KYC friction. Onboarding spec will reference that."</div>
+          <div class="by">CTO · drafting auth-v2 · 4s ago</div>
+
+          <h4>Memories recalled</h4>
+          <div class="recall">
+            <div class="bar"></div>
+            <div class="body">Use Lemon Squeezy for billing instead of Stripe. <em>Decision · sprint-2 retro · sim 0.91</em></div>
+          </div>
+          <div class="recall">
+            <div class="bar" style="background:linear-gradient(to bottom,var(--accent),transparent);opacity:.8"></div>
+            <div class="body">Prefer shipping thin slice end-to-end. <em>Preference · CEO note · sim 0.74</em></div>
+          </div>
+          <div class="recall">
+            <div class="bar" style="opacity:.5"></div>
+            <div class="body">Memory recall capped at top-5. <em>Decision · eng-meeting · sim 0.61</em></div>
+          </div>
+
+          <h4 style="margin-top:24px">Trace</h4>
+          <div class="recall"><div class="body">Original source: <span style="color:var(--accent);text-decoration:underline;cursor:pointer">meeting/sprint-2-retro.md · L42–58</span><em>3 agents present · CEO, OPS, PM</em></div></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============= FORGE ============= -->
+    <section class="surface" data-id="forge">
+      <div class="topbar">
+        <div class="status-line"><b>Skill Forge</b> · 24 skills · 3 evolving now · last evolution 22m ago · +18% avg pass-rate this sprint</div>
+        <div class="grow"></div>
+        <div class="cmdk" onclick="openPalette()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Inspect a skill…</span><kbd>⌘K</kbd></div>
+      </div>
+      <div class="forge">
+        <div class="forge-head">
+          <div><h2>Skill Forge</h2><div class="sub">Every skill an agent owns. Versioned. Measured. Evolving.</div></div>
+        </div>
+        <div class="forge-body">
+
+          <div class="skill evolving">
+            <div class="top"><h3>Spec Writer</h3><span class="ver">v8</span></div>
+            <div class="who">CTO · evolved 22m ago from retro lesson</div>
+            <div class="metric"><span class="v">94%</span><span class="l">review pass</span><span class="delta up">+18%</span></div>
+            <div class="spark"><span style="height:30%"></span><span style="height:42%"></span><span style="height:38%"></span><span style="height:55%"></span><span style="height:60%"></span><span style="height:72%"></span><span style="height:88%"></span><span style="height:94%"></span></div>
+            <div class="note"><b>Last change:</b> added given/when/then acceptance template after 3 ambiguous specs.</div>
+          </div>
+
+          <div class="skill">
+            <div class="top"><h3>Code Reviewer</h3><span class="ver">v12</span></div>
+            <div class="who">CTO · stable for 6 days</div>
+            <div class="metric"><span class="v">87%</span><span class="l">catch rate</span><span class="delta up">+4%</span></div>
+            <div class="spark"><span style="height:60%"></span><span style="height:65%"></span><span style="height:71%"></span><span style="height:74%"></span><span style="height:80%"></span><span style="height:82%"></span><span style="height:85%"></span><span style="height:87%"></span></div>
+            <div class="note"><b>Last change:</b> learned to flag missing error handling on async boundaries.</div>
+          </div>
+
+          <div class="skill evolving">
+            <div class="top"><h3>UI Mock Generator</h3><span class="ver">v9</span></div>
+            <div class="who">DSG · evolving — testing v9 vs v8 now</div>
+            <div class="metric"><span class="v">81%</span><span class="l">CEO accept</span><span class="delta up">+11%</span></div>
+            <div class="spark"><span style="height:40%"></span><span style="height:48%"></span><span style="height:55%"></span><span style="height:52%"></span><span style="height:62%"></span><span style="height:70%"></span><span style="height:75%"></span><span style="height:81%"></span></div>
+            <div class="note"><b>Trigger:</b> 4 mocks in a row required revision for empty-state coverage.</div>
+          </div>
+
+          <div class="skill">
+            <div class="top"><h3>Sprint Planner</h3><span class="ver">v6</span></div>
+            <div class="who">PM · stable</div>
+            <div class="metric"><span class="v">72%</span><span class="l">on-time</span><span class="delta up">+8%</span></div>
+            <div class="spark"><span style="height:55%"></span><span style="height:50%"></span><span style="height:58%"></span><span style="height:64%"></span><span style="height:60%"></span><span style="height:66%"></span><span style="height:69%"></span><span style="height:72%"></span></div>
+            <div class="note"><b>Last change:</b> learned to topo-sort tasks before assigning days.</div>
+          </div>
+
+          <div class="skill evolving">
+            <div class="top"><h3>E2E Tester</h3><span class="ver">v4</span></div>
+            <div class="who">QA · evolving — needs your gate to retire v3</div>
+            <div class="metric"><span class="v">68%</span><span class="l">flake-free</span><span class="delta down">−3%</span></div>
+            <div class="spark"><span style="height:75%"></span><span style="height:78%"></span><span style="height:72%"></span><span style="height:74%"></span><span style="height:71%"></span><span style="height:69%"></span><span style="height:70%"></span><span style="height:68%"></span></div>
+            <div class="note"><b>Why:</b> retry strategy regressed after env change. Pending governance.</div>
+          </div>
+
+          <div class="skill">
+            <div class="top"><h3>Cost Auditor</h3><span class="ver">v3</span></div>
+            <div class="who">OPS · stable</div>
+            <div class="metric"><span class="v">$0.12</span><span class="l">avg/task</span><span class="delta up">−14%</span></div>
+            <div class="spark"><span style="height:80%"></span><span style="height:75%"></span><span style="height:70%"></span><span style="height:64%"></span><span style="height:60%"></span><span style="height:55%"></span><span style="height:50%"></span><span style="height:48%"></span></div>
+            <div class="note"><b>Last change:</b> caches embedding lookups for repeated memory recalls.</div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= GATE LIST ============= -->
+    <section class="surface" data-id="gate-list">
+      <div class="topbar">
+        <div class="status-line"><b>Approvals</b> · 2 awaiting · 8 auto-resolved this week · you're trending toward earned absence (−47% vs sprint 1)</div>
+        <div class="grow"></div>
+      </div>
+      <div class="forge">
+        <div class="forge-head"><div><h2>Governance</h2><div class="sub">Things the company needs you on. Resolve in one keystroke.</div></div></div>
+        <div class="forge-body" style="grid-template-columns:1fr;max-width:760px;margin:0 auto">
+          <div class="skill" onclick="openGate()" style="border-color:var(--warn);background:linear-gradient(135deg,rgba(255,180,84,.06),var(--bg-1))">
+            <div class="top"><h3>Postgres upgrade — $240/mo</h3><span class="ver" style="color:var(--warn);background:rgba(255,180,84,.14)">SPEND</span></div>
+            <div class="who">OPS · 11m ago · agent confidence 78%</div>
+            <div class="note"><b>Why:</b> vector index growth hit 78% of allocated. Upgrade unblocks 2 future sprints. Lemon Squeezy decision means we have runway.</div>
+          </div>
+
+          <div class="skill" style="border-color:var(--warn);background:linear-gradient(135deg,rgba(255,180,84,.06),var(--bg-1))">
+            <div class="top"><h3>Skip e2e for auth-v2 this sprint</h3><span class="ver" style="color:var(--warn);background:rgba(255,180,84,.14)">QUALITY</span></div>
+            <div class="who">QA · 2m ago · agent confidence 54%</div>
+            <div class="note"><b>Why:</b> blocked by env issue. Manual smoke + unit cover 81%. CTO disagrees: "ship gate without e2e is risky for auth."</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============== GATE MODAL ============== -->
+<div class="scrim" id="gateModal" onclick="if(event.target===this)closeGate()">
+  <div class="gate">
+    <div class="g-head">
+      <span class="pill">Needs you</span>
+      <h3>OPS proposes a $240/mo spend</h3>
+    </div>
+    <div class="g-body">
+      <div class="ask">Approve <b>Postgres upgrade to db.m6g.large</b> for vector index headroom?</div>
+
+      <div class="row"><span>Cost</span><b>$240/mo (+$2,880/yr)</b></div>
+      <div class="row"><span>Reversible</span><b>Yes · downgrade in 1 click</b></div>
+      <div class="row"><span>Confidence</span><b>78% · OPS agent</b></div>
+      <div class="row"><span>Dissenting</span><b style="color:var(--text-2)">none</b></div>
+
+      <div class="reason">
+        Vector index is at 78% of allocated. Two upcoming features (memory-search-v2, audit-trace) will breach by Sprint 5. Recalled the sprint-2 decision to prefer Lemon Squeezy: that gives us runway to absorb this cost without re-pricing.
+        <em>Memory recalled · 3 entries · trace available</em>
+      </div>
+    </div>
+    <div class="g-foot">
+      <button class="btn warn" onclick="closeGate()">Send back<span class="k">N</span></button>
+      <button class="btn ghost" onclick="closeGate()">Defer<span class="k">D</span></button>
+      <div class="grow"></div>
+      <button class="btn ghost" onclick="closeGate()">Approve<span class="k">Y</span></button>
+      <button class="btn primary" onclick="closeGate()">Approve & remember preference<span class="k">⌘Y</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== Cmd-K ============== -->
+<div class="scrim" id="palette" onclick="if(event.target===this)closePalette()">
+  <div class="palette">
+    <input placeholder="Talk to the company, ask, or remember…" autofocus />
+    <div class="group">
+      <div class="gh">Direct</div>
+      <div class="item sel">→ Tell engineering to deprioritize search this sprint<span class="hint">↵</span></div>
+      <div class="item">→ Ask QA to retry the e2e suite<span class="hint">↵</span></div>
+    </div>
+    <div class="group">
+      <div class="gh">Ask</div>
+      <div class="item">? Why did we drop Stripe?<span class="hint">cite memory</span></div>
+      <div class="item">? What slipped from sprint 2?<span class="hint">cite memory</span></div>
+    </div>
+    <div class="group">
+      <div class="gh">Remember</div>
+      <div class="item">★ Remember that we never use red in marketing<span class="hint">add memory</span></div>
+    </div>
+    <div class="group">
+      <div class="gh">Go to</div>
+      <div class="item">⤳ Pulse · Atlas · Memory · Forge · Approvals<span class="hint">⌘1–5</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const buttons = document.querySelectorAll('.rail [data-go]');
+  const surfaces = document.querySelectorAll('.surface');
+  buttons.forEach(b => b.addEventListener('click', () => {
+    buttons.forEach(x => x.classList.remove('active'));
+    surfaces.forEach(s => s.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelector(`.surface[data-id="${b.dataset.go}"]`).classList.add('active');
+  }));
+
+  function openGate(){ document.getElementById('gateModal').classList.add('open'); }
+  function closeGate(){ document.getElementById('gateModal').classList.remove('open'); }
+  function openPalette(){ document.getElementById('palette').classList.add('open'); setTimeout(()=>document.querySelector('#palette input').focus(),0); }
+  function closePalette(){ document.getElementById('palette').classList.remove('open'); }
+
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); openPalette(); }
+    if (e.key === 'Escape'){ closeGate(); closePalette(); }
+    if (document.getElementById('gateModal').classList.contains('open')){
+      if (e.key.toLowerCase()==='y' || e.key.toLowerCase()==='n' || e.key.toLowerCase()==='d') closeGate();
+    }
+  });
+</script>
+</body>
+</html>

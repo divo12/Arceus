@@ -34,6 +34,7 @@ function makeSkill(overrides: Partial<SkillArtifact> = {}): SkillArtifact {
     trigger: "When writing tests or test infrastructure",
     content: "# Test Skill\n\n1. Write tests first\n2. Run them\n3. Fix failures",
     testCases: [],
+    resources: [],
     successRate: 0.7,
     usageCount: 5,
     lastUsedAt: null,

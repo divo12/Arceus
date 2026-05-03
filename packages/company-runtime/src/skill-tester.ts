@@ -67,6 +67,12 @@ export function hasSkillTesterDeps(): boolean {
   return deps !== null;
 }
 
+/** Spec 29 Phase F — orchestrator-only direct access to wired LLM primitives. */
+export function getSkillTesterDeps(): SkillTesterDeps {
+  if (!deps) throw new Error("[SkillTester] deps not configured");
+  return deps;
+}
+
 // ── Constants ────────────────────────────────────────────
 
 const MAX_REVISION_CYCLES = 2;

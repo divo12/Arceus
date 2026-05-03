@@ -4,16 +4,20 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getSnapshot, resetCompany, applyStrategy, clearPersistedStoreState } from "../persistence/store.js";
-import { bootstrapCompanyWithWorkspace, bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
-import { resetOrchestratorState, getExecutionStatus } from "../orchestration/state.js";
+import { resetCompany, clearPersistedStoreState } from "../persistence/mutations/index.js";
+import { getActiveCompanyId, clearActiveCompanyId } from "../persistence/active-company.js";
+import { buildSnapshotView } from "../orchestration/snapshot-view.js";
+import { resetCompanyTx } from "../companies/reset.js";
+import { bootstrapCompanyWithWorkspace } from "../orchestration/bootstrap.js";
+import { resetOrchestratorState } from "../orchestration/state.js";
+import { clearAllSessionContexts } from "../orchestration/session-context.js";
 import { audit } from "../observability/audit-ledger.js";
-import { seedRegistry, clearRegistry } from "../governance/service-registry.js";
+import { sanitizeError } from "../observability/sanitize.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
-import { getDatabaseHealth, getDb, isDatabaseConfigured, trustScoresTable, policyViolationsTable } from "@arceus/db";
-import { inArray, eq } from "drizzle-orm";
+import { resetOpencodeConnection, resetCeoChatSession } from "../infra/opencode.js";
+import { getDatabaseHealth } from "@arceus/db";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
 const bootstrapSchema = z.object({
@@ -23,7 +27,7 @@ const bootstrapSchema = z.object({
   budgetCents: z.number().int().nonnegative(),
 });
 
-export interface CompanyRouteDeps {
+interface CompanyRouteDeps {
   heartbeatEngine: HeartbeatEngine;
   meetingScheduler: MeetingScheduler;
 }
@@ -31,67 +35,86 @@ export interface CompanyRouteDeps {
 export default async function companyRoutes(app: FastifyInstance, opts: CompanyRouteDeps) {
   const { heartbeatEngine, meetingScheduler } = opts;
 
+  // Spec 31 Phase 7.C.c — buildSnapshotView now assembles the full
+  // CompanySnapshot from canonical (idea, strategy, hierarchy, memories,
+  // meetings, schedules, chatMessages all populated). When no company is
+  // bootstrapped yet we return the empty snapshot so the dashboard can
+  // render its pre-bootstrap state.
   app.get("/api/company", async () => {
-    return getSnapshot();
+    const companyId = getActiveCompanyId();
+    if (!companyId) {
+      const { createEmptyCompanySnapshot } = await import("@arceus/company-runtime");
+      return createEmptyCompanySnapshot();
+    }
+    return buildSnapshotView(companyId);
   });
 
   app.post("/api/company/bootstrap", async (request, reply) => {
     const body = bootstrapSchema.parse(request.body);
     const { snapshot, warnings } = await bootstrapCompanyWithWorkspace(body);
     audit({ companyId: snapshot.company.id, category: "system", eventType: "company_bootstrapped", summary: `Company "${body.companyName}" bootstrapped by ${body.boardOwner}`, detail: { idea: body.idea, budgetCents: body.budgetCents, warnings } });
-    await seedRegistry(snapshot.company.id);
     if (warnings.length > 0) {
       request.log?.warn({ warnings }, "Workspace provision completed with warnings");
     }
+    // Audit C13 (F-436): RFC 7231 §7.1.2 expects 201 Created responses to
+    // include a `Location` header pointing at the newly created resource.
+    // The single-active-company shape means this is `/api/company` (no id
+    // path segment), but emitting the header keeps clients RFC-compliant.
+    reply.header("Location", `/api/company`);
     reply.code(201);
     return snapshot;
   });
 
   app.delete("/api/company", async (request, reply) => {
     try {
-      const snap = getSnapshot();
-      const companyId = snap.company.id;
-      const priorAgentIds = snap.agents.map((a) => a.id);
+      // Spec 31 Phase 7.C.c-bis — DB cascade is now atomic via
+      // `resetCompanyTx`. Filesystem and in-memory cleanup happen
+      // outside the transaction (they're not DB ops).
+      const companyId = getActiveCompanyId();
 
       await resetOrchestratorState();
+      heartbeatEngine.stop();
       heartbeatEngine.reset();
-      const warnings = companyId === "company_pending"
-        ? []
-        : (await workspaceManager.archive(companyId)).warnings;
-      if (companyId !== "company_pending") {
+      meetingScheduler.stop();
+      // Spec 31 Phase 7.C.1 — workspace archive is keyed by companyId
+      // (it cleans the company's cache directory). When no company is
+      // active there's nothing company-specific to archive; legacy
+      // directories survive across resets and aren't this route's
+      // responsibility.
+      if (companyId) {
+        const archiveResult = await workspaceManager.archive(companyId);
+        if (archiveResult.warnings.length > 0) {
+          request.log?.warn({ warnings: archiveResult.warnings }, "Reset completed with filesystem cleanup warnings");
+        }
         await clearPersistedStoreState(companyId);
         await deletePersistedArtifacts(companyId);
       }
-      if (warnings.length > 0) {
-        request.log?.warn({ warnings }, "Reset completed with filesystem cleanup warnings");
-      }
 
-      if (companyId !== "company_pending" && isDatabaseConfigured()) {
+      if (companyId) {
         try {
-          const db = getDb();
-          await db.delete(policyViolationsTable).where(eq(policyViolationsTable.companyId, companyId));
-          if (priorAgentIds.length > 0) {
-            await db.delete(trustScoresTable).where(inArray(trustScoresTable.agentId, priorAgentIds));
-          }
+          await resetCompanyTx(companyId);
         } catch (err) {
           request.log?.warn?.({ err }, "Cascade cleanup of governance rows failed");
         }
       }
 
       resetEmployeeActivityLog();
-      clearRegistry(companyId);
+      clearAllSessionContexts();
+      resetCeoChatSession();
+      await resetOpencodeConnection();
+      clearActiveCompanyId();
       return resetCompany();
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
-      return {
-        error: error instanceof Error ? error.message : "Reset failed.",
-      };
+      return sanitizeError(error, "Company reset failed.", {
+        route: "DELETE /api/company",
+      });
     }
   });
 
   app.get("/api/events", async (_request, reply) => {
-    const { getEvents } = await import("../persistence/store.js");
+    const { getEvents } = await import("../persistence/mutations/index.js");
     reply.raw.setHeader("Content-Type", "text/event-stream");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
     reply.raw.setHeader("Connection", "keep-alive");

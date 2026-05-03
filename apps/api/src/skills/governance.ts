@@ -19,7 +19,7 @@
 
 import type { AgentIdentity, SkillMutation } from "@arceus/contracts";
 import { updateMutationStatus } from "@arceus/company-runtime";
-import { cpLoadTrustScore } from "../persistence/control-plane.js";
+import { cpLoadTrustScore } from "../persistence/control-plane/index.js";
 import { auditAgent, auditSystem } from "../observability/audit-ledger.js";
 
 // ── Constants (spec §1183–1190) ───────────────────────────
@@ -74,12 +74,12 @@ interface SprintBudgetRecord {
   sprintId: string;
   mutationCount: number;
   budgetCentsSpent: number;
-  proposals: Array<{
+  proposals: {
     mutationId: string;
     proposedBy: string;
     costCents: number;
     at: string;
-  }>;
+  }[];
 }
 
 const sprintBudgets = new Map<string, SprintBudgetRecord>();

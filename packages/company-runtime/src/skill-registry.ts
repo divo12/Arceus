@@ -11,9 +11,10 @@
  * Singleton access via getSkillRegistry().
  */
 
-import type { SkillArtifact, SkillHealthReport, SkillMutation, FailureAttribution } from "@arceus/contracts";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import type { SkillArtifact, SkillHealthReport, SkillMutation, FailureAttribution, SkillResource } from "@arceus/contracts";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { extname, join, relative, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ── In-memory store ───────────────────────────────────────
 
@@ -44,6 +45,15 @@ function rebuildActiveIndex(): void {
 
 /** Register or overwrite a skill in the in-memory store and rebuild the active index. */
 export function registerSkill(skill: SkillArtifact): void {
+  const next = { ...skill };
+  skillsById.set(skill.id, next);
+  rebuildActiveIndex();
+  registryDeps?.onSkillUpserted?.(next);
+}
+
+/** Hydrate a skill into the in-memory store WITHOUT firing write-through callbacks.
+ *  Used at boot when loading from DB so we don't write back to DB. */
+export function hydrateSkill(skill: SkillArtifact): void {
   skillsById.set(skill.id, { ...skill });
   rebuildActiveIndex();
 }
@@ -55,6 +65,7 @@ export function updateSkill(skillId: string, updates: Partial<SkillArtifact>): S
   const updated: SkillArtifact = { ...existing, ...updates };
   skillsById.set(skillId, updated);
   rebuildActiveIndex();
+  registryDeps?.onSkillUpserted?.(updated);
   return updated;
 }
 
@@ -62,12 +73,14 @@ export function updateSkill(skillId: string, updates: Partial<SkillArtifact>): S
 export function deprecateSkill(skillId: string, reason: string): boolean {
   const existing = skillsById.get(skillId);
   if (!existing) return false;
-  skillsById.set(skillId, {
+  const updated: SkillArtifact = {
     ...existing,
     status: "deprecated",
     mutationReason: reason,
-  });
+  };
+  skillsById.set(skillId, updated);
   rebuildActiveIndex();
+  registryDeps?.onSkillUpserted?.(updated);
   return true;
 }
 
@@ -154,11 +167,13 @@ export function matchSkills(
 export function recordSkillUsage(skillId: string): void {
   const skill = skillsById.get(skillId);
   if (!skill) return;
-  skillsById.set(skillId, {
+  const updated: SkillArtifact = {
     ...skill,
     usageCount: skill.usageCount + 1,
     lastUsedAt: new Date().toISOString(),
-  });
+  };
+  skillsById.set(skillId, updated);
+  registryDeps?.onSkillUsageRecorded?.(updated);
 }
 
 /**
@@ -171,10 +186,12 @@ export function updateSuccessRate(skillId: string, outcome: number): void {
   if (!skill) return;
   const lr = 0.15;
   const newRate = skill.successRate * (1 - lr) + outcome * lr;
-  skillsById.set(skillId, {
+  const updated: SkillArtifact = {
     ...skill,
     successRate: Math.max(0, Math.min(1, newRate)),
-  });
+  };
+  skillsById.set(skillId, updated);
+  registryDeps?.onSkillSuccessRateChanged?.(updated);
 }
 
 // ── Health metrics ────────────────────────────────────────
@@ -225,7 +242,7 @@ export function getSkillHealth(companyId: string): SkillHealthReport {
  */
 export function getUnusedSkills(
   companyId: string,
-  staleDays: number = 30,
+  staleDays = 30,
 ): SkillArtifact[] {
   const cutoffMs = Date.now() - staleDays * 24 * 60 * 60 * 1000;
   const active = getAllSkills(companyId).filter((s) => s.status === "active");
@@ -245,7 +262,7 @@ export function getUnusedSkills(
  */
 export function getUnderperformingSkills(
   companyId: string,
-  threshold: number = 0.6,
+  threshold = 0.6,
 ): SkillArtifact[] {
   return getAllSkills(companyId)
     .filter((s) => s.status === "active" && s.successRate < threshold && s.usageCount > 0)
@@ -258,7 +275,7 @@ export function isSeeded(): boolean {
   return seeded;
 }
 
-export function markSeeded(): void {
+function markSeeded(): void {
   seeded = true;
 }
 
@@ -362,12 +379,74 @@ export function applyMergedMutation(mutation: SkillMutation): SkillArtifact {
 
 // ── Seed from Markdown files ──────────────────────────────
 
+interface ResourceTypeInfo {
+  kind: SkillResource["kind"];
+  contentType: string;
+  encoding: SkillResource["encoding"];
+}
+
+const RESOURCE_TYPE_MAP: Record<string, ResourceTypeInfo> = {
+  ".md":   { kind: "reference", contentType: "text/markdown", encoding: "utf8" },
+  ".mdx":  { kind: "reference", contentType: "text/markdown", encoding: "utf8" },
+  ".txt":  { kind: "reference", contentType: "text/plain", encoding: "utf8" },
+  ".json": { kind: "reference", contentType: "application/json", encoding: "utf8" },
+  ".yaml": { kind: "reference", contentType: "application/yaml", encoding: "utf8" },
+  ".yml":  { kind: "reference", contentType: "application/yaml", encoding: "utf8" },
+  ".js":   { kind: "script", contentType: "application/javascript", encoding: "utf8" },
+  ".mjs":  { kind: "script", contentType: "application/javascript", encoding: "utf8" },
+  ".ts":   { kind: "script", contentType: "application/typescript", encoding: "utf8" },
+  ".sh":   { kind: "script", contentType: "application/x-shellscript", encoding: "utf8" },
+  ".png":  { kind: "asset", contentType: "image/png", encoding: "base64" },
+  ".jpg":  { kind: "asset", contentType: "image/jpeg", encoding: "base64" },
+  ".jpeg": { kind: "asset", contentType: "image/jpeg", encoding: "base64" },
+  ".svg":  { kind: "asset", contentType: "image/svg+xml", encoding: "utf8" },
+  ".pdf":  { kind: "asset", contentType: "application/pdf", encoding: "base64" },
+};
+
+function resolveResourceType(filePath: string): ResourceTypeInfo {
+  const ext = extname(filePath).toLowerCase();
+  return RESOURCE_TYPE_MAP[ext] ?? { kind: "reference", contentType: "application/octet-stream", encoding: "base64" };
+}
+
+/**
+ * Walk `<skillDir>/resources/` recursively and build the SkillResource[] array.
+ * Returns empty array if the resources directory does not exist.
+ */
+function readSkillResources(skillDir: string): SkillResource[] {
+  const resourcesDir = join(skillDir, "resources");
+  if (!existsSync(resourcesDir)) return [];
+
+  const out: SkillResource[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const info = resolveResourceType(abs);
+      const raw = readFileSync(abs);
+      const content = info.encoding === "base64" ? raw.toString("base64") : raw.toString("utf8");
+      out.push({
+        path: relative(skillDir, abs),
+        kind: info.kind,
+        contentType: info.contentType,
+        content,
+        encoding: info.encoding,
+      });
+    }
+  };
+  walk(resourcesDir);
+  return out;
+}
+
 /**
  * Parse YAML-ish frontmatter from a skill Markdown file.
  * Returns { frontmatter, body }.
  */
 function parseSkillFrontmatter(content: string): { frontmatter: Record<string, string>; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(content);
   if (!match) return { frontmatter: {}, body: content };
   const lines = match[1].split("\n");
   const frontmatter: Record<string, string> = {};
@@ -380,36 +459,76 @@ function parseSkillFrontmatter(content: string): { frontmatter: Record<string, s
   return { frontmatter, body: match[2].trim() };
 }
 
+export interface SeedSkillsOptions {
+  /** Override the directory to seed from. Defaults to `<repoRoot>/.arceus/skills-seed`. */
+  skillsDir?: string;
+  /**
+   * Upsert behavior when a skill with the same name already exists:
+   * - `"preserve"` (default): skip, keep existing metrics (usageCount, successRate).
+   * - `"overwrite-content"`: replace content + resources + role, preserve metrics.
+   */
+  mode?: "preserve" | "overwrite-content";
+}
+
+export interface SeedSkillsResult {
+  seeded: number;   // newly registered
+  updated: number;  // existing skills whose content/resources were overwritten
+  skipped: number;  // existing skills left alone
+}
+
 /**
- * Seed the registry from the 6 Markdown skill files on disk.
- * Idempotent — skips if already seeded or if skills already exist.
+ * Seed the registry from SKILL.md files under a source directory.
  *
- * @param companyId - The company to associate skills with
- * @param skillsDir - Optional override for the skills directory path
- * @returns Number of skills seeded
+ * For each `<slug>/SKILL.md`, parses frontmatter + body and attaches any files
+ * found in `<slug>/resources/` as tier-3 `SkillResource[]`. Idempotent — safe to
+ * call repeatedly. Pass `mode: "overwrite-content"` to pick up edits without
+ * losing existing metrics.
+ *
+ * Returns the count of newly-seeded skills (for backward compatibility with
+ * callers that test `count > 0`). Use `seedExistingSkillsDetailed` for a full
+ * breakdown of `{ seeded, updated, skipped }`.
  */
 export function seedExistingSkills(
   companyId: string,
-  skillsDir?: string,
+  skillsDirOrOptions?: string | SeedSkillsOptions,
 ): number {
-  // Only treat the registry as seeded once at least one skill exists for this
-  // company — otherwise an earlier transient failure (missing dir, parse error,
-  // race with snapshot load) permanently blocks lazy re-seed. See
-  // `markSeeded()` call at the end of this fn, which is now count-gated.
-  if (seeded && getAllSkills(companyId).length > 0) return 0;
+  return seedExistingSkillsDetailed(companyId, skillsDirOrOptions).seeded;
+}
 
-  // Resolve relative to this file so it works regardless of process.cwd()
-  const thisDir = new URL(".", import.meta.url).pathname;
-  const dir = skillsDir ?? resolve(thisDir, "..", "skills");
+/**
+ * Full-breakdown variant of `seedExistingSkills`. Same behavior, richer return
+ * value so callers can tell whether existing skills were updated vs skipped.
+ */
+export function seedExistingSkillsDetailed(
+  companyId: string,
+  skillsDirOrOptions?: string | SeedSkillsOptions,
+): SeedSkillsResult {
+  const opts: SeedSkillsOptions = typeof skillsDirOrOptions === "string"
+    ? { skillsDir: skillsDirOrOptions }
+    : skillsDirOrOptions ?? {};
+  const mode = opts.mode ?? "preserve";
+
+  // Default source: `.arceus/skills-seed/` at the repo root (four parents up from
+  // `packages/company-runtime/src/`). Callers can override for tests.
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  const fallbackNew = resolve(thisDir, "..", "..", "..", ".arceus", "skills-seed");
+  const fallbackLegacy = resolve(thisDir, "..", "skills");
+  const dir = opts.skillsDir
+    ?? (existsSync(fallbackNew) ? fallbackNew : fallbackLegacy);
+
   if (!existsSync(dir)) {
     console.warn(`[SkillRegistry] Skills directory not found: ${dir}`);
-    return 0;
+    return { seeded: 0, updated: 0, skipped: 0 };
   }
 
-  let count = 0;
+  let seededCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const skillPath = join(dir, entry.name, "SKILL.md");
+    const skillDir = join(dir, entry.name);
+    const skillPath = join(skillDir, "SKILL.md");
     if (!existsSync(skillPath)) continue;
 
     const raw = readFileSync(skillPath, "utf8");
@@ -417,10 +536,24 @@ export function seedExistingSkills(
 
     const name = frontmatter.name || entry.name;
     const role = frontmatter.role || "developer";
+    const resources = readSkillResources(skillDir);
 
-    // Skip if this skill already exists in the registry
     const existing = getSkillHistory(companyId, name);
-    if (existing.length > 0) continue;
+    if (existing.length > 0) {
+      if (mode === "overwrite-content") {
+        const latest = existing[existing.length - 1];
+        updateSkill(latest.id, {
+          role,
+          trigger: frontmatter.description || name,
+          content: body,
+          resources,
+        });
+        updatedCount++;
+      } else {
+        skippedCount++;
+      }
+      continue;
+    }
 
     const skill: SkillArtifact = {
       id: `skill-${name}-v1`,
@@ -431,6 +564,7 @@ export function seedExistingSkills(
       status: "active",
       trigger: frontmatter.description || name,
       content: body,
+      resources,
       testCases: [],
       successRate: 0.7,    // seed skills start at 0.7 (trusted baseline)
       usageCount: 0,
@@ -443,14 +577,14 @@ export function seedExistingSkills(
     };
 
     registerSkill(skill);
-    count++;
+    seededCount++;
   }
 
   // Only mark seeded if we actually registered skills. If count=0 (all files
   // failed to parse, or all were filtered out), leave the flag false so the
   // next lazy-seed call gets another chance.
-  if (count > 0) markSeeded();
-  return count;
+  if (seededCount > 0) markSeeded();
+  return { seeded: seededCount, updated: updatedCount, skipped: skippedCount };
 }
 
 // ── Registry hooks (progressive-disclosure design) ────────
@@ -470,6 +604,13 @@ export interface SkillRegistryDeps {
   /** Called synchronously after a skill is activated (approved by ATA).
    *  Intended for fire-and-forget async work — indexing, telemetry, etc. */
   onSkillActivated?: (skill: SkillArtifact) => void;
+  /** Called after registerSkill / updateSkill / deprecateSkill. Fire-and-forget
+   *  hook for DB write-through (Spec 23 Pass 3). NOT called by hydrateSkill. */
+  onSkillUpserted?: (skill: SkillArtifact) => void;
+  /** Called after recordSkillUsage. Fire-and-forget hook for DB write-through. */
+  onSkillUsageRecorded?: (skill: SkillArtifact) => void;
+  /** Called after updateSuccessRate. Fire-and-forget hook for DB write-through. */
+  onSkillSuccessRateChanged?: (skill: SkillArtifact) => void;
 }
 
 let registryDeps: SkillRegistryDeps | null = null;

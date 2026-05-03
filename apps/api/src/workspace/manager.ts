@@ -2,20 +2,23 @@ import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CompanySnapshot, ExportResult, SprintSnapshot, WorkspaceFileManifestEntry, WorkspaceInfo } from "@arceus/contracts";
-import { getDb, isDatabaseConfigured, sprintSnapshotsTable, workspacesTable } from "@arceus/db";
+import { getDb, isDatabaseConfigured, sprintSnapshots as sprintSnapshotsTable, workspaces as workspacesTable } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
+import { friendlyToUuid } from "@arceus/db/src/repos/_uuid.js";
+import { eq } from "drizzle-orm";
 import { persistenceConfig } from "../config/index.js";
 import { cloneWorkspaceFromBundle, commitAllChanges, createBundleFromWorkspace, diffWorkspaceRefs, ensureGitRepository, getHeadSha, tagWorkspace } from "./git-ops.js";
 import { createSignedBucketUrl, downloadWorkspaceBundle, getAssetRecordByObjectKey, getLocalFileInfo, isStorageConfigured, uploadWorkspaceBundle } from "../persistence/supabase-storage.js";
 
-type WorkspaceOperationResult = {
+interface WorkspaceOperationResult {
   workspace: WorkspaceInfo;
   warnings: string[];
-};
+}
 
-type WorkspaceFileEntry = {
+interface WorkspaceFileEntry {
   path: string;
   modifiedAt: string;
-};
+}
 
 type WorkspaceManifestEntry = WorkspaceFileManifestEntry;
 
@@ -106,10 +109,18 @@ function buildWorkspaceInfo(companyId: string, overrides: Partial<WorkspaceInfo>
   };
 }
 
-function mapWorkspaceRecord(record: typeof workspacesTable.$inferSelect): WorkspaceInfo {
+function mapWorkspaceRecord(
+  record: typeof workspacesTable.$inferSelect,
+  friendlyCompanyId: string,
+): WorkspaceInfo {
+  // Spec 31 Phase 7.B.6 — canonical PK / company_id are uuids, but the
+  // contract / consumers think in friendly ids. Surface the friendly
+  // workspace id (always derivable from the friendly companyId) and
+  // the friendly companyId (passed in by the caller from
+  // getActiveCompanyId()).
   return {
-    id: record.id,
-    companyId: record.companyId,
+    id: buildWorkspaceId(friendlyCompanyId),
+    companyId: friendlyCompanyId,
     localPath: record.localPath,
     status: record.status as WorkspaceInfo["status"],
     latestBundleKey: record.latestBundleKey,
@@ -123,17 +134,26 @@ function mapWorkspaceRecord(record: typeof workspacesTable.$inferSelect): Worksp
   };
 }
 
-function mapSprintSnapshotRecord(record: typeof sprintSnapshotsTable.$inferSelect): SprintSnapshot {
+function mapSprintSnapshotRecord(
+  record: typeof sprintSnapshotsTable.$inferSelect,
+  friendlyCompanyId: string,
+): SprintSnapshot {
+  // Spec 31 Phase 7.B.7 — surface the friendly snapshot id /
+  // companyId; the canonical row stores uuid forms.
   return {
-    id: record.id,
-    companyId: record.companyId,
+    id: `snapshot_${friendlyCompanyId}_${record.sprintNumber}`,
+    companyId: friendlyCompanyId,
     sprintNumber: record.sprintNumber,
     gitTag: record.gitTag,
     bundleKey: record.bundleKey,
     bundleSha256: record.bundleSha256,
     bundleBytes: record.bundleBytes,
-    snapshotData: record.snapshotData as CompanySnapshot,
-    fileManifest: record.fileManifest as WorkspaceManifestEntry[],
+    snapshotData: record.snapshotData as unknown as CompanySnapshot,
+    // The canonical schema's typed jsonb (`{path; sha256; bytes}`) and the
+    // contract's `WorkspaceFileManifestEntry` (`{path; size}`) both
+    // round-trip through the same physical jsonb column; cast through
+    // unknown.
+    fileManifest: record.fileManifest as unknown as WorkspaceManifestEntry[],
     status: record.status as SprintSnapshot["status"],
     createdAt: toIsoString(record.createdAt) ?? new Date().toISOString(),
   };
@@ -146,11 +166,17 @@ async function persistWorkspaceInfo(workspace: WorkspaceInfo) {
     return workspace;
   }
 
+  // Spec 31 Phase 7.B.6 — canonical schema uses uuid PK / company FK.
+  // Friendly ids (`workspace_company_<uuid>`, `company_<uuid>`) are
+  // hashed via uuidv5 to land on stable canonical rows.
+  const dbId = friendlyToUuid(workspace.id);
+  const dbCompanyId = companiesRepo.toDbId(workspace.companyId);
+
   await getDb()
     .insert(workspacesTable)
     .values({
-      id: workspace.id,
-      companyId: workspace.companyId,
+      id: dbId,
+      companyId: dbCompanyId,
       localPath: workspace.localPath,
       status: workspace.status,
       latestBundleKey: workspace.latestBundleKey,
@@ -165,7 +191,7 @@ async function persistWorkspaceInfo(workspace: WorkspaceInfo) {
     .onConflictDoUpdate({
       target: workspacesTable.id,
       set: {
-        companyId: workspace.companyId,
+        companyId: dbCompanyId,
         localPath: workspace.localPath,
         status: workspace.status,
         latestBundleKey: workspace.latestBundleKey,
@@ -196,9 +222,16 @@ async function loadWorkspaceInfo(companyId: string) {
   }
 
   try {
-    const rows = await getDb().select().from(workspacesTable);
-    const record = rows.find((candidate) => candidate.id === buildWorkspaceId(companyId));
-    return record ? mapWorkspaceRecord(record) : fallbackWorkspaceState.get(companyId) ?? null;
+    // Spec 31 Phase 7.B.6 — query by company_id (uuid FK, unique index)
+    // instead of fetching all rows and filtering by friendly id. Same
+    // O(1) lookup, but goes through the canonical PK/index path.
+    const dbCompanyId = companiesRepo.toDbId(companyId);
+    const [record] = await getDb()
+      .select()
+      .from(workspacesTable)
+      .where(eq(workspacesTable.companyId, dbCompanyId))
+      .limit(1);
+    return record ? mapWorkspaceRecord(record, companyId) : fallbackWorkspaceState.get(companyId) ?? null;
   } catch {
     return fallbackWorkspaceState.get(companyId) ?? null;
   }
@@ -242,7 +275,7 @@ async function listWorkspaceFiles(dir: string, base: string): Promise<WorkspaceF
  * Manages the product workspace lifecycle — provisioning, git commit/sync,
  * sprint snapshots, bundle export, and archive/cleanup.
  */
-export class WorkspaceManager {
+class WorkspaceManager {
   /** Return the legacy workspace directory path. */
   getLegacyProductDir() {
     return legacyProductDir;
@@ -379,11 +412,15 @@ export class WorkspaceManager {
     }
 
     try {
-      const rows = await getDb().select().from(sprintSnapshotsTable);
+      // Spec 31 Phase 7.B.7 — query by indexed company_id uuid FK.
+      const dbCompanyId = companiesRepo.toDbId(companyId);
+      const rows = await getDb()
+        .select()
+        .from(sprintSnapshotsTable)
+        .where(eq(sprintSnapshotsTable.companyId, dbCompanyId));
       return rows
-        .filter((row) => row.companyId === companyId)
         .sort((left, right) => right.sprintNumber - left.sprintNumber)
-        .map(mapSprintSnapshotRecord);
+        .map((row) => mapSprintSnapshotRecord(row, companyId));
     } catch {
       return fallbackSprintSnapshots.get(companyId) ?? [];
     }
@@ -420,18 +457,31 @@ export class WorkspaceManager {
     }
 
     if (isDatabaseConfigured()) {
+      // Spec 31 Phase 7.B.7 — canonical sprint_snapshots uses uuid PK
+      // / FK; map the friendly snapshot id (`snapshot_<companyId>_<n>`)
+      // and friendly companyId to deterministic uuids.
+      const dbId = friendlyToUuid(`snapshot_${companyId}_${sprintNumber}`);
+      const dbCompanyId = companiesRepo.toDbId(companyId);
       await getDb()
         .insert(sprintSnapshotsTable)
         .values({
-          id: `snapshot_${companyId}_${sprintNumber}`,
-          companyId,
+          id: dbId,
+          companyId: dbCompanyId,
           sprintNumber,
           gitTag: tagName,
           bundleKey,
           bundleSha256,
           bundleBytes,
+          // Cast through Record<string, unknown> — the schema is
+          // declared untyped to avoid an @arceus/contracts circular
+          // dep in @arceus/db. The runtime payload is a CompanySnapshot.
           snapshotData: snapshot,
-          fileManifest: manifest,
+          // The canonical schema's jsonb is typed `{ path; sha256; bytes }`;
+          // the workspace's listWorkspaceManifest helper produces
+          // `{ path; size }` (contract `WorkspaceFileManifestEntry`).
+          // The DB column is plain jsonb — cast through unknown so
+          // both shapes can land without changing either type.
+          fileManifest: manifest as unknown as { path: string; sha256: string; bytes: number }[],
           status: "active",
           createdAt: new Date(),
         })
@@ -443,7 +493,7 @@ export class WorkspaceManager {
             bundleSha256,
             bundleBytes,
             snapshotData: snapshot,
-            fileManifest: manifest,
+            fileManifest: manifest as unknown as { path: string; sha256: string; bytes: number }[],
             status: "active",
           },
         });

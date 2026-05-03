@@ -1,43 +1,52 @@
 /**
  * @module audit.routes
- * Routes for the audit ledger — event queries, stats, SSE stream, and log viewer.
+ * Routes for the audit ledger — event queries, stats, SSE stream.
+ *
+ * Note: the `/logs` HTML viewer used to live here. It moved to
+ * `inspector.routes.ts` so it sits alongside the Spec 32 event stream
+ * it actually displays.
  */
 import type { FastifyInstance } from "fastify";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { z } from "zod";
+import { auditCategorySchema, auditSeveritySchema } from "@arceus/contracts";
 import { auditConfig } from "../config/audit.js";
-import { startAuditLedger, drainAuditLedger, subscribeSse, getAuditEvents, getAuditStats } from "../observability/audit-ledger.js";
+import { subscribeSse, getAuditEvents, getAuditStats } from "../observability/audit-view-sink.js";
 
-const __audit_dirname = dirname(fileURLToPath(import.meta.url));
-let logViewerHtml: string | null = null;
+/**
+ * Querystring schema for `GET /api/audit/events`. Coerces `limit` from string,
+ * narrows `category`/`severity` to the typed enums from contracts. Anything
+ * outside the enum (typo, drift) becomes a validation error rather than
+ * silently filtering on a bogus string.
+ */
+const auditQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(1000).optional(),
+  category: auditCategorySchema.optional(),
+  severity: auditSeveritySchema.optional(),
+  companyId: z.string().min(1).optional(),
+  agentRole: z.string().min(1).optional(),
+});
 
 export default async function auditRoutes(app: FastifyInstance) {
-  if (auditConfig.logViewerEnabled) {
-    app.get("/logs", async (_request, reply) => {
-      if (!logViewerHtml) {
-        logViewerHtml = readFileSync(join(__audit_dirname, "..", "log-viewer.html"), "utf-8");
-      }
-      reply.type("text/html").send(logViewerHtml);
-    });
-  }
-
-  app.get("/api/audit/events", async (request) => {
-    const query = request.query as Record<string, string>;
-    return getAuditEvents({
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
-      category: (query.category as any) || undefined,
-      severity: (query.severity as any) || undefined,
-      companyId: query.companyId || undefined,
-      agentRole: query.agentRole || undefined,
-    });
+  app.get("/api/audit/events", async (request, reply) => {
+    const parsed = auditQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "Invalid query parameters",
+        details: parsed.error.issues.map((i) => ({
+          field: i.path.join("."),
+          message: i.message,
+        })),
+      };
+    }
+    return getAuditEvents(parsed.data);
   });
 
   app.get("/api/audit/stats", async () => {
     return getAuditStats();
   });
 
-  app.get("/api/audit/stream", async (request, reply) => {
+  app.get("/api/audit/stream", { logLevel: "warn" }, async (request, reply) => {
     reply.raw.setHeader("Content-Type", "text/event-stream");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
     reply.raw.setHeader("Connection", "keep-alive");

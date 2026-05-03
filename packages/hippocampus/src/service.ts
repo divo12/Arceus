@@ -1,4 +1,4 @@
-import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingGenerator, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, StaticMemoryStore } from "./types";
+import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, ScoredMemory, StaticMemoryStore } from "./types";
 import { InMemoryDynamicStore } from "./tiers/dynamic";
 import { InMemoryPrimingStore, createDefaultPrimingState, renderPrimingDisposition, updatePrimingStateFromOutcome } from "./tiers/priming";
 import { InMemoryProceduralStore } from "./tiers/procedural";
@@ -7,6 +7,7 @@ import { embed } from "./backends/embedding.js";
 import { rankAndSelect, DEFAULT_RETRIEVAL_OPTIONS } from "./engines/retrieval.js";
 import type { RawCandidate } from "./engines/retrieval.js";
 import type { Habit, MemoryUnit } from "@arceus/contracts";
+import { observability } from "@arceus/contracts";
 
 /**
  * Build a MemoryUnit from a completed task's output.
@@ -34,7 +35,7 @@ function buildCompletionMemoryUnit(input: ProcessTaskCompletionInput): MemoryUni
   };
 }
 
-export type HippocampusDependencies = {
+export interface HippocampusDependencies {
   staticStore?: StaticMemoryStore;
   dynamicStore?: DynamicMemoryStore;
   proceduralStore?: ProceduralMemoryStore;
@@ -45,9 +46,7 @@ export type HippocampusDependencies = {
   decideAction?: ActionDecider;
   /** LLM-powered habit matcher. If not provided, falls back to naive token matching. */
   matchHabits?: HabitMatcher;
-  /** LLM-powered priming disposition generator. If not provided, falls back to hardcoded thresholds. */
-  generatePriming?: PrimingGenerator;
-};
+}
 
 /**
  * Core memory service orchestrating all four tiers (static, dynamic, procedural, priming).
@@ -70,7 +69,6 @@ export class HippocampusService implements HippocampusGateway {
   private readonly extractFacts: FactExtractor | null;
   private readonly decideAction: ActionDecider | null;
   private readonly matchHabits: HabitMatcher | null;
-  private readonly generatePriming: PrimingGenerator | null;
 
   constructor(dependencies: HippocampusDependencies = {}) {
     this.staticStore = dependencies.staticStore ?? new InMemoryStaticStore();
@@ -80,7 +78,6 @@ export class HippocampusService implements HippocampusGateway {
     this.extractFacts = dependencies.extractFacts ?? null;
     this.decideAction = dependencies.decideAction ?? null;
     this.matchHabits = dependencies.matchHabits ?? null;
-    this.generatePriming = dependencies.generatePriming ?? null;
   }
 
   /**
@@ -120,7 +117,7 @@ export class HippocampusService implements HippocampusGateway {
         console.log(`[Hippocampus] LLM habit match: ${habits.length}/${allHabits.length} habits relevant`);
       } catch (err) {
         // Fallback to naive token matching if LLM fails
-        console.warn(`[Hippocampus] LLM habit match failed, falling back to token match: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] LLM habit match failed, falling back to token match: ${err instanceof Error ? err.message : String(err)}`);
         habits = await this.proceduralStore.findMatching(agentId, taskDescription);
       }
     } else {
@@ -141,7 +138,7 @@ export class HippocampusService implements HippocampusGateway {
         ...dynamicResults.map((r) => ({
           ...r,
           tier: "dynamic" as const,
-          decayedScore: (r as any).decayedScore,
+          decayedScore: r.decayedScore,
         })),
       ];
     } else {
@@ -164,19 +161,12 @@ export class HippocampusService implements HippocampusGateway {
     // Replace stored confidence with MMR retrieval score so consumers see task-relevance
     const memories = scored.map((m) => ({ ...m, confidence: m.finalScore }));
 
-    // Generate priming disposition — LLM if available, hardcoded fallback otherwise
-    let priming: string;
-    if (primingState && this.generatePriming) {
-      try {
-        priming = await this.generatePriming(primingState);
-        console.log(`[Hippocampus] LLM priming: "${priming}"`);
-      } catch (err) {
-        console.warn(`[Hippocampus] LLM priming failed, using fallback: ${err instanceof Error ? err.message : err}`);
-        priming = renderPrimingDisposition(primingState);
-      }
-    } else {
-      priming = primingState ? renderPrimingDisposition(primingState) : "Neutral. Start with a direct first pass.";
-    }
+    // Priming disposition — deterministic render from numeric state scores.
+    // The former LLM-backed priming (memoryAgentGeneratePriming) was deleted
+    // per spec 27 §6: numeric inputs, LLM couldn't improve on hardcoded thresholds.
+    const priming: string = primingState
+      ? renderPrimingDisposition(primingState)
+      : "Neutral. Start with a direct first pass.";
 
     return { memories, habits, priming };
   }
@@ -222,7 +212,7 @@ export class HippocampusService implements HippocampusGateway {
     try {
       facts = await this.extractFacts!(input.output, input.taskTitle ?? input.taskId, input.role ?? "unknown");
     } catch (err) {
-      console.warn(`[Hippocampus] LLM extraction failed, falling back to raw: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[Hippocampus] LLM extraction failed, falling back to raw: ${err instanceof Error ? err.message : String(err)}`);
       await this.processRawDump(input);
       return;
     }
@@ -282,7 +272,7 @@ export class HippocampusService implements HippocampusGateway {
             break;
         }
       } catch (err) {
-        console.warn(`[Hippocampus] Habit action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] Habit action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
         // Fall through to ADD
       }
     }
@@ -315,7 +305,7 @@ export class HippocampusService implements HippocampusGateway {
     if (this.decideAction) {
       try {
         // Embed the fact and search for similar existing memories
-        let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+        let similar: { id: string; content: string; type: string; confidence: number }[] = [];
         try {
           const factEmbedding = await embed(fact.content);
           if (store.searchByEmbedding) {
@@ -331,7 +321,7 @@ export class HippocampusService implements HippocampusGateway {
         decision = await this.decideAction(fact.content, similar);
       } catch (err) {
         // Action decision failed — default to ADD (spec: worst case is slight duplication, GC cleans up)
-        console.warn(`[Hippocampus] Action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[Hippocampus] Action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -382,6 +372,176 @@ export class HippocampusService implements HippocampusGateway {
   }
 
   /**
+   * Semantic search over a single agent's memory store (spec 27 §6).
+   *
+   * `scope` controls whether delegation-typed memories (received handoffs)
+   * are included: 'self' excludes them; 'company' includes them.
+   *
+   * `kind` filters on the memory tier: 'static' hits only staticStore,
+   * 'dynamic' hits only dynamicStore, 'any' searches both.
+   *
+   * Zero LLM in the hot path: embed → searchByEmbedding → MMR rank → filter.
+   * If the underlying stores don't expose vector search (in-memory fallback),
+   * returns list()-sourced candidates with similarity=1.0 and no MMR.
+   */
+  async search(
+    agentId: string,
+    query: string,
+    opts: {
+      scope?: "self" | "company";
+      kind?: "static" | "dynamic" | "any";
+      limit?: number;
+      since?: string;
+    } = {},
+  ): Promise<{ memories: ScoredMemory[]; totalSearched: number; queryEmbeddingMs: number }> {
+    const scope = opts.scope ?? "self";
+    const kind = opts.kind ?? "any";
+    const limit = opts.limit ?? 5;
+    const sinceTs = opts.since ? Date.parse(opts.since) : null;
+
+    const hasVectorSearch =
+      Boolean(this.staticStore.searchByEmbedding) &&
+      Boolean(this.dynamicStore.searchByEmbedding);
+
+    const embedStart = Date.now();
+    const queryEmbedding = hasVectorSearch ? await embed(query) : null;
+    const queryEmbeddingMs = Date.now() - embedStart;
+
+    const overFetch = DEFAULT_RETRIEVAL_OPTIONS.overFetch;
+    const candidateLimit = limit * overFetch;
+
+    const [staticCandidates, dynamicCandidates] = await Promise.all([
+      kind === "dynamic"
+        ? Promise.resolve<RawCandidate[]>([])
+        : this.fetchStaticCandidates(agentId, queryEmbedding, candidateLimit),
+      kind === "static"
+        ? Promise.resolve<RawCandidate[]>([])
+        : this.fetchDynamicCandidates(agentId, queryEmbedding, candidateLimit),
+    ]);
+
+    const rawCandidates: RawCandidate[] = [...staticCandidates, ...dynamicCandidates];
+    const totalSearched = rawCandidates.length;
+
+    // Scope filter: 'self' excludes delegation-typed memories (received handoffs).
+    const scopeFiltered = rawCandidates.filter((candidate) => {
+      if (scope === "self" && candidate.type === "delegation") return false;
+      if (sinceTs !== null && Date.parse(candidate.createdAt) < sinceTs) return false;
+      return true;
+    });
+
+    const scored = rankAndSelect(scopeFiltered, `agent:${agentId}`, {
+      ...DEFAULT_RETRIEVAL_OPTIONS,
+      topK: limit,
+    });
+
+    return {
+      memories: scored,
+      totalSearched,
+      queryEmbeddingMs,
+    };
+  }
+
+  /**
+   * Add a single memory unit, running the action decider for dedup.
+   * Returns the final unit (if stored or updated) along with the decider's
+   * verdict. Used by `memory_add_learning` (spec 27 §6) to surface
+   * ADD/UPDATE/NONE action back to the caller.
+   */
+  async addMemory(
+    unit: MemoryUnit,
+    opts: { skipDedup?: boolean } = {},
+  ): Promise<{
+    memoryId: string;
+    action: "ADD" | "UPDATE" | "NONE";
+    reason: string;
+    targetId: string | null;
+  }> {
+    const store = unit.type === "static" ? this.staticStore : this.dynamicStore;
+
+    if (opts.skipDedup) {
+      await store.add(unit);
+      return { memoryId: unit.id, action: "ADD", reason: "skip-dedup", targetId: null };
+    }
+
+    if (this.decideAction) {
+      try {
+        let similar: { id: string; content: string; type: string; confidence: number }[] = [];
+        try {
+          const factEmbedding = await embed(unit.content);
+          if (store.searchByEmbedding) {
+            const results = await store.searchByEmbedding(unit.agentId, factEmbedding, 5);
+            similar = results.map((r) => ({ id: r.id, content: r.content, type: r.type, confidence: r.confidence }));
+          }
+        } catch {
+          const all = await store.list(unit.agentId);
+          similar = all.slice(0, 5).map((m) => ({ id: m.id, content: m.content, type: m.type, confidence: m.confidence }));
+        }
+
+        const decision = await this.decideAction(unit.content, similar);
+
+        if (decision.action === "NONE") {
+          return { memoryId: decision.target_id ?? unit.id, action: "NONE", reason: decision.reason, targetId: decision.target_id };
+        }
+        if (decision.action === "UPDATE" && decision.target_id) {
+          await store.update(decision.target_id, unit.content, unit.confidence);
+          return { memoryId: decision.target_id, action: "UPDATE", reason: decision.reason, targetId: decision.target_id };
+        }
+        if (decision.action === "DELETE" && decision.target_id) {
+          await store.softDelete(decision.target_id, `Contradicted by: ${unit.content.slice(0, 100)}`);
+          await store.add(unit);
+          return { memoryId: unit.id, action: "ADD", reason: `Replaced ${decision.target_id}: ${decision.reason}`, targetId: decision.target_id };
+        }
+        // ADD falls through
+      } catch (err) {
+        console.warn(`[Hippocampus] Action decision failed in addMemory, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await store.add(unit);
+    // Spec 32 — narrate memory writes for observability.
+    observability.logEvent({
+      event: "memory.written",
+      companyId: unit.companyId,
+      scope: `${unit.agentId}/${unit.type}`,
+      sizeBytes: Buffer.byteLength(unit.content ?? "", "utf8"),
+      ts: Date.now(),
+    });
+    return { memoryId: unit.id, action: "ADD", reason: "default", targetId: null };
+  }
+
+  /** Best-effort fetch of static candidates (vector search or list fallback). */
+  private async fetchStaticCandidates(
+    agentId: string,
+    queryEmbedding: number[] | null,
+    candidateLimit: number,
+  ): Promise<RawCandidate[]> {
+    if (queryEmbedding && this.staticStore.searchByEmbedding) {
+      const results = await this.staticStore.searchByEmbedding(agentId, queryEmbedding, candidateLimit);
+      return results.map((r) => ({ ...r, tier: "static" as const }));
+    }
+    const memories = await this.staticStore.list(agentId);
+    return memories.map((m) => ({ ...m, similarity: 1.0, tier: "static" as const }));
+  }
+
+  /** Best-effort fetch of dynamic candidates (vector search or list fallback). */
+  private async fetchDynamicCandidates(
+    agentId: string,
+    queryEmbedding: number[] | null,
+    candidateLimit: number,
+  ): Promise<RawCandidate[]> {
+    if (queryEmbedding && this.dynamicStore.searchByEmbedding) {
+      const results = await this.dynamicStore.searchByEmbedding(agentId, queryEmbedding, candidateLimit);
+      return results.map((r) => ({
+        ...r,
+        tier: "dynamic" as const,
+        decayedScore: (r).decayedScore,
+      }));
+    }
+    const memories = await this.dynamicStore.list(agentId);
+    return memories.map((m) => ({ ...m, similarity: 1.0, tier: "dynamic" as const }));
+  }
+
+  /**
    * Store pre-built memory units directly, bypassing LLM extraction.
    * Runs the action decider on each unit to avoid duplicates.
    * Returns the count of units actually stored (ADD or UPDATE).
@@ -394,7 +554,7 @@ export class HippocampusService implements HippocampusGateway {
       // Run action decider to avoid duplicates if available
       if (this.decideAction) {
         try {
-          let similar: Array<{ id: string; content: string; type: string; confidence: number }> = [];
+          let similar: { id: string; content: string; type: string; confidence: number }[] = [];
           try {
             const factEmbedding = await embed(unit.content);
             if (store.searchByEmbedding) {
@@ -418,7 +578,7 @@ export class HippocampusService implements HippocampusGateway {
             continue;
           }
         } catch (err) {
-          console.warn(`[Hippocampus] Action decision failed for storeMemories, defaulting to ADD: ${err instanceof Error ? err.message : err}`);
+          console.warn(`[Hippocampus] Action decision failed for storeMemories, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 

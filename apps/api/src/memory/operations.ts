@@ -1,25 +1,74 @@
-/** Agent memory read/write operations: focus updates, enrichment, blocker clearing, and formatting. */
+/**
+ * Agent memory read/write operations: focus updates, enrichment,
+ * blocker clearing, and prompt formatting. Spec 31 Phase 7.B.1 — DB-direct,
+ * no in-memory snapshot.
+ */
 
-import type { AgentIdentity } from "@arceus/contracts";
+import type { AgentIdentity, MemorySummary } from "@arceus/contracts";
 import type { PreparedAgentContext } from "@arceus/hippocampus";
-import { getSnapshot, updateAgentMemory } from "../persistence/store.js";
 import { uniqueStrings } from "@arceus/task-engine";
-import { getAgentByRole } from "@arceus/task-engine";
+import { getDb, type DbClient } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 
-/** Replace an agent's currentFocus memory with the given entries. */
-export function updateRoleMemory(role: AgentIdentity["role"], currentFocus: string[]) {
-  const agent = getAgentByRole(getSnapshot(), role);
-  if (!agent) return;
+const FOCUS_LIMIT = 6;
+const LEARNINGS_LIMIT = 8;
+const PATTERNS_LIMIT = 6;
+const BLOCKERS_LIMIT = 6;
+const DECISIONS_LIMIT = 8;
 
-  updateAgentMemory(agent.id, (memory) => ({
-    ...memory,
-    currentFocus: uniqueStrings(currentFocus, 6),
+/** Default summary used when an agent has no memory_summaries row yet. */
+function emptyMemory(agentId: string): MemorySummary {
+  return {
+    id: `memory_${agentId}`,
+    agentId,
+    currentFocus: [],
+    recentLearnings: [],
+    activePatterns: [],
+    openBlockers: [],
+    importantDecisions: [],
     updatedAt: new Date().toISOString(),
-  }));
+  };
 }
 
-/** Merge new entries into an agent's memory fields (focus, learnings, patterns, blockers, decisions). */
-export function enrichRoleMemory(
+/**
+ * Read-modify-write the agent's memory summary. Resolves the agent
+ * by `(companyId, role)`, fetches the current summary (or starts
+ * fresh), applies `updater`, persists via `upsertSummary`. Returns
+ * the persisted contract row, or `null` if no agent matches.
+ */
+async function mutateRoleMemory(
+  companyId: string,
+  role: AgentIdentity["role"],
+  updater: (memory: MemorySummary) => MemorySummary,
+  db: DbClient = getDb(),
+): Promise<MemorySummary | null> {
+  const agent = await agentsRepo.findAgentByRole(db, companyId, role);
+  if (!agent) return null;
+
+  const current = await memorySummariesRepo.findByAgentHydrated(db, agent.id) ?? emptyMemory(agent.id);
+  const next = updater(current);
+  await memorySummariesRepo.upsertSummary(db, next, companyId);
+  return next;
+}
+
+/** Replace an agent's currentFocus memory with the given entries. */
+export async function updateRoleMemory(
+  companyId: string,
+  role: AgentIdentity["role"],
+  currentFocus: string[],
+  db: DbClient = getDb(),
+): Promise<void> {
+  await mutateRoleMemory(companyId, role, (memory) => ({
+    ...memory,
+    currentFocus: uniqueStrings(currentFocus, FOCUS_LIMIT),
+    updatedAt: new Date().toISOString(),
+  }), db);
+}
+
+/** Merge new entries into an agent's memory fields. */
+export async function enrichRoleMemory(
+  companyId: string,
   role: AgentIdentity["role"],
   update: {
     currentFocus?: string[];
@@ -28,35 +77,46 @@ export function enrichRoleMemory(
     openBlockers?: string[];
     importantDecisions?: string[];
   },
-) {
-  const agent = getAgentByRole(getSnapshot(), role);
-  if (!agent) return;
-
-  updateAgentMemory(agent.id, (memory) => ({
+  db: DbClient = getDb(),
+): Promise<void> {
+  await mutateRoleMemory(companyId, role, (memory) => ({
     ...memory,
-    currentFocus: update.currentFocus ? uniqueStrings([...update.currentFocus, ...memory.currentFocus], 6) : memory.currentFocus,
-    recentLearnings: update.recentLearnings ? uniqueStrings([...update.recentLearnings, ...memory.recentLearnings], 8) : memory.recentLearnings,
-    activePatterns: update.activePatterns ? uniqueStrings([...update.activePatterns, ...memory.activePatterns], 6) : memory.activePatterns,
-    openBlockers: update.openBlockers ? uniqueStrings([...update.openBlockers, ...memory.openBlockers], 6) : memory.openBlockers,
-    importantDecisions: update.importantDecisions ? uniqueStrings([...update.importantDecisions, ...memory.importantDecisions], 8) : memory.importantDecisions,
+    currentFocus: update.currentFocus
+      ? uniqueStrings([...update.currentFocus, ...memory.currentFocus], FOCUS_LIMIT)
+      : memory.currentFocus,
+    recentLearnings: update.recentLearnings
+      ? uniqueStrings([...update.recentLearnings, ...memory.recentLearnings], LEARNINGS_LIMIT)
+      : memory.recentLearnings,
+    activePatterns: update.activePatterns
+      ? uniqueStrings([...update.activePatterns, ...memory.activePatterns], PATTERNS_LIMIT)
+      : memory.activePatterns,
+    openBlockers: update.openBlockers
+      ? uniqueStrings([...update.openBlockers, ...memory.openBlockers], BLOCKERS_LIMIT)
+      : memory.openBlockers,
+    importantDecisions: update.importantDecisions
+      ? uniqueStrings([...update.importantDecisions, ...memory.importantDecisions], DECISIONS_LIMIT)
+      : memory.importantDecisions,
     updatedAt: new Date().toISOString(),
-  }));
+  }), db);
 }
 
 /** Remove specific blockers from an agent's openBlockers list. */
-export function clearRoleBlockers(role: AgentIdentity["role"], blockersToClear: string[]) {
-  const agent = getAgentByRole(getSnapshot(), role);
-  if (!agent || blockersToClear.length === 0) return;
-
+export async function clearRoleBlockers(
+  companyId: string,
+  role: AgentIdentity["role"],
+  blockersToClear: string[],
+  db: DbClient = getDb(),
+): Promise<void> {
+  if (blockersToClear.length === 0) return;
   const normalized = new Set(blockersToClear.map((item) => item.trim()));
-  updateAgentMemory(agent.id, (memory) => ({
+  await mutateRoleMemory(companyId, role, (memory) => ({
     ...memory,
     openBlockers: memory.openBlockers.filter((item) => !normalized.has(item.trim())),
     updatedAt: new Date().toISOString(),
-  }));
+  }), db);
 }
 
-/** Format a PreparedAgentContext into a human-readable prompt section. */
+/** Format a PreparedAgentContext into a human-readable prompt section. Pure. */
 export function formatHippocampusContext(ctx: PreparedAgentContext): string {
   const sections: string[] = [];
 

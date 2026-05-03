@@ -31,13 +31,13 @@ function formatContributions(meeting: Meeting): string {
 }
 
 function extractJson(output: string): string | null {
-  const match = output.match(/\{[\s\S]*\}/);
+  const match = /\{[\s\S]*\}/.exec(output);
   return match?.[0] ?? null;
 }
 
 // ── Facilitator Session ────────────────────────────────────
 
-export interface FacilitatorResult {
+interface FacilitatorResult {
   synthesis: SynthesisOutput;
   resolutions: ResolutionOutput;
   brief: DailySyncBrief | null;
@@ -149,6 +149,7 @@ export async function runFacilitatorSession(
     const briefOutput = await runInternalAgentPrompt("facilitator_agent", null, briefPrompt);
     try {
       const json = extractJson(briefOutput);
+       
       if (json) brief = dailySyncBriefSchema.parse(JSON.parse(json));
     } catch {
       // No brief on parse failure

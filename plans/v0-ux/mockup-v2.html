@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Arceus — describe a company. it runs.</title>
+<style>
+  :root{
+    --bg:#FBFAF7;
+    --panel:#FFFFFF;
+    --inset:#F4F2EC;
+    --line:#E8E5DD;
+    --line-2:#D6D2C7;
+    --ink:#1A1B1E;
+    --ink-2:#5A5D63;
+    --ink-3:#8C8F95;
+    --accent:#2E3A4A;       /* graphite blue */
+    --accent-soft:#E8ECF1;
+    --warn:#B7873A;
+    --warn-soft:#F6ECD9;
+    --good:#4F7A57;
+    --good-soft:#E5EFE7;
+    --risk:#A8463A;
+    --r:14px;
+    --r-sm:10px;
+    --shadow-sm:0 1px 2px rgba(20,22,26,.04), 0 1px 1px rgba(20,22,26,.03);
+    --shadow:0 8px 28px rgba(20,22,26,.06), 0 2px 6px rgba(20,22,26,.04);
+    --sans:'Inter',-apple-system,system-ui,sans-serif;
+    --serif:'Source Serif 4','Source Serif Pro',Georgia,serif;
+    --mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  ::selection{background:var(--accent-soft)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#DAD6CC;border-radius:6px;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-track{background:transparent}
+  button{font:inherit;color:inherit}
+
+  /* Shell */
+  .app{display:grid;grid-template-columns:440px 1fr;height:100vh;gap:0}
+  /* === LEFT: Bridge (chat) === */
+  .bridge{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+  .br-head{padding:18px 22px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+  .logo{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:600;font-size:13px;letter-spacing:-.02em}
+  .br-head .name{font-weight:600;font-size:14.5px;letter-spacing:-.01em}
+  .br-head .sub{color:var(--ink-3);font-size:12px}
+  .br-head .right{margin-left:auto;display:flex;gap:6px}
+  .iconbtn{all:unset;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink-2);transition:.15s}
+  .iconbtn:hover{background:var(--inset);color:var(--ink)}
+  .iconbtn svg{width:16px;height:16px}
+
+  .br-state{padding:10px 22px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);background:linear-gradient(to bottom, var(--panel), #FCFBF8)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px var(--good-soft);animation:pulse 2.6s ease-in-out infinite}
+  .br-state .label{font-size:12.5px;color:var(--ink-2)}
+  .br-state .label b{color:var(--ink);font-weight:600}
+  .br-state .meta{margin-left:auto;color:var(--ink-3);font-family:var(--mono);font-size:11px}
+
+  .messages{flex:1;overflow-y:auto;padding:22px 22px 8px;display:flex;flex-direction:column;gap:18px}
+
+  .msg{display:flex;flex-direction:column;gap:6px;max-width:100%}
+  .msg .who{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:600;display:flex;align-items:center;gap:8px}
+  .msg .who .av{width:18px;height:18px;border-radius:50%;background:var(--inset);display:grid;place-items:center;font-size:9px;font-weight:700;color:var(--ink-2);text-transform:none;letter-spacing:0}
+  .msg.you .who .av{background:var(--accent);color:#fff}
+  .msg .body{font-size:14px;line-height:1.55;color:var(--ink)}
+  .msg.you .body{background:var(--inset);padding:12px 14px;border-radius:var(--r-sm);border:1px solid var(--line)}
+
+  .think{display:flex;align-items:center;gap:8px;color:var(--ink-3);font-size:12.5px;padding:6px 10px;border:1px dashed var(--line-2);border-radius:999px;align-self:flex-start;background:#FCFBF8}
+  .think .spinner{width:10px;height:10px;border-radius:50%;border:1.5px solid var(--line-2);border-top-color:var(--accent);animation:spin .9s linear infinite}
+
+  .plan{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);overflow:hidden;box-shadow:var(--shadow-sm)}
+  .plan .ph{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .plan .ph .tag{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  .plan .ph h4{margin:0;font-size:13.5px;font-weight:600}
+  .plan .ph .right{margin-left:auto;color:var(--ink-3);font-size:11px}
+  .plan ul{margin:0;padding:8px 0;list-style:none}
+  .plan li{padding:8px 14px;display:grid;grid-template-columns:18px 1fr auto;gap:10px;align-items:center;font-size:13px;color:var(--ink)}
+  .plan li .b{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--line-2);background:var(--panel);position:relative}
+  .plan li.done .b{background:var(--accent);border-color:var(--accent)}
+  .plan li.done .b::after{content:'';position:absolute;left:3px;top:.5px;width:5px;height:9px;border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+  .plan li.now .b{border-color:var(--accent);background:#fff}
+  .plan li.now .b::after{content:'';position:absolute;inset:3px;border-radius:50%;background:var(--accent);animation:pulse 1.6s ease-in-out infinite}
+  .plan li.now{color:var(--ink);font-weight:500}
+  .plan li.todo{color:var(--ink-3)}
+  .plan li .who{font-size:11px;color:var(--ink-3);font-family:var(--mono)}
+
+  .ask{border:1px solid var(--line);border-radius:var(--r);background:#FCFBF8;padding:14px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow-sm)}
+  .ask .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);font-weight:600;display:flex;align-items:center;gap:6px}
+  .ask .lbl .d{width:6px;height:6px;border-radius:50%;background:var(--warn)}
+  .ask .q{font-size:14px;color:var(--ink);line-height:1.5}
+  .ask .actions{display:flex;gap:8px;margin-top:2px}
+  .btn{all:unset;cursor:pointer;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);transition:.15s}
+  .btn:hover{background:var(--inset)}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.primary:hover{background:#1f2935}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2);padding:8px 10px}
+  .btn.ghost:hover{color:var(--ink);background:var(--inset)}
+
+  .composer{padding:14px 16px 18px;border-top:1px solid var(--line);background:var(--panel)}
+  .composer .wrap{border:1px solid var(--line-2);border-radius:14px;background:var(--panel);padding:10px 12px;display:flex;flex-direction:column;gap:8px;transition:.15s;box-shadow:var(--shadow-sm)}
+  .composer .wrap:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .composer textarea{width:100%;border:0;outline:0;resize:none;font:inherit;font-size:14px;line-height:1.5;background:transparent;color:var(--ink);min-height:46px;padding:4px 2px}
+  .composer textarea::placeholder{color:var(--ink-3)}
+  .composer .toolbar{display:flex;gap:6px;align-items:center}
+  .chip{font-size:11.5px;color:var(--ink-2);padding:4px 9px;border:1px solid var(--line);border-radius:999px;background:var(--panel);cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:5px}
+  .chip:hover{background:var(--inset)}
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .chip svg{width:11px;height:11px}
+  .composer .toolbar .grow{flex:1}
+  .composer .send{all:unset;cursor:pointer;width:34px;height:34px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;transition:.15s}
+  .composer .send:hover{background:#1f2935}
+  .composer .send svg{width:14px;height:14px}
+  .composer .hint{margin-top:6px;font-size:11px;color:var(--ink-3);display:flex;justify-content:space-between}
+  .composer .hint kbd{font-family:var(--mono);font-size:10.5px;background:var(--inset);padding:1px 5px;border-radius:4px;border:1px solid var(--line)}
+
+  /* === RIGHT: Canvas === */
+  .canvas{display:flex;flex-direction:column;background:var(--bg);min-width:0}
+  .cv-head{display:flex;align-items:center;gap:6px;padding:14px 22px;border-bottom:1px solid var(--line);background:var(--bg)}
+  .tabs{display:flex;gap:2px;background:var(--inset);padding:3px;border-radius:10px;border:1px solid var(--line)}
+  .tab{all:unset;cursor:pointer;padding:6px 14px;border-radius:7px;font-size:13px;color:var(--ink-2);font-weight:500;display:flex;align-items:center;gap:7px;transition:.15s}
+  .tab:hover{color:var(--ink)}
+  .tab.active{background:var(--panel);color:var(--ink);box-shadow:var(--shadow-sm)}
+  .tab svg{width:13px;height:13px}
+  .cv-head .grow{flex:1}
+  .cv-head .meta{display:flex;align-items:center;gap:14px;color:var(--ink-3);font-size:12px}
+  .cv-head .meta b{color:var(--ink);font-weight:500}
+  .cv-head .seg{display:inline-flex;align-items:center;gap:8px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:12px}
+  .cv-head .seg .lab{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .cv-head .live{display:inline-flex;align-items:center;gap:6px;color:var(--good);font-size:12px;font-weight:500}
+
+  .frame{flex:1;overflow:auto;padding:22px}
+  .preview{max-width:1180px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);overflow:hidden}
+
+  /* Pulse preview */
+  .p-head{padding:24px 28px 18px;border-bottom:1px solid var(--line)}
+  .p-eyebrow{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:8px}
+  .p-title{font-family:var(--serif);font-size:30px;line-height:1.18;letter-spacing:-.015em;color:var(--ink);margin:0;font-weight:500}
+  .p-title b{font-weight:600}
+  .p-stats{margin-top:16px;display:flex;gap:8px;flex-wrap:wrap}
+  .stat{display:inline-flex;align-items:baseline;gap:6px;padding:6px 12px;background:var(--inset);border-radius:999px;font-size:12.5px;color:var(--ink-2)}
+  .stat b{color:var(--ink);font-weight:600}
+  .stat.warn{background:var(--warn-soft);color:#7e5c20}
+  .stat.warn b{color:#7e5c20}
+  .stat.good{background:var(--good-soft);color:#365a3c}
+  .stat.good b{color:#365a3c}
+
+  .p-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:0}
+  .p-grid > div{padding:24px 28px}
+  .p-grid > div + div{border-left:1px solid var(--line)}
+
+  .pane-h{font-size:13px;font-weight:600;color:var(--ink);margin:0 0 4px}
+  .pane-sub{font-size:12.5px;color:var(--ink-3);margin:0 0 18px;line-height:1.5}
+
+  /* Org graph */
+  .org{position:relative;height:340px}
+  .org svg{position:absolute;inset:0;width:100%;height:100%}
+  .org .edge{stroke:#CFCAC0;stroke-width:1;fill:none}
+  .org .edge.live{stroke:var(--accent);stroke-width:1.25;stroke-dasharray:3 4;animation:flow 1.6s linear infinite;opacity:.6}
+  .node{position:absolute;transform:translate(-50%,-50%);background:var(--panel);border:1px solid var(--line-2);border-radius:12px;padding:9px 12px 10px;text-align:center;min-width:96px;box-shadow:var(--shadow-sm);transition:.2s}
+  .node .role{font-size:13px;font-weight:600;color:var(--ink);letter-spacing:-.005em}
+  .node .st{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:3px;font-weight:600}
+  .node .st .d{width:5px;height:5px;border-radius:50%;background:var(--ink-3)}
+  .node.active{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft),var(--shadow-sm)}
+  .node.active .st{color:var(--good)}
+  .node.active .st .d{background:var(--good);box-shadow:0 0 0 3px var(--good-soft);animation:pulse 2.4s ease-in-out infinite}
+  .node.warn{border-color:var(--warn)}
+  .node.warn .st{color:var(--warn)}
+  .node.warn .st .d{background:var(--warn)}
+
+  .quick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+  .quick .card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--panel)}
+  .quick .card .l{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:5px}
+  .quick .card .v{font-size:12.5px;color:var(--ink);line-height:1.45}
+
+  /* Stream */
+  .stream{display:flex;flex-direction:column;gap:10px}
+  .filt{display:flex;gap:6px;margin-bottom:14px}
+  .filt .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .ev{border:1px solid var(--line);border-radius:12px;padding:13px 14px;background:var(--panel);transition:.15s}
+  .ev:hover{border-color:var(--line-2)}
+  .ev .row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .ev .av{width:22px;height:22px;border-radius:50%;background:var(--inset);display:grid;place-items:center;font-size:9.5px;font-weight:700;color:var(--ink-2)}
+  .ev .who{font-size:12.5px;font-weight:600;color:var(--ink)}
+  .ev .when{font-size:11.5px;color:var(--ink-3)}
+  .ev .kind{margin-left:auto;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding:2px 8px;border-radius:999px;background:var(--inset)}
+  .ev .kind.needs{background:var(--warn-soft);color:#7e5c20}
+  .ev .body{font-size:13px;color:var(--ink);line-height:1.5}
+  .ev .body em{font-style:normal;color:var(--ink-2);background:linear-gradient(transparent 65%, var(--accent-soft) 65%);padding:0 2px}
+  .ev .actions{margin-top:8px;display:flex;gap:6px}
+  .pill{font-size:11px;padding:3px 8px;border:1px solid var(--line);border-radius:999px;color:var(--ink-2);background:var(--panel);cursor:pointer}
+  .pill:hover{background:var(--inset)}
+
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.9);opacity:.6}}
+  @keyframes flow{from{stroke-dashoffset:21}to{stroke-dashoffset:0}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ===================== LEFT — BRIDGE ===================== -->
+  <aside class="bridge">
+    <div class="br-head">
+      <div class="logo">A</div>
+      <div>
+        <div class="name">Northstar Bio</div>
+        <div class="sub">your company · sprint 6</div>
+      </div>
+      <div class="right">
+        <button class="iconbtn" title="History"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
+        <button class="iconbtn" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14 3h-4l-.6 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12a7 7 0 0 0 .1 1.2l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2L10 21h4l.6-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5A7 7 0 0 0 19 12z"/></svg></button>
+      </div>
+    </div>
+
+    <div class="br-state">
+      <span class="dot"></span>
+      <span class="label"><b>Running.</b> 14 tasks in flight · 2 need you</span>
+      <span class="meta">beat 2,184</span>
+    </div>
+
+    <div class="messages">
+
+      <!-- agent intro -->
+      <div class="msg">
+        <div class="who"><span class="av">N</span> Northstar</div>
+        <div class="body">
+          Good morning. Sprint 6 is mid-flight — checkout recovery shipping, mobile nav fix verified.
+          <strong>Two things need you:</strong> a marketing publish (contract language) and an autonomy bump for the Tester role.
+        </div>
+      </div>
+
+      <!-- you -->
+      <div class="msg you">
+        <div class="who"><span class="av">P</span> You</div>
+        <div class="body">Make checkout recovery feel less aggressive — only one reminder per session.</div>
+      </div>
+
+      <!-- thinking pill -->
+      <div class="think"><span class="spinner"></span> CTO is reading 3 memories about onboarding tone…</div>
+
+      <!-- plan card (live) -->
+      <div class="msg">
+        <div class="who"><span class="av">CT</span> CTO · drafting plan</div>
+        <div class="plan">
+          <div class="ph">
+            <span class="tag">PROPOSED CHANGE</span>
+            <h4>Soften checkout recovery</h4>
+            <span class="right">3 tasks · ships Friday</span>
+          </div>
+          <ul>
+            <li class="done"><span class="b"></span><span>Add session-scoped reminder counter</span><span class="who">DEV</span></li>
+            <li class="now"><span class="b"></span><span>Update copy: empathetic, single-shot</span><span class="who">UI · now</span></li>
+            <li class="todo"><span class="b"></span><span>Verify with 5 returning users</span><span class="who">QA</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- agent reply -->
+      <div class="msg">
+        <div class="who"><span class="av">CT</span> CTO</div>
+        <div class="body">
+          Linked the <em style="background:linear-gradient(transparent 65%, var(--accent-soft) 65%);padding:0 2px">"prefer thin slices"</em> preference and the prior <em style="background:linear-gradient(transparent 65%, var(--accent-soft) 65%);padding:0 2px">retention-over-conversion</em> decision.
+          Want me to start, or open the diff first?
+        </div>
+      </div>
+
+      <!-- approval ask -->
+      <div class="ask">
+        <div class="lbl"><span class="d"></span> Needs you · governance</div>
+        <div class="q">Marketing wants to publish the launch post. Contract language references a partnership not yet announced — approve, edit, or hold?</div>
+        <div class="actions">
+          <button class="btn primary">Open diff</button>
+          <button class="btn">Hold</button>
+          <button class="btn ghost">Why now?</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- composer -->
+    <div class="composer">
+      <div class="wrap">
+        <textarea placeholder="Talk to the company. Direct, ask, or remember."></textarea>
+        <div class="toolbar">
+          <button class="chip on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg> Direct</button>
+          <button class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.7.5-1.5 1-1.5 2M12 17h.01"/></svg> Ask</button>
+          <button class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.6 6.5L21 9.7l-5 4.4 1.5 6.4L12 17.3 6.5 20.5 8 14.1 3 9.7l6.4-1.2L12 2z"/></svg> Remember</button>
+          <div class="grow"></div>
+          <button class="chip">@agent</button>
+          <button class="send" title="Send (⌘↵)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+        </div>
+      </div>
+      <div class="hint">
+        <span>Replies stream live. Plans, asks, and changes appear in this thread.</span>
+        <span>send <kbd>⌘↵</kbd> · new line <kbd>↵</kbd></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===================== RIGHT — CANVAS ===================== -->
+  <main class="canvas">
+
+    <div class="cv-head">
+      <div class="tabs">
+        <button class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>Pulse</button>
+        <button class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="11" rx="1.5"/><rect x="3" y="14" width="7" height="6" rx="1.5"/></svg>Sprint</button>
+        <button class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a4 4 0 0 0-4 4v1a4 4 0 0 0 0 8 4 4 0 0 0 8 0 4 4 0 0 0 0-8V7a4 4 0 0 0-4-4z"/></svg>Memory</button>
+        <button class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3l3 3M3 21l4.5-1.5L20 7l-3-3L4.5 16.5 3 21z"/></svg>Skills</button>
+        <button class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12l2 2 4-4M12 3l8 4v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z"/></svg>Approvals · 2</button>
+      </div>
+      <div class="grow"></div>
+      <div class="meta">
+        <span class="live"><span class="dot" style="width:6px;height:6px;box-shadow:0 0 0 3px var(--good-soft)"></span> live</span>
+        <div class="seg"><span class="lab">autonomy</span><b style="color:var(--ink)">balanced</b></div>
+        <div class="seg"><span class="lab">⌘K</span><b>focus chat</b></div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <article class="preview">
+
+        <header class="p-head">
+          <div class="p-eyebrow">Pulse · sprint 6 · day 3 of 7</div>
+          <h1 class="p-title">
+            <b>Northstar Bio</b> is shipping the claim-review flow with memory-backed reasoning.
+            Two items want your eyes today.
+          </h1>
+          <div class="p-stats">
+            <span class="stat">14 <b>tasks in flight</b></span>
+            <span class="stat warn">2 <b>need you</b></span>
+            <span class="stat good">−47% <b>interventions vs sprint 1</b></span>
+            <span class="stat">heartbeat <b>2,184</b></span>
+            <span class="stat">verified throughput <b>18 tasks / wk</b></span>
+          </div>
+        </header>
+
+        <section class="p-grid">
+
+          <!-- Org graph -->
+          <div>
+            <h3 class="pane-h">Living company</h3>
+            <p class="pane-sub">Who is active, who is handing off, who is waiting on you. Lines pulse when work moves.</p>
+
+            <div class="org">
+              <svg viewBox="0 0 600 340" preserveAspectRatio="none">
+                <path class="edge live" d="M300,60 C260,120 220,140 170,180"/>
+                <path class="edge live" d="M300,60 C340,120 380,140 430,180"/>
+                <path class="edge"      d="M170,180 C180,230 200,260 230,290"/>
+                <path class="edge live" d="M430,180 C420,230 400,260 370,290"/>
+                <path class="edge"      d="M170,180 C220,210 280,220 300,60"/>
+                <path class="edge"      d="M430,180 L500,290"/>
+                <path class="edge"      d="M170,180 L100,290"/>
+              </svg>
+
+              <div class="node active" style="left:50%;top:18%"><div class="st"><span class="d"></span>active</div><div class="role">CEO</div></div>
+              <div class="node active" style="left:28%;top:54%"><div class="st"><span class="d"></span>active</div><div class="role">PM</div></div>
+              <div class="node active" style="left:72%;top:54%"><div class="st"><span class="d"></span>active</div><div class="role">CTO</div></div>
+              <div class="node active" style="left:17%;top:88%"><div class="st"><span class="d"></span>active</div><div class="role">Developer</div></div>
+              <div class="node" style="left:38%;top:88%"><div class="st"><span class="d"></span>idle</div><div class="role">UI</div></div>
+              <div class="node warn" style="left:62%;top:88%"><div class="st"><span class="d"></span>needs you</div><div class="role">Tester</div></div>
+              <div class="node" style="left:83%;top:88%"><div class="st"><span class="d"></span>idle</div><div class="role">Marketing</div></div>
+            </div>
+
+            <div class="quick">
+              <div class="card">
+                <div class="l">Sprint goal</div>
+                <div class="v">Ship claim-review with memory-backed reasoning &amp; preview links by Friday.</div>
+              </div>
+              <div class="card">
+                <div class="l">Top risk</div>
+                <div class="v">Marketing publish blocked on contract language — review by beat 2,190.</div>
+              </div>
+              <div class="card">
+                <div class="l">Earned absence</div>
+                <div class="v">Interventions down 47% since sprint 1; verified throughput rose to 18/wk.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Stream -->
+          <div>
+            <h3 class="pane-h">Stream</h3>
+            <p class="pane-sub">Beats written as sentences, with the memory and governance behind each one.</p>
+
+            <div class="filt">
+              <button class="chip on">all</button>
+              <button class="chip">needs me</button>
+              <button class="chip">decisions</button>
+              <button class="chip">progress</button>
+            </div>
+
+            <div class="stream">
+
+              <div class="ev">
+                <div class="row"><span class="av">MK</span><span class="who">Marketing</span><span class="when">just now</span><span class="kind needs">needs you</span></div>
+                <div class="body">Wants to publish launch post. Recalled <em>"never imply partnerships pre-announce"</em> — flagged the line and asked for your call.</div>
+                <div class="actions"><button class="pill">open diff</button><button class="pill">why</button><button class="pill">hold</button></div>
+              </div>
+
+              <div class="ev">
+                <div class="row"><span class="av">PM</span><span class="who">PM</span><span class="when">38s ago</span><span class="kind">progress</span></div>
+                <div class="body">Shaped checkout recovery into two tasks and linked the <em>pricing constraint</em> memory.</div>
+                <div class="actions"><button class="pill">why</button><button class="pill">trace</button><button class="pill">undo · 24h</button></div>
+              </div>
+
+              <div class="ev">
+                <div class="row"><span class="av">CT</span><span class="who">CTO</span><span class="when">2m ago</span><span class="kind">decision</span></div>
+                <div class="body">Chose Drizzle migration path over a custom DSL — cited <em>"prefer maintained tools"</em> and the sprint-3 outage post-mortem.</div>
+                <div class="actions"><button class="pill">why</button><button class="pill">trace · 3 memories</button></div>
+              </div>
+
+              <div class="ev">
+                <div class="row"><span class="av">QA</span><span class="who">Tester</span><span class="when">7m ago</span><span class="kind">progress</span></div>
+                <div class="body">Verified mobile nav regression fix and stored a lesson about <em>focus traps in drawers</em>.</div>
+                <div class="actions"><button class="pill">read lesson</button><button class="pill">trace</button></div>
+              </div>
+
+              <div class="ev">
+                <div class="row"><span class="av">DV</span><span class="who">Developer</span><span class="when">11m ago</span><span class="kind">progress</span></div>
+                <div class="body">Pushed checkout-recovery scaffold; preview live at <em>preview.northstar.app/cr-04</em>. Skill <em>code-reviewer v9</em> approved the diff.</div>
+                <div class="actions"><button class="pill">open preview</button><button class="pill">diff</button></div>
+              </div>
+
+            </div>
+          </div>
+
+        </section>
+      </article>
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

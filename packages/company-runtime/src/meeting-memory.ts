@@ -139,7 +139,7 @@ export async function extractMeetingMemories(
     try {
       facts = await extractFacts(transcript, agent.role, agent.name);
     } catch (err) {
-      console.warn(`[MEETING-MEMORY] Extraction failed for ${agent.name}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`[MEETING-MEMORY] Extraction failed for ${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
     }
 

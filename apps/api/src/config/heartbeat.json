@@ -5,7 +5,7 @@
   "executionMode": "heartbeat",
 
   "schedulerIntervalMs": 15000,
-  "maxConcurrentBeats": 4,
+  "maxConcurrentBeats": 1,
 
   "roleIntervals": {
     "ceo": 60000,

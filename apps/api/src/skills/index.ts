@@ -1,5 +1,0 @@
-// skills/ barrel — skill system + evolution (Spec 14)
-export { ensureSkillsSeeded, buildSkillCatalog, buildSkillSection, buildSkillMenu, getSkillBody } from "./catalog.js";
-export { skillClassifierSchema, classifyTaskSkills, matchAndRecordSkills } from "./classifier.js";
-export { buildSkillAuthoringArtifact, slugifySkillName, materializeSkillPackage } from "./packaging.js";
-export { runCrossSprintTransfer, runPatternPromotionSweep } from "./cross-sprint.js";

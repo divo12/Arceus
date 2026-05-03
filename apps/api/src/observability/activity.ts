@@ -5,7 +5,7 @@
 
 import type { FastifyReply } from "fastify";
 
-export type EmployeeActivityEntry = {
+interface EmployeeActivityEntry {
   id: string;
   timestamp: string;
   employee: string;
@@ -16,12 +16,18 @@ export type EmployeeActivityEntry = {
   taskId?: string | null;
   beatId?: string | null;
   detail?: Record<string, unknown> | null;
-};
+}
 
-export type ActivityEvent = EmployeeActivityEntry;
+type ActivityEvent = EmployeeActivityEntry;
 
 const log: EmployeeActivityEntry[] = [];
 const subs = new Set<(e: EmployeeActivityEntry) => void>();
+
+/** Shorten a beat ID for display: beat_5_1776878895056 → beat_5 */
+export function shortBeat(beatId: string): string {
+  const m = /^(beat_\d+)/.exec(beatId);
+  return m ? m[1] : beatId;
+}
 
 /** Clear all entries from the in-memory activity log. */
 export function resetEmployeeActivityLog() {
@@ -87,6 +93,7 @@ export function streamEmployeeActivity(reply: FastifyReply) {
 
   const handler = (e: EmployeeActivityEntry) => {
     try {
+       
       reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
     } catch {
       /* stream broken */
@@ -100,7 +107,4 @@ export function streamEmployeeActivity(reply: FastifyReply) {
   });
 }
 
-export const resetActivityLog = resetEmployeeActivityLog;
 export const emitActivity = emitEmployeeActivity;
-export const getActivityLog = getEmployeeActivityLog;
-export const streamActivity = streamEmployeeActivity;

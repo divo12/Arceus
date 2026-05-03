@@ -23,6 +23,7 @@ function makeSkill(overrides?: Partial<SkillArtifact>): SkillArtifact {
     trigger: "Use when testing",
     content: "# Test Skill\n\n## When to use\nUse for tests.",
     testCases: [],
+    resources: [],
     successRate: 0.7,
     usageCount: 5,
     lastUsedAt: null,

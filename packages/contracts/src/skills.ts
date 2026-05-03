@@ -25,6 +25,23 @@ export const skillTestCaseSchema = z.object({
   validationCriteria: z.array(z.string()),
 });
 
+/**
+ * A tier-3 resource attached to a skill. Written to `<slug>/resources/` during
+ * beat materialization so the agent can read it via OpenCode's progressive
+ * disclosure (SKILL.md cites the path, agent pulls on demand).
+ */
+export const skillResourceSchema = z.object({
+  /** Relative path from the skill directory, e.g. `resources/evidence-templates.md`. */
+  path: z.string(),
+  /** Semantic kind — "script" runnable, "reference" prose, "asset" binary. */
+  kind: z.enum(["script", "reference", "asset"]),
+  /** MIME type, e.g. `text/markdown`, `application/javascript`, `image/png`. */
+  contentType: z.string(),
+  /** File content. Base64 when `encoding === "base64"`, raw UTF-8 otherwise. */
+  content: z.string(),
+  encoding: z.enum(["utf8", "base64"]).default("utf8"),
+});
+
 export const skillArtifactSchema = z.object({
   id: z.string(),
   companyId: z.string(),
@@ -43,6 +60,12 @@ export const skillArtifactSchema = z.object({
   mutationReason: z.string().nullable().default(null),
   createdAt: z.string(),
   approvedAt: z.string().nullable().default(null),
+  /**
+   * Tier-3 resource files referenced by the SKILL.md body. Written to
+   * `<slug>/resources/` at beat materialization time; OpenCode's native skill
+   * tool loads them on demand per progressive-disclosure.
+   */
+  resources: z.array(skillResourceSchema).default([]),
   /** @deprecated No longer populated. Kept optional so legacy records still
    *  parse. Skill matching is now handled by an LLM classifier in the
    *  orchestrator (see buildSkillCatalog / classifyTaskSkills); trigger
@@ -111,6 +134,7 @@ export const skillMutationSchema = z.object({
 
 export type SkillStatus = z.infer<typeof skillStatusSchema>;
 export type SkillTestCase = z.infer<typeof skillTestCaseSchema>;
+export type SkillResource = z.infer<typeof skillResourceSchema>;
 export type SkillArtifact = z.infer<typeof skillArtifactSchema>;
 export type SkillHealthReport = z.infer<typeof skillHealthReportSchema>;
 export type FailureAttribution = z.infer<typeof failureAttributionSchema>;

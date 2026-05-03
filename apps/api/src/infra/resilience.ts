@@ -17,8 +17,13 @@ export interface RetryOptions {
   backoff: number;
   /** Optional predicate — return false to skip retrying a specific error. */
   shouldRetry?: (error: unknown) => boolean;
-  /** Called before each retry with attempt index (1-based) and the error. */
-  onRetry?: (attempt: number, error: unknown) => void;
+  /**
+   * Called before each retry with attempt index (1-based) and the error.
+   * May be sync or async — the retry loop awaits the returned Promise so
+   * teardown (e.g. resetting an OpenCode connection) completes before the
+   * next attempt fires.
+   */
+  onRetry?: (attempt: number, error: unknown) => void | Promise<void>;
 }
 
 const DEFAULT_RETRY: RetryOptions = {
@@ -48,7 +53,7 @@ export async function withRetry<T>(
       if (attempt === maxRetries) break;
       if (shouldRetry && !shouldRetry(error)) break;
 
-      onRetry?.(attempt, error);
+      await onRetry?.(attempt, error);
 
       const jitter = Math.random() * 0.3 + 0.85; // 0.85–1.15
       const wait = delay * Math.pow(backoff, attempt - 1) * jitter;
@@ -212,7 +217,35 @@ export const breakers = {
     cooldownMs: 15_000,
     onStateChange: logStateChange,
   }),
+  /**
+   * Spec 31 §Phase 8.5 — postgres.js Drizzle path. Trips after 5
+   * consecutive failed queries, short-circuits new calls with
+   * CircuitBreakerOpenError for 5 s. Stops the thundering herd of
+   * doomed queries during a DB outage so connections free up and the
+   * pool can recover when Postgres comes back. Repos opt in via the
+   * `withDbBreaker` helper; the dual-write pattern's existing
+   * try/catch wrappers prevent breaker exceptions from leaking into
+   * runtime paths that already degrade gracefully.
+   */
+  postgres: new CircuitBreaker({
+    name: "postgres",
+    failureThreshold: 5,
+    cooldownMs: 5_000,
+    onStateChange: logStateChange,
+  }),
 } as const;
+
+/**
+ * Wrap a Drizzle/postgres.js call with the postgres breaker.
+ * Use sparingly — only on hot paths where a DB outage would otherwise
+ * pile up doomed retries (every cost_events insert, every dual-write
+ * sink). Cold-path one-shots (migrations, admin queries, smokes)
+ * should call the DB directly so breaker state isn't perturbed by
+ * legitimate startup failures.
+ */
+export function withDbBreaker<T>(fn: () => Promise<T>): Promise<T> {
+  return breakers.postgres.execute(fn);
+}
 
 /** Snapshot of all breakers for the /api/health endpoint. */
 export function getBreakersHealth() {
@@ -242,6 +275,8 @@ export function isRetryableError(error: unknown): boolean {
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
     // Timeout, connection reset, DNS
+    // Exclude prompt-level timeouts — retrying a slow LLM call is pointless.
+    if (msg.includes("prompt timed out")) return false;
     if (msg.includes("timeout") || msg.includes("econnreset") || msg.includes("enotfound")) {
       return true;
     }
@@ -250,7 +285,7 @@ export function isRetryableError(error: unknown): boolean {
       return true;
     }
     // Azure OpenAI rate limit or transient server error
-    const statusMatch = msg.match(/error (\d{3})/);
+    const statusMatch = /error (\d{3})/.exec(msg);
     if (statusMatch) {
       return isRetryableHttpStatus(Number(statusMatch[1]));
     }

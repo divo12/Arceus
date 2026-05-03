@@ -20,14 +20,44 @@ import type {
   MeetingSchedule,
   MeetingScheduleConfig,
 } from "@arceus/contracts";
+import { swallowAndAudit } from "./swallow.js";
 
 // ── Dependencies ───────────────────────────────────────────
 
 export interface MeetingSchedulerDeps {
-  getSnapshot: () => CompanySnapshot;
-  upsertMeeting: (meeting: Meeting) => Meeting;
-  upsertMeetingSchedule: (schedule: MeetingSchedule) => MeetingSchedule;
-  updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => MeetingSchedule | null;
+  /** Spec 31 Phase 7.C.b — async to read from canonical. */
+  getSnapshot: () => Promise<CompanySnapshot>;
+  /** Spec 31 Phase 7.C.d — async to write directly to canonical. */
+  upsertMeeting: (meeting: Meeting) => Promise<Meeting>;
+  upsertMeetingSchedule: (schedule: MeetingSchedule) => Promise<MeetingSchedule>;
+  updateMeetingSchedule: (id: string, updater: (s: MeetingSchedule) => MeetingSchedule) => Promise<MeetingSchedule | null>;
+  /**
+   * Audit C8 (F-361): atomic "fire a scheduled meeting" — creates the
+   * meeting row AND advances the schedule's lastMeetingId / skipCount /
+   * nextCheckAt in a single DB transaction. If the process dies mid-
+   * write the whole pair rolls back, so the schedule never claims to
+   * have fired a meeting that doesn't exist (and vice versa).
+   *
+   * Returns the persisted meeting, or `null` if the schedule row
+   * disappeared between the snapshot read and the commit.
+   */
+  commitScheduledMeeting: (
+    meeting: Meeting,
+    scheduleId: string,
+    scheduleUpdater: (s: MeetingSchedule) => MeetingSchedule,
+  ) => Promise<Meeting | null>;
+  /**
+   * Spec 33 / Audit C1 Phase 4 — atomic "tick was a skip" record.
+   * Single-statement UPDATE that increments `skipCount` and writes
+   * the timestamps in one transaction. Replaces the previous read-
+   * modify-write `updateMeetingSchedule` call so concurrent skips
+   * can't lose increments.
+   */
+  recordScheduleSkip: (
+    scheduleId: string,
+    lastCheckedAt: Date,
+    nextCheckAt: Date,
+  ) => Promise<boolean>;
   flush: () => Promise<void>;
   runPipeline: (meetingId: string) => Promise<void>;
 }
@@ -80,11 +110,12 @@ export class MeetingScheduler {
     if (this.ticking) return; // guard re-entrant ticks
     this.ticking = true;
     try {
-      const snap = this.deps.getSnapshot();
-      if (snap.company.id === "company_pending") return;
+      const snap = await this.deps.getSnapshot();
+      // Spec 31 Phase 7.C.1 — empty company id signals "no company yet."
+      if (!snap.company.id) return;
 
       // Auto-create daily sync schedule when 2+ agents exist
-      this.ensureDailySyncExists(snap);
+      await this.ensureDailySyncExists(snap);
 
       const now = Date.now();
       const schedules = snap.meetingSchedules ?? [];
@@ -116,7 +147,7 @@ export class MeetingScheduler {
           if (!sprintId || alreadyFiredThisSprint) {
             const nowIso = new Date().toISOString();
             const nextCheckIso = new Date(now + schedule.intervalMs).toISOString();
-            this.deps.updateMeetingSchedule(schedule.id, (s) => ({
+            await this.deps.updateMeetingSchedule(schedule.id, (s) => ({
               ...s,
               lastCheckedAt: nowIso,
               nextCheckAt: nextCheckIso,
@@ -132,37 +163,51 @@ export class MeetingScheduler {
         const nextCheckIso = new Date(now + schedule.intervalMs).toISOString();
 
         if (!needsMeeting) {
-          // Skip — increment skip counter, advance nextCheckAt
-          this.deps.updateMeetingSchedule(schedule.id, (s) => ({
-            ...s,
-            lastCheckedAt: nowIso,
-            nextCheckAt: nextCheckIso,
-            skipCount: s.skipCount + 1,
-          }));
+          // Spec 33 / Audit C1 Phase 4 — atomic "tick was a skip" UPDATE
+          // (`skip_count = skip_count + 1` + timestamps in one statement).
+          // Replaces the previous read-modify-write so 10 concurrent
+          // skips on the same schedule can't lose any increments.
+          await this.deps.recordScheduleSkip(
+            schedule.id,
+            new Date(nowIso),
+            new Date(nextCheckIso),
+          );
           console.log(`[MEETING-SCHEDULER] Skipped ${schedule.type} (skipCount=${schedule.skipCount + 1})`);
           continue;
         }
 
-        // Create scheduled meeting
+        // Audit C8 (F-361): meeting INSERT + schedule UPDATE commit
+        // atomically. Previously two sequential awaits — a crash
+        // between left the schedule pointing at a meeting that didn't
+        // exist (or vice versa). Now both land or neither.
         const meeting = this.createScheduledMeeting(snap, schedule);
-        this.deps.upsertMeeting(meeting);
-
-        // Update schedule — link meeting, reset skip count, advance
-        this.deps.updateMeetingSchedule(schedule.id, (s) => ({
-          ...s,
-          lastCheckedAt: nowIso,
-          lastMeetingId: meeting.id,
-          nextCheckAt: nextCheckIso,
-          skipCount: 0,
-          totalRuns: s.totalRuns + 1,
-        }));
+        const persisted = await this.deps.commitScheduledMeeting(
+          meeting,
+          schedule.id,
+          (s) => ({
+            ...s,
+            lastCheckedAt: nowIso,
+            lastMeetingId: meeting.id,
+            nextCheckAt: nextCheckIso,
+            skipCount: 0,
+            totalRuns: s.totalRuns + 1,
+          }),
+        );
+        if (!persisted) {
+          console.warn(`[MEETING-SCHEDULER] Schedule ${schedule.id} vanished during commit — meeting not created`);
+          continue;
+        }
 
         console.log(`[MEETING-SCHEDULER] Created ${schedule.type} meeting ${meeting.id}`);
 
-        // Trigger the pipeline asynchronously (fire-and-forget from scheduler perspective)
-        this.deps.runPipeline(meeting.id).catch((err) => {
-          console.error(`[MEETING-SCHEDULER] Pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
-        });
+        // Audit C3.5 (F-283/F-360): meeting pipeline runs for minutes per
+        // meeting. Routing through swallowAndAudit means a hung LLM or DB
+        // failure surfaces to the error sink instead of becoming a console
+        // line that gets buried in scheduler tick noise.
+        swallowAndAudit("meeting_scheduler.tick_pipeline", () =>
+          this.deps.runPipeline(meeting.id),
+          { detail: { meetingId: meeting.id, type: schedule.type } },
+        );
       }
     } catch (err) {
       console.error("[MEETING-SCHEDULER] Tick error:", err instanceof Error ? err.message : err);
@@ -215,7 +260,7 @@ export class MeetingScheduler {
    * Ensures a daily_sync schedule exists when 2+ agents are active.
    * Idempotent — safe to call every tick.
    */
-  ensureDailySyncExists(snap: CompanySnapshot): void {
+  async ensureDailySyncExists(snap: CompanySnapshot): Promise<void> {
     const schedules = snap.meetingSchedules ?? [];
     const hasDailySync = schedules.some((s) => s.type === "daily_sync");
     if (hasDailySync) return;
@@ -224,7 +269,7 @@ export class MeetingScheduler {
     if (activeAgents.length < 2) return;
 
     const ceo = activeAgents.find((a) => a.role === "ceo");
-    const facilitatorId = ceo?.id ?? activeAgents[0]!.id;
+    const facilitatorId = ceo?.id ?? activeAgents[0].id;
 
     const schedule: MeetingSchedule = {
       id: `msched_daily_sync_${snap.company.id}`,
@@ -249,7 +294,7 @@ export class MeetingScheduler {
       },
     };
 
-    this.deps.upsertMeetingSchedule(schedule);
+    await this.deps.upsertMeetingSchedule(schedule);
     console.log(`[MEETING-SCHEDULER] Auto-created daily_sync schedule for ${activeAgents.length} agents`);
   }
 
@@ -285,12 +330,12 @@ export class MeetingScheduler {
    * Returns null if no manager exists for the role or if an active
    * escalation meeting already exists for this task.
    */
-  createEscalationMeeting(
+  async createEscalationMeeting(
     snap: CompanySnapshot,
     blockedAgentId: string,
     blockerDetail: string,
     relatedTaskId: string | null,
-  ): Meeting | null {
+  ): Promise<Meeting | null> {
     const blockedAgent = snap.agents.find((a) => a.id === blockedAgentId);
     if (!blockedAgent) return null;
 
@@ -330,15 +375,16 @@ export class MeetingScheduler {
       completedAt: null,
     };
 
-    this.deps.upsertMeeting(meeting);
+    await this.deps.upsertMeeting(meeting);
     console.log(
       `[MEETING-SCHEDULER] Escalation meeting ${meeting.id}: ${blockedAgent.role} → ${managerRole} (${blockerDetail.slice(0, 80)})`,
     );
 
-    // Fire pipeline immediately (async)
-    this.deps.runPipeline(meeting.id).catch((err) => {
-      console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
-    });
+    // Fire pipeline immediately (async). Audit-routed.
+    swallowAndAudit("meeting_scheduler.escalation_pipeline", () =>
+      this.deps.runPipeline(meeting.id),
+      { detail: { meetingId: meeting.id, blockedRole: blockedAgent.role, managerRole, kind: "escalation" } },
+    );
 
     return meeting;
   }
@@ -349,12 +395,12 @@ export class MeetingScheduler {
    *
    * Returns null if the chain is exhausted (already at CEO level).
    */
-  escalateUp(
+  async escalateUp(
     snap: CompanySnapshot,
     previousMeeting: Meeting,
     blockerDetail: string,
     relatedTaskId: string | null,
-  ): Meeting | null {
+  ): Promise<Meeting | null> {
     // The facilitator of the previous meeting is the manager who couldn't resolve.
     // Escalate to THEIR manager.
     const prevManager = snap.agents.find((a) => a.id === previousMeeting.facilitatorAgentId);
@@ -391,14 +437,15 @@ export class MeetingScheduler {
       completedAt: null,
     };
 
-    this.deps.upsertMeeting(meeting);
+    await this.deps.upsertMeeting(meeting);
     console.log(
       `[MEETING-SCHEDULER] Escalation UP ${meeting.id}: ${prevManager.role} → ${nextManagerRole}`,
     );
 
-    this.deps.runPipeline(meeting.id).catch((err) => {
-      console.error(`[MEETING-SCHEDULER] Escalation pipeline failed for ${meeting.id}:`, err instanceof Error ? err.message : err);
-    });
+    swallowAndAudit("meeting_scheduler.escalation_up_pipeline", () =>
+      this.deps.runPipeline(meeting.id),
+      { detail: { meetingId: meeting.id, prevRole: prevManager.role, nextRole: nextManagerRole, kind: "escalation_up" } },
+    );
 
     return meeting;
   }

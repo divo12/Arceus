@@ -16,6 +16,14 @@ import type {
   CheckResult,
   AgentIdentity,
 } from "@arceus/contracts";
+import { loadChecklistConfig, type ChecklistConfig } from "./checklist-config";
+
+// ── Config (cluster C17 — F-242 + F-250) ───────────────────
+//
+// `loadChecklistConfig()` reads ARCEUS_CHECKLIST_* env vars on first call.
+// Tests can override via `setChecklistConfigForTests({ ... })`.
+
+const activeConfig: ChecklistConfig = loadChecklistConfig();
 
 // ── Individual check functions ─────────────────────────────
 
@@ -30,46 +38,85 @@ function checkPendingApprovals(ctx: AgentBeatContext): CheckResult {
   };
 }
 
-/** Check company budget utilization — blocks at 0%, warns above 90%. */
+/**
+ * Check company budget utilization — blocks at 0%, warns above the
+ * unhealthy ratio (default 0.9, configurable via
+ * `ARCEUS_CHECKLIST_BUDGET_UNHEALTHY_RATIO` — F-250).
+ */
 function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
   if (ctx.companyBudgetRemainingCents <= 0) {
     return { status: "blocked", detail: "Budget exhausted", suggestedAction: "Pause work — budget is 0" };
   }
   const usedPct = ((ctx.company.spentCents / ctx.company.budgetCents) * 100).toFixed(1);
-  if (ctx.company.spentCents > ctx.company.budgetCents * 0.9) {
+  if (ctx.company.spentCents > ctx.company.budgetCents * activeConfig.budgetUnhealthyRatio) {
     return { status: "action_needed", detail: `Budget at ${usedPct}%`, suggestedAction: "Review spending" };
   }
   return { status: "ok", detail: `Budget at ${usedPct}%` };
 }
 
-/** Check for blocked/failed tasks in the current sprint. */
+/**
+ * Check for a blocked task that THIS agent owns and that doesn't yet have
+ * an open "Fix blocker" follow-up. Role-targeted so only the responsible
+ * agent gets woken (no more CEO/PM looping with no-handler messages).
+ *
+ * Idempotency: if a follow-up task titled `Fix blocker for <id>` already
+ * exists in a non-terminal state, the original blocker is considered
+ * "in progress" and we return ok — preventing per-beat re-fires.
+ */
 function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
   if (!ctx.currentSprint) {
     return { status: "ok", detail: "No active sprint" };
   }
-  const blocked = ctx.tasks.filter((t) => t.status === "blocked");
-  const failed = ctx.tasks.filter((t) => t.status === "failed");
-  if (blocked.length > 0 || failed.length > 0) {
-    return {
-      status: "action_needed",
-      detail: `Sprint has ${blocked.length} blocked, ${failed.length} failed tasks`,
-      suggestedAction: "Investigate blocked/failed tasks",
-    };
+  const isOpen = (s: string) => !["completed", "cancelled", "failed"].includes(s);
+  const myBlockers = ctx.tasks.filter(
+    (t) => (t.status === "blocked" || t.status === "failed") && t.assignedRole === ctx.role,
+  );
+  if (myBlockers.length === 0) {
+    return { status: "ok", detail: "No blocked tasks owned by me" };
   }
-  return { status: "ok", detail: "Sprint healthy" };
+  // Skip blockers that already have an open follow-up
+  const pending = myBlockers.filter((t) => {
+    const followupTitle = `Fix blocker for ${t.id}`;
+    const hasOpenFollowup = ctx.tasks.some(
+      (f) => f.title === followupTitle && isOpen(f.status),
+    );
+    return !hasOpenFollowup;
+  });
+  if (pending.length === 0) {
+    return { status: "ok", detail: `${myBlockers.length} blocker(s) already being worked on` };
+  }
+  const next = pending[0];
+  // Audit C11: typed dispatch instead of colon-string (was: `task_resolve_blocker:${next.id}`)
+  return {
+    status: "action_needed",
+    detail: `Task "${next.title}" (${next.id}) is ${next.status}`,
+    suggestedAction: `Resolve blocker on task: ${next.title}`,
+    dispatch: { kind: "task_resolve_blocker", taskId: next.id },
+  };
 }
 
 /** CEO proactive check: propose next sprint when current is done or absent. */
 function checkRoadmap(ctx: AgentBeatContext): CheckResult {
   // CEO proactive: if sprint is complete or no sprint, propose next
   if (!ctx.currentSprint) {
-    return { status: "action_needed", detail: "No active sprint", suggestedAction: "Propose new sprint" };
-  }
-  if (ctx.currentSprint.status === "completed" || ctx.currentSprint.status === "reviewing") {
     return {
       status: "action_needed",
-      detail: `Sprint ${ctx.currentSprint.number} is ${ctx.currentSprint.status}`,
-      suggestedAction: "Propose next sprint or summarize results",
+      detail: "No active sprint",
+      suggestedAction: "Call sprint_create with a goal and tasks to start the next sprint.",
+    };
+  }
+  if (ctx.currentSprint.status === "reviewing") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${ctx.currentSprint.number} is in review`,
+      suggestedAction: `Call sprint_check_completion for sprint ${ctx.currentSprint.id}; if readyToFinalize, call sprint_finalize, then sprint_create for the next sprint. Otherwise wait for the tester gate.`,
+    };
+  }
+  if (ctx.currentSprint.status === "completed") {
+    return {
+      status: "action_needed",
+      detail: `Sprint ${ctx.currentSprint.number} is completed`,
+      suggestedAction: "Call sprint_create with a goal and tasks to start the next sprint.",
     };
   }
   // Detect all tasks terminal even if sprint status hasn't been updated yet
@@ -78,7 +125,7 @@ function checkRoadmap(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `All ${sprintTasks.length} tasks in sprint ${ctx.currentSprint.number} are terminal`,
-      suggestedAction: "Propose next sprint",
+      suggestedAction: `Call sprint_check_completion for sprint ${ctx.currentSprint.id}; if readyToFinalize, call sprint_finalize, then sprint_create for the next sprint.`,
     };
   }
   return { status: "ok", detail: "Sprint in progress" };
@@ -243,16 +290,17 @@ function checkTestQueue(ctx: AgentBeatContext): CheckResult {
  */
 function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
-  const reviewState = (sprint as any).reviewState;
+  const reviewState = sprint.reviewState;
   if (!reviewState) return { status: "ok", detail: "No review state" };
 
   if (reviewState.phase === "tester_verification") {
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} awaiting tester verification (cycle ${reviewState.reworkCycleCount})`,
-      suggestedAction: "sprint_review:run_tester_verification",
+      suggestedAction: `Run tester verification for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.run_tester_verification" },
     };
   }
 
@@ -260,7 +308,8 @@ function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} awaiting final gate`,
-      suggestedAction: "sprint_review:run_final_gate",
+      suggestedAction: `Run final gate for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.run_final_gate" },
     };
   }
 
@@ -274,10 +323,10 @@ function checkReviewPhaseActive(ctx: AgentBeatContext): CheckResult {
  */
 function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
-  const reviewState = (sprint as any).reviewState;
-  if (!reviewState || reviewState.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
+  const reviewState = sprint.reviewState;
+  if (reviewState?.phase !== "rework") return { status: "ok", detail: "Not in rework phase" };
 
   const bugTaskIds: string[] = reviewState.bugTaskIds ?? [];
   if (bugTaskIds.length === 0) {
@@ -290,7 +339,8 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} in rework with no bug tasks — re-verifying`,
-      suggestedAction: "sprint_review:retest_after_rework",
+      suggestedAction: `Re-test Sprint ${sprint.number} after rework`,
+      dispatch: { kind: "sprint_review.retest_after_rework" },
     };
   }
 
@@ -305,7 +355,8 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `All ${bugTaskIds.length} bug fix(es) resolved — ready for re-verification`,
-      suggestedAction: "sprint_review:retest_after_rework",
+      suggestedAction: `Re-test Sprint ${sprint.number} (${bugTaskIds.length} bug fix(es) ready)`,
+      dispatch: { kind: "sprint_review.retest_after_rework" },
     };
   }
 
@@ -319,63 +370,64 @@ function checkBugFixesReady(ctx: AgentBeatContext): CheckResult {
 // ── Spec 21: CTO Escalation Check ─────────────────────────
 
 /**
- * Safety-valve: if an escalation sits without a CTO decision longer than
- * this timeout, force-complete the sprint instead of repeatedly retrying
- * the 3-way review. Keeps stuck sprints from consuming the CTO's beats
- * indefinitely when the LLM can't produce a parseable decision.
- */
-const ESCALATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
  * CTO check: has the sprint been escalated after max rework cycles?
+ *
  * Fires `sprint_review:cto_escalation_review` for a fresh escalation,
  * or `sprint_review:cto_escalation_force_complete` if the escalation
- * has been pending longer than {@link ESCALATION_TIMEOUT_MS}.
+ * has been pending longer than `escalationTimeoutMs` (F-242). Once the
+ * CTO decides "fix" and the sprint is stuck in tester_verification /
+ * rework past `stuckAfterFixTimeoutMs`, force-complete as a safety valve.
+ *
+ * Both timeouts come from `ChecklistConfig` so deployments can tune them
+ * (defaults: 5min escalation, 10min stuck-after-fix) and tests can
+ * shorten them via `setChecklistConfigForTests`.
  */
 function checkEscalationPending(ctx: AgentBeatContext): CheckResult {
   const sprint = ctx.currentSprint;
-  if (!sprint || sprint.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
+  if (sprint?.status !== "reviewing") return { status: "ok", detail: "Sprint not in review" };
 
-  const reviewState = (sprint as any).reviewState;
+  const reviewState = sprint.reviewState;
   if (!reviewState) return { status: "ok", detail: "No review state" };
 
-  if (reviewState.escalatedToCto === true && reviewState.ctoDecision === null) {
+  if (reviewState.escalatedToCto && reviewState.ctoDecision === null) {
     // Safety valve — if escalation has been pending for too long without a
     // decision, force-complete rather than looping the CTO indefinitely.
     const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
-    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > ESCALATION_TIMEOUT_MS) {
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > activeConfig.escalationTimeoutMs) {
       const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
       return {
         status: "action_needed",
         detail: `Sprint ${sprint.number} escalation pending ${ageMinutes}m without decision — force-completing as safety valve`,
-        suggestedAction: "sprint_review:cto_escalation_force_complete",
+        suggestedAction: `Force-complete Sprint ${sprint.number} (escalation timeout)`,
+        dispatch: { kind: "sprint_review.cto_escalation_force_complete" },
       };
     }
     return {
       status: "action_needed",
       detail: `Sprint ${sprint.number} escalated after ${reviewState.reworkCycleCount} rework cycles — awaiting CTO decision (fix/skip/abort)`,
-      suggestedAction: "sprint_review:cto_escalation_review",
+      suggestedAction: `Review CTO escalation for Sprint ${sprint.number}`,
+      dispatch: { kind: "sprint_review.cto_escalation_review" },
     };
   }
 
-  // Extended safety valve (Option 5): CTO already decided "fix" but the sprint
-  // is still stuck in tester_verification or rework past a generous timeout.
-  // This happens when the developer beat has no dispatchable handler for build
+  // Extended safety valve: CTO already decided "fix" but the sprint
+  // is still stuck in tester_verification or rework past a generous timeout
+  // (`stuckAfterFixTimeoutMs`, default 2× `escalationTimeoutMs`). This
+  // happens when the developer beat has no dispatchable handler for build
   // errors during review, or the rework cycle fails to advance.
-  // Use 2× the base timeout to give genuine fix attempts a fair window first.
   if (
-    reviewState.escalatedToCto === true &&
+    reviewState.escalatedToCto &&
     reviewState.ctoDecision === "fix" &&
     ["tester_verification", "rework"].includes(reviewState.phase)
   ) {
     const escalatedAtMs = reviewState.escalatedAt ? new Date(reviewState.escalatedAt).getTime() : null;
-    const STUCK_AFTER_FIX_TIMEOUT_MS = ESCALATION_TIMEOUT_MS * 2; // 10 minutes
-    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > STUCK_AFTER_FIX_TIMEOUT_MS) {
+    if (escalatedAtMs !== null && Date.now() - escalatedAtMs > activeConfig.stuckAfterFixTimeoutMs) {
       const ageMinutes = Math.round((Date.now() - escalatedAtMs) / 60_000);
       return {
         status: "action_needed",
         detail: `Sprint ${sprint.number} stuck in ${reviewState.phase} for ${ageMinutes}m after CTO "fix" decision — force-completing`,
-        suggestedAction: "sprint_review:cto_escalation_force_complete",
+        suggestedAction: `Force-complete stuck Sprint ${sprint.number}`,
+        dispatch: { kind: "sprint_review.cto_escalation_force_complete" },
       };
     }
   }
@@ -447,7 +499,8 @@ function checkMeetingContribution(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `Meeting "${collectingMeeting.title}" awaiting your contribution`,
-    suggestedAction: `meeting_contribution:${collectingMeeting.id}`,
+    suggestedAction: `Contribute to meeting: ${collectingMeeting.title}`,
+    dispatch: { kind: "meeting_contribution", meetingId: collectingMeeting.id },
   };
 }
 
@@ -469,7 +522,8 @@ function checkSkillHealth(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `${health.worstPerformers.length} underperforming skill(s), worst: ${worst.name} (${Math.round(worst.successRate * 100)}%)`,
-    suggestedAction: "skills_lead:mutate_underperformer",
+    suggestedAction: `Mutate underperforming skill: ${worst.name}`,
+    dispatch: { kind: "skills_lead.mutate_underperformer" },
   };
 }
 
@@ -486,7 +540,8 @@ function checkUnusedSkills(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `${unused.length} skill(s) unused for 30+ days`,
-    suggestedAction: "skills_lead:deprecate_unused",
+    suggestedAction: `Deprecate ${unused.length} stale skill(s)`,
+    dispatch: { kind: "skills_lead.deprecate_unused" },
   };
 }
 
@@ -502,7 +557,8 @@ function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
   return {
     status: "action_needed",
     detail: `${gapCount} skill gap(s) in current sprint`,
-    suggestedAction: "skills_lead:fill_skill_gap",
+    suggestedAction: `Fill ${gapCount} skill gap(s) in current sprint`,
+    dispatch: { kind: "skills_lead.fill_skill_gap" },
   };
 }
 
@@ -511,13 +567,20 @@ function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
 type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
-  ceo: [checkMeetingContribution, checkPendingApprovals, checkBudgetHealth, checkSprintHealth, checkRoadmap, checkBoardMessages],
+  // CEO is woken only on real strategic triggers: pending approvals,
+  // roadmap (no/done sprint), or active meetings. Sprint health and
+  // budget alerts are handled by the role that owns the work — not CEO.
+  ceo: [checkMeetingContribution, checkPendingApprovals, checkRoadmap],
   cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
-  developer: [checkMeetingContribution, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
-  tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkTestQueue, checkAssignedTasks],
-  ui_designer: [checkMeetingContribution, checkDesignQueue, checkAssignedTasks],
-  marketing: [checkMeetingContribution, checkContentQueue, checkAssignedTasks],
+  developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
+  // Tester only fires at sprint-end now. Per-task verifying is handled by
+  // the developer's self-test (bash + task_complete with evidence). The
+  // legacy checkTestQueue would have routed verifying-status tasks here;
+  // that path is intentionally retired.
+  tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkAssignedTasks],
+  ui_designer: [checkMeetingContribution, checkSprintHealth, checkDesignQueue, checkAssignedTasks],
+  marketing: [checkMeetingContribution, checkSprintHealth, checkContentQueue, checkAssignedTasks],
   skills_lead: [
     checkMeetingContribution,
     // Phase 6 proactive checks first — fire even with no assigned task

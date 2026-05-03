@@ -9,8 +9,13 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push"
+    "db:migrate": "bun src/scripts/apply-migrations.ts",
+    "db:migrate:raw": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:lint-migrations": "bun src/scripts/lint-migrations.ts",
+    "db:seed": "bun src/seed.ts",
+    "db:explain-audit": "bun src/scripts/explain-audit.ts"
   },
   "dependencies": {
     "@arceus/contracts": "file:../contracts",

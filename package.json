@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
     "dev:web": "npm run dev --workspace @arceus/web",
     "dev:api": "npm run dev --workspace @arceus/api",
     "run:ui": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-ui.ps1",
@@ -16,19 +17,32 @@
     "db:push": "npm run db:push --workspace @arceus/db",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:silent-catch": "bun scripts/check-no-silent-catch.ts",
+    "prepare": "husky",
     "docs:typedoc": "typedoc",
     "docs:dev": "vitepress dev docs",
     "docs:build": "typedoc && vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "dev:tui": "npm run dev --workspace @arceus/tui"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
     "@types/node": "^22.19.17",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
+    "@typescript-eslint/parser": "^8.59.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^10.2.1",
+    "husky": "^9.1.7",
+    "knip": "^6.7.0",
+    "lint-staged": "^16.4.0",
     "typedoc": "^0.28.19",
     "typedoc-plugin-markdown": "^4.11.0",
     "typedoc-vitepress-theme": "^1.1.2",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.59.1",
     "vite": "^8.0.4",
     "vitepress": "^1.6.4"
   },

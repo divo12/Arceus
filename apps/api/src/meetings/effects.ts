@@ -1,15 +1,29 @@
 import type { AgentIdentity, Task } from "@arceus/contracts";
-import { getAgentByRole, uniqueStrings } from "@arceus/task-engine";
-import { getSnapshot, updateTask } from "../persistence/store.js";
+import { uniqueStrings } from "@arceus/task-engine";
+import { updateTask } from "../persistence/mutations/index.js";
+import { getDb } from "@arceus/db";
+import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { audit } from "../observability/audit-ledger.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { enrichRoleMemory, clearRoleBlockers } from "../memory/operations.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import type { TaskModificationInput, MemoryModificationInput, MeetingAgendaInput, MeetingDecisionInput, MeetingLearningInput } from "../orchestration/state.js";
 
-/** Apply a single task modification (assign, cancel, unblock, etc.) to the store and emit audit/reactive events. */
-export function applyTaskModification(modification: TaskModificationInput) {
-  updateTask(modification.taskId, (task) => {
-    const assignedAgent = modification.assignedRole ? getAgentByRole(getSnapshot(), modification.assignedRole) : null;
+/**
+ * Apply a single task modification (assign, cancel, unblock, etc.) to
+ * the store and emit audit/reactive events. Spec 31 Phase 7.B.2 —
+ * `companyId` and the resolved-agent map come pre-populated from
+ * `applyMeetingEffects` so this function can stay sync inside the
+ * `updateTask` updater closure.
+ */
+function applyTaskModification(
+  companyId: string,
+  modification: TaskModificationInput,
+  agentByRole: Map<AgentIdentity["role"], { id: string }>,
+): void {
+  swallowAndAudit("meeting.apply_task_modification", () => updateTask(modification.taskId, (task) => {
+    const assignedAgent = modification.assignedRole ? agentByRole.get(modification.assignedRole) ?? null : null;
     const nextStatus =
       modification.resultingStatus ??
       (modification.modificationType === "assign"
@@ -49,10 +63,9 @@ export function applyTaskModification(modification: TaskModificationInput) {
     };
 
     return nextTask;
-  });
+  }), { companyId, detail: { taskId: modification.taskId, modificationType: modification.modificationType } });
 
   if (modification.modificationType === "assign" || modification.modificationType === "reassign") {
-    const companyId = getSnapshot().company.id;
     audit({
       companyId,
       category: "task_lifecycle",
@@ -70,7 +83,6 @@ export function applyTaskModification(modification: TaskModificationInput) {
       emitReactive(modification.assignedRole, "task_assigned");
     }
   } else if (modification.modificationType === "cancel") {
-    const companyId = getSnapshot().company.id;
     audit({
       companyId,
       category: "task_lifecycle",
@@ -83,55 +95,57 @@ export function applyTaskModification(modification: TaskModificationInput) {
   }
 }
 
-function applyMemoryModification(modification: MemoryModificationInput) {
+async function applyMemoryModification(companyId: string, modification: MemoryModificationInput): Promise<void> {
   switch (modification.modificationType) {
     case "current_focus":
-      enrichRoleMemory(modification.role, { currentFocus: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { currentFocus: [modification.content] });
       break;
     case "recent_learning":
-      enrichRoleMemory(modification.role, { recentLearnings: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { recentLearnings: [modification.content] });
       break;
     case "active_pattern":
-      enrichRoleMemory(modification.role, { activePatterns: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { activePatterns: [modification.content] });
       break;
     case "open_blocker":
-      enrichRoleMemory(modification.role, { openBlockers: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { openBlockers: [modification.content] });
       break;
     case "important_decision":
-      enrichRoleMemory(modification.role, { importantDecisions: [modification.content] });
+      await enrichRoleMemory(companyId, modification.role, { importantDecisions: [modification.content] });
       break;
     case "clear_blocker":
-      clearRoleBlockers(modification.role, [modification.content]);
+      await clearRoleBlockers(companyId, modification.role, [modification.content]);
       break;
   }
 }
 
 /**
- * Derive deduplicated memory modifications from meeting agenda, decisions, learnings,
- * and task unblock actions.
+ * Derive deduplicated memory modifications from meeting agenda,
+ * decisions, learnings, and task unblock actions. Spec 31 Phase 7.B.2 —
+ * the unblock-task lookup now resolves through `tasksRepo`; the
+ * function becomes async because of that one read.
  */
-export function deriveMeetingMemoryModifications(params: {
+export async function deriveMeetingMemoryModifications(params: {
   agenda: MeetingAgendaInput[];
   decisions?: MeetingDecisionInput[];
   learnings?: MeetingLearningInput[];
   participantRoles: AgentIdentity["role"][];
   memoryModifications?: MemoryModificationInput[];
   taskModifications?: TaskModificationInput[];
-}) {
-  const clearBlockerModifications = (params.taskModifications ?? [])
-    .filter((modification) => modification.modificationType === "unblock")
-    .flatMap((modification) => {
-      const task = getSnapshot().tasks.find((entry) => entry.id === modification.taskId);
-      return task
-        ? [
-            {
-              role: task.assignedRole,
-              modificationType: "clear_blocker" as const,
-              content: modification.details,
-            },
-          ]
-        : [];
-    });
+}): Promise<MemoryModificationInput[]> {
+  const unblockMods = (params.taskModifications ?? []).filter((m) => m.modificationType === "unblock");
+  const unblockTaskRows = await Promise.all(
+    unblockMods.map(async (modification) => {
+      const task = await tasksRepo.findByIdHydrated(getDb(), modification.taskId);
+      return task ? { modification, role: task.assignedRole } : null;
+    }),
+  );
+  const clearBlockerModifications = unblockTaskRows
+    .filter((entry): entry is { modification: TaskModificationInput; role: AgentIdentity["role"] } => entry !== null)
+    .map(({ modification, role }) => ({
+      role,
+      modificationType: "clear_blocker" as const,
+      content: modification.details,
+    }));
 
   const derived: MemoryModificationInput[] = [
     ...(params.memoryModifications ?? []),
@@ -171,12 +185,46 @@ export function deriveMeetingMemoryModifications(params: {
   });
 }
 
-/** Apply all task and memory modifications produced by a meeting. */
-export function applyMeetingEffects(taskModifications: TaskModificationInput[], memoryModifications: MemoryModificationInput[]) {
-  for (const modification of taskModifications) {
-    applyTaskModification(modification);
+/**
+ * Apply all task and memory modifications produced by a meeting.
+ *
+ * Spec 31 Phase 7.B.2 — the function pre-resolves the agents needed
+ * by `applyTaskModification` (one canonical read per distinct
+ * `assignedRole`) so the per-mod loop stays synchronous. Memory mods
+ * still fire-and-forget so callers don't have to await per-message
+ * persistence.
+ */
+export async function applyMeetingEffects(
+  companyId: string,
+  taskModifications: TaskModificationInput[],
+  memoryModifications: MemoryModificationInput[],
+): Promise<void> {
+  const distinctAssignedRoles = Array.from(
+    new Set(
+      taskModifications
+        .map((m) => m.assignedRole)
+        .filter((role): role is AgentIdentity["role"] => Boolean(role)),
+    ),
+  );
+  const agentByRole = new Map<AgentIdentity["role"], { id: string }>();
+  for (const role of distinctAssignedRoles) {
+    const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
+    if (agent) agentByRole.set(role, { id: agent.id });
   }
+
+  for (const modification of taskModifications) {
+    applyTaskModification(companyId, modification, agentByRole);
+  }
+
+  if (memoryModifications.length === 0) return;
   for (const modification of memoryModifications) {
-    applyMemoryModification(modification);
+    // Audit C2: each modification is independently fire-and-forget;
+    // routing through swallowAndAudit means a single embed/DB failure
+    // surfaces with context (which modification) instead of being
+    // collapsed under one console.warn.
+    swallowAndAudit("meeting.memory_modification", () =>
+      applyMemoryModification(companyId, modification),
+      { companyId, detail: { modificationType: modification.modificationType, role: modification.role } },
+    );
   }
 }

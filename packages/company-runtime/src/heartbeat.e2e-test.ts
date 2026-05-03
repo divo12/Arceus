@@ -147,7 +147,7 @@ function makeDeps(overrides: Partial<BeatDependencies> = {}): BeatDependencies {
       auditSystem: (_cid, eventType, summary) => { auditLog.push(`system:${eventType}:${summary}`); },
       auditError: (_cid, eventType, summary) => { auditLog.push(`error:${eventType}:${summary}`); },
     },
-    executeTask: async (_ctx, _taskId, _beatId) => ({
+    executeTask: async (_ctx, _beatId) => ({
       summary: "Implemented feature X",
       tokensUsed: 1500,
       actionsCount: 3,
@@ -374,7 +374,7 @@ async function testStagedMutations() {
 
   const config = makeConfig();
   const deps = makeDeps({
-    executeTask: async (_ctx, _taskId, _beatId) => {
+    executeTask: async (_ctx, _beatId) => {
       // The engine exposes stageMutation for callers to use
       // In real code, the orchestrator would call this.
       return { summary: "staged work", tokensUsed: 100, actionsCount: 1, toolCalls: 1, completed: true };
@@ -562,6 +562,49 @@ async function testOrchestratorModeIgnoresStart() {
   assert(!engine.isBeating(), "engine not started in orchestrator mode");
 }
 
+async function testAgentClaimsTaskNotOrchestrator() {
+  // Vision: orchestrator does NOT pre-select a task. It wakes the agent and
+  // the agent claims via `task_claim`. We verify executeTask receives only
+  // (ctx, beatId) and the agent sees the open tasks via ctx.tasks.
+  console.log("\n── Agent Claims Task (Not Orchestrator) ──");
+
+  snapshotVersion = 0;
+  appliedMutations.length = 0;
+  committedRecords.length = 0;
+  auditLog.length = 0;
+
+  let executeTaskCallArgs: { ctxTasksCount: number; beatId: string } | null = null;
+
+  const config = makeConfig();
+  const deps = makeDeps({
+    executeTask: async (ctx, beatId) => {
+      executeTaskCallArgs = { ctxTasksCount: ctx.tasks.length, beatId };
+      return { summary: "agent claimed and worked", tokensUsed: 200, actionsCount: 1, toolCalls: 1, completed: true };
+    },
+  });
+  const engine = new HeartbeatEngine(config, deps);
+
+  await engine.triggerBeat({
+    companyId: "company_test",
+    agentId: "agent_developer_001",
+    role: "developer",
+    trigger: { type: "interval", scheduledAt: new Date().toISOString() },
+  });
+
+  assert(executeTaskCallArgs !== null, "executeTask was invoked");
+  assertEqual(executeTaskCallArgs!.ctxTasksCount, 1, "agent received tasks in ctx (1 task)");
+  assert(typeof executeTaskCallArgs!.beatId === "string" && executeTaskCallArgs!.beatId.length > 0, "agent received beatId");
+  // Verify audit log shows the role-agnostic wake message (no task title leaked from orchestrator)
+  assert(
+    auditLog.some((e) => e.includes("beat_executing") && e.includes("Waking developer")),
+    "audit shows orchestrator woke the agent without pre-selecting a task"
+  );
+  assert(
+    !auditLog.some((e) => e.includes("Executing task:")),
+    "audit does NOT contain old 'Executing task:' message (orchestrator no longer selects)"
+  );
+}
+
 // ── Runner ─────────────────────────────────────────────────
 
 async function main() {
@@ -582,6 +625,7 @@ async function main() {
   await testIdleBeat();
   await testErrorBeat();
   await testOrchestratorModeIgnoresStart();
+  await testAgentClaimsTaskNotOrchestrator();
 
   console.log(`\n═══ Results: ${passed} passed, ${failed} failed ═══`);
   process.exit(failed > 0 ? 1 : 0);
