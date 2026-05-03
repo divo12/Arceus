@@ -97,8 +97,10 @@ COPY --from=build --chown=arceus:arceus /app/opencode.json ./opencode.json
 COPY --from=build --chown=arceus:arceus /app/.opencode ./.opencode
 
 # Per-company workspace root + bundle cache.
-RUN mkdir -p /var/lib/arceus/workspaces \
-    && chown -R arceus:arceus /var/lib/arceus
+# /app/workspace is a fixed path OpenCode mkdir's at warm-up time;
+# create it owned by `arceus` so the non-root runtime can write to it.
+RUN mkdir -p /var/lib/arceus/workspaces /app/workspace \
+    && chown -R arceus:arceus /var/lib/arceus /app/workspace
 
 USER arceus
 
