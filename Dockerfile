@@ -81,7 +81,11 @@ RUN groupadd -g 1001 arceus && useradd -u 1001 -g arceus -m -s /bin/bash arceus
 
 # Pin the OpenCode CLI version the API spawns at runtime.
 ARG OPENCODE_VERSION=1.3.17
-RUN npm install -g opencode-ai@${OPENCODE_VERSION}
+ARG TSX_VERSION=4.19.3
+# tsx is the runtime: cross-package imports resolve to .ts source via
+# package.json "main": "./src/index.ts" entries, so we run TypeScript
+# directly rather than try to compose pre-compiled dist/ folders.
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} tsx@${TSX_VERSION}
 
 # Copy hoisted node_modules + workspace tree + compiled API.
 COPY --from=build --chown=arceus:arceus /app/node_modules ./node_modules
@@ -113,4 +117,7 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:${PORT}/api/control-plane/status > /dev/null || exit 1
 
-CMD ["node", "apps/api/dist/server.js"]
+# Workspace packages declare "main": "./src/index.ts", so cross-package
+# imports resolve to TypeScript source files. Use tsx (not node) so those
+# .ts imports load via the tsx ESM loader.
+CMD ["npx", "tsx", "apps/api/src/server.ts"]
