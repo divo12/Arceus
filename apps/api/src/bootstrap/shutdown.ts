@@ -7,6 +7,7 @@ import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime"
 import { stopStrandedRunSweeper } from "../orchestration/stranded-run-sweeper.js";
 import { stopSkillScheduler } from "../skills/scheduler.js";
 import { teardown } from "../persistence/mutations/index.js";
+import { resetOpencodeConnection } from "../infra/opencode.js";
 
 interface ShutdownDeps {
   app: FastifyInstance;
@@ -29,6 +30,11 @@ async function shutdown(signal: string, { app, heartbeatEngine, meetingScheduler
     await stopSkillScheduler();
     await teardown();
     await app.close();
+    // Kill the spawned OpenCode child so it releases port 4096. Without
+    // this, container restart-in-place finds the port held by a zombie
+    // process and falls back to a random port — operationally fine but
+    // breaks "boot exactly once" expectations and pollutes logs.
+    await resetOpencodeConnection();
     console.log("[ARCEUS] Server closed cleanly.");
     process.exit(0);
   } catch (err) {
