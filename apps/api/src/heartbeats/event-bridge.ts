@@ -39,7 +39,7 @@ interface OpenCodeEvent {
 }
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
-import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
+import { getOpencode } from "../infra/opencode.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { auditAgent } from "../observability/audit-ledger.js";
 import { swallowAndAudit } from "../observability/swallow.js";
@@ -125,7 +125,12 @@ export async function startEventBridge(): Promise<void> {
   } catch (err) {
     emitEmployeeActivity("system", "info", `Event bridge disconnected — will reconnect (${err instanceof Error ? err.message : String(err)})`);
     // OncePromise auto-clears on reject; nothing to flip here.
-    await resetOpencodeConnection();
+    // Do NOT call resetOpencodeConnection() here. SSE disconnects are usually
+    // transient (network blip, slow consumer). Killing the OpenCode child on
+    // every drop caused dual-boot: kill → port not yet released → respawn
+    // falls back to a random port. scheduleReconnect re-establishes the SSE
+    // against the SAME running OpenCode; if the server is genuinely dead the
+    // reconnect will fail and surface via the OncePromise reject path.
     scheduleReconnect();
     // Re-throw so a caller doing `await startEventBridge()` knows the
     // handshake never came up. Callers that don't care can `.catch(() => {})`.
