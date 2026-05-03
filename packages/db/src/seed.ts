@@ -24,8 +24,12 @@
  */
 import "./load-env.js";
 import { eq } from "drizzle-orm";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import bcrypt from "bcryptjs";
 import { getDb } from "./client.js";
 import { companies } from "./schema/companies.js";
+import { users } from "./schema/users.js";
 import * as companiesRepo from "./repos/companies.js";
 import * as agentsRepo from "./repos/agents.js";
 import * as sprintsRepo from "./repos/sprints.js";
@@ -348,6 +352,27 @@ async function seedHeartbeatRuns(): Promise<number> {
   return total;
 }
 
+const SEED_USERS = [
+  { email: "divo@arceus.com",    displayName: "Divo",    password: "admin123" },
+  { email: "pranjal@arceus.com", displayName: "Pranjal", password: "admin123" },
+  { email: "ujjwal@arceus.com",  displayName: "Ujjwal",  password: "admin123" },
+] as const;
+
+export async function seedUsers(): Promise<number> {
+  const db = getDb();
+  for (const u of SEED_USERS) {
+    const passwordHash = await bcrypt.hash(u.password, 10);
+    await db
+      .insert(users)
+      .values({ email: u.email, displayName: u.displayName, passwordHash })
+      .onConflictDoUpdate({
+        target: users.email,
+        set: { passwordHash, displayName: u.displayName },
+      });
+  }
+  return SEED_USERS.length;
+}
+
 export async function seedCanonical(): Promise<SeedResult> {
   console.log(`[seed] resetting canonical company ${COMPANY_ID} …`);
   await deleteCanonical();
@@ -384,10 +409,16 @@ export async function seedCanonical(): Promise<SeedResult> {
 
 export const CANONICAL_COMPANY_ID = COMPANY_ID;
 
-// CLI entrypoint — `bun src/seed.ts`
-if (import.meta.main) {
-  seedCanonical()
-    .then(() => process.exit(0))
+// CLI entrypoint — works in Bun (import.meta.main) and Node.js/tsx (argv check)
+const _isMain = (import.meta as { main?: boolean }).main
+  ?? resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1] ?? "");
+
+if (_isMain) {
+  Promise.all([seedCanonical(), seedUsers()])
+    .then(([result, userCount]) => {
+      console.log(`[seed] seeded ${userCount} users.`, result);
+      process.exit(0);
+    })
     .catch((err: unknown) => {
       console.error("[seed] FAIL:", err);
       process.exit(1);

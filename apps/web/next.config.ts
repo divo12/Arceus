@@ -6,7 +6,14 @@ const nextConfig: NextConfig = {
   // Docker container build sets NEXT_BUILD_STANDALONE=1 → small runtime image.
   // Vercel never sets it, so Vercel's bundling pipeline runs unchanged.
   output: process.env.NEXT_BUILD_STANDALONE === "1" ? "standalone" : undefined,
-  transpilePackages: ["@arceus/contracts", "@arceus/company-runtime"],
+  transpilePackages: ["@arceus/contracts", "@arceus/company-runtime", "@arceus/db"],
+  webpack: (config) => {
+    config.resolve.extensionAlias = {
+      ".js": [".ts", ".js"],
+      ".jsx": [".tsx", ".jsx"],
+    };
+    return config;
+  },
   async rewrites() {
     return [
       {
