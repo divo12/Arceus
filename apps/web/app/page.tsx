@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AgentNetworkVisual, MemoryTiersVisual, GovernanceVisual } from "./feature-visuals";
+import { AgentNetworkVisual, MemoryTiersVisual, GovernanceVisual, EvolutionVisual } from "./feature-visuals";
 
 const HOW_IT_WORKS = [
   {
@@ -21,6 +21,24 @@ const HOW_IT_WORKS = [
     step: "04",
     title: "You govern",
     body: "Review decisions, approve proposals, and steer direction. No tickets, no standups.",
+  },
+] as const;
+
+const EVOLUTION_PILLARS = [
+  {
+    label: "Pattern Detection",
+    title: "Every task is a lesson",
+    body: "After each task, agents extract execution vectors and cluster similar trajectories. Recurring patterns — same tool calls, same decision sequences — are automatically catalogued for habit candidacy.",
+  },
+  {
+    label: "Habit Formation",
+    title: "Patterns become instinct",
+    body: "When a cluster hits 10 successful runs at 60%+ success rate, agents synthesize a habit: a trigger/action pair that loads at task start, cutting exploration overhead to zero.",
+  },
+  {
+    label: "Skill Evolution",
+    title: "Habits graduate to versioned skills",
+    body: "Proven habits become governed, versioned skills. Agents propose mutations, dry-run them in isolation, pass them through automated review, and roll back failures — all without you lifting a finger.",
   },
 ] as const;
 
@@ -518,6 +536,108 @@ export default function LandingPage() {
               </div>
             </div>
           ))}
+        </div>
+      </section>
+
+      <hr style={{ border: "none", borderTop: "1px solid #e5e5e5", maxWidth: "1024px", margin: "0 auto" }} />
+
+      {/* ── Adaptive Intelligence ── */}
+      <section
+        id="evolution"
+        style={{
+          maxWidth: "1024px",
+          margin: "0 auto",
+          padding: "88px 40px",
+        }}
+      >
+        <div style={{ marginBottom: "56px" }}>
+          <div
+            style={{
+              fontFamily: "ui-monospace, monospace",
+              fontSize: "12px",
+              fontWeight: 400,
+              textTransform: "uppercase",
+              letterSpacing: "2px",
+              color: "#737373",
+              marginBottom: "12px",
+            }}
+          >
+            Adaptive Intelligence
+          </div>
+          <h2
+            style={{
+              fontFamily: "system-ui, -apple-system, 'SF Pro Rounded', sans-serif",
+              fontSize: "30px",
+              fontWeight: 500,
+              lineHeight: 1.2,
+              color: "#000000",
+              maxWidth: "520px",
+            }}
+          >
+            Agents that get smarter every sprint
+          </h2>
+        </div>
+
+        <div style={{ display: "flex", gap: "48px", alignItems: "center" }}>
+          <div style={{ flex: "0 0 42%" }}>
+            <EvolutionVisual />
+          </div>
+
+          <div style={{ flex: 1 }}>
+            {EVOLUTION_PILLARS.map((p, i) => (
+              <div
+                key={p.label}
+                style={{
+                  padding: "24px",
+                  background: "#fafafa",
+                  border: "1px solid #e5e5e5",
+                  borderRadius:
+                    i === 0
+                      ? "12px 12px 0 0"
+                      : i === EVOLUTION_PILLARS.length - 1
+                      ? "0 0 12px 12px"
+                      : "0",
+                  marginTop: i > 0 ? "-1px" : "0",
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: "ui-monospace, monospace",
+                    fontSize: "10px",
+                    fontWeight: 500,
+                    textTransform: "uppercase",
+                    letterSpacing: "1.5px",
+                    color: "#d97706",
+                    marginBottom: "6px",
+                  }}
+                >
+                  {p.label}
+                </div>
+                <div
+                  style={{
+                    fontFamily: "system-ui, -apple-system, sans-serif",
+                    fontSize: "15px",
+                    fontWeight: 500,
+                    color: "#000000",
+                    marginBottom: "6px",
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {p.title}
+                </div>
+                <p
+                  style={{
+                    fontSize: "14px",
+                    color: "#737373",
+                    lineHeight: 1.6,
+                    margin: 0,
+                  }}
+                >
+                  {p.body}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 

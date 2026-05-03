@@ -102,6 +102,93 @@ export function MemoryTiersVisual() {
   );
 }
 
+export function EvolutionVisual() {
+  const cx = 130, cy = 110, nodeR = 70;
+
+  const nodes = [
+    { name: "Complete", sub: "task done",   angle: -90 },
+    { name: "Observe",  sub: "extract vec", angle:   0 },
+    { name: "Cluster",  sub: "form habit",  angle:  90 },
+    { name: "Evolve",   sub: "new skill",   angle: 180 },
+  ].map((n, i) => ({
+    ...n, i,
+    x: Math.round(cx + nodeR * Math.cos((n.angle * Math.PI) / 180)),
+    y: Math.round(cy + nodeR * Math.sin((n.angle * Math.PI) / 180)),
+  }));
+
+  // Arrow coords offset 22px from each node center along the connecting direction
+  const arrows = [
+    { x1: 146, y1: 56,  x2: 184, y2: 94,  delay: "0s"    },
+    { x1: 184, y1: 126, x2: 146, y2: 164, delay: "0.25s" },
+    { x1: 114, y1: 164, x2: 76,  y2: 126, delay: "0.5s"  },
+    { x1: 76,  y1: 94,  x2: 114, y2: 56,  delay: "0.75s" },
+  ];
+
+  return (
+    <>
+      <style>{`
+        @keyframes evoNodePulse {
+          0%, 100% { opacity: 0.3; }
+          25%, 75%  { opacity: 1;   }
+        }
+        @keyframes evoDash {
+          to { stroke-dashoffset: -20; }
+        }
+      `}</style>
+      <svg viewBox="0 0 260 220" style={{ width: "100%", height: "auto" }}>
+        <defs>
+          <marker id="evoArr" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <path d="M0,0 L0,5 L7,2.5 Z" fill="#fbbf24" />
+          </marker>
+        </defs>
+
+        <text x={cx} y={cy - 7} textAnchor="middle" fontSize="9" fontFamily="ui-monospace, monospace" fill="#d4d4d4">
+          self-improving
+        </text>
+        <text x={cx} y={cy + 9} textAnchor="middle" fontSize="9" fontFamily="ui-monospace, monospace" fill="#d4d4d4">
+          loop
+        </text>
+
+        {arrows.map((a, i) => (
+          <line
+            key={i}
+            x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2}
+            stroke="#fbbf24" strokeWidth="1.5" strokeDasharray="5 4"
+            markerEnd="url(#evoArr)"
+            style={{ animation: `evoDash 1s ${a.delay} linear infinite` }}
+          />
+        ))}
+
+        {nodes.map((n, i) => (
+          <g
+            key={n.name}
+            style={{ animation: `evoNodePulse 4s ${i}s infinite ease-in-out` }}
+          >
+            <rect
+              x={n.x - 28} y={n.y - 20} width="56" height="40" rx="10"
+              fill="#fffbeb" stroke="#fbbf24" strokeWidth="1.5"
+            />
+            <text
+              x={n.x} y={n.y - 4}
+              textAnchor="middle" fontSize="9" fontFamily="ui-monospace, monospace"
+              fontWeight="600" fill="#92400e"
+            >
+              {n.name}
+            </text>
+            <text
+              x={n.x} y={n.y + 11}
+              textAnchor="middle" fontSize="7.5" fontFamily="ui-monospace, monospace"
+              fill="#a3a3a3"
+            >
+              {n.sub}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </>
+  );
+}
+
 export function GovernanceVisual() {
   const stages = [
     { label: "Proposal", sub: "sprint 4", bg: "#f0f9ff", border: "#bae6fd", text: "#0369a1" },
