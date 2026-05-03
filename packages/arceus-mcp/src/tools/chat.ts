@@ -25,7 +25,7 @@ export const registerChatTools = (
     "chat_emit_card",
     {
       description:
-        "Emit an interactive card into the CEO chat. Use this for the bootstrap sequence and ad-hoc interactions only: idea_refine, name_suggest, hiring_slate, sprint_plan, decision, approval_request, memory_capture, meeting_summary. NEVER emit strategy_proposal, welcome_brief, mission_brief, clarifying_question, status_update or sprint_proposal — those are produced automatically by the system from your reply text and emitting them here will cause duplicate cards. Fire-and-forget — the user's reaction arrives later as a synthetic user message.",
+        "Emit an interactive card into the CEO chat. Available card types: idea_refine, name_suggest, hiring_slate, sprint_plan, decision, approval_request, memory_capture, meeting_summary. During bootstrap (no agents/sprints yet), follow the sequence: idea_refine → name_suggest → hiring_slate → sprint_plan. Fire-and-forget — the user's reaction arrives later as a synthetic user message.",
       inputSchema: {
         type: z.enum([
           "idea_refine",

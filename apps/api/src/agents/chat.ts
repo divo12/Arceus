@@ -1,12 +1,11 @@
 import type { FastifyReply } from "fastify";
-import { buildCeoOperatingPrompt, classifyCeoResponse, generateStrategy, type CeoCard } from "./ceo.js";
+import { buildCeoOperatingPrompt, generateStrategy, type CeoCard } from "./ceo.js";
 import { appendChatMessage } from "../persistence/mutations/index.js";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { ensureDeployment } from "../config/index.js";
 import { getCeoChatSession, openOpencodeEventStream, postOpencodeJson } from "../infra/opencode.js";
 import { getExecutionStatus } from "../orchestration/state.js";
-import { recordCeoCardMeeting } from "../meetings/recording.js";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { bootstrapIdeaWithWorkspace } from "../orchestration/bootstrap.js";
 import { emitBeatEvent } from "@arceus/company-runtime";
@@ -14,8 +13,7 @@ import { chatModeToolFilter, type ChatMode } from "./chat-modes.js";
 import { chatModeAllowedTools } from "./chat-modes.js";
 import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
-import { publishChatEvent } from "./chat-events.js";
-import { consumeChatCardEmitted } from "./chat-card-tracker.js";
+import { publishChatEvent, subscribeChat } from "./chat-events.js";
 
 interface OpenCodeEvent {
   type: string;
@@ -170,6 +168,16 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   });
   let fullText = "";
 
+  // Subscribe to chat.card_added so we forward cards to the SSE client
+  // the moment the MCP handler writes them — no race with session.idle.
+  const companyId = snapshot.company.id;
+  const unsubCard = subscribeChat((evt) => {
+    if (evt.type === "chat.card_added" && evt.companyId === companyId) {
+      const m = evt.message;
+      sseWrite(reply, "card", { id: m.id, type: m.cardType, data: m.cardData });
+    }
+  });
+
   sseWrite(reply, "status", { phase: "running" });
 
   try {
@@ -222,47 +230,8 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
 
     let nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
     if (fullText) {
-      // Spec 35 — if the CEO emitted an interactive card via
-      // `chat_emit_card` during this turn (idea_refine, name_suggest,
-      // hiring_slate, sprint_plan, decision, …) skip the legacy
-      // classifier so the same beat doesn't render two cards.
-      const skipClassifier = consumeChatCardEmitted(chatBeatId);
-      if (skipClassifier) {
-        await appendConversationMessage(nextSnapshot, "ceo", fullText);
-        nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
-        // Emit the most recent card from the snapshot so the frontend renders it.
-        const latestCard = [...nextSnapshot.chatMessages].reverse().find(m => m.cardType && m.cardData);
-        if (latestCard) {
-          sseWrite(reply, "card", { id: latestCard.id, type: latestCard.cardType, data: latestCard.cardData });
-        }
-      } else try {
-        sseWrite(reply, "status", { phase: "classifying" });
-        const card = await classifyCeoResponse(fullText, nextSnapshot, getExecutionStatus());
-        // Spec 01: No side effects during ideation. Meetings and tasks are only
-        // created after strategy approval when the company is active with agents.
-        const meeting = await recordCeoCardMeeting(card, trimmedMessage, fullText);
-        // Re-read after recordCeoCardMeeting may have appended tasks/meetings.
-        const postMeetingSnapshot = await buildSnapshotView(requireActiveCompanyId());
-        await appendConversationMessage(postMeetingSnapshot, "ceo", fullText, card);
-        if (meeting) {
-          sseWrite(reply, "meeting", {
-            meetingId: meeting.id,
-            summary: meeting.title,
-            type: meeting.type,
-            taskDeltaCount: meeting.resolutions?.decisions.filter(d => d.taskAction).length ?? 0,
-            memoryDeltaCount: 0,
-          });
-        }
-        nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
-        sseWrite(reply, "proposal", card);
-      } catch (cardErr) {
-        const errorSnapshot = await buildSnapshotView(requireActiveCompanyId());
-        await appendConversationMessage(errorSnapshot, "ceo", fullText);
-        nextSnapshot = errorSnapshot;
-        sseWrite(reply, "error", {
-          message: cardErr instanceof Error ? cardErr.message : "Card classification failed"
-        });
-      }
+      await appendConversationMessage(nextSnapshot, "ceo", fullText);
+      nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
     }
 
     sseWrite(reply, "done", {
@@ -275,6 +244,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       sseWrite(reply, "error", { message: errMsg });
     } catch { /* stream already broken */ }
   } finally {
+    unsubCard();
     reader.releaseLock();
     unregisterSessionContext(sessionId);
     publishChatEvent({ type: "chat.turn_ended", companyId: snapshot.company.id });

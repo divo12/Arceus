@@ -23,18 +23,6 @@ import { noteChatCardEmitted } from "../../agents/chat-card-tracker.js";
 
 const CHAT_CARDS = "/api/internal/v1/chat/cards";
 
-// Card types owned by the legacy classifier (`classifyCeoResponse`).
-// They are produced automatically from the CEO's streamed reply text on
-// every turn; emitting them here too would render duplicate cards.
-const CLASSIFIER_OWNED_CARD_TYPES = new Set([
-  "strategy_proposal",
-  "welcome_brief",
-  "mission_brief",
-  "clarifying_question",
-  "status_update",
-  "sprint_proposal",
-]);
-
 const emitCardInputSchema = z.object({
   type: chatMessageCardTypeSchema,
   payload: z.record(z.unknown()),
@@ -62,16 +50,6 @@ export default async function internalMcpChatRoutes(app: FastifyInstance): Promi
     }
 
     const { type, payload } = parsed.data;
-    if (CLASSIFIER_OWNED_CARD_TYPES.has(type)) {
-      return reply.code(422).send(
-        failure(
-          `chat_emit_card cannot emit '${type}' — that card type is produced automatically by the system from your reply text. Just answer in plaintext and the system will format it. Use chat_emit_card only for: idea_refine, name_suggest, hiring_slate, sprint_plan, decision, approval_request, memory_capture, meeting_summary.`,
-          "governance",
-          "never",
-          "card_type_corrected",
-        ),
-      );
-    }
     const cardData = { type, ...payload } as Record<string, unknown>;
 
     // Pull current sprint id so the card sits in the right scope.

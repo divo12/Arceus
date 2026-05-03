@@ -1565,13 +1565,6 @@ export default function Page() {
       );
     });
 
-    eventSource.addEventListener("proposal", (event) => {
-      const card = JSON.parse((event as MessageEvent<string>).data) as CeoCard;
-      setMessages((current) =>
-        current.map((msg) => (msg.id === ceoBubbleId ? { ...msg, card } : msg))
-      );
-    });
-
     eventSource.addEventListener("card", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as InteractiveCard;
       setMessages((current) =>
@@ -2210,43 +2203,31 @@ export default function Page() {
               <LaunchBoardPanel disabled={isStreaming} onPrompt={(prompt) => void sendMessage(prompt)} />
             ) : (
               <div className="space-y-3">
-                {messages.map((message) => {
-                  if (message.role === "ceo" && message.card) {
-                    return (
-                      <div key={message.id} className="space-y-2 rounded-lg border border-[var(--swiss-gray-100)] px-4 py-3 text-[0.8125rem]">
-                        <div className="swiss-caption opacity-70">CEO</div>
-                        {message.content ? <p className="whitespace-pre-wrap leading-6 text-[var(--swiss-gray-400)]">{message.content}</p> : null}
-                        {message.card.card_type === "welcome_brief" ? <WelcomeBriefView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                        {message.card.card_type === "mission_brief" ? <MissionBriefView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                        {message.card.card_type === "strategy_proposal" ? (
-                          <StrategyProposalEditor
-                            card={message.card}
-                            busy={proposalActionId === message.id}
-                            resolved={resolvedProposalIds.includes(message.id)}
-                            onApprove={(card, execute) => handleStrategyAction(message.id, card, execute)}
-                          />
-                        ) : null}
-                        {message.card.card_type === "clarifying_question" ? <ClarifyingQuestionView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                        {message.card.card_type === "status_update" ? <StatusUpdateView card={message.card} disabled={isStreaming} onChoose={handleQuestionOption} /> : null}
-                        {message.card.card_type === "sprint_proposal" ? (
-                          <SprintProposalView
-                            card={message.card}
-                            busy={proposalActionId === message.id}
-                            resolved={resolvedProposalIds.includes(message.id)}
-                            onApprove={() => handleSprintApproval(message.id)}
-                            onReject={() => handleSprintReject(message.id)}
-                          />
-                        ) : null}
-                      </div>
-                    );
-                  }
+                {messages.map((message, idx) => {
+                  const isLastCeo = isStreaming && message.role === "ceo" && message.content && !message.interactiveCard &&
+                    !messages.slice(idx + 1).some((m) => m.role === "ceo");
 
-                  if (message.role === "ceo" && message.interactiveCard) {
+                  if (message.role === "ceo" && (message.interactiveCard || isLastCeo)) {
                     return (
                       <div key={message.id} className="space-y-2 rounded-lg border border-[var(--swiss-gray-100)] px-4 py-3 text-[0.8125rem]">
                         <div className="swiss-caption opacity-70">ceo</div>
-                        {message.content ? <p className="whitespace-pre-wrap leading-6 text-[var(--swiss-gray-400)]">{message.content}</p> : null}
-                        <InteractiveCardView card={message.interactiveCard} disabled={isStreaming} onDecide={handleCardDecide} />
+                        {message.content ? <div className="prose prose-sm max-w-none leading-6 text-[var(--swiss-gray-400)]"><ReactMarkdown>{message.content}</ReactMarkdown></div> : null}
+                        {message.interactiveCard ? (
+                          <InteractiveCardView card={message.interactiveCard} disabled={isStreaming} onDecide={handleCardDecide} />
+                        ) : (
+                          <div className="space-y-3 rounded-lg border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)] p-4">
+                            <div className="h-4 w-1/3 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                            <div className="space-y-2">
+                              <div className="h-3 w-full animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                              <div className="h-3 w-5/6 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                              <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                            </div>
+                            <div className="flex gap-2 pt-1">
+                              <div className="h-8 w-24 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                              <div className="h-8 w-24 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   }
@@ -2265,7 +2246,17 @@ export default function Page() {
                       <div className="swiss-caption mb-1 opacity-70">
                         {message.role === "board" ? "board" : message.role === "ceo" ? "ceo" : "system"}
                       </div>
-                      <p className="whitespace-pre-wrap leading-6">{message.content}</p>
+                      {message.role === "ceo" && !message.content && isStreaming ? (
+                        <div className="space-y-2 py-1">
+                          <div className="h-3 w-3/4 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                          <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                          <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--swiss-gray-100)]" />
+                        </div>
+                      ) : message.role === "ceo" ? (
+                        <div className="prose prose-sm max-w-none leading-6"><ReactMarkdown>{message.content}</ReactMarkdown></div>
+                      ) : (
+                        <p className="whitespace-pre-wrap leading-6">{message.content}</p>
+                      )}
                     </div>
                   );
                 })}
