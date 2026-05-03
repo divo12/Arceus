@@ -15,7 +15,6 @@ import { appendChatMessage } from "../persistence/mutations/index.js";
 import { publishChatEvent, subscribeChat } from "../agents/chat-events.js";
 import { enforceMandatoryRoles, MANDATORY_ROLE_DEFAULTS, type StrategyOutput } from "../agents/ceo.js";
 import { applyStrategyTx } from "../sprints/strategy.js";
-import { createSprintWithTasks } from "../sprints/proposals.js";
 
 const chatSchema = z.object({
   message: z.string().min(1),
@@ -194,40 +193,6 @@ export default async function chatRoutes(app: FastifyInstance) {
           // Auto-hire is best-effort — log and continue. The synthetic
           // user message still goes through so the CEO can recover.
           request.log?.warn?.(autoHireErr, "[chat.decide] hiring_slate auto-hire failed");
-        }
-      }
-
-      // Spec 35 hard-wire: sprint_plan approval materializes the sprint +
-      // tasks immediately. The CEO's next turn was supposed to call
-      // arceus_sprint_create but routinely stalls (model picks plain text).
-      // Card payload shape: { sprintNumber, goal, tasks: [{title, kind?, assignedRole?}, ...] }
-      const sprintData = cardMessage.cardData as {
-        goal?: string;
-        tasks?: { title?: string; assignedRole?: string; description?: string }[];
-      } | null;
-      if (
-        cardMessage.cardType === "sprint_plan"
-        && (body.decision as { approved?: boolean }).approved === true
-        && sprintData?.goal
-        && Array.isArray(sprintData.tasks)
-      ) {
-        try {
-          const sprintTasks = sprintData.tasks
-            .filter((t): t is { title: string; assignedRole?: string; description?: string } =>
-              typeof t?.title === "string" && t.title.length > 0,
-            )
-            .map((t) => ({
-              title: t.title,
-              assigned_role: t.assignedRole || "developer",
-              priority: "medium" as const,
-              depends_on: [] as string[],
-              description: t.description ?? "",
-            }));
-          if (sprintTasks.length > 0) {
-            await createSprintWithTasks({ goal: sprintData.goal, tasks: sprintTasks });
-          }
-        } catch (autoSprintErr) {
-          request.log?.warn?.(autoSprintErr, "[chat.decide] sprint_plan auto-create failed");
         }
       }
 
