@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
-  "installCommand": "npm ci --include=optional || (rm -rf node_modules package-lock.json && npm install --include=optional --no-audit --no-fund)",
+  "installCommand": "rm -f package-lock.json && npm install --include=optional --no-audit --no-fund",
   "buildCommand": "npm run build --workspace @arceus/web",
   "outputDirectory": "apps/web/.next",
   "ignoreCommand": "git diff --quiet HEAD^ HEAD ./apps/web ./packages"
