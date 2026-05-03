@@ -28,10 +28,8 @@
     "@opentelemetry/semantic-conventions": "^1.28.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
+    "tsx": "^4.19.3",
     "undici": "^8.1.0",
     "zod-to-json-schema": "^3.25.2"
-  },
-  "devDependencies": {
-    "tsx": "^4.19.3"
   }
 }
