@@ -133,7 +133,7 @@ type StrategyRoleEntry = StrategyOutput["roles"][number];
  * a mandatory role. Titles/capabilities mirror ROLE_SOULS defaults so behavior
  * is consistent regardless of whether the LLM produced the role or the server did.
  */
-export const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRoleEntry, "role">> = {
+const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRoleEntry, "role">> = {
   ceo: { title: "Founder CEO", parent_role: null, capabilities: ["Board communication", "Strategic narrowing", "Hiring requests", "Meeting orchestration"] },
   cto: { title: "Chief Technology Officer", parent_role: "ceo", capabilities: ["Architecture planning", "Task decomposition", "Verification", "Technical escalation"] },
   pm: { title: "Product Manager", parent_role: "cto", capabilities: ["Sprint planning", "Backlog prioritization", "Cross-role coordination"] },
@@ -147,7 +147,7 @@ export const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRole
  * (and the other core roles) are present regardless of what the LLM produced.
  * Called after every strategy generation / classification path.
  */
-export function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
+function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
   const present = new Set(roles.map((r) => r.role));
   const result = [...roles];
   for (const core of coreStrategyRoles) {
