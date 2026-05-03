@@ -122,4 +122,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # Workspace packages declare "main": "./src/index.ts", so cross-package
 # imports resolve to TypeScript source files. Use tsx (not node) so those
 # .ts imports load via the tsx ESM loader.
-CMD ["npx", "tsx", "apps/api/src/server.ts"]
+#
+# Call tsx DIRECTLY (not via `npx`/`npm exec`) so PID 1 is the node
+# process itself. With npm as PID 1, any SIGTERM forwarded through the
+# wrapper bounces the container — the API saw graceful-shutdown +
+# container restart loops with double OpenCode warm-ups as a result.
+CMD ["tsx", "apps/api/src/server.ts"]
