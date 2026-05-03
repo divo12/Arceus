@@ -28,7 +28,7 @@ export function middleware(req: NextRequest) {
   if (host === APP_HOST) {
     if (url.pathname === "/") {
       url.pathname = "/home";
-      return NextResponse.rewrite(url);
+      return NextResponse.redirect(url);
     }
   } else if (host === APEX || host === `www.${APEX}`) {
     if (url.pathname !== "/") {
