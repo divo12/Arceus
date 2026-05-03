@@ -13,6 +13,8 @@ import { getDb } from "@arceus/db";
 import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
 import { appendChatMessage } from "../persistence/mutations/index.js";
 import { publishChatEvent, subscribeChat } from "../agents/chat-events.js";
+import { enforceMandatoryRoles, MANDATORY_ROLE_DEFAULTS, type StrategyOutput } from "../agents/ceo.js";
+import { applyStrategyTx } from "../sprints/strategy.js";
 
 const chatSchema = z.object({
   message: z.string().min(1),
@@ -148,6 +150,51 @@ export default async function chatRoutes(app: FastifyInstance) {
 
       const cardMessage = boardMessagesRepo.rowToChatMessage(updated);
       publishChatEvent({ type: "chat.card_decided", companyId, message: cardMessage });
+
+      // Spec 35 hard-wire: when an approved hiring_slate lands, materialize
+      // the team in the company record immediately. Without this, the CEO's
+      // next turn calls sprint_create and the runtime rejects ("no hired
+      // roles") because the slate decision was only recorded in chat — not
+      // in agents/hierarchy_nodes. Synthesize a StrategyOutput from the
+      // slate roles, fill in mandatory defaults, and atomically apply.
+      const cardData = cardMessage.cardData as { roles?: { role?: string; title?: string; rationale?: string }[] } | null;
+      if (
+        cardMessage.cardType === "hiring_slate"
+        && (body.decision as { approved?: boolean }).approved === true
+        && Array.isArray(cardData?.roles)
+      ) {
+        try {
+          const slateRoles = cardData.roles
+            .filter((r): r is { role: string; title?: string; rationale?: string } =>
+              typeof r?.role === "string" && r.role in MANDATORY_ROLE_DEFAULTS,
+            )
+            .map((r) => {
+              const role = r.role as keyof typeof MANDATORY_ROLE_DEFAULTS;
+              const defaults = MANDATORY_ROLE_DEFAULTS[role];
+              return {
+                role,
+                title: r.title || defaults.title,
+                parent_role: defaults.parent_role,
+                capabilities: defaults.capabilities,
+              };
+            });
+
+          const synthesizedStrategy = {
+            strategy_title: "Approved hiring slate",
+            summary: `Team hired from approved hiring_slate card (${cardMessage.id}).`,
+            first_release: "First demoable release.",
+            scope_boundary: [],
+            role_rationale: cardData.roles.map((r) => r.rationale ?? `${r.role}: ${r.title ?? "core role"}`),
+            roles: enforceMandatoryRoles(slateRoles),
+          } as StrategyOutput;
+
+          await applyStrategyTx(companyId, synthesizedStrategy);
+        } catch (autoHireErr) {
+          // Auto-hire is best-effort — log and continue. The synthetic
+          // user message still goes through so the CEO can recover.
+          request.log?.warn?.(autoHireErr, "[chat.decide] hiring_slate auto-hire failed");
+        }
+      }
 
       // Synthetic user message — short, structured, parsable.
       const label = body.label ?? JSON.stringify(body.decision);
