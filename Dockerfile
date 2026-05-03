@@ -112,8 +112,6 @@ ENV NODE_ENV=production \
     PORT=4000 \
     ARCEUS_WORKSPACE_ROOT=/var/lib/arceus/workspaces
 
-VOLUME ["/var/lib/arceus"]
-
 EXPOSE 4000
 
 # /api/control-plane/status returns 200 with healthy:true once bootstrap
