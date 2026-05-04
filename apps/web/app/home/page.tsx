@@ -1427,10 +1427,49 @@ export default function Page() {
   useEffect(() => {
     void loadState();
     void loadExecutionTelemetry();
-  }, []);
 
-  // Chat persistence is handled by ChatProvider in layout.tsx.
-  // No hydrate/persist effects needed here — state survives navigation.
+    // Load chat history from API when localStorage is empty (fresh browser / cleared storage).
+    if (messages.length === 0) {
+      void (async () => {
+        try {
+          const res = await fetch(apiUrl("/chat/history?limit=200"), { cache: "no-store" });
+          if (!res.ok) return;
+          const { messages: apiMessages } = (await res.json()) as {
+            messages: Array<{
+              id: string;
+              role: string;
+              content: string;
+              cardType: string | null;
+              cardData: Record<string, unknown> | null;
+              cardDecision: string | null;
+            }>;
+          };
+          if (apiMessages.length === 0) return;
+
+          const bubbles: ChatBubble[] = apiMessages
+            .filter((m) => m.role === "board" || m.role === "ceo" || m.role === "system")
+            .map((m) => {
+              const bubble: ChatBubble = {
+                id: m.id,
+                role: m.role as ChatBubble["role"],
+                content: m.content ?? "",
+              };
+              if (m.cardType && m.cardData) {
+                bubble.interactiveCard = {
+                  id: m.id,
+                  type: m.cardType,
+                  data: m.cardData,
+                  decided: m.cardDecision != null,
+                };
+              }
+              return bubble;
+            });
+
+          setMessages(bubbles);
+        } catch { /* ignore — localStorage will still be used if available */ }
+      })();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleApproveBoardReview() {
     try {
