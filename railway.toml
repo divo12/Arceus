@@ -5,6 +5,6 @@ dockerfilePath = "Dockerfile"
 [deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 300
-startCommand = "npm run db:migrate --workspace @arceus/db && npx tsx apps/api/src/server.ts"
+preDeployCommand = "npm run db:migrate --workspace @arceus/db"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
