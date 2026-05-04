@@ -9,21 +9,24 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "bun src/scripts/apply-migrations.ts",
+    "db:migrate": "npx tsx src/scripts/apply-migrations.ts",
     "db:migrate:raw": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:lint-migrations": "bun src/scripts/lint-migrations.ts",
-    "db:seed": "bun src/seed.ts",
-    "db:explain-audit": "bun src/scripts/explain-audit.ts"
+    "db:lint-migrations": "npx tsx src/scripts/lint-migrations.ts",
+    "db:seed": "npx tsx src/seed.ts",
+    "db:seed-users": "npx tsx src/scripts/seed-users.ts",
+    "db:explain-audit": "npx tsx src/scripts/explain-audit.ts"
   },
   "dependencies": {
     "@arceus/contracts": "file:../contracts",
     "@supabase/supabase-js": "^2.56.0",
+    "bcryptjs": "^2.4.3",
     "drizzle-orm": "^0.44.5",
     "postgres": "^3.4.7"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "drizzle-kit": "^0.31.4"
   }
 }

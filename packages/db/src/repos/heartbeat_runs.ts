@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { heartbeatRuns } from "../schema/heartbeat_runs.js";
 import type { DbClient } from "./_helpers.js";
 
@@ -46,7 +46,7 @@ export async function findStrandedRuns(
   return db
     .select()
     .from(heartbeatRuns)
-    .where(and(eq(heartbeatRuns.status, "running"), sql`${heartbeatRuns.startedAt} < ${cutoff}`));
+    .where(and(eq(heartbeatRuns.status, "running"), lt(heartbeatRuns.startedAt, cutoff)));
 }
 
 export async function markStranded(db: DbClient, id: string, reason: string): Promise<HeartbeatRun | null> {
