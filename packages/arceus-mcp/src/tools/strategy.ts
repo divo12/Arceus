@@ -7,10 +7,28 @@ import { deriveIdempotencyKey, toMcpContent } from "../envelope.js";
 
 const STRATEGY = "/api/internal/v1/strategy";
 
+// Must stay in lockstep with strategyRoleSchema in apps/api/src/agents/ceo.ts.
+// Tightening this from z.string() to z.enum prevents the LLM from drifting on
+// role names (casing, made-up roles like "engineer") — the OpenCode SDK rejects
+// pre-flight with a clear "must be one of [...]" rather than the API rejecting
+// after HTTP with the same enum check.
+const ROLE_KEYS = [
+  "ceo",
+  "cto",
+  "pm",
+  "developer",
+  "tester",
+  "ui_designer",
+  "marketing",
+  "skills_lead",
+] as const;
+
 const strategyRoleSchema = z.object({
-  role: z.string().min(1).describe("Role key: ceo, cto, pm, developer, tester, ui_designer, marketing, skills_lead"),
+  role: z.enum(ROLE_KEYS).describe("Role key — must be exactly one of the 8 supported roles (lowercase, snake_case)"),
   title: z.string().min(1).describe("Human-readable job title"),
-  parent_role: z.string().nullable().describe("Role key of direct manager (null for CEO)"),
+  parent_role: z.enum(ROLE_KEYS).nullable().describe(
+    "Direct manager role (null only for ceo). Allowed reporting lines: ceo→{cto, marketing}; cto→{pm, developer, tester, ui_designer, skills_lead}; pm→{developer, tester, ui_designer}.",
+  ),
   capabilities: z.array(z.string()).describe("What this role can do"),
 });
 

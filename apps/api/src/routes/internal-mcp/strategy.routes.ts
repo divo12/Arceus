@@ -35,8 +35,21 @@ export default async function internalMcpStrategyRoutes(app: FastifyInstance): P
 
     const parsed = strategyOutputSchema.safeParse(req.body);
     if (!parsed.success) {
+      // Echo zod issues so the CEO agent can self-correct on retry —
+      // mirrors the self-heal loop in generateStrategy(). Without this,
+      // the agent loops forever trying random payload variants because
+      // the only feedback is an opaque "Invalid strategy payload."
+      const detail = parsed.error.issues
+        .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+        .slice(0, 6)
+        .join("; ");
       return reply.code(422).send(
-        failure("Invalid strategy payload.", "validation", "never", "payload_fixed"),
+        failure(
+          `Invalid strategy payload — ${detail}`,
+          "validation",
+          "never",
+          "payload_fixed",
+        ),
       );
     }
 
