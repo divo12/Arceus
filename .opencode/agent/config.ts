@@ -141,6 +141,8 @@ export const ALL_ARCEUS_TOOLS = [
   "skill_deprecate",
   // Spec 35 — chat surface
   "chat_emit_card",
+  // Strategy
+  "strategy_apply",
 ] as const;
 
 const MEMORY_ALL = {
@@ -203,6 +205,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       skill_inspect_history: true,
       // Spec 35 — CEO is the only role that can emit chat cards
       chat_emit_card: true,
+      // Strategy — CEO provisions agents via tool call after board approval
+      strategy_apply: true,
     }),
   },
   cto: {
@@ -293,6 +297,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       task_report_bug: true,
       artifact_write_to_workspace: true,
       workspace_checkpoint: true,
+      workspace_start_preview: true,
       workspace_probe_preview: true,
       workspace_run_typecheck: true,
       workspace_get_preview_url: true,

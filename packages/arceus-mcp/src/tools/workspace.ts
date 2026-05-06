@@ -34,6 +34,30 @@ export const registerWorkspaceTools = (
   );
 
   server.registerTool(
+    "workspace_start_preview",
+    {
+      description:
+        "Start the local preview dev server for the product workspace. " +
+        "Auto-detects the framework (Vite, Next.js, Express, etc.) and runs the appropriate dev command. " +
+        "Returns the preview URL when the server is ready. " +
+        "Call this after your build work is done so you can verify and share the preview link.",
+      inputSchema: {
+        targetPath: z.string().optional().describe("Subdirectory inside the workspace to launch (e.g. 'frontend'). Omit for auto-detect."),
+      },
+    },
+    async ({ targetPath }) => {
+      const body = { targetPath: targetPath ?? null };
+      const res = await client.request<ToolResult>({
+        method: "POST",
+        path: `${WORKSPACES}/preview-start`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "workspace_start_preview", body),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
     "workspace_probe_preview",
     {
       description: "Probe the preview server and report status + URL.",

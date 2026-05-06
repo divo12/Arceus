@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { createSprintWithTasks } from "../../sprints/proposals.js";
+import { finalizeSprintCompletion } from "../../sprints/lifecycle.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -291,21 +292,24 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
         return;
       }
 
-      // Mark sprint as completed
-      sprint.status = "completed";
-      sprint.completedAt = new Date().toISOString();
+      // Persist sprint completion to DB + run side effects (snapshot tag, graph emit, etc.)
+      await finalizeSprintCompletion(sprintId);
 
-      const sprintTasks = snapshot.tasks.filter((t) => t.sprintId === sprintId);
+      // Re-read to get the persisted state
+      const updated = await buildSnapshotView(req.mcp.companyId);
+      const finalizedSprint = updated.sprints.find((s) => s.id === sprintId);
+
+      const sprintTasks = updated.tasks.filter((t) => t.sprintId === sprintId);
       const completedCount = sprintTasks.filter((t) =>
         ["completed", "verified"].includes(t.status),
       ).length;
 
-      return cacheAndSend(req, reply, 200, success(`Sprint ${sprint.number} finalized.`, {
+      return cacheAndSend(req, reply, 200, success(`Sprint ${finalizedSprint?.number ?? sprint.number} finalized.`, {
         sprintId,
-        sprintNumber: sprint.number,
+        sprintNumber: finalizedSprint?.number ?? sprint.number,
         completedTasks: completedCount,
         totalTasks: sprintTasks.length,
-        finalizedAt: sprint.completedAt,
+        finalizedAt: finalizedSprint?.completedAt ?? new Date().toISOString(),
       }));
     },
   );

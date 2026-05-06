@@ -1561,6 +1561,10 @@ export default function Page() {
     const trimmed = (rawMessage ?? composer).trim();
     if (!trimmed) return;
 
+    // Guard against concurrent streams — if a CEO stream is already
+    // active, skip opening a second one (the first will finish).
+    if (isStreaming) return;
+
     if (runtime && !runtime.chatReady) {
       setMessages((current) => [
         ...current,
@@ -1625,11 +1629,16 @@ export default function Page() {
     });
 
     eventSource.addEventListener("done", async (event) => {
+      // Close immediately BEFORE any await — prevents the race where
+      // reply.raw.end() closes the TCP connection during the await,
+      // firing onerror and triggering a spurious retry.
+      eventSource.close();
       const payload = JSON.parse((event as MessageEvent<string>).data) as StreamDonePayload;
       if (payload.snapshot) {
         setSnapshot(payload.snapshot);
       }
-      await loadState();
+      setIsStreaming(false);
+      await loadState().catch(() => undefined);
       try {
         const orchRes = await fetch(apiUrl("/orchestrator/status"), { cache: "no-store" });
         if (orchRes.ok) {
@@ -1638,8 +1647,6 @@ export default function Page() {
           setExecutionStatus(orch.executionStatus);
         }
       } catch { /* ignore */ }
-      setIsStreaming(false);
-      eventSource.close();
     });
 
     eventSource.addEventListener("status", () => {
@@ -1683,11 +1690,11 @@ export default function Page() {
         });
 
         retrySource.addEventListener("done", async (ev) => {
+          retrySource.close();
           const payload = JSON.parse((ev as MessageEvent<string>).data) as StreamDonePayload;
           if (payload.snapshot) setSnapshot(payload.snapshot);
-          await loadState().catch(() => undefined);
           setIsStreaming(false);
-          retrySource.close();
+          await loadState().catch(() => undefined);
         });
 
         retrySource.onerror = async () => {

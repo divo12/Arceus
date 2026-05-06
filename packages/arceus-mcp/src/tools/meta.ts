@@ -24,6 +24,7 @@ const TOOL_CATALOG: CatalogEntry[] = [
   { id: "artifact_write_to_workspace", description: "Write an artifact's content to workspace.", tags: ["artifact", "workspace", "write"] },
   { id: "artifact_persist", description: "Promote artifact to durable storage.", tags: ["artifact", "persist", "storage"] },
   { id: "workspace_checkpoint", description: "Commit current workspace state as a git checkpoint.", tags: ["workspace", "git", "checkpoint"] },
+  { id: "workspace_start_preview", description: "Start the local preview dev server.", tags: ["workspace", "preview", "start"] },
   { id: "workspace_probe_preview", description: "Probe the preview server.", tags: ["workspace", "preview", "probe"] },
   { id: "meeting_record", description: "Record a meeting with agenda, decisions, and learnings.", tags: ["meeting", "record"] },
   { id: "approval_request", description: "Request an external approval.", tags: ["approval", "governance"] },

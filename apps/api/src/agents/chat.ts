@@ -182,6 +182,12 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
 
   sseWrite(reply, "status", { phase: "running" });
 
+  // Keepalive: send an SSE comment every 15s to prevent browser/proxy
+  // idle timeouts during long CEO tool calls (strategy_apply etc.).
+  const keepalive = setInterval(() => {
+    try { reply.raw.write(": keepalive\n\n"); } catch { /* stream closed */ }
+  }, 15_000);
+
   try {
     while (true) {
       const result = await readSseEvent(reader, buffer);
@@ -246,6 +252,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       sseWrite(reply, "error", { message: errMsg });
     } catch { /* stream already broken */ }
   } finally {
+    clearInterval(keepalive);
     unsubCard();
     reader.releaseLock();
     unregisterSessionContext(sessionId);

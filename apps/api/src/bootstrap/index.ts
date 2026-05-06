@@ -28,7 +28,7 @@ import { heartbeatConfig } from "../config/heartbeat.js";
 import { warmUpOpencode } from "../infra/opencode.js";
 import { createHeartbeatRuntime } from "../heartbeats/runtime.js";
 import { createMeetingRuntime } from "../meetings/runtime.js";
-import { setMeetingScheduler } from "../orchestration/state.js";
+import { setMeetingScheduler, setHeartbeatEngineRef } from "../orchestration/state.js";
 import { startStrandedRunSweeper, sweepStrandedRunsOnBoot } from "../orchestration/stranded-run-sweeper.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
@@ -52,6 +52,7 @@ export async function startServer(app: FastifyInstance): Promise<void> {
   const { engine: heartbeatEngine } = createHeartbeatRuntime();
   const { scheduler: meetingScheduler } = createMeetingRuntime();
   setMeetingScheduler(meetingScheduler);
+  setHeartbeatEngineRef(heartbeatEngine);
 
   await autoResumeIfActiveSprint(heartbeatEngine, meetingScheduler);
 

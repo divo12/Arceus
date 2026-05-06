@@ -10,9 +10,9 @@
     "zod": "3.25.76"
   },
   "optionalDependencies": {
-    "@img/sharp-linux-x64": "0.34.5",
     "@img/sharp-darwin-arm64": "0.34.5",
-    "@img/sharp-darwin-x64": "0.34.5"
+    "@img/sharp-darwin-x64": "0.34.5",
+    "@img/sharp-linux-x64": "0.34.5"
   },
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
@@ -72,6 +72,7 @@
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-router-dom": "^7.14.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.2.2",
     "ts-node": "^10.9.2",
     "uuid": "^13.0.0"

@@ -147,7 +147,7 @@ const MANDATORY_ROLE_DEFAULTS: Record<CoreStrategyRole, Omit<StrategyRoleEntry, 
  * (and the other core roles) are present regardless of what the LLM produced.
  * Called after every strategy generation / classification path.
  */
-function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
+export function enforceMandatoryRoles(roles: StrategyRoleEntry[]): StrategyRoleEntry[] {
   const present = new Set(roles.map((r) => r.role));
   const result = [...roles];
   for (const core of coreStrategyRoles) {
@@ -424,7 +424,8 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStat
     "  1. Board gives you a raw idea → IMMEDIATELY call `arceus_chat_emit_card` with type `idea_refine`. Do not ask clarifying questions first. Reframe the idea into 2-3 concrete product directions and let the board pick.",
     "  2. Board picks a direction → call `arceus_chat_emit_card` with type `name_suggest`.",
     "  3. Board picks a name → call `arceus_chat_emit_card` with type `hiring_slate`. You MUST propose a team before any sprint. A sprint cannot exist without agents.",
-    "  4. Board approves the team → ONLY THEN call `arceus_chat_emit_card` with type `sprint_plan`. NEVER emit sprint_plan if there are 0 agents in the company.",
+    "  4. Board approves the team → call `strategy_apply` with the full strategy payload (strategy_title, summary, first_release, scope_boundary, role_rationale, roles). This provisions agents atomically. The roles array must include at least ceo, cto, pm, developer with correct parent_role hierarchy. Missing mandatory roles (tester, skills_lead) are auto-injected.",
+    "  5. After `strategy_apply` succeeds → ONLY THEN call `arceus_chat_emit_card` with type `sprint_plan`. NEVER emit sprint_plan if there are 0 agents in the company.",
     "",
     "Card type reference:",
     "  - `idea_refine` — call when the user describes a raw idea. Payload: { originalIdea, reframings: [{id,title,summary}, ...] }. ALWAYS emit this on the FIRST message containing a product idea.",
@@ -441,7 +442,7 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStat
     "- Idea refinement: synthesize the mission, identify assumptions, and ask only the highest-leverage question.",
     "- Team design: pressure-test scope and the minimum org needed to ship.",
     "- Kickoff: propose the first release, team shape, execution sequence, risks, and board checkpoints.",
-    "- Execution: report like an operator. Reference real team, tasks, approvals, meetings, and blockers.",
+    "- Execution: report like an operator. Reference real team, tasks, approvals, meetings, and blockers. When all tasks reach terminal status (completed/failed/cancelled), call `sprint_finalize` to complete the sprint and start the preview. Then transition to between-sprints mode.",
     "- Between sprints: the prior sprint is complete. Analyze what was built, what failed, what the Board said, and what follow-up tasks the planner suggested. Propose Sprint N+1 using `arceus_chat_emit_card` with type `sprint_plan`. Assign tasks to specific roles. Define dependencies between tasks. The system will automatically add a CTO review step at the end of the pipeline.",
     "- Avoid generic filler. Be concise, opinionated, and operationally sharp.",
     "- Prefer tradeoffs and recommendations over vague brainstorming.",

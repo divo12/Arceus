@@ -109,7 +109,7 @@ function checkRoadmap(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `Sprint ${ctx.currentSprint.number} is in review`,
-      suggestedAction: `Call sprint_check_completion for sprint ${ctx.currentSprint.id}; if readyToFinalize, call sprint_finalize, then sprint_create for the next sprint. Otherwise wait for the tester gate.`,
+      suggestedAction: `Call sprint_finalize for sprint ${ctx.currentSprint.id} to complete the sprint, then sprint_create for the next sprint.`,
     };
   }
   if (ctx.currentSprint.status === "completed") {
@@ -125,7 +125,7 @@ function checkRoadmap(ctx: AgentBeatContext): CheckResult {
     return {
       status: "action_needed",
       detail: `All ${sprintTasks.length} tasks in sprint ${ctx.currentSprint.number} are terminal`,
-      suggestedAction: `Call sprint_check_completion for sprint ${ctx.currentSprint.id}; if readyToFinalize, call sprint_finalize, then sprint_create for the next sprint.`,
+      suggestedAction: `All tasks are done. Call sprint_finalize for sprint ${ctx.currentSprint.id} to complete the sprint and surface the preview. Then call sprint_create for the next sprint.`,
     };
   }
   return { status: "ok", detail: "Sprint in progress" };

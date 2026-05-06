@@ -119,7 +119,7 @@ export const registerSprintTools = (
     "sprint_finalize",
     {
       description:
-        "Finalize a sprint: marks it completed and records timestamps. CEO role only. Call only after sprint_check_completion reports readyToFinalize.",
+        "Finalize a sprint: starts preview, tags snapshot, marks it completed, and records timestamps. CEO role only. Call when all tasks are terminal.",
       inputSchema: { sprintId: z.string() },
     },
     async ({ sprintId }) => {

@@ -78,8 +78,12 @@ const TOOL_MAP: Record<string, string> = {
   // chat
   "POST /api/internal/v1/chat/cards": "chat_emit_card",
 
+  // strategy
+  "POST /api/internal/v1/strategy/apply": "strategy_apply",
+
   // workspace
   "POST /api/internal/v1/workspace/checkpoints": "workspace_checkpoint",
+  "POST /api/internal/v1/workspaces/preview-start": "workspace_start_preview",
   "POST /api/internal/v1/workspace/preview-probe": "workspace_probe_preview",
   "GET /api/internal/v1/workspace/preview-url": "workspace_get_preview_url",
   "GET /api/internal/v1/workspace/build-health": "workspace_check_build_health",

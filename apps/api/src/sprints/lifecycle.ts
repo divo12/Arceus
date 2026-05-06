@@ -9,7 +9,7 @@ import {
   emitGraphSprintCompleted,
   emitGraphNodeAdded,
 } from "../observability/graph-emitter/index.js";
-import { stopLocalPreview, getLocalPreviewState, startLocalPreview } from "../workspace/preview.js";
+import { getLocalPreviewState, startLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { createReviewState, buildGateFailureBugFields } from "./review-helpers.js";
 import { runVerificationGate } from "./verification-gate.js";
@@ -197,7 +197,58 @@ export async function finalizeSprintCompletion(
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
 
-  await stopLocalPreview();
+  // Per vision: the agent (CEO) decided to finalize. Before completing,
+  // ensure the user can see what was built by auto-starting preview if
+  // one isn't already running. The preview stays alive until the next
+  // sprint's workspace setup tears it down.
+  const productDirForPreview = workspaceManager.getLegacyProductDir();
+  const currentPreview = getLocalPreviewState();
+  if (currentPreview.status !== "ready" && currentPreview.status !== "starting") {
+    try {
+      const started = await startLocalPreview(productDirForPreview);
+      const url = started.url ?? started.entryUrl ?? started.validationUrl;
+      if (started.status === "ready" && url) {
+        emitEmployeeActivity("system", "preview", `Preview auto-started for sprint ${sprint.number} finalization → ${url}`, {
+          detail: { sprintId, status: started.status, url },
+        });
+        await appendChatMessage({
+          id: `chat_${crypto.randomUUID()}`,
+          companyId: snapshot.company.id,
+          sprintId,
+          agentId: null,
+          role: "system",
+          content: `🚀 Preview ready for Sprint ${sprint.number}: ${url}`,
+          cardType: "status_update",
+          cardData: { previewUrl: url, sprintNumber: sprint.number, phase: "sprint_finalized" },
+          createdAt: nowIso(),
+        });
+      } else {
+        emitEmployeeActivity("system", "preview", `Preview auto-start did not become reachable during finalization: ${started.lastError ?? started.status}`, {
+          detail: { sprintId, status: started.status, lastError: started.lastError },
+        });
+      }
+    } catch (err) {
+      emitEmployeeActivity("system", "error", `Preview auto-start threw during finalization: ${err instanceof Error ? err.message : String(err)}`, {
+        detail: { sprintId },
+      });
+    }
+  } else {
+    // Preview already running — surface the URL if we haven't already
+    const existingUrl = currentPreview.url ?? currentPreview.entryUrl ?? currentPreview.validationUrl;
+    if (existingUrl) {
+      await appendChatMessage({
+        id: `chat_${crypto.randomUUID()}`,
+        companyId: snapshot.company.id,
+        sprintId,
+        agentId: null,
+        role: "system",
+        content: `🚀 Preview ready for Sprint ${sprint.number}: ${existingUrl}`,
+        cardType: "status_update",
+        cardData: { previewUrl: existingUrl, sprintNumber: sprint.number, phase: "sprint_finalized" },
+        createdAt: nowIso(),
+      });
+    }
+  }
 
   const sprintTasks = snapshot.tasks.filter(
     (t) => t.sprintId === sprintId && t.kind !== "follow_up",

@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { workspaceManager } from "../../workspace/manager.js";
-import { probePreviewHealth } from "../../workspace/preview.js";
+import { probePreviewHealth, startLocalPreview } from "../../workspace/preview.js";
 import {
   getHealth,
   recordPreview,
@@ -187,6 +187,37 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       }),
       `${WORKSPACE_BASE}/checkpoints/${commitSha}`,
     );
+  });
+
+  // POST /workspaces/preview-start — start (or restart) the local preview dev server
+  app.post(`${WORKSPACE_BASE}/preview-start`, async (req, reply) => {
+    const body = parseOrFail(
+      z.object({ targetPath: z.string().nullable().optional() }),
+      req.body ?? {},
+      reply,
+    );
+    if (!body) return reply;
+
+    const productDir = workspaceManager.getLegacyProductDir();
+    try {
+      const state = await startLocalPreview(productDir, body.targetPath);
+      const url = state.url ?? state.entryUrl ?? state.validationUrl;
+      if (state.status === "ready") {
+        return cacheAndSend(req, reply, 200, success(
+          `Preview started → ${url ?? "(no url)"}`,
+          { status: state.status, url, entryUrl: state.entryUrl, framework: state.framework, runtime: state.runtime, port: state.port },
+        ));
+      }
+      return reply.code(503).send(failure(
+        `Preview did not become ready: ${state.lastError ?? state.status}`,
+        "upstream", "safe", "preview_reachable",
+      ));
+    } catch (err) {
+      return reply.code(503).send(failure(
+        `Preview start failed: ${err instanceof Error ? err.message : String(err)}`,
+        "upstream", "safe", "preview_reachable",
+      ));
+    }
   });
 
   // POST /workspaces/preview-probes — HTTP probe of the local preview URL

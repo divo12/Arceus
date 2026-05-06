@@ -190,10 +190,32 @@ export async function applyStrategyTx(
     await companiesRepo.upsertCompany(tx, updatedCompany);
     await ideasRepo.upsertIdea(tx, updatedIdea);
     await strategyBriefsRepo.upsertStrategy(tx, updatedStrategy);
+
+    // Upsert agents and collect actual DB UUIDs. When a row for
+    // (companyId, role) already exists the PK stays as the original
+    // value — which differs from toDbId(newFriendlyId). We must use
+    // the real PK so the hierarchy_nodes / memory FK references resolve.
+    const roleToActualDbId = new Map<string, string>();
     for (const agent of agents) {
-      await agentsRepo.upsertAgent(tx, agent);
+      const row = await agentsRepo.upsertAgent(tx, agent);
+      roleToActualDbId.set(agent.role, row.id);
+    }
+
+    // Patch hierarchy nodes to reference actual agent PKs.
+    for (const node of hierarchy) {
+      const actualId = roleToActualDbId.get(node.role);
+      if (actualId) node.agentId = actualId;
     }
     await hierarchyNodesRepo.replaceForCompany(tx, companyId, hierarchy);
+
+    // Patch memories to reference actual agent PKs.
+    for (const mem of memories) {
+      const agent = agents.find((a) => a.memorySummaryId === mem.id);
+      if (agent) {
+        const actualId = roleToActualDbId.get(agent.role);
+        if (actualId) mem.agentId = actualId;
+      }
+    }
     for (const memory of memories) {
       await memorySummariesRepo.upsertSummary(tx, memory, companyId);
     }
