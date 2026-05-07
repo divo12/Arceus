@@ -16,12 +16,30 @@
  * Full policy matrix is Phase 7+.
  */
 
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SkillArtifact, SkillResource } from "@arceus/contracts";
 import { getSkillsForRole } from "@arceus/company-runtime";
-import { beatSkillsDir, swapSkillsSymlink } from "../infra/beat-paths.js";
+import { beatSkillsDir, skillsCacheDir, swapSkillsSymlink } from "../infra/beat-paths.js";
 import { productWorkspace } from "../infra/opencode.js";
+
+// ── Skills cache ──────────────────────────────────────────────────────────────
+// Maps `${companyId}:${role}` → { hash, dir, manifest } so repeated beats for
+// the same role skip the rm+mkdir+writeFile cycle when skills haven't changed.
+// The cache dir lives under /tmp/arceus/skills-cache/ (not beat scratch) so it
+// survives cleanupBeatScratch() between beats.
+interface CachedSkills {
+  hash: string;
+  dir: string;
+  manifest: MaterializedSkill[];
+}
+const skillsMaterializedCache = new Map<string, CachedSkills>();
+
+function computeSkillsHash(active: SkillArtifact[]): string {
+  const fingerprint = active.map((s) => ({ id: s.id, version: s.version, content: s.content }));
+  return crypto.createHash("sha1").update(JSON.stringify(fingerprint)).digest("hex");
+}
 
 export type TrustBand = "probation" | "standard" | "senior";
 
@@ -124,20 +142,68 @@ export async function materializeBeatSkills(
   input: MaterializeBeatSkillsInput,
 ): Promise<MaterializedSkill[]> {
   const useLegacy = !!input.workDir;
-  const skillsDir = useLegacy
-    ? join(input.workDir!, ".opencode", "skills")
-    : beatSkillsDir(input.beatId);
   const manifestDir = useLegacy
     ? join(input.workDir!, ".opencode")
     : join(productWorkspace, ".opencode");
 
-  // Clear and recreate the skills dir so stale entries don't leak in.
-  await rm(skillsDir, { recursive: true, force: true });
-  await mkdir(skillsDir, { recursive: true });
-
   const active = getSkillsForRole(input.companyId, input.role)
     .filter((s) => s.status === "active")
     .filter((s) => trustBandAllows(input.trustBand, s));
+
+  // ── Cache check (Phase 6.5+) ──────────────────────────────────────────────
+  // Skip the full rm+write cycle when the skills set hasn't changed since the
+  // last beat for this role. The persistent cache dir lives outside beat
+  // scratch so cleanupBeatScratch() doesn't evict it.
+  if (!useLegacy) {
+    const cacheKey = `${input.companyId}:${input.role}`;
+    const hash = computeSkillsHash(active);
+    const cached = skillsMaterializedCache.get(cacheKey);
+
+    if (cached?.hash === hash) {
+      // Verify the cached dir still exists on disk (survives server restarts and
+      // /tmp evictions). If it does, just re-point the symlink and return early.
+      const dirStillExists = await stat(cached.dir).then(() => true).catch(() => false);
+      if (dirStillExists) {
+        await swapSkillsSymlink(cached.dir);
+        return cached.manifest;
+      }
+    }
+
+    // Hash miss or cache dir gone — write to the persistent cache dir.
+    const cacheDir = skillsCacheDir(input.role, hash);
+    await rm(cacheDir, { recursive: true, force: true });
+    await mkdir(cacheDir, { recursive: true });
+
+    const manifest: SkillManifest = {};
+    for (const artifact of active) {
+      const slug = slugify(artifact.name);
+      const skillDir = join(cacheDir, slug);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, "SKILL.md"), renderSkillMd(artifact), "utf8");
+      for (const resource of artifact.resources ?? []) {
+        await writeResource(skillDir, resource);
+      }
+      manifest[slug] = { skillId: artifact.id, version: artifact.version };
+    }
+
+    await mkdir(manifestDir, { recursive: true });
+    await writeFile(
+      join(manifestDir, "arceus-skills.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf8",
+    );
+
+    await swapSkillsSymlink(cacheDir);
+
+    const result = Object.entries(manifest).map(([slug, m]) => ({ slug, ...m }));
+    skillsMaterializedCache.set(cacheKey, { hash, dir: cacheDir, manifest: result });
+    return result;
+  }
+
+  // ── Legacy / test mode (workDir provided) — original behaviour ────────────
+  const skillsDir = join(input.workDir!, ".opencode", "skills");
+  await rm(skillsDir, { recursive: true, force: true });
+  await mkdir(skillsDir, { recursive: true });
 
   const manifest: SkillManifest = {};
   for (const artifact of active) {
@@ -157,11 +223,6 @@ export async function materializeBeatSkills(
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
-
-  // Phase 6.5: swap the symlink so OpenCode reads from this beat's skills dir.
-  if (!useLegacy) {
-    await swapSkillsSymlink(skillsDir);
-  }
 
   return Object.entries(manifest).map(([slug, m]) => ({ slug, ...m }));
 }

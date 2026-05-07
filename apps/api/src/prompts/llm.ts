@@ -97,6 +97,14 @@ import { PROMPT_COMPLETION_POLL_INTERVAL_MS } from "../orchestration/state.js";
  */
 const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * If no SSE activity is seen for a pending session within this window, the
+ * poller rejects it early rather than waiting for the full hard cap.
+ * 4 min is safely above the 90s Azure per-call timeout so transient slow
+ * calls don't false-fire, but short enough to unblock a genuinely hung beat.
+ */
+const BEAT_STALL_TIMEOUT_MS = 4 * 60 * 1000;
+
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
@@ -110,7 +118,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       pendingPromptCompletions.delete(sessionId);
       reject(new Error(`OpenCode prompt timed out after ${timeoutMs}ms for session ${sessionId}`));
     }, timeoutMs);
-    pendingPromptCompletions.set(sessionId, { resolve, reject, timer });
+    pendingPromptCompletions.set(sessionId, { resolve, reject, timer, lastActivityAt: Date.now() });
     startPromptCompletionPoller();
   });
 }
@@ -152,7 +160,16 @@ async function pollPendingPromptCompletions() {
     const statusMap = statusResult.data as Record<string, { type: string }> | undefined;
     if (!statusMap) return;
 
-    for (const [sessionId, _entry] of pendingPromptCompletions) {
+    for (const [sessionId, entry] of pendingPromptCompletions) {
+      // Stall guard: if no SSE event has touched this session in BEAT_STALL_TIMEOUT_MS,
+      // the agent is silently hung. Reject early so the beat fails fast instead of
+      // burning the full 15-min hard cap.
+      if (Date.now() - entry.lastActivityAt > BEAT_STALL_TIMEOUT_MS) {
+        emitEmployeeActivity("system", "info", `Stall detected: session ${sessionId.slice(0, 12)}… silent for ${BEAT_STALL_TIMEOUT_MS / 1000}s — rejecting`);
+        rejectPromptCompletion(sessionId, new Error(`Beat session ${sessionId} stalled: no SSE activity for ${BEAT_STALL_TIMEOUT_MS}ms`));
+        continue;
+      }
+
       const sessionStatus = statusMap[sessionId];
       if (sessionStatus?.type === "idle") {
         emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… is idle — resolving completion`);

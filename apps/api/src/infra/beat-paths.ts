@@ -14,6 +14,15 @@ import { productWorkspace } from "./opencode.js";
 const beatScratchDir = (beatId: string): string =>
   path.join("/tmp", "arceus", "beats", beatId);
 
+/**
+ * Persistent skills cache directory keyed by role + content hash.
+ * Unlike beatSkillsDir(), this is NOT cleaned up between beats — it survives
+ * as long as /tmp does. materializeBeatSkills can symlink here and skip
+ * re-writing skill files when the hash matches.
+ */
+export const skillsCacheDir = (role: string, hash: string): string =>
+  path.join("/tmp", "arceus", "skills-cache", role, hash);
+
 export const beatSkillsDir = (beatId: string): string =>
   path.join(beatScratchDir(beatId), "skills");
 
