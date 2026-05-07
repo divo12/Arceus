@@ -79,6 +79,8 @@ export interface PendingPromptCompletion {
   resolve: () => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+  /** Epoch ms of the last SSE event seen for this session. Used by the poller to detect stuck agents. */
+  lastActivityAt: number;
 }
 
 type ReactiveEmitter = (

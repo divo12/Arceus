@@ -178,6 +178,14 @@ async function processEvent(event: OpenCodeEvent) {
   const sessionId: string | undefined = props.info?.sessionID ?? props.part?.sessionID ?? props.sessionID;
   if (!sessionId) return;
 
+  // Reset the stall clock for any session that has a pending completion — this
+  // includes beat sessions which aren't in agentSessions and would otherwise
+  // fall through the `!role` guard below before we could touch them.
+  const pendingCompletion = pendingPromptCompletions.get(sessionId);
+  if (pendingCompletion) {
+    pendingCompletion.lastActivityAt = Date.now();
+  }
+
   const role = resolveRoleBySessionId(sessionId);
   if (!role) return;
 
