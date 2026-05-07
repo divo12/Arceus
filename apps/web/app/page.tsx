@@ -242,7 +242,14 @@ function LandingPageInner() {
   useEffect(() => {
     const authed = localStorage.getItem(AUTH_KEY) === "1";
     setIsLoggedIn(authed);
-    if (!authed && searchParams.get("login") === "1") {
+    // Always show the modal when middleware redirects with ?login=1.
+    // Dropping the !authed guard fixes a stuck-loop where the cookie
+    // expired (24h maxAge) but localStorage still claimed authed=true:
+    // middleware kept redirecting to /?login=1 and the modal never
+    // rendered, so the user could not re-authenticate. Auth is enforced
+    // server-side by middleware.ts checking the arceus_auth cookie —
+    // localStorage is UX state only.
+    if (searchParams.get("login") === "1") {
       setShowLogin(true);
     }
   }, [searchParams]);
