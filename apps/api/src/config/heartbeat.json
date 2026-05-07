@@ -5,7 +5,7 @@
   "executionMode": "heartbeat",
 
   "schedulerIntervalMs": 15000,
-  "maxConcurrentBeats": 1,
+  "maxConcurrentBeats": 3,
 
   "roleIntervals": {
     "ceo": 60000,
@@ -18,7 +18,7 @@
     "skills_lead": 120000
   },
 
-  "beatTimeoutMs": 300000,
+  "beatTimeoutMs": 900000,
   "beatTokenBudget": 50000,
   "beatCostCeilingCents": 50,
   "idleThresholdTokens": 500,
