@@ -45,7 +45,11 @@ import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
 
 interface OpencodeInstance {
-  server: { url: string; close(): void };
+  // close() returns a promise the caller awaits, so the child's exit (and
+  // OS port release) actually completes before the next spawn — without
+  // this, fast restarts (`tsx watch`, container restart-in-place) leak
+  // orphan opencode children that hold port 4096 across boots.
+  server: { url: string; close(): Promise<void> | void };
   client: ReturnType<typeof createOpencodeClient>;
 }
 
@@ -204,7 +208,7 @@ async function detectExistingOpencodeServer(url: string) {
 }
 
 /** Create an authenticated OpenCode SDK client connected to the given URL. */
-async function connectOpencodeClient(url: string, close: () => void): Promise<OpencodeInstance> {
+async function connectOpencodeClient(url: string, close: () => Promise<void> | void): Promise<OpencodeInstance> {
   const client = createOpencodeClient({ baseUrl: url });
 
   await client.auth.set({
@@ -415,8 +419,24 @@ export async function getOpencode() {
         { share: "disabled" }
       );
 
-      return connectOpencodeClient(url, () => {
-        proc.kill();
+      // Graceful shutdown ladder: SIGTERM → wait up to GRACEFUL_EXIT_MS →
+      // SIGKILL. Without awaiting exit the OS keeps port 4096 bound long
+      // enough for the next boot to fall back to a random port.
+      const GRACEFUL_EXIT_MS = 3000;
+      return connectOpencodeClient(url, async () => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return;
+        const exited = new Promise<true>((resolve) => {
+          proc.once("exit", () => { resolve(true); });
+        });
+        try { proc.kill("SIGTERM"); } catch { /* already dead */ }
+        const result = await Promise.race([
+          exited,
+          new Promise<false>((resolve) => { setTimeout(() => { resolve(false); }, GRACEFUL_EXIT_MS).unref(); }),
+        ]);
+        if (!result && proc.exitCode === null && proc.signalCode === null) {
+          try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+          await exited;
+        }
       });
     })();
 
@@ -442,7 +462,10 @@ export async function resetOpencodeConnection() {
   if (opencodePromise) {
     try {
       const instance = await opencodePromise;
-      instance.server.close();
+      // Await child exit so the next getOpencode() call doesn't race a
+      // dying opencode child for port 4096. close() is the SIGTERM →
+      // 3s grace → SIGKILL ladder wired in getOpencode().
+      await instance.server.close();
     } catch {
       // Instance never resolved — nothing to kill
     }
