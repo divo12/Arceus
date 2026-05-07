@@ -14,6 +14,20 @@ import { chatModeAllowedTools } from "./chat-modes.js";
 import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { publishChatEvent, subscribeChat } from "./chat-events.js";
+import { getDb } from "@arceus/db";
+import { findCompanyById } from "@arceus/db/src/repos/companies.js";
+
+/**
+ * Minimal context for chat-message persistence. appendChatMessage only
+ * reads companyId + currentSprintId; previously the chat handlers paid
+ * for a full buildSnapshotView (12 parallel queries) just to extract
+ * these two scalars before each write. Carry them on the request scope
+ * instead — the values cannot change inside one chat turn.
+ */
+interface TurnContext {
+  companyId: string;
+  sprintId: string | null;
+}
 
 interface OpenCodeEvent {
   type: string;
@@ -78,11 +92,11 @@ async function readSseEvent(reader: ReadableStreamDefaultReader<Uint8Array>, buf
   };
 }
 
-function appendConversationMessage(snapshot: CompanySnapshot, role: ChatMessage["role"], content: string, card: CeoCard | null = null, mode: ChatMode | null = null) {
+function appendConversationMessage(ctx: TurnContext, role: ChatMessage["role"], content: string, card: CeoCard | null = null, mode: ChatMode | null = null) {
   return appendChatMessage({
     id: `chat_${crypto.randomUUID()}`,
-    companyId: snapshot.company.id,
-    sprintId: snapshot.company.currentSprintId,
+    companyId: ctx.companyId,
+    sprintId: ctx.sprintId,
     agentId: null,
     role,
     content,
@@ -95,6 +109,29 @@ function appendConversationMessage(snapshot: CompanySnapshot, role: ChatMessage[
     cardDecidedAt: null,
     cardDecidedBy: null,
   });
+}
+
+/**
+ * Resolve `(companyId, sprintId)` for the current chat turn at one query
+ * cost. Bootstraps a fresh company if none is active, reusing the snapshot
+ * the bootstrap helper already returns; otherwise it does a single indexed
+ * lookup against the companies table. Replaces the previous pattern of
+ * calling buildSnapshotView purely to extract these two scalars.
+ */
+async function resolveTurnContext(boardMessage: string): Promise<{ ctx: TurnContext; bootstrapSnapshot: CompanySnapshot | null }> {
+  if (!getActiveCompanyId()) {
+    const bootstrapSnapshot = (await bootstrapIdeaWithWorkspace(boardMessage)).snapshot;
+    return {
+      ctx: { companyId: bootstrapSnapshot.company.id, sprintId: bootstrapSnapshot.company.currentSprintId },
+      bootstrapSnapshot,
+    };
+  }
+  const companyId = requireActiveCompanyId();
+  const row = await findCompanyById(getDb(), companyId);
+  return {
+    ctx: { companyId, sprintId: row?.currentSprintId ?? null },
+    bootstrapSnapshot: null,
+  };
 }
 
 async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot, mode: ChatMode) {
@@ -125,16 +162,17 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   }
 
   // Spec 31 Phase 7.C.c — bootstrap if needed, then assemble the
-  // snapshot from canonical for CEO prompt context.
-  let snapshot: CompanySnapshot;
-  if (!getActiveCompanyId()) {
-    snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
-  } else {
-    snapshot = await buildSnapshotView(requireActiveCompanyId());
-  }
-
-  await appendConversationMessage(snapshot, "board", trimmedMessage, null, mode);
-  snapshot = await buildSnapshotView(requireActiveCompanyId());
+  // snapshot from canonical for CEO prompt context. Previously this
+  // function called buildSnapshotView() four times per turn (~48 DB
+  // round-trips); two of those reads only consumed companyId +
+  // currentSprintId. Cheap-lookup the scalars once via
+  // resolveTurnContext, keep the one full read that the prompt
+  // genuinely needs (immediately after the board append so summaries
+  // see the latest message), and one final read for the `done` SSE
+  // payload below.
+  const { ctx: turnCtx } = await resolveTurnContext(trimmedMessage);
+  await appendConversationMessage(turnCtx, "board", trimmedMessage, null, mode);
+  const snapshot = await buildSnapshotView(turnCtx.companyId);
   publishChatEvent({ type: "chat.turn_started", companyId: snapshot.company.id });
 
   reply.raw.setHeader("Content-Type", "text/event-stream");
@@ -236,11 +274,13 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
       }
     }
 
-    let nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
+    // Append the CEO reply with the cached turn-context scalars (no
+    // full snapshot needed for the write), then read the snapshot
+    // exactly once for the `done` payload the frontend consumes.
     if (fullText) {
-      await appendConversationMessage(nextSnapshot, "ceo", fullText);
-      nextSnapshot = await buildSnapshotView(requireActiveCompanyId());
+      await appendConversationMessage(turnCtx, "ceo", fullText);
     }
+    const nextSnapshot = await buildSnapshotView(turnCtx.companyId);
 
     sseWrite(reply, "done", {
       content: fullText,
@@ -278,15 +318,11 @@ export async function sendBoardMessageToCeo(message: string) {
   }
 
   // Spec 31 Phase 7.C.c — bootstrap if needed, then read from canonical.
-  let snapshot: CompanySnapshot;
-  if (!getActiveCompanyId()) {
-    snapshot = (await bootstrapIdeaWithWorkspace(trimmedMessage)).snapshot;
-  } else {
-    snapshot = await buildSnapshotView(requireActiveCompanyId());
-  }
-
-  await appendConversationMessage(snapshot, "board", trimmedMessage);
-  snapshot = await buildSnapshotView(requireActiveCompanyId());
+  // Same P0 shape as streamBoardMessageToCeo: cheap-lookup the turn
+  // scalars once, do the single full read the prompt actually needs.
+  const { ctx: turnCtx } = await resolveTurnContext(trimmedMessage);
+  await appendConversationMessage(turnCtx, "board", trimmedMessage);
+  const snapshot = await buildSnapshotView(turnCtx.companyId);
 
   const strategy = await generateStrategy(snapshot);
   const assistantMessage = [strategy.summary, `First release: ${strategy.first_release}`].join("\n\n");
@@ -330,13 +366,14 @@ export async function sendBoardMessageToCeo(message: string) {
     },
   };
 
-  const postSnapshot = await buildSnapshotView(requireActiveCompanyId());
-  await appendConversationMessage(postSnapshot, "ceo", assistantMessage, card);
+  // Append CEO reply with cached scalars (no snapshot needed), then
+  // read the snapshot exactly once for the return payload.
+  await appendConversationMessage(turnCtx, "ceo", assistantMessage, card);
 
   return {
     assistantMessage,
     strategy,
     card,
-    snapshot: await buildSnapshotView(requireActiveCompanyId()),
+    snapshot: await buildSnapshotView(turnCtx.companyId),
   };
 }
