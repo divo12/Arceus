@@ -33,8 +33,16 @@ import * as heartbeatRunsRepo from "@arceus/db/src/repos/heartbeat_runs.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 
 const BOOT_STALL_THRESHOLD_MS = 0; // Boot sweep — anything still running is stranded.
-const RUNTIME_STALL_THRESHOLD_MS = 30 * 60 * 1000;
-const PERIODIC_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+// Tightened from 30 min after observing in-process orphans (e.g. company
+// switched mid-flight, prior beat held the global semaphore until
+// HARD_CAP_MS fired at 15 min). Set just above HARD_CAP_MS so a row only
+// reaches this threshold when run-beat's finally block didn't fire (true
+// orphan). Anything younger is either active or about to be killed by
+// the per-beat hard cap.
+const RUNTIME_STALL_THRESHOLD_MS = 16 * 60 * 1000;
+// Tightened from 5 min so orphans don't sit blocking the global
+// concurrency=1 semaphore for half a sweep cycle in the worst case.
+const PERIODIC_SWEEP_INTERVAL_MS = 2 * 60 * 1000;
 
 let periodicTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -124,4 +132,41 @@ export function stopStrandedRunSweeper(): void {
   clearInterval(periodicTimer);
   periodicTimer = null;
   console.log("[stranded-sweeper] Stopped.");
+}
+
+/**
+ * Mark every still-`running` row for the given company as stranded —
+ * regardless of age. Used when the active company switches: any beat
+ * that belonged to the departing company is by definition orphaned
+ * since the seam is single-tenant and the engine will no longer drive
+ * it forward. Without this, an orphaned beat keeps holding the global
+ * concurrency=1 semaphore until HARD_CAP_MS (15 min) fires from the
+ * original run-beat path — starving the new company's heartbeat.
+ *
+ * Pairs with the in-memory `cancelInFlightBeatsForCompany` in
+ * prompts/llm.ts: that catches the live-process case (rejects pending
+ * completions, lets run-beat's finally do its normal cleanup); this
+ * catches the cross-process / lost-tracking case (DB row says running
+ * but nothing in-memory references it).
+ */
+export async function sweepStaleRunsForCompany(companyId: string): Promise<number> {
+  let count = 0;
+  await swallowAndAudit("stranded_run_sweeper.company_switch", async () => {
+    const db = getDb();
+    const stale = await heartbeatRunsRepo.findRunningRunsForCompany(db, companyId);
+    for (const run of stale) {
+      const updated = await heartbeatRunsRepo.markStranded(
+        db,
+        run.id,
+        `Marked stranded: active company switched away from ${companyId}`,
+      );
+      if (updated) count += 1;
+    }
+    if (count > 0) {
+      console.log(
+        `[stranded-sweeper] Company-switch sweep marked ${count} run(s) stranded for ${companyId}.`,
+      );
+    }
+  });
+  return count;
 }

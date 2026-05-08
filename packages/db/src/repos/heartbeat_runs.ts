@@ -49,6 +49,22 @@ export async function findStrandedRuns(
     .where(and(eq(heartbeatRuns.status, "running"), lt(heartbeatRuns.startedAt, cutoff)));
 }
 
+/**
+ * Find every still-`running` row for a specific company, regardless of
+ * age. Used by the active-company switch path to mark beats from the
+ * departing company stranded immediately — they cannot be productive
+ * anymore since the active-company seam is single-tenant.
+ */
+export async function findRunningRunsForCompany(
+  db: DbClient,
+  companyId: string,
+): Promise<HeartbeatRun[]> {
+  return db
+    .select()
+    .from(heartbeatRuns)
+    .where(and(eq(heartbeatRuns.status, "running"), eq(heartbeatRuns.companyId, companyId)));
+}
+
 export async function markStranded(db: DbClient, id: string, reason: string): Promise<HeartbeatRun | null> {
   const [row] = await db
     .update(heartbeatRuns)
