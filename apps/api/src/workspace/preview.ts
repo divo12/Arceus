@@ -4,6 +4,53 @@ import { basename, extname, join, normalize, relative } from "node:path";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { previewConfig } from "../config/index.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
+import { getDb } from "@arceus/db";
+import { findCompanyById } from "@arceus/db/src/repos/companies.js";
+
+/**
+ * Build the public-facing base URL for the preview, in priority order:
+ *   1. `ARCEUS_PREVIEW_PUBLIC_BASE_URL` if set — fixed URL like
+ *      `https://preview.arceus.sh`. Useful when you don't want
+ *      per-company subdomains.
+ *   2. `<companySlug>.<ARCEUS_PREVIEW_PUBLIC_DOMAIN>` if `publicDomain`
+ *      is set and an active company exists. Each company gets its own
+ *      vanity subdomain (e.g. `https://quill.arceus.sh`).
+ *   3. Fallback: `http://<publicHost>:<port>` — legacy local URL.
+ *
+ * Async because (2) reads the active company from canonical to derive
+ * the slug. The caller must `await` before using the URL.
+ */
+async function buildPreviewPublicBaseUrl(): Promise<string> {
+  if (previewConfig.publicBaseUrl) {
+    return previewConfig.publicBaseUrl.replace(/\/$/, "");
+  }
+  if (previewConfig.publicDomain) {
+    const companyId = getActiveCompanyId();
+    if (companyId) {
+      try {
+        const row = await findCompanyById(getDb(), companyId);
+        const name = row?.name?.trim();
+        if (name) {
+          const slug = slugifyCompanyName(name);
+          return `https://${slug}.${previewConfig.publicDomain}`;
+        }
+      } catch {
+        // best-effort: fall through to default subdomain on DB error
+      }
+    }
+    return `https://preview.${previewConfig.publicDomain}`;
+  }
+  return `http://${previewConfig.publicHost}:${previewConfig.port}`;
+}
+
+function slugifyCompanyName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "preview";
+}
 
 type PreviewStatus = "idle" | "starting" | "ready" | "error";
 type PreviewTargetKind = "browser" | "service";
@@ -592,13 +639,29 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
   previewState.targetKind = launch.targetKind;
   previewState.runtime = launch.runtime;
   previewState.framework = launch.framework;
-  previewState.url = `http://${previewConfig.publicHost}:${previewState.port}`;
+  // Public-facing URL (vanity subdomain or fixed override) when
+  // configured; falls back to the legacy local URL otherwise. The
+  // proxy hook in routes/preview-proxy.ts forwards public-subdomain
+  // traffic to this same preview server's local port.
+  const publicBaseUrl = await buildPreviewPublicBaseUrl();
+  // Keep an internal local URL for backend health probes — going
+  // through the public URL would round-trip via Railway's edge and
+  // depends on external DNS/cert state we don't always control here.
+  const localProbeBaseUrl = `http://${previewConfig.host}:${previewState.port}`;
+  const localProbePath = launch.validationPath
+    ? `/${launch.validationPath}`
+    : launch.entryPath
+      ? `/${launch.entryPath}`
+      : "";
+  const localProbeUrl = `${localProbeBaseUrl}${localProbePath}`;
+
+  previewState.url = publicBaseUrl;
   previewState.entryUrl = launch.targetKind === "browser"
-    ? (launch.entryPath ? `${previewState.url}/${launch.entryPath}` : previewState.url)
+    ? (launch.entryPath ? `${publicBaseUrl}/${launch.entryPath}` : publicBaseUrl)
     : null;
   previewState.validationUrl = launch.validationPath
-    ? `${previewState.url}/${launch.validationPath}`
-    : (previewState.entryUrl ?? previewState.url);
+    ? `${publicBaseUrl}/${launch.validationPath}`
+    : (previewState.entryUrl ?? publicBaseUrl);
   previewState.validationStrategy = launch.validationPath === "health"
     ? "health-url"
     : launch.entryPath
@@ -633,27 +696,22 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
     }
   });
 
-  const primaryUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
-  let ready = await waitForUrl(primaryUrl, previewConfig.launchTimeoutMs);
+  // Probe LOCAL URL for readiness (not public) — public URL depends on
+  // an external proxy/cert chain that may not be ready yet, but the
+  // local preview server is always direct-addressable.
+  let ready = await waitForUrl(localProbeUrl, previewConfig.launchTimeoutMs);
 
   // Fallback: Vite may bind to "localhost" but not "127.0.0.1" (or vice versa)
-  if (!ready && primaryUrl) {
-    const fallbackUrl = primaryUrl.includes("127.0.0.1")
-      ? primaryUrl.replace("127.0.0.1", "localhost")
-      : primaryUrl.replace("localhost", "127.0.0.1");
-    ready = await waitForUrl(fallbackUrl, 5000);
-    if (ready) {
-      previewState.url = previewState.url?.replace(
-        primaryUrl.includes("127.0.0.1") ? "127.0.0.1" : "localhost",
-        primaryUrl.includes("127.0.0.1") ? "localhost" : "127.0.0.1",
-      );
-      previewState.validationUrl = fallbackUrl;
-    }
+  if (!ready) {
+    const fallbackProbe = localProbeUrl.includes("127.0.0.1")
+      ? localProbeUrl.replace("127.0.0.1", "localhost")
+      : localProbeUrl.replace("localhost", "127.0.0.1");
+    ready = await waitForUrl(fallbackProbe, 5000);
   }
 
   if (!ready) {
     previewState.status = "error";
-    previewState.lastError = `Preview not reachable at ${primaryUrl} after ${previewConfig.launchTimeoutMs}ms. Launch: ${previewState.command}. Check if package.json exists at cwd and 'dev' script starts on port ${previewState.port}.`;
+    previewState.lastError = `Preview not reachable at ${localProbeUrl} after ${previewConfig.launchTimeoutMs}ms. Launch: ${previewState.command}. Check if package.json exists at cwd and 'dev' script starts on port ${previewState.port}.`;
     return previewState;
   }
 

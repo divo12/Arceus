@@ -40,6 +40,7 @@ import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { installObservabilitySinks } from "./observability.js";
 import { initWorkspaceAndPersistence } from "./workspace-init.js";
 import { registerCors, registerRoutes, registerSecurityHooks } from "./routes-register.js";
+import { registerPreviewProxy } from "../routes/preview-proxy.js";
 import { registerShutdownHandlers } from "./shutdown.js";
 
 const BEAT_LIFECYCLE_TYPES = new Set(["beat_started", "beat_completed", "beat_failed", "beat_idle"]);
@@ -70,6 +71,10 @@ export async function startServer(app: FastifyInstance): Promise<void> {
     });
   });
 
+  // Preview proxy fires on `onRequest` BEFORE CORS, auth, and routing
+  // so requests for `<slug>.arceus.sh` are short-circuited and forwarded
+  // to the local preview server. Non-preview hosts fall through normally.
+  registerPreviewProxy(app);
   await registerCors(app);
   registerSecurityHooks(app);
   await registerRoutes(app, { heartbeatEngine, meetingScheduler });
