@@ -100,6 +100,21 @@ export interface BeatDependencies {
   /** Spec 31 Phase 7.C.c — async to read from canonical via repos. */
   getAgentRoster?: () => Promise<{ agentId: string; role: AgentIdentity["role"]; companyId: string }[]>;
 
+  /**
+   * Pre-flight claimability check used by the scheduler tick to skip
+   * beats for roles with no work. Returns true if the role has at
+   * least one claimable task (status in claimable + checkout_run_id
+   * IS NULL) for the given company. Implementations should use the
+   * `(company_id, assigned_role, status)` index for O(1)-ish lookup.
+   *
+   * Optional — if undefined, the scheduler falls back to firing every
+   * beat unconditionally (legacy behavior).
+   */
+  roleHasClaimableWork?: (
+    companyId: string,
+    role: AgentIdentity["role"],
+  ) => Promise<boolean>;
+
   /** Emit beat lifecycle events for SSE streaming. */
   emitBeatEvent?: (event: { type: string; beatId: string; agentId: string; role: string; data?: Record<string, unknown> }) => void;
 }
@@ -472,6 +487,30 @@ export class HeartbeatEngine {
 
       // Skip if at capacity
       if (this.semaphore.available <= 0) break;
+
+      // Pre-flight claimability check — skip the entire beat if this
+      // role has no claimable task for this company. Saves the full
+      // session-create + LLM-call overhead (~10-12s per idle beat
+      // observed in production logs) for roles waiting on upstream
+      // dependencies. Reactive emission still wakes a beat the moment
+      // a task becomes claimable, so we don't miss work that lands
+      // inside the interval window.
+      if (this.deps?.roleHasClaimableWork) {
+        try {
+          const hasWork = await this.deps.roleHasClaimableWork(agent.companyId, agent.role);
+          if (!hasWork) {
+            // Bump lastBeat so we don't re-check on every 15s tick
+            // for the same role. Reactive events override this when
+            // state changes, so productive beats still fire promptly.
+            this.lastBeatAt.set(agent.agentId, now);
+            continue;
+          }
+        } catch {
+          // Pre-flight check is best-effort — if it fails, fall through
+          // to the legacy unconditional firing. The in-beat "no work"
+          // guard at run-beat.ts:107 still catches truly idle beats.
+        }
+      }
 
       // Fire and forget — triggerBeat handles lock + semaphore.
       // Audit-routed so a scheduled beat crash lands in the error sink.

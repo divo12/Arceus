@@ -8,6 +8,7 @@
  */
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import { hasClaimableTasksForRole } from "@arceus/db/src/repos/tasks/index.js";
 import { parseRoleStrict } from "@arceus/contracts";
 import { HeartbeatEngine, emitBeatEvent } from "@arceus/company-runtime";
 import type { BeatDependencies } from "@arceus/company-runtime";
@@ -77,6 +78,14 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
         companyId,
       }));
     },
+    // Pre-flight claimability check — single indexed lookup against
+    // tasks(company_id, assigned_role, status). The scheduler skips
+    // firing a beat for any role with no claimable work, saving the
+    // ~10-12s of session create + LLM round-trip overhead per idle
+    // beat. Reactive events still wake the role the moment its state
+    // changes (a new task becomes claimable, an upstream completes).
+    roleHasClaimableWork: (companyId, role) =>
+      hasClaimableTasksForRole(getDb(), companyId, role),
     emitBeatEvent: (event) => { emitBeatEvent(event); },
   };
 
