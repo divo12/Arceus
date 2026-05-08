@@ -100,10 +100,15 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 /**
  * If no SSE activity is seen for a pending session within this window, the
  * poller rejects it early rather than waiting for the full hard cap.
- * 4 min is safely above the 90s Azure per-call timeout so transient slow
- * calls don't false-fire, but short enough to unblock a genuinely hung beat.
+ *
+ * Bumped from 4 → 6 min after observing legitimate dev beats stall
+ * mid-turn waiting on a single Azure round-trip that took >4 min (no
+ * tool invoked, no partial text — the LLM call itself was slow). 6 min
+ * is still well below the 15-min HARD_CAP_MS so a genuinely dead beat
+ * still fails fast; this just gives a slow-but-real Azure call room
+ * to land before we kill it.
  */
-const BEAT_STALL_TIMEOUT_MS = 4 * 60 * 1000;
+const BEAT_STALL_TIMEOUT_MS = 6 * 60 * 1000;
 
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {

@@ -444,7 +444,7 @@ export function buildCeoSystemPrompt(): string {
     "  - `idea_refine` — call when the user describes a raw idea. Payload: { originalIdea, reframings: [{id,title,summary}, ...] }. ALWAYS emit this on the FIRST message containing a product idea.",
     "  - `name_suggest` — call after the idea is locked. Payload: { suggestions: [{name, rationale?}, ...], allowWriteIn: true }.",
     "  - `hiring_slate` — call after strategy/team is discussed. Payload: { roles: [{role, displayName, title?, rationale?}, ...] }.",
-    "  - `sprint_plan` — call after hiring is approved. Payload: { sprintNumber, goal, tasks: [{title, kind?, assignedRole?}, ...] }.",
+    "  - `sprint_plan` — call after hiring is approved. Payload: { sprintNumber, goal, tasks: [{title, kind?, assignedRole?}, ...] }. Tasks must be 5–15 minute units of work. If a task touches more than 3 files OR involves more than one of {model, endpoint, ui, test}, split it. Smaller tasks complete faster, fail more legibly, and let the heartbeat reschedule cleanly between them — prefer 6–10 small tasks over 3 sprawling ones.",
     "  - `decision` — call when you need the board to pick from options. Payload: { question, options: [{id, label, description?}, ...] }.",
     "Do NOT narrate the card payload in plaintext — emit it via the tool. A short conversational sentence in the chat reply is fine ('Here's how I'm reading it:'), but the card carries the structured content.",
     "When you DO call arceus_chat_emit_card, keep your plaintext reply to ONE short sentence of framing — never restate the question or the options that the card already shows.",
