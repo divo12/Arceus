@@ -1,5 +1,5 @@
 import type { FastifyReply } from "fastify";
-import { buildCeoOperatingPrompt, generateStrategy, type CeoCard } from "./ceo.js";
+import { buildCeoSystemPrompt, buildCeoContextMessage, generateStrategy, type CeoCard } from "./ceo.js";
 import { appendChatMessage } from "../persistence/mutations/index.js";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
@@ -140,12 +140,18 @@ async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot, m
   const baseAllowed = getAllowedArceusTools("ceo");
   const tools = chatModeToolFilter(mode, baseAllowed);
 
+  // Split prompt: static system block stays byte-identical across
+  // turns so Azure prompt caching reuses its KV state for the prefix
+  // (TTFT win). Per-turn dynamic snapshot rides as a user-message
+  // preamble in front of the actual board message.
+  const contextMessage = buildCeoContextMessage(snapshot, getExecutionStatus());
+
   await postOpencodeJson(`/session/${session.id}/prompt_async`, {
     model: { providerID: "azure", modelID: deployment },
     agent: "ceo",
-    system: buildCeoOperatingPrompt(snapshot, getExecutionStatus()),
+    system: buildCeoSystemPrompt(),
     tools,
-    parts: [{ type: "text", text: message }]
+    parts: [{ type: "text", text: `${contextMessage}\n\n${message}` }]
   });
 
   return session.id;

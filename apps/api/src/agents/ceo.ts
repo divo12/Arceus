@@ -403,12 +403,24 @@ function buildSnapshotContext(snapshot: CompanySnapshot, executionStatus?: strin
   ].join("\n");
 }
 
-/** Build the full system prompt for the CEO agent, including company context. */
-export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStatus?: string) {
+/**
+ * STATIC system prompt for the CEO agent — byte-identical across turns
+ * so Azure prompt caching reuses its KV state for this prefix every
+ * call. Pair with buildCeoContextMessage() for the per-turn dynamic
+ * snapshot, sent as a user-role message preamble.
+ *
+ * Invariant: do NOT inject anything that varies per turn (snapshot
+ * fields, timestamps, counters). Even one byte of drift breaks the
+ * cache hit and the TTFT win disappears.
+ *
+ * getAgentSkills("ceo") + the role soul are treated as effectively
+ * static — they only change when skill evolution rewrites them, which
+ * is rare and represents a real change worth invalidating the cache for.
+ */
+export function buildCeoSystemPrompt(): string {
   const ceoSoul = getRoleSoul("ceo");
-  const stage = inferCeoStage(snapshot, executionStatus);
 
-  const lines = [
+  return [
     ceoSoul.systemPrompt,
     getAgentSkills("ceo"),
     "",
@@ -451,15 +463,40 @@ export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStat
     "- Convergence: after 2-3 clarifying exchanges, stop asking and propose a strategy. Do not ask more than 3 clarifying questions total. If the board has given enough direction, converge immediately. The goal is a demoable first release, not perfect requirements.",
     "- One intent per response: either ASK a question or PROPOSE a strategy — never both. If you want board confirmation before proceeding, stop after the question. Do not answer your own question in the same message.",
     "",
+    "Per-turn company state arrives in the next user message under a `Current company intelligence:` header. Read that first, then respond to the board.",
+  ].join("\n");
+}
+
+/**
+ * DYNAMIC per-turn context for the CEO agent. Send as a user-role
+ * message preamble — concatenate before the actual user message.
+ * Kept small and focused on what the model needs to ground its turn.
+ */
+export function buildCeoContextMessage(snapshot: CompanySnapshot, executionStatus?: string): string {
+  const stage = inferCeoStage(snapshot, executionStatus);
+  const lines = [
     "Current company intelligence:",
     buildSnapshotContext(snapshot, executionStatus),
   ];
-
   if (stage === "between_sprints") {
     lines.push(buildSprintRetrospectiveContext(snapshot));
   }
-
   return lines.join("\n");
+}
+
+/**
+ * Backward-compat shim: combines the static system block with the
+ * dynamic per-turn context into one string. Prefer calling
+ * buildCeoSystemPrompt() and buildCeoContextMessage() separately at
+ * call sites that pass them to Azure — that way the static block is
+ * cacheable across turns.
+ */
+export function buildCeoOperatingPrompt(snapshot: CompanySnapshot, executionStatus?: string) {
+  return [
+    buildCeoSystemPrompt(),
+    "",
+    buildCeoContextMessage(snapshot, executionStatus),
+  ].join("\n");
 }
 
 /**
@@ -609,7 +646,10 @@ export async function generateStrategy(snapshot: CompanySnapshot): Promise<Strat
   ].join("\n");
 
   const messages = [
-    { role: "system" as const, content: buildCeoOperatingPrompt(snapshot) },
+    // Static system prompt — Azure prompt caching reuses its KV state
+    // for this prefix across calls. The userPrompt below already
+    // includes buildSnapshotContext(), so we don't double-inject here.
+    { role: "system" as const, content: buildCeoSystemPrompt() },
     { role: "user" as const, content: userPrompt },
   ];
 
