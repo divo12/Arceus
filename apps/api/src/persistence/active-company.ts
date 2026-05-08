@@ -65,23 +65,10 @@ export function clearActiveCompanyId(): void {
 }
 
 /**
- * Two-tier cleanup when the active company changes:
- *   1. cancelInFlightBeatsForCompany (in-memory, immediate) — rejects
- *      pending OpenCode completions for the departing company. Catches
- *      the common case where the prior beat is still tracked in this
- *      process's pendingPromptCompletions map. Run-beat's finally block
- *      then handles claim release + audit cleanup.
- *
- *   2. sweepStaleRunsForCompany (DB-side, defense in depth) — marks
- *      any still-`running` heartbeat_runs row for the departing company
- *      as `stranded`. Catches the cross-process / lost-tracking case
- *      where the in-memory map was wiped by a redeploy but the DB row
- *      survived. Without this, the orphan keeps holding the global
- *      concurrency=1 semaphore until HARD_CAP_MS fires (15 min).
- *
- * Both lazy-imported to avoid a top-of-file cycle (active-company is
- * reachable from llm.ts via several paths). Best-effort: errors are
- * swallowed so cleanup can never block company bootstrap or reset.
+ * Lazy import of cancelInFlightBeatsForCompany — avoids a top-of-file
+ * import cycle (active-company is reachable from llm.ts via several
+ * paths). Best-effort: errors are swallowed so cleanup can never
+ * block company bootstrap or reset.
  */
 function cancelStaleBeats(companyId: string): void {
   void import("../prompts/llm.js")
@@ -93,12 +80,6 @@ function cancelStaleBeats(companyId: string): void {
     })
     .catch(() => {
       /* best-effort — never block setActiveCompanyId on cleanup */
-    });
-
-  void import("../orchestration/stranded-run-sweeper.js")
-    .then(({ sweepStaleRunsForCompany }) => sweepStaleRunsForCompany(companyId))
-    .catch(() => {
-      /* best-effort — same rationale */
     });
 }
 
