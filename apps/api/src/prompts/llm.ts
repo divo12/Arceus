@@ -19,6 +19,7 @@ import { describePgError } from "../infra/pg-errors.js";
 import { withRetry, isRetryableError } from "../infra/resilience.js";
 import { truncateTelemetry } from "../infra/utils.js";
 import { agentSessions, pendingPromptCompletions, type AgentSessionState } from "../orchestration/state.js";
+import { getSessionContext } from "../orchestration/session-context.js";
 import { updateAgentSessionState } from "../agents/sessions.js";
 import { formatHippocampusContext } from "../memory/operations.js";
 import { hippocampus } from "../memory/extractors.js";
@@ -146,6 +147,36 @@ export function rejectPromptCompletion(sessionId: string, error: Error) {
     pendingPromptCompletions.delete(sessionId);
     entry.reject(error);
   }
+}
+
+/**
+ * Cancel all in-flight beat completions for a given company. Walks the
+ * session-context registry to find sessions belonging to the company,
+ * then rejects each pending completion. Used when the active company
+ * switches (e.g. user resets and bootstraps a new company) so the old
+ * company's beats don't keep holding the global concurrency semaphore
+ * and starve the new company's heartbeat.
+ *
+ * Best-effort and synchronous-ish — rejections fire immediately; the
+ * run-beat finally block handles claim release + audit cleanup.
+ *
+ * Returns the count of sessions that were cancelled (for logging).
+ */
+export function cancelInFlightBeatsForCompany(companyId: string): number {
+  let cancelled = 0;
+  // Snapshot keys first — rejectPromptCompletion mutates the map mid-iteration.
+  const sessionIds = [...pendingPromptCompletions.keys()];
+  for (const sessionId of sessionIds) {
+    const ctx = getSessionContext(sessionId);
+    if (ctx?.companyId === companyId) {
+      rejectPromptCompletion(
+        sessionId,
+        new Error(`Beat cancelled: active company switched away from ${companyId}`),
+      );
+      cancelled += 1;
+    }
+  }
+  return cancelled;
 }
 
 function startPromptCompletionPoller() {

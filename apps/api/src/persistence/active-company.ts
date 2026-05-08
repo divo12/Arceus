@@ -40,14 +40,47 @@ export function requireActiveCompanyId(): string {
 /**
  * Set the active company id. Called by `bootstrapCompanyTx` after the
  * transaction commits. Idempotent — safe to call with the same id.
+ *
+ * When the active company changes, in-flight beats for the *previous*
+ * company are cancelled so they don't keep holding the global
+ * concurrency semaphore and starve the new company's heartbeat. With
+ * maxConcurrentBeats=1, a single orphaned beat blocks every new beat
+ * until its HARD_CAP_MS (15 min) fires.
  */
 export function setActiveCompanyId(id: string): void {
+  const previous = activeCompanyId;
   activeCompanyId = id;
+  if (previous && previous !== id) {
+    cancelStaleBeats(previous);
+  }
 }
 
 /** Clear the active company id. Called by reset / teardown paths. */
 export function clearActiveCompanyId(): void {
+  const previous = activeCompanyId;
   activeCompanyId = null;
+  if (previous) {
+    cancelStaleBeats(previous);
+  }
+}
+
+/**
+ * Lazy import of cancelInFlightBeatsForCompany — avoids a top-of-file
+ * import cycle (active-company is reachable from llm.ts via several
+ * paths). Best-effort: errors are swallowed so cleanup can never
+ * block company bootstrap or reset.
+ */
+function cancelStaleBeats(companyId: string): void {
+  void import("../prompts/llm.js")
+    .then(({ cancelInFlightBeatsForCompany }) => {
+      const n = cancelInFlightBeatsForCompany(companyId);
+      if (n > 0) {
+        console.log(`[ARCEUS] Cancelled ${n} in-flight beat(s) for departing company ${companyId}`);
+      }
+    })
+    .catch(() => {
+      /* best-effort — never block setActiveCompanyId on cleanup */
+    });
 }
 
 /**
