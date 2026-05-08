@@ -1335,6 +1335,12 @@ export default function Page() {
   const [expandedArtifact, setExpandedArtifact] = useState<Artifact | null>(null);
   const [productOverview, setProductOverview] = useState<ProductOverview>(emptyProductOverview);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // Single-slot queue for a card-decision follow-up message that arrived
+  // while a CEO stream was still in flight. The sendMessage() guard at
+  // line ~1566 skips concurrent streams, which silently dropped instant
+  // card clicks. Parking here and draining from the EventSource "done"
+  // handler closes that race without removing the concurrent-stream guard.
+  const pendingDecisionRef = useRef<string | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [sprintOpen, setSprintOpen] = useState(false);
   const [heartbeatStatus, setHeartbeatStatus] = useState<{
@@ -1647,6 +1653,13 @@ export default function Page() {
           setExecutionStatus(orch.executionStatus);
         }
       } catch { /* ignore */ }
+      // Drain any card-decision follow-up that was parked because the
+      // user clicked while this stream was still mid-flight.
+      const pending = pendingDecisionRef.current;
+      if (pending) {
+        pendingDecisionRef.current = null;
+        void sendMessage(pending);
+      }
     });
 
     eventSource.addEventListener("status", () => {
@@ -1854,8 +1867,17 @@ export default function Page() {
             : msg
         )
       );
-      // Send the decision as a follow-up message so the CEO continues
-      void sendMessage(`[user decided ${label}]`);
+      // Send the decision as a follow-up message so the CEO continues.
+      // If a CEO turn is still streaming (instant card click during the
+      // tail of a stream), park the message — sendMessage's isStreaming
+      // guard would otherwise drop it silently. The EventSource "done"
+      // handler drains pendingDecisionRef and fires sendMessage then.
+      const followup = `[user decided ${label}]`;
+      if (isStreaming) {
+        pendingDecisionRef.current = followup;
+      } else {
+        void sendMessage(followup);
+      }
     } catch {
       // silent
     } finally {
