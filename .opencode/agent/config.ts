@@ -257,6 +257,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       task_create: true,
       task_update: true,
       task_get: true,
+      task_claim: true,
       task_list_progress: true,
       task_clear_progress: true,
       task_report_bug: true,
