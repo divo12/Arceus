@@ -1,11 +1,16 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useRef, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { useAuth } from "../../contexts/auth-context";
 
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
-const CHAT_STORAGE_KEY = "arceus-board-messages";
-const RESOLVED_PROPOSALS_KEY = "arceus-resolved-proposals";
+function chatStorageKey(userId: string | null | undefined) {
+  return userId ? `arceus-board-messages-${userId}` : "arceus-board-messages";
+}
+function proposalsStorageKey(userId: string | null | undefined) {
+  return userId ? `arceus-resolved-proposals-${userId}` : "arceus-resolved-proposals";
+}
 
 // Generic message shape — page.tsx defines the full ChatBubble type
 // and uses this context with that concrete type via the hook.
@@ -32,42 +37,47 @@ function readStorage<T>(key: string, fallback: T): T {
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const userId = user?.userId ?? null;
   const [messages, setMessagesRaw] = useState<Message[]>([]);
   const [resolvedProposalIds, setResolvedProposalIdsRaw] = useState<string[]>([]);
   const hydrated = useRef(false);
 
-  // Hydrate from localStorage before paint (no flash, no SSR mismatch).
+  // Re-hydrate when userId changes (login/logout) — clear and reload from the correct key.
   useIsomorphicLayoutEffect(() => {
-    const savedMessages = readStorage<Message[]>(CHAT_STORAGE_KEY, []);
-    const savedProposals = readStorage<string[]>(RESOLVED_PROPOSALS_KEY, []);
+    hydrated.current = false;
+    setMessagesRaw([]);
+    setResolvedProposalIdsRaw([]);
+    const savedMessages = readStorage<Message[]>(chatStorageKey(userId), []);
+    const savedProposals = readStorage<string[]>(proposalsStorageKey(userId), []);
     if (savedMessages.length > 0) setMessagesRaw(savedMessages);
     if (savedProposals.length > 0) setResolvedProposalIdsRaw(savedProposals);
     hydrated.current = true;
-  }, []);
+  }, [userId]);
 
   // Persist messages — only after hydration to avoid writing [] on mount.
   useEffect(() => {
     if (!hydrated.current) return;
     try {
-      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+      window.localStorage.setItem(chatStorageKey(userId), JSON.stringify(messages));
     } catch { /* ignore */ }
-  }, [messages]);
+  }, [messages, userId]);
 
   useEffect(() => {
     if (!hydrated.current) return;
     try {
-      window.localStorage.setItem(RESOLVED_PROPOSALS_KEY, JSON.stringify(resolvedProposalIds));
+      window.localStorage.setItem(proposalsStorageKey(userId), JSON.stringify(resolvedProposalIds));
     } catch { /* ignore */ }
-  }, [resolvedProposalIds]);
+  }, [resolvedProposalIds, userId]);
 
   const clearMessages = useCallback(() => {
     setMessagesRaw([]);
     setResolvedProposalIdsRaw([]);
     try {
-      window.localStorage.removeItem(CHAT_STORAGE_KEY);
-      window.localStorage.removeItem(RESOLVED_PROPOSALS_KEY);
+      window.localStorage.removeItem(chatStorageKey(userId));
+      window.localStorage.removeItem(proposalsStorageKey(userId));
     } catch { /* ignore */ }
-  }, []);
+  }, [userId]);
 
   return (
     <ChatContext.Provider value={{

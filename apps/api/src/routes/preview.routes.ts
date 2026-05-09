@@ -2,11 +2,11 @@
 import type { FastifyInstance } from "fastify";
 import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 export default async function previewRoutes(app: FastifyInstance) {
-  const productDir = workspaceManager.getLegacyProductDir();
-
-  app.post("/api/preview/start", async () => {
+  app.post("/api/preview/start", { preHandler: [requireUserAuth] }, async (request) => {
+    const productDir = workspaceManager.getLocalPath(request.companyId!);
     const state = await startLocalPreview(productDir);
     return { status: state.status, url: state.url, entryUrl: state.entryUrl, error: state.lastError };
   });

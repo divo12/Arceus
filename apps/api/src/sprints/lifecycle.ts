@@ -86,7 +86,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
     reviewState,
   }));
 
-  const productDirForGate = workspaceManager.getLegacyProductDir();
+  const productDirForGate = workspaceManager.getLocalPath(snapshot.company.id);
 
   // Ensure a preview is running before the gate probes it. The workspace
   // monitor that used to auto-start previews after each developer beat is
@@ -201,7 +201,7 @@ export async function finalizeSprintCompletion(
   // ensure the user can see what was built by auto-starting preview if
   // one isn't already running. The preview stays alive until the next
   // sprint's workspace setup tears it down.
-  const productDirForPreview = workspaceManager.getLegacyProductDir();
+  const productDirForPreview = workspaceManager.getLocalPath(snapshot.company.id);
   const currentPreview = getLocalPreviewState();
   if (currentPreview.status !== "ready" && currentPreview.status !== "starting") {
     try {

@@ -1,6 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { productDir } from "../orchestration/state.js";
 
 interface EntryPointCheckResult {
   pass: boolean;
@@ -43,7 +42,7 @@ function isExcludedFromEntryCheck(rel: string): boolean {
  * Walk the product workspace's import graph starting from the entry file
  * and report whether all source modules are transitively reachable.
  */
-export function checkEntryPointImports(): EntryPointCheckResult {
+export function checkEntryPointImports(productDir: string): EntryPointCheckResult {
   const entryFileCandidates = [
     "src/App.tsx", "src/App.jsx", "src/App.vue", "src/App.svelte",
     "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
@@ -161,7 +160,7 @@ export function checkEntryPointImports(): EntryPointCheckResult {
 }
 
 /** Generate human-readable import statements for orphaned modules to wire them into the entry file. */
-export function generateOrphanWiringPrescription(orphans: string[], entryFile: string | null): string {
+export function generateOrphanWiringPrescription(orphans: string[], entryFile: string | null, productDir: string): string {
   if (orphans.length === 0 || !entryFile) return "";
   const entryDir = entryFile.includes("/") ? entryFile.slice(0, entryFile.lastIndexOf("/")) : "";
 

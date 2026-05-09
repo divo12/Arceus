@@ -1,4 +1,5 @@
 // routes/ — HTTP route plugins, one file per domain
+export { default as authRoutes } from "./auth.routes.js";
 export { default as healthRoutes } from "./health.routes.js";
 export { default as companyRoutes } from "./company.routes.js";
 export { default as strategyRoutes } from "./strategy.routes.js";

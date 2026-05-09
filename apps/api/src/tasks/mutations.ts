@@ -27,7 +27,7 @@ import {
 import { applyGovernanceToMutation } from "../skills/governance.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { triggerEscalationMeeting } from "../orchestration/reactive.js";
-import { productDir, type Artifact } from "../orchestration/state.js";
+import { getProductDir, type Artifact } from "../orchestration/state.js";
 import { getDb } from "@arceus/db";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import { hippocampus } from "../memory/extractors.js";
@@ -48,6 +48,7 @@ export async function addArtifactSync(
   kind: Artifact["kind"],
   title: string,
   content: string,
+  companyId?: string,
 ): Promise<Artifact> {
   const artifact: Artifact = {
     id: `artifact_${crypto.randomUUID()}`,
@@ -58,7 +59,7 @@ export async function addArtifactSync(
     createdAt: new Date().toISOString(),
   };
   await writeArtifactSync(artifact);
-  swallowAndAudit("artifact.disk_write_sync", () => writeArtifactToDisk(artifact), {
+  swallowAndAudit("artifact.disk_write_sync", () => writeArtifactToDisk(artifact, companyId), {
     agentRole: artifact.agent,
     detail: { artifactId: artifact.id, kind: artifact.kind },
   });
@@ -75,9 +76,11 @@ function slugify(title: string): string {
 }
 
 /** Write an artifact to the appropriate workspace folder based on its kind. */
-async function writeArtifactToDisk(artifact: Artifact): Promise<void> {
+async function writeArtifactToDisk(artifact: Artifact, companyId?: string): Promise<void> {
+  const baseDir = companyId ? getProductDir(companyId) : null;
+  if (!baseDir) return; // no companyId = no filesystem target
   const subdir = artifact.kind === "specification" ? "specs" : "artifacts";
-  const dir = join(productDir, subdir);
+  const dir = join(baseDir, subdir);
   await mkdir(dir, { recursive: true });
   const slug = slugify(artifact.title);
   const filePath = join(dir, `${slug}.md`);
@@ -94,8 +97,10 @@ export async function writeArtifactToWorkspace(
   role: string,
   slug: string,
   content: string,
+  companyId?: string,
 ): Promise<void> {
-  const docsDir = join(productDir, "docs");
+  if (!companyId) return;
+  const docsDir = join(getProductDir(companyId), "docs");
   await mkdir(docsDir, { recursive: true });
   const filePath = join(docsDir, `${slug}.md`);
   await writeFile(filePath, `${content}\n`, "utf8");

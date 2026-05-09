@@ -21,6 +21,18 @@ const PROTECTED = [
   "/debug",
 ];
 
+function isJwtValid(token: string): boolean {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return false;
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const { exp } = JSON.parse(json) as { exp?: number };
+    return !!exp && Math.floor(Date.now() / 1000) < exp;
+  } catch {
+    return false;
+  }
+}
+
 export function middleware(req: NextRequest) {
   const host = (req.headers.get("host") || "").toLowerCase();
   const url = req.nextUrl.clone();
@@ -43,8 +55,11 @@ export function middleware(req: NextRequest) {
     (p) => url.pathname === p || url.pathname.startsWith(p + "/"),
   );
 
-  if (isProtected && req.cookies.get("arceus_auth")?.value !== "1") {
-    return NextResponse.redirect(new URL("/?login=1", req.url));
+  if (isProtected) {
+    const sessionToken = req.cookies.get("arceus_session")?.value;
+    if (!sessionToken || !isJwtValid(sessionToken)) {
+      return NextResponse.redirect(new URL("/?login=1", req.url));
+    }
   }
 
   return NextResponse.next();

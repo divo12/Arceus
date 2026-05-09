@@ -5,7 +5,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { flush } from "../persistence/mutations/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
@@ -13,6 +12,9 @@ import { approveBoardReview } from "../sprints/lifecycle.js";
 import { updateApproval } from "../persistence/mutations/index.js";
 import { sanitizeError } from "../observability/sanitize.js";
 import { heartbeatConfig } from "../config/heartbeat.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
+import { pauseCompanyHeartbeat, resumeCompanyHeartbeat, isCompanyHeartbeatPaused } from "../heartbeats/runtime.js";
+import { cancelInFlightBeatsForCompany } from "../prompts/llm.js";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
 interface OrchestratorRouteDeps {
@@ -23,46 +25,44 @@ interface OrchestratorRouteDeps {
 export default async function orchestratorRoutes(app: FastifyInstance, opts: OrchestratorRouteDeps) {
   const { heartbeatEngine, meetingScheduler } = opts;
 
-  app.get("/api/orchestrator/status", async () => {
-    const companyId = getActiveCompanyId();
-    let currentSprint = null;
-    if (companyId) {
-      const snapshot = await buildSnapshotView(companyId);
-      const found = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
-      if (found) {
-        currentSprint = { id: found.id, number: found.number, status: found.status, title: found.title };
-      }
-    }
+  app.get("/api/orchestrator/status", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = request.companyId!;
+    const snapshot = await buildSnapshotView(companyId);
+    const found = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
+    const currentSprint = found
+      ? { id: found.id, number: found.number, status: found.status, title: found.title }
+      : null;
     return {
-      executionStatus: getExecutionStatus(),
+      executionStatus: isCompanyHeartbeatPaused(companyId) ? "paused" : getExecutionStatus(),
       agentSessions: (await import("../orchestration/state.js")).getAgentSessions(),
       localPreview: getLocalPreviewState(),
       sprint: currentSprint,
     };
   });
 
-  app.post("/api/orchestrator/execute", async (request, reply) => {
-    const companyId = getActiveCompanyId();
-    if (!companyId) {
-      reply.code(400);
-      return { error: "No company bootstrapped yet." };
-    }
+  // Start the global heartbeat engine (ensures it's running) and un-pause
+  // the requesting user's company so their agents get scheduled.
+  app.post("/api/orchestrator/execute", { preHandler: [requireUserAuth] }, async (request, reply) => {
+    const companyId = request.companyId!;
     const snapshot = await buildSnapshotView(companyId);
     if (snapshot.agents.length === 0) {
       reply.code(400);
       return { error: "No agents available. Generate a strategy first." };
     }
 
+    resumeCompanyHeartbeat(companyId);
     heartbeatEngine.start();
     if (heartbeatConfig.meetingsEnabled) meetingScheduler.start();
     return { status: "heartbeat_started", mode: "heartbeat", meetingsEnabled: heartbeatConfig.meetingsEnabled };
   });
 
-  app.post("/api/orchestrator/stop", async (request, reply) => {
+  // Pause just this user's company — other users keep running.
+  app.post("/api/orchestrator/stop", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
-      heartbeatEngine.stop();
-      meetingScheduler.stop();
-      return { status: "stopped", ...heartbeatEngine.getStatus() };
+      const companyId = request.companyId!;
+      pauseCompanyHeartbeat(companyId);
+      cancelInFlightBeatsForCompany(companyId);
+      return { status: "stopped", companyId, ...heartbeatEngine.getStatus() };
     } catch (error) {
       request.log?.error?.(error);
       reply.code(400);
@@ -84,10 +84,6 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     }
   });
 
-  // Audit C12 (F-426): Zod parse for the resolve body.
-  // Audit C13 (F-438): `action` is REQUIRED — defaulting to "approved" on a
-  // missing field meant a misfired empty request silently approved an
-  // approval. Now: missing/invalid → 422 with a field-level error.
   const approvalResolveBody = z.object({
     action: z.enum(["approved", "rejected"]),
     summary: z.string().max(2000).optional(),
@@ -132,9 +128,12 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     }
   });
 
-  // Spec 31 7.B.4 / 7.A.2 — transitions + feedback rounds will flow through
-  // `activity_log` once the producer ships. Until then return [] so any client
-  // polling the contract gets a valid (empty) array.
   app.get("/api/transitions", async () => []);
   app.get("/api/feedback-rounds", async () => []);
+
+  // Expose flush for internal use — admin-level, no user auth required.
+  app.post("/api/orchestrator/flush", async () => {
+    await flush();
+    return { ok: true };
+  });
 }

@@ -40,7 +40,7 @@ import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
-import { productDir } from "./state.js";
+import { getProductDir } from "./state.js";
 import { computeTrustBand } from "../governance/trust.js";
 
 /**
@@ -452,11 +452,11 @@ function renderIncomingHandoffsSection(handoffs: IncomingHandoff[]): string {
   return lines.join("\n").trimEnd();
 }
 
-function renderWorkspaceContext(existingFiles?: string[]): string {
+function renderWorkspaceContext(companyId: string, existingFiles?: string[]): string {
   const preview = getLocalPreviewState();
   const lines = [
     "## Workspace",
-    `- **Product directory:** ${productDir}`,
+    `- **Product directory:** ${getProductDir(companyId)}`,
     `- **Preview status:** ${preview.status}`,
   ];
   if (preview.url) lines.push(`- **Preview URL:** ${preview.url}`);
@@ -606,7 +606,7 @@ export async function prepareBeatRender(
     ? [
         renderIncomingHandoffsBanner(incomingHandoffs),
         renderTaskContext(task),
-        renderWorkspaceContext(existingFiles),
+        renderWorkspaceContext(companyId, existingFiles),
         renderCompanyState(ctx),
         renderBudget(ctx),
         renderSprintHistory(ctx),

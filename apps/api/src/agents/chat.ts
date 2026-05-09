@@ -134,8 +134,8 @@ async function resolveTurnContext(boardMessage: string): Promise<{ ctx: TurnCont
   };
 }
 
-async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot, mode: ChatMode) {
-  const session = await getCeoChatSession();
+async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot, mode: ChatMode, userId: string) {
+  const session = await getCeoChatSession(userId);
   const deployment = ensureDeployment("ceoDeployment");
   const baseAllowed = getAllowedArceusTools("ceo");
   const tools = chatModeToolFilter(mode, baseAllowed);
@@ -160,25 +160,35 @@ async function startCeoPromptAsync(message: string, snapshot: CompanySnapshot, m
 /**
  * Stream a board message to the CEO agent via SSE.
  * Handles bootstrapping, classification, and meeting recording.
+ * userId and companyId come from the JWT (per-user isolation).
  */
-export async function streamBoardMessageToCeo(reply: FastifyReply, message: string, mode: ChatMode = "instruct") {
+export async function streamBoardMessageToCeo(
+  reply: FastifyReply,
+  message: string,
+  mode: ChatMode = "instruct",
+  userId: string,
+  userCompanyId?: string | null,
+) {
   const trimmedMessage = message.trim();
   if (!trimmedMessage) {
     throw new Error("CEO chat message cannot be empty.");
   }
 
-  // Spec 31 Phase 7.C.c — bootstrap if needed, then assemble the
-  // snapshot from canonical for CEO prompt context. Previously this
-  // function called buildSnapshotView() four times per turn (~48 DB
-  // round-trips); two of those reads only consumed companyId +
-  // currentSprintId. Cheap-lookup the scalars once via
-  // resolveTurnContext, keep the one full read that the prompt
-  // genuinely needs (immediately after the board append so summaries
-  // see the latest message), and one final read for the `done` SSE
-  // payload below.
-  const { ctx: turnCtx } = await resolveTurnContext(trimmedMessage);
-  await appendConversationMessage(turnCtx, "board", trimmedMessage, null, mode);
-  const snapshot = await buildSnapshotView(turnCtx.companyId);
+  // Use the JWT-provided companyId if available; otherwise fall back to the
+  // legacy global seam (for backward compatibility with non-authed paths).
+  const { ctx: turnCtx } = userCompanyId
+    ? { ctx: { companyId: userCompanyId, sprintId: null } }
+    : await resolveTurnContext(trimmedMessage);
+
+  // If we skipped resolveTurnContext, still need currentSprintId.
+  const resolvedSprintId = userCompanyId
+    ? (await findCompanyById(getDb(), userCompanyId))?.currentSprintId ?? null
+    : turnCtx.sprintId;
+
+  const resolvedCtx: TurnContext = { companyId: turnCtx.companyId, sprintId: resolvedSprintId };
+
+  await appendConversationMessage(resolvedCtx, "board", trimmedMessage, null, mode);
+  const snapshot = await buildSnapshotView(resolvedCtx.companyId);
   publishChatEvent({ type: "chat.turn_started", companyId: snapshot.company.id });
 
   reply.raw.setHeader("Content-Type", "text/event-stream");
@@ -195,7 +205,7 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
   const reader = await openOpencodeEventStream();
   let buffer = "";
   let targetMessageId: string | null = null;
-  const sessionId = await startCeoPromptAsync(trimmedMessage, snapshot, mode);
+  const sessionId = await startCeoPromptAsync(trimmedMessage, snapshot, mode, userId);
   // Spec 35 — register chat session context so MCP tool calls (e.g.
   // `chat_emit_card`) resolve role=ceo + companyId via session-context.
   // Allowed tools mirror the prompt's `tools` filter exactly.
@@ -284,9 +294,9 @@ export async function streamBoardMessageToCeo(reply: FastifyReply, message: stri
     // full snapshot needed for the write), then read the snapshot
     // exactly once for the `done` payload the frontend consumes.
     if (fullText) {
-      await appendConversationMessage(turnCtx, "ceo", fullText);
+      await appendConversationMessage(resolvedCtx, "ceo", fullText);
     }
-    const nextSnapshot = await buildSnapshotView(turnCtx.companyId);
+    const nextSnapshot = await buildSnapshotView(resolvedCtx.companyId);
 
     sseWrite(reply, "done", {
       content: fullText,

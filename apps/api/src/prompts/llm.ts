@@ -18,7 +18,7 @@ import { emitEmployeeActivity } from "../observability/activity.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { withRetry, isRetryableError } from "../infra/resilience.js";
 import { truncateTelemetry } from "../infra/utils.js";
-import { agentSessions, pendingPromptCompletions, type AgentSessionState } from "../orchestration/state.js";
+import { agentSessions, pendingPromptCompletions, agentSessionKey, type AgentSessionState } from "../orchestration/state.js";
 import { getSessionContext } from "../orchestration/session-context.js";
 import { updateAgentSessionState } from "../agents/sessions.js";
 import { formatHippocampusContext } from "../memory/operations.js";
@@ -29,7 +29,7 @@ import { hippocampus } from "../memory/extractors.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Create a new OpenCode session for an agent and register it in the session map. */
-async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionState> {
+async function createAgentSession(agent: AgentIdentity, companyId: string): Promise<AgentSessionState> {
   const soul = getRoleSoul(agent.role);
   if (!soul) throw new Error(`No SOUL policy for role: ${agent.role}`);
 
@@ -65,20 +65,20 @@ async function createAgentSession(agent: AgentIdentity): Promise<AgentSessionSta
     stallReason: null,
   };
 
-  agentSessions.set(agent.role, state);
+  agentSessions.set(agentSessionKey(companyId, agent.role), state);
   emitEmployeeActivity(agent.role, "info", `Session created for ${agent.name} (${agent.title})`);
   return state;
 }
 
 /** Ensure an agent has an active session, creating one if needed. */
-export async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity["role"]) {
-  const existing = agentSessions.get(role);
+export async function ensureAgentSession(snapshot: CompanySnapshot, role: AgentIdentity["role"], companyId: string) {
+  const existing = agentSessions.get(agentSessionKey(companyId, role));
   if (existing) return existing;
 
   const agent = getAgentByRole(snapshot, role);
   if (!agent) throw new Error(`${role.toUpperCase()} agent not available`);
 
-  return createAgentSession(agent);
+  return createAgentSession(agent, companyId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -292,18 +292,21 @@ export async function runPromptText(
   systemPrompt: string,
   text: string,
   tools?: Record<string, boolean>,
+  companyId?: string,
 ) {
   const deployment = ensureDeployment("workerDeployment");
+  const sessionKey = companyId ? agentSessionKey(companyId, role) : role;
 
   let memoryBlock = "";
   let memoryCount = 0;
   let habitCount = 0;
   try {
-    // Spec 31 Phase 7.B.1 / 7.C.c — read agent from canonical via repo,
-    // companyId via the seam helper.
-    const companyId = getActiveCompanyId();
-    const agent = companyId
-      ? await agentsRepo.findAgentByRole(getDb(), companyId, role)
+    // Spec 31 Phase 7.B.1 / 7.C.c — read agent from canonical via repo.
+    // Prefer explicitly passed companyId; fall back to the global seam for
+    // backward compatibility with internal paths that don't yet thread it.
+    const resolvedCompanyId = companyId ?? getActiveCompanyId();
+    const agent = resolvedCompanyId
+      ? await agentsRepo.findAgentByRole(getDb(), resolvedCompanyId, role)
       : null;
     if (agent) {
       const ctx = await hippocampus.prepareAgentContext(agent.id, text);
@@ -332,7 +335,7 @@ export async function runPromptText(
     },
   });
 
-  updateAgentSessionState(role, {
+  updateAgentSessionState(sessionKey, {
     promptStartedAt: nowIso(),
     promptCompletedAt: null,
     awaiting: "waiting for Opencode response",
@@ -410,19 +413,19 @@ export async function runPromptText(
       shouldRetry: isRetryableError,
       onRetry: async (attempt, _error) => {
         await resetOpencodeConnection();
-        agentSessions.delete(role);
+        agentSessions.delete(sessionKey);
         emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
         // Spec 31 Phase 7.C.c — canonical-backed view for the retry path.
-        const retryCompanyId = getActiveCompanyId();
+        const retryCompanyId = companyId ?? getActiveCompanyId();
         if (!retryCompanyId) return;
         const snap = await buildSnapshotView(retryCompanyId);
-        const freshSession = await ensureAgentSession(snap, role);
+        const freshSession = await ensureAgentSession(snap, role, retryCompanyId);
         currentSessionId = freshSession.sessionId;
       },
     },
   );
 
-  updateAgentSessionState(role, {
+  updateAgentSessionState(sessionKey, {
     promptCompletedAt: nowIso(),
     lastProgressAt: nowIso(),
     lastEventSummary: truncateTelemetry(output || "Prompt completed with no text output."),

@@ -10,7 +10,8 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Separator } from "../../components/ui/separator";
 import { Textarea } from "../../components/ui/textarea";
-import { apiUrl } from "../../lib/api";
+import { apiUrl, fetchWithAuth } from "../../lib/api";
+import { useAuth } from "../../contexts/auth-context";
 import { useChatMessages } from "../../components/chat/chat-context";
 import { ResizableSplit } from "../../components/resizable-split";
 
@@ -409,8 +410,10 @@ function createId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
 }
 
-async function fetchJson<T>(url: string) {
-  const response = await fetch(url, { cache: "no-store" });
+async function fetchJson<T>(url: string, token?: string | null) {
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(url, { cache: "no-store", headers });
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
@@ -1315,6 +1318,9 @@ function LaunchBoardPanel({ disabled, onPrompt }: { disabled: boolean; onPrompt:
 }
 
 export default function Page() {
+  const { token: authToken } = useAuth();
+  const authTokenRef = useRef<string | null>(null);
+  authTokenRef.current = authToken;
   const [snapshot, setSnapshot] = useState<CompanySnapshot>(emptySnapshot);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [composer, setComposer] = useState("");
@@ -1360,8 +1366,8 @@ export default function Page() {
 
   async function loadState(options?: { suppressRuntimeError?: boolean }) {
     const [companyResult, runtimeResult] = await Promise.allSettled([
-      fetchJson<CompanySnapshot>(apiUrl("/company")),
-      fetchJson<RuntimeStatus>(apiUrl("/runtime")),
+      fetchJson<CompanySnapshot>(apiUrl("/company"), authTokenRef.current),
+      fetchJson<RuntimeStatus>(apiUrl("/runtime"), authTokenRef.current),
     ]);
 
     if (companyResult.status === "fulfilled") {
@@ -1392,12 +1398,12 @@ export default function Page() {
   async function loadExecutionTelemetry() {
     try {
       const [activityResponse, orchestratorResponse, companyResponse, productResponse, heartbeatStatusResponse, heartbeatHistoryResponse] = await Promise.all([
-        fetch(apiUrl("/employee-activity"), { cache: "no-store" }),
-        fetch(apiUrl("/orchestrator/status"), { cache: "no-store" }),
-        fetch(apiUrl("/company"), { cache: "no-store" }),
-        fetch(apiUrl("/product/overview"), { cache: "no-store" }),
-        fetch(apiUrl("/heartbeat/status"), { cache: "no-store" }),
-        fetch(apiUrl("/heartbeat/history?limit=30"), { cache: "no-store" }),
+        fetchWithAuth("/employee-activity", authTokenRef.current, { cache: "no-store" }),
+        fetchWithAuth("/orchestrator/status", authTokenRef.current, { cache: "no-store" }),
+        fetchWithAuth("/company", authTokenRef.current, { cache: "no-store" }),
+        fetchWithAuth("/product/overview", authTokenRef.current, { cache: "no-store" }),
+        fetchWithAuth("/heartbeat/status", authTokenRef.current, { cache: "no-store" }),
+        fetchWithAuth("/heartbeat/history?limit=30", authTokenRef.current, { cache: "no-store" }),
       ]);
 
       if (activityResponse.ok) {
@@ -1438,7 +1444,7 @@ export default function Page() {
     if (messages.length === 0) {
       void (async () => {
         try {
-          const res = await fetch(apiUrl("/chat/history?limit=200"), { cache: "no-store" });
+          const res = await fetchWithAuth("/chat/history?limit=200", authTokenRef.current, { cache: "no-store" });
           if (!res.ok) return;
           const { messages: apiMessages } = (await res.json()) as {
             messages: Array<{
@@ -1479,7 +1485,7 @@ export default function Page() {
 
   async function handleApproveBoardReview() {
     try {
-      const response = await fetch(apiUrl("/board-review/approve"), {
+      const response = await fetchWithAuth("/board-review/approve", authToken, {
         method: "POST",
       });
 
@@ -1606,7 +1612,8 @@ export default function Page() {
       }
     ]);
 
-    const eventSource = new EventSource(`${apiUrl("/chat/ceo/stream")}?message=${encodeURIComponent(trimmed)}`);
+    const tokenParam = authToken ? `&token=${encodeURIComponent(authToken)}` : "";
+    const eventSource = new EventSource(`${apiUrl("/chat/ceo/stream")}?message=${encodeURIComponent(trimmed)}${tokenParam}`);
 
     eventSource.addEventListener("token", (event) => {
       const payload = JSON.parse((event as MessageEvent<string>).data) as { content?: string };
@@ -1646,7 +1653,7 @@ export default function Page() {
       setIsStreaming(false);
       await loadState().catch(() => undefined);
       try {
-        const orchRes = await fetch(apiUrl("/orchestrator/status"), { cache: "no-store" });
+        const orchRes = await fetchWithAuth("/orchestrator/status", authTokenRef.current, { cache: "no-store" });
         if (orchRes.ok) {
           const orch = (await orchRes.json()) as OrchestratorStatus;
           setOrchestratorStatus(orch);
@@ -1691,7 +1698,7 @@ export default function Page() {
 
       // API is alive — retry the stream once before giving up.
       try {
-        const retrySource = new EventSource(`${apiUrl("/chat/ceo/stream")}?message=${encodeURIComponent(trimmed)}`);
+        const retrySource = new EventSource(`${apiUrl("/chat/ceo/stream")}?message=${encodeURIComponent(trimmed)}${tokenParam}`);
         let retryGotData = false;
 
         retrySource.addEventListener("token", (ev) => {
@@ -1742,11 +1749,9 @@ export default function Page() {
     setProposalActionId(messageId);
 
     try {
-      const response = await fetch(apiUrl(`/strategy/${execute ? "execute" : "approve"}`), {
+      const response = await fetchWithAuth(`/strategy/${execute ? "execute" : "approve"}`, authToken, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildStrategyPayload(card)),
       });
 
@@ -1797,7 +1802,7 @@ export default function Page() {
   async function handleSprintApproval(messageId: string) {
     setProposalActionId(messageId);
     try {
-      const response = await fetch(apiUrl("/sprint-proposal/approve"), {
+      const response = await fetchWithAuth("/sprint-proposal/approve", authToken, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -1834,7 +1839,7 @@ export default function Page() {
 
   async function handleSprintReject(messageId: string) {
     try {
-      await fetch(apiUrl("/sprint-proposal/reject"), { method: "POST" });
+      await fetchWithAuth("/sprint-proposal/reject", authToken, { method: "POST" });
       setMessages((current) => [
         ...current,
         { id: createId(), role: "system" as const, content: "Sprint proposal rejected. You can chat with the CEO to request a revised proposal." },
@@ -1855,7 +1860,7 @@ export default function Page() {
     if (decidingCardId === cardId) return;
     setDecidingCardId(cardId);
     try {
-      await fetch(apiUrl(`/chat/cards/${cardId}/decide`), {
+      await fetchWithAuth(`/chat/cards/${cardId}/decide`, authToken, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision, decidedBy: "user", label }),
@@ -1899,7 +1904,7 @@ export default function Page() {
     ]);
 
     try {
-      const response = await fetch(apiUrl("/quick-execute"), {
+      const response = await fetchWithAuth("/quick-execute", authToken, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idea: trimmed }),
@@ -1932,7 +1937,7 @@ export default function Page() {
 
   async function openArtifact(artifactId: string) {
     try {
-      const response = await fetch(apiUrl(`/artifacts/${artifactId}`), { cache: "no-store" });
+      const response = await fetchWithAuth(`/artifacts/${artifactId}`, authToken, { cache: "no-store" });
       if (!response.ok) {
         throw new Error("Artifact not found.");
       }
@@ -1956,7 +1961,7 @@ export default function Page() {
     setRuntimeError(null);
 
     try {
-      const response = await fetch(apiUrl("/company"), {
+      const response = await fetchWithAuth("/company", authToken, {
         method: "DELETE",
       });
 
@@ -1997,7 +2002,7 @@ export default function Page() {
   async function handleStopExecution() {
     setStoppingExecution(true);
     try {
-      const response = await fetch(apiUrl("/orchestrator/stop"), {
+      const response = await fetchWithAuth("/orchestrator/stop", authToken, {
         method: "POST",
       });
 
@@ -2226,7 +2231,7 @@ export default function Page() {
       <header className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)] px-5">
         <div className="flex items-center gap-3">
           <span className="font-mono text-[0.6875rem] font-medium tracking-tight text-[var(--text-primary)]">
-            {!snapshot.company.id ? "arceus" : snapshot.company.name.toLowerCase()}
+            arceus
           </span>
           {currentSprint ? (
             <span className="font-mono text-[0.625rem] text-[var(--ink-3)]">sprint {currentSprint.number}</span>
@@ -2585,17 +2590,19 @@ export default function Page() {
                     <div className="flex items-center gap-2">
                       <Zap className="h-3 w-3 text-[var(--swiss-gray-400)]" />
                       <span className="font-mono text-[0.6875rem] font-medium">heartbeat</span>
-                      {heartbeatStatus.running ? (
+                      {executionStatus !== "idle" && executionStatus !== "paused" ? (
                         <span className="flex items-center gap-1 font-mono text-[0.625rem] text-[var(--status-success)]">
                           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--status-success)]" />
                           running
                         </span>
                       ) : (
-                        <span className="font-mono text-[0.625rem] text-[var(--swiss-gray-400)]">idle</span>
+                        <span className="font-mono text-[0.625rem] text-[var(--swiss-gray-400)]">
+                          {executionStatus === "paused" ? "paused" : "idle"}
+                        </span>
                       )}
                     </div>
-                    {heartbeatStatus.totalBeats > 0 ? (
-                      <span className="font-mono text-[0.6875rem] text-[var(--swiss-gray-400)]">{heartbeatStatus.totalBeats} beats</span>
+                    {heartbeatHistory.length > 0 ? (
+                      <span className="font-mono text-[0.6875rem] text-[var(--swiss-gray-400)]">{heartbeatHistory.length} beats</span>
                     ) : null}
                   </div>
                   {heartbeatHistory.length > 0 ? (
@@ -2661,7 +2668,7 @@ export default function Page() {
           </span>
         ) : null}
         <span>Preview: {previewStatus === "ready" ? "✓ running" : previewStatus === "starting" ? "starting…" : "—"}</span>
-        <span className="ml-auto text-[var(--text-muted)]">{snapshot.company.name || "Arceus"}</span>
+        <span className="ml-auto text-[var(--text-muted)]">{snapshot.company.name && snapshot.company.name !== snapshot.company.boardOwner ? snapshot.company.name : ""}</span>
       </footer>
 
       {/* ── Artifact modal ──────────────────────────────── */}

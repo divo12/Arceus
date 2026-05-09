@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useMemo } from "react";
 import type { CompanySnapshot, Meeting } from "@arceus/contracts";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
+import { useAuth } from "../../contexts/auth-context";
 
 /* ── Role → color map (matches globals.css role vars) ── */
 const ROLE_COLORS: Record<string, string> = {
@@ -442,6 +443,7 @@ function Field({ label, value, color }: { label: string; value: string; color?: 
    ═══════════════════════════════════════════════════════ */
 
 export default function MeetingsVizPage() {
+  const { token } = useAuth();
   const [snapshot, setSnapshot] = useState<CompanySnapshot | null>(null);
   const [selectedMeetingIdx, setSelectedMeetingIdx] = useState(0);
   const [selectedAttendeeId, setSelectedAttendeeId] = useState<string | null>(null);
@@ -450,14 +452,14 @@ export default function MeetingsVizPage() {
   useEffect(() => {
     async function load() {
       try {
-        const r = await fetch(apiUrl("/company"), { cache: "no-store" });
+        const r = await fetchWithAuth("/company", token, { cache: "no-store" });
         if (r.ok) setSnapshot(await r.json());
       } catch { /* ignore */ }
     }
     void load();
     const id = setInterval(() => void load(), 3000);
     return () => clearInterval(id);
-  }, []);
+  }, [token]);
 
   const agentsById = useMemo(
     () => new Map((snapshot?.agents ?? []).map((a) => [a.id, a])),

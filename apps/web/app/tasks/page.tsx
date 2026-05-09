@@ -8,8 +8,9 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Separator } from "../../components/ui/separator";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
 import { PageShell } from "../../components/layout/page-shell";
+import { useAuth } from "../../contexts/auth-context";
 
 type Artifact = {
   id: string;
@@ -27,6 +28,7 @@ function taskTone(status: Task["status"]) {
 }
 
 export default function TasksPage() {
+  const { token } = useAuth();
   const [snapshot, setSnapshot] = useState<CompanySnapshot | null>(null);
   const [executionStatus, setExecutionStatus] = useState<string>("idle");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -36,8 +38,8 @@ export default function TasksPage() {
     async function load() {
       try {
         const [companyResponse, orchestratorResponse] = await Promise.all([
-          fetch(apiUrl("/company"), { cache: "no-store" }),
-          fetch(apiUrl("/orchestrator/status"), { cache: "no-store" }),
+          fetchWithAuth("/company", token, { cache: "no-store" }),
+          fetchWithAuth("/orchestrator/status", token, { cache: "no-store" }),
         ]);
 
         if (companyResponse.ok) {
@@ -56,7 +58,7 @@ export default function TasksPage() {
     void load();
     const interval = setInterval(() => void load(), 1500);
     return () => clearInterval(interval);
-  }, []);
+  }, [token]);
 
   const currentSprint = snapshot?.sprints.find((s) => s.id === snapshot.company.currentSprintId);
   const allTasks = snapshot?.tasks ?? [];
@@ -95,7 +97,7 @@ export default function TasksPage() {
 
   async function openArtifact(artifactId: string) {
     try {
-      const response = await fetch(apiUrl(`/artifacts/${artifactId}`), { cache: "no-store" });
+      const response = await fetchWithAuth(`/artifacts/${artifactId}`, token, { cache: "no-store" });
       if (!response.ok) {
         throw new Error("Artifact not found.");
       }
@@ -108,14 +110,14 @@ export default function TasksPage() {
 
   async function approveBoardReview() {
     try {
-      const response = await fetch(apiUrl("/board-review/approve"), { method: "POST" });
+      const response = await fetchWithAuth("/board-review/approve", token, { method: "POST" });
       if (!response.ok) {
         return;
       }
 
       const [companyResponse, orchestratorResponse] = await Promise.all([
-        fetch(apiUrl("/company"), { cache: "no-store" }),
-        fetch(apiUrl("/orchestrator/status"), { cache: "no-store" }),
+        fetchWithAuth("/company", token, { cache: "no-store" }),
+        fetchWithAuth("/orchestrator/status", token, { cache: "no-store" }),
       ]);
 
       if (companyResponse.ok) {
@@ -198,13 +200,13 @@ export default function TasksPage() {
                   size="sm"
                   onClick={async () => {
                     for (const a of pendingApprovals) {
-                      await fetch(apiUrl(`/approvals/${a.id}/resolve`), {
+                      await fetchWithAuth(`/approvals/${a.id}/resolve`, token, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ action: "approved" }),
                       });
                     }
-                    const res = await fetch(apiUrl("/company"), { cache: "no-store" });
+                    const res = await fetchWithAuth("/company", token, { cache: "no-store" });
                     if (res.ok) setSnapshot((await res.json()) as CompanySnapshot);
                   }}
                 >
@@ -215,13 +217,13 @@ export default function TasksPage() {
                   variant="outline"
                   onClick={async () => {
                     for (const a of pendingApprovals) {
-                      await fetch(apiUrl(`/approvals/${a.id}/resolve`), {
+                      await fetchWithAuth(`/approvals/${a.id}/resolve`, token, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ action: "dismissed" }),
                       });
                     }
-                    const res = await fetch(apiUrl("/company"), { cache: "no-store" });
+                    const res = await fetchWithAuth("/company", token, { cache: "no-store" });
                     if (res.ok) setSnapshot((await res.json()) as CompanySnapshot);
                   }}
                 >

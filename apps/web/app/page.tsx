@@ -3,8 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AgentNetworkVisual, MemoryTiersVisual, GovernanceVisual, EvolutionVisual } from "./feature-visuals";
-
-const AUTH_KEY = "arceus_auth";
+import { useAuth } from "../contexts/auth-context";
 
 const HOW_IT_WORKS = [
   {
@@ -75,8 +74,11 @@ function LoginModal({
   onSuccess: () => void;
   onClose: () => void;
 }) {
+  const { login, register } = useAuth();
+  const [tab, setTab] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -85,24 +87,29 @@ function LoginModal({
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (res.ok) {
-        localStorage.setItem(AUTH_KEY, "1");
-        onSuccess();
+      if (tab === "login") {
+        await login(email, password);
       } else {
-        const data = await res.json().catch(() => ({}));
-        setError((data as { error?: string }).error ?? "Invalid email or password.");
+        await register(email, password, displayName || undefined);
       }
-    } catch {
-      setError("Something went wrong. Please try again.");
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setLoading(false);
     }
   }
+
+  const inputStyle: React.CSSProperties = {
+    padding: "10px 14px",
+    borderRadius: "8px",
+    border: "1px solid #d4d4d4",
+    fontSize: "15px",
+    outline: "none",
+    fontFamily: "inherit",
+    width: "100%",
+    boxSizing: "border-box",
+  };
 
   return (
     <>
@@ -151,22 +158,44 @@ function LoginModal({
             <span style={{ fontWeight: 500, fontSize: "16px" }}>arceus</span>
           </div>
 
-          <h2
-            style={{
-              fontFamily: "system-ui, -apple-system, 'SF Pro Rounded', sans-serif",
-              fontSize: "22px",
-              fontWeight: 500,
-              marginBottom: "6px",
-              color: "#000000",
-            }}
-          >
-            Sign in
-          </h2>
-          <p style={{ fontSize: "14px", color: "#737373", marginBottom: "28px" }}>
-            Enter your credentials to continue.
-          </p>
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: "0", marginBottom: "28px", borderBottom: "1px solid #e5e5e5" }}>
+            {(["login", "register"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => { setTab(t); setError(""); }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  borderBottom: tab === t ? "2px solid #000" : "2px solid transparent",
+                  padding: "8px 16px 10px",
+                  fontSize: "14px",
+                  fontWeight: tab === t ? 500 : 400,
+                  color: tab === t ? "#000" : "#737373",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  marginBottom: "-1px",
+                }}
+              >
+                {t === "login" ? "Sign in" : "Create account"}
+              </button>
+            ))}
+          </div>
 
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {tab === "register" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "13px", fontWeight: 500, color: "#404040" }}>Name (optional)</label>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Your name"
+                  style={inputStyle}
+                />
+              </div>
+            )}
+
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               <label style={{ fontSize: "13px", fontWeight: 500, color: "#404040" }}>Email</label>
               <input
@@ -174,14 +203,7 @@ function LoginModal({
                 value={email}
                 onChange={(e) => { setEmail(e.target.value); setError(""); }}
                 autoFocus
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: "8px",
-                  border: "1px solid #d4d4d4",
-                  fontSize: "15px",
-                  outline: "none",
-                  fontFamily: "inherit",
-                }}
+                style={inputStyle}
               />
             </div>
 
@@ -191,14 +213,7 @@ function LoginModal({
                 type="password"
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setError(""); }}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: "8px",
-                  border: "1px solid #d4d4d4",
-                  fontSize: "15px",
-                  outline: "none",
-                  fontFamily: "inherit",
-                }}
+                style={inputStyle}
               />
             </div>
 
@@ -223,7 +238,7 @@ function LoginModal({
                 fontFamily: "inherit",
               }}
             >
-              {loading ? "Signing in…" : "Sign in"}
+              {loading ? (tab === "login" ? "Signing in…" : "Creating account…") : (tab === "login" ? "Sign in" : "Create account")}
             </button>
           </form>
         </div>
@@ -235,20 +250,12 @@ function LoginModal({
 function LandingPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { user } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [pendingPath, setPendingPath] = useState("/home");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const isLoggedIn = !!user;
 
   useEffect(() => {
-    const authed = localStorage.getItem(AUTH_KEY) === "1";
-    setIsLoggedIn(authed);
-    // Always show the modal when middleware redirects with ?login=1.
-    // Dropping the !authed guard fixes a stuck-loop where the cookie
-    // expired (24h maxAge) but localStorage still claimed authed=true:
-    // middleware kept redirecting to /?login=1 and the modal never
-    // rendered, so the user could not re-authenticate. Auth is enforced
-    // server-side by middleware.ts checking the arceus_auth cookie —
-    // localStorage is UX state only.
     if (searchParams.get("login") === "1") {
       setShowLogin(true);
     }
@@ -264,7 +271,6 @@ function LandingPageInner() {
   }
 
   function handleLoginSuccess() {
-    setIsLoggedIn(true);
     setShowLogin(false);
     router.push(pendingPath);
   }

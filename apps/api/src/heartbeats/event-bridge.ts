@@ -52,8 +52,9 @@ import {
   pendingPromptCompletions,
   getDeveloperStepLoopActive,
   setExecutionStatus,
+  setCurrentDeveloperSessionKey,
 } from "../orchestration/state.js";
-import { updateAgentSessionState, touchAgentSession, resolveRoleBySessionId } from "../agents/sessions.js";
+import { updateAgentSessionState, touchAgentSession, resolveRoleBySessionId, roleFromKey } from "../agents/sessions.js";
 import { resolvePromptCompletion, rejectPromptCompletion } from "../prompts/llm.js";
 import { scheduleDeveloperWatchdog, clearDeveloperWatchdog, failDeveloperStall } from "../workspace/watchdog.js";
 import { stopDeveloperWorkspaceMonitor } from "../workspace/monitor.js";
@@ -199,8 +200,10 @@ async function processEvent(event: OpenCodeEvent) {
     pendingCompletion.lastActivityAt = Date.now();
   }
 
-  const role = resolveRoleBySessionId(sessionId);
-  if (!role) return;
+  // resolveRoleBySessionId now returns the compound `companyId:role` key.
+  const sessionKey = resolveRoleBySessionId(sessionId);
+  if (!sessionKey) return;
+  const role = roleFromKey(sessionKey);
 
   // Capture once per event so TS narrowing on `if (activeExecution)` works
   // and we don't read inconsistent runtime state mid-handler.
@@ -213,17 +216,21 @@ async function processEvent(event: OpenCodeEvent) {
   const caps = (ROLE_CAPABILITIES as Record<string, { ownsProductWorkspace: boolean; escalatesOnSessionError: boolean }>)[role]
     ?? { ownsProductWorkspace: false, escalatesOnSessionError: false };
 
-  const agentState = agentSessions.get(role);
+  const agentState = agentSessions.get(sessionKey);
   if (agentState) {
-    updateAgentSessionState(role, {
+    updateAgentSessionState(sessionKey, {
       lastEventAt: nowIso(),
       lastEventType: event.type,
       eventCount: agentState.eventCount + 1,
       stallReason: null,
     });
-    touchAgentSession(role);
-    if (caps.ownsProductWorkspace && agentState.status === "working") {
-      scheduleDeveloperWatchdog(failDeveloperStall);
+    touchAgentSession(sessionKey);
+    if (caps.ownsProductWorkspace) {
+      // Track the active developer session key so watchdog/monitor can resolve it.
+      setCurrentDeveloperSessionKey(sessionKey);
+      if (agentState.status === "working") {
+        scheduleDeveloperWatchdog(failDeveloperStall);
+      }
     }
   }
 
@@ -233,7 +240,7 @@ async function processEvent(event: OpenCodeEvent) {
     if (part.type === "text") {
       const textContent = String(part.text ?? part.content ?? part.delta ?? "");
       if (textContent) {
-        updateAgentSessionState(role, {
+        updateAgentSessionState(sessionKey, {
           lastProgressAt: nowIso(),
           lastEventSummary: truncateTelemetry(textContent),
           awaiting: "streaming response",
@@ -260,14 +267,14 @@ async function processEvent(event: OpenCodeEvent) {
       const isInvocation = part.type === "tool-invocation";
 
       if (toolName) {
-        updateAgentSessionState(role, {
+        updateAgentSessionState(sessionKey, {
           lastToolName: toolName,
           lastToolStatus: isInvocation ? "invoked" : "completed",
           lastToolAt: nowIso(),
           lastProgressAt: nowIso(),
           lastEventSummary: `${isInvocation ? "Running" : "Completed"} tool ${toolName}`,
           awaiting: isInvocation ? `waiting for ${toolName} result` : "processing tool result",
-          toolInvocationCount: isInvocation ? (agentSessions.get(role)?.toolInvocationCount ?? 0) + 1 : agentSessions.get(role)?.toolInvocationCount ?? 0,
+          toolInvocationCount: isInvocation ? (agentSessions.get(sessionKey)?.toolInvocationCount ?? 0) + 1 : agentSessions.get(sessionKey)?.toolInvocationCount ?? 0,
         });
       }
 
@@ -332,7 +339,7 @@ async function processEvent(event: OpenCodeEvent) {
       // Resolve the active task ID for this role — capability-gated, not role-gated.
       const resolvedTaskId = (caps.ownsProductWorkspace && activeExecution?.buildTaskId)
         ? activeExecution.buildTaskId
-        : agentSessions.get(role)?.activeTaskId ?? null;
+        : agentSessions.get(sessionKey)?.activeTaskId ?? null;
 
       if (isInvocation && (toolName === "edit" || toolName === "write" || toolName === "patch" || toolName === "apply_patch")) {
         // args is `Record<string, unknown>` — coerce to string with explicit fallbacks.
@@ -340,8 +347,8 @@ async function processEvent(event: OpenCodeEvent) {
         const filePath = asString(args.filePath) || asString(args.file_path) || "unknown file";
         const newContent = asString(args.newString) || asString(args.new_str) || asString(args.content) || asString(args.patch);
         const linesChanged = newContent.length > 0 ? newContent.split("\n").length : undefined;
-        updateAgentSessionState(role, {
-          fileEditCount: (agentSessions.get(role)?.fileEditCount ?? 0) + 1,
+        updateAgentSessionState(sessionKey, {
+          fileEditCount: (agentSessions.get(sessionKey)?.fileEditCount ?? 0) + 1,
           lastEventSummary: `Edited ${filePath}`,
           lastWorkspaceChangeAt: nowIso(),
           awaiting: "continuing after file edit",
@@ -355,8 +362,8 @@ async function processEvent(event: OpenCodeEvent) {
         }
       } else if (isInvocation && toolName === "bash") {
         const cmd = (typeof args.command === "string" ? args.command : "").slice(0, 180);
-        updateAgentSessionState(role, {
-          shellCommandCount: (agentSessions.get(role)?.shellCommandCount ?? 0) + 1,
+        updateAgentSessionState(sessionKey, {
+          shellCommandCount: (agentSessions.get(sessionKey)?.shellCommandCount ?? 0) + 1,
           lastEventSummary: `$ ${cmd}`,
           awaiting: "waiting for shell result",
         });
@@ -389,16 +396,16 @@ async function processEvent(event: OpenCodeEvent) {
     // When the step loop is active, each prompt() returns on session.idle.
     // The loop itself handles progression — don't trigger post-completion routing here.
     if (caps.ownsProductWorkspace && developerStepLoopActive) {
-      touchAgentSession(role, "working");
-      updateAgentSessionState(role, {
+      touchAgentSession(sessionKey, "working");
+      updateAgentSessionState(sessionKey, {
         lastProgressAt: nowIso(),
         lastEventSummary: "Step prompt completed. Verifying…",
       });
       return;
     }
 
-    touchAgentSession(role, "done");
-    updateAgentSessionState(role, {
+    touchAgentSession(sessionKey, "done");
+    updateAgentSessionState(sessionKey, {
       awaiting: "idle",
       promptCompletedAt: nowIso(),
       lastProgressAt: nowIso(),
@@ -426,8 +433,8 @@ async function processEvent(event: OpenCodeEvent) {
       rejectPromptCompletion(sessionId, new Error(errorMessage));
     }
 
-    touchAgentSession(role, "error");
-    updateAgentSessionState(role, {
+    touchAgentSession(sessionKey, "error");
+    updateAgentSessionState(sessionKey, {
       awaiting: "session error",
       promptCompletedAt: nowIso(),
       stallReason: props.error?.message ?? "Session error",

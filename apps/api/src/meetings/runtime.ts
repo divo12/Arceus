@@ -98,7 +98,8 @@ export function createMeetingRuntime(): MeetingRuntime {
 
         try {
           const soul = getRoleSoul(agent.role);
-          const session = await ensureAgentSession(snap, agent.role);
+          const meetingCompanyId = snap.company.id;
+          const session = await ensureAgentSession(snap, agent.role, meetingCompanyId);
 
           const agentTasks = snap.tasks.filter((t) => t.assignedRole === agent.role);
           const taskSummary = agentTasks.length > 0
@@ -107,7 +108,7 @@ export function createMeetingRuntime(): MeetingRuntime {
 
           const prompt = buildContributionPrompt(meeting, taskSummary);
 
-          const output = await runPromptText(agent.role, session.sessionId, soul.systemPrompt, prompt);
+          const output = await runPromptText(agent.role, session.sessionId, soul.systemPrompt, prompt, undefined, meetingCompanyId);
           const jsonMatch = /\{[\s\S]*\}/.exec(output);
           // The agent emits a JSON contribution; fall back to a default
           // shape if no JSON object is found. Cast at the boundary so

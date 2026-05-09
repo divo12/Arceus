@@ -22,3 +22,9 @@ export function apiUrl(path: string) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${getApiBase()}${normalizedPath}`;
 }
+
+export function fetchWithAuth(path: string, token: string | null, options: RequestInit = {}) {
+  const headers = new Headers(options.headers as HeadersInit | undefined);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(apiUrl(path), { ...options, headers });
+}

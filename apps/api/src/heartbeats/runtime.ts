@@ -8,6 +8,7 @@
  */
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { hasClaimableTasksForRole } from "@arceus/db/src/repos/tasks/index.js";
 import { parseRoleStrict } from "@arceus/contracts";
 import { HeartbeatEngine, emitBeatEvent } from "@arceus/company-runtime";
@@ -16,7 +17,6 @@ import { heartbeatConfig } from "../config/heartbeat.js";
 import { audit } from "../observability/audit-ledger.js";
 import { setReactiveEventEmitter } from "../orchestration/state.js";
 import { runBeat } from "../orchestration/run-beat.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import {
   cpApplyMutations,
   cpCommitBeatRecord,
@@ -28,6 +28,26 @@ import { executeChecklistAction } from "./checklist-executor.js";
 
 export interface HeartbeatRuntime {
   engine: HeartbeatEngine;
+}
+
+/**
+ * Per-company execution pause set.
+ * A company in this set is excluded from the agent roster so the scheduler
+ * never fires beats for it — without stopping the global engine and
+ * interrupting other users.
+ */
+const pausedCompanies = new Set<string>();
+
+export function pauseCompanyHeartbeat(companyId: string): void {
+  pausedCompanies.add(companyId);
+}
+
+export function resumeCompanyHeartbeat(companyId: string): void {
+  pausedCompanies.delete(companyId);
+}
+
+export function isCompanyHeartbeatPaused(companyId: string): boolean {
+  return pausedCompanies.has(companyId);
 }
 
 export function createHeartbeatRuntime(): HeartbeatRuntime {
@@ -48,9 +68,6 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
         { audit({ companyId, category: "error", severity: "error", eventType, summary, detail: { error: error instanceof Error ? error.message : error }, ...opts }); },
     },
     executeTask: async (ctx, beatId) => {
-      // Vision: orchestrator hands the beat to runBeat. The agent reads its open
-      // tasks from rendered state and claims one via `task_claim`. No taskId
-      // pre-selection. See plans/agent-redesign/00-vision.md.
       const result = await runBeat({
         role: ctx.role,
         companyId: ctx.company.id,
@@ -68,22 +85,26 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
     },
     executeChecklistAction: (ctx, action, beatId) => executeChecklistAction(ctx, action, beatId),
     getAgentRoster: async () => {
-      // Spec 31 Phase 7.C.c — async, reads agents from canonical via repo.
-      const companyId = getActiveCompanyId();
-      if (!companyId) return [];
-      const agents = await agentsRepo.listAgentsByCompany(getDb(), companyId);
-      return agents.map((a) => ({
-        agentId: a.id,
-        role: parseRoleStrict(a.role),
-        companyId,
-      }));
+      // Return agents for ALL companies so the engine schedules beats for
+      // every user in parallel. Companies in the paused set are excluded
+      // so individual users can stop/resume without affecting others.
+      const db = getDb();
+      const companies = await companiesRepo.listCompanies(db);
+      const roster: { agentId: string; role: ReturnType<typeof parseRoleStrict>; companyId: string }[] = [];
+      for (const company of companies) {
+        const companyId = companiesRepo.fromDbId(company.id, company.friendlyId);
+        if (pausedCompanies.has(companyId)) continue;
+        const agents = await agentsRepo.listAgentsByCompany(db, companyId);
+        for (const a of agents) {
+          try {
+            roster.push({ agentId: a.id, role: parseRoleStrict(a.role), companyId });
+          } catch {
+            // skip agents with unrecognised roles (e.g. legacy rows)
+          }
+        }
+      }
+      return roster;
     },
-    // Pre-flight claimability check — single indexed lookup against
-    // tasks(company_id, assigned_role, status). The scheduler skips
-    // firing a beat for any role with no claimable work, saving the
-    // ~10-12s of session create + LLM round-trip overhead per idle
-    // beat. Reactive events still wake the role the moment its state
-    // changes (a new task becomes claimable, an upstream completes).
     roleHasClaimableWork: (companyId, role) =>
       hasClaimableTasksForRole(getDb(), companyId, role),
     emitBeatEvent: (event) => { emitBeatEvent(event); },

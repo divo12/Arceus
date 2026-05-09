@@ -2,11 +2,11 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 export default async function tasksRoutes(app: FastifyInstance) {
-  app.get("/api/tasks", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/tasks", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = request.companyId;
     if (!companyId) return [];
     return tasksRepo.listByCompanyHydrated(getDb(), companyId);
   });

@@ -98,11 +98,11 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * Paths that legitimately accept POST without admin auth. Add sparingly —
- * each entry is an attack surface. Empty for now; SSE endpoints all use
- * GET so they don't need exemption.
+ * each entry is an attack surface.
  */
 const PUBLIC_MUTATION_ALLOWLIST = new Set<string>([
-  // (none currently)
+  "/api/auth/register",
+  "/api/auth/login",
 ]);
 
 /**
@@ -152,6 +152,11 @@ export async function requireAdminAuth(
   // Internal MCP routes have their own auth (apps/api/src/routes/internal-mcp/middleware.ts)
   if (path.startsWith("/api/internal/")) return;
   if (PUBLIC_MUTATION_ALLOWLIST.has(path)) return;
+
+  // Authenticated users (valid user JWT decoded by userJwtPlugin) bypass the
+  // admin token gate — they're already verified. Admin token is only required
+  // for unauthenticated backend callers (scripts, curl, etc.).
+  if (req.userId) return;
 
   const auth = req.headers.authorization;
   const token = typeof auth === "string" && auth.startsWith("Bearer ")

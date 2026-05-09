@@ -85,6 +85,8 @@ export interface BootstrapInput {
   boardOwner: string;
   idea: string;
   budgetCents: number;
+  /** Optional: the authenticated user who owns this company (1:1). */
+  userId?: string;
 }
 
 interface BootstrapResult {
@@ -137,7 +139,10 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
   // a successful commit means all three rows exist.
   const db = getDb();
   await db.transaction(async (tx) => {
-    await companiesRepo.upsertCompany(tx, company);
+    const row = await companiesRepo.upsertCompany(tx, company);
+    if (input.userId) {
+      await companiesRepo.updateCompany(tx, row.id, { userId: input.userId });
+    }
     await ideasRepo.upsertIdea(tx, idea);
     await strategyBriefsRepo.upsertStrategy(tx, strategy);
   });

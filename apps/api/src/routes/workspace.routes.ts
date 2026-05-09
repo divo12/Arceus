@@ -11,15 +11,13 @@ import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "../persistence/supabase-storage.js";
 
 export default async function workspaceRoutes(app: FastifyInstance) {
-  const productDir = workspaceManager.getLegacyProductDir();
-
-  app.get("/api/product/overview", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/product/overview", async (request) => {
+    const companyId = request.companyId ?? getActiveCompanyId();
     const workspace = companyId ? await workspaceManager.get(companyId) : null;
     const files = companyId ? (await workspaceManager.listFiles(companyId)).files : [];
 
     return {
-      root: workspace?.localPath ?? productDir,
+      root: workspace?.localPath ?? (companyId ? workspaceManager.getLocalPath(companyId) : null),
       workspace,
       preview: getLocalPreviewState(),
       files,

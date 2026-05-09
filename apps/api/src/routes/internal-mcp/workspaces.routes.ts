@@ -198,7 +198,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     );
     if (!body) return reply;
 
-    const productDir = workspaceManager.getLegacyProductDir();
+    const productDir = workspaceManager.getLocalPath(req.mcp!.companyId);
     try {
       const state = await startLocalPreview(productDir, body.targetPath);
       const url = state.url ?? state.entryUrl ?? state.validationUrl;
@@ -280,7 +280,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const body = parseOrFail(checkExportsBody, req.body, reply);
     if (!body) return reply;
 
-    const root = workspaceManager.getLegacyProductDir();
+    const root = workspaceManager.getLocalPath(req.mcp!.companyId);
     const abs = resolvePath(root, body.modulePath);
     if (!abs.startsWith(root)) {
       return reply.code(422).send(failure("modulePath must stay inside the workspace.", "validation", "never", "payload_fixed"));
@@ -317,7 +317,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const failures: { category: string; errors: string[] }[] = [];
 
     // Typecheck
-    const tsc = await runTsc(workspaceManager.getLegacyProductDir(), timeoutMs ?? 60_000);
+    const tsc = await runTsc(workspaceManager.getLocalPath(req.mcp!.companyId), timeoutMs ?? 60_000);
     recordTypecheck(tsc.ok, tsc.errors);
     if (!tsc.ok) failures.push({ category: "typecheck", errors: tsc.errors.slice(0, 3) });
 

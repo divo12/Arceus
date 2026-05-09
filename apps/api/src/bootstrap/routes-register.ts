@@ -6,10 +6,12 @@ import type { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 import { isDebugPath, requireAdminAuth, shouldDisableDebugRoutes } from "../auth/admin.js";
+import { userJwtPlugin } from "../auth/user-jwt-middleware.js";
 import {
   agentsRoutes,
   artifactsRoutes,
   auditRoutes,
+  authRoutes,
   chatRoutes,
   companyRoutes,
   controlPlaneRoutes,
@@ -89,6 +91,11 @@ export function registerSecurityHooks(app: FastifyInstance): void {
 export async function registerRoutes(app: FastifyInstance, runtime: RouteRuntime): Promise<void> {
   const routeDeps = runtime;
 
+  // Decode JWT from Authorization header and decorate req.userId / req.companyId.
+  // Must run before any route plugin so the decoration is available everywhere.
+  await app.register(userJwtPlugin);
+
+  await app.register(authRoutes);
   await app.register(healthRoutes);
   await app.register(companyRoutes, routeDeps);
   await app.register(strategyRoutes, routeDeps);

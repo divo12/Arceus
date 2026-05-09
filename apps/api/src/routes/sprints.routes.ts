@@ -2,11 +2,11 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "@arceus/db";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 export default async function sprintsRoutes(app: FastifyInstance) {
-  app.get("/api/sprints", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/sprints", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = request.companyId;
     if (!companyId) return [];
     const rows = await sprintsRepo.listSprintsByCompany(getDb(), companyId);
     return rows.map(sprintsRepo.rowToSprint);
