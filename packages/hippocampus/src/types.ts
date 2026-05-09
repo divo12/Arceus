@@ -35,6 +35,21 @@ export interface MemoryAction {
 /** LLM-powered action decider — injected from the API layer */
 export type ActionDecider = (newFact: string, existingMemories: { id: string; content: string; type: string; confidence: number }[]) => Promise<MemoryAction>;
 
+/** One fact + its similar-memory context, fed to the batched decider. */
+export interface BatchedActionInput {
+  newFact: string;
+  existingMemories: { id: string; content: string; type: string; confidence: number }[];
+}
+
+/**
+ * Batched action decider — collapses N per-fact LLM calls into ONE call
+ * per task. Returns decisions in the same order as the input items.
+ *
+ * Implementations MUST preserve order and array length so callers can
+ * pair decisions back to their facts by index.
+ */
+export type BatchActionDecider = (items: BatchedActionInput[]) => Promise<MemoryAction[]>;
+
 /** LLM-powered habit matcher — returns IDs of habits relevant to a task */
 export type HabitMatcher = (taskDescription: string, habits: Habit[]) => Promise<string[]>;
 

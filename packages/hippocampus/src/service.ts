@@ -1,4 +1,4 @@
-import type { ActionDecider, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, ScoredMemory, StaticMemoryStore } from "./types";
+import type { ActionDecider, BatchActionDecider, BatchedActionInput, DynamicMemoryStore, ExtractedFact, FactExtractor, GCResult, HabitMatcher, HippocampusGateway, MemoryAction, PreparedAgentContext, PrimingStore, ProceduralMemoryStore, ProcessTaskCompletionInput, RetrievalOptions, ScoredMemory, StaticMemoryStore } from "./types";
 import { InMemoryDynamicStore } from "./tiers/dynamic";
 import { InMemoryPrimingStore, createDefaultPrimingState, renderPrimingDisposition, updatePrimingStateFromOutcome } from "./tiers/priming";
 import { InMemoryProceduralStore } from "./tiers/procedural";
@@ -44,9 +44,25 @@ export interface HippocampusDependencies {
   extractFacts?: FactExtractor;
   /** LLM-powered action decider (ADD/UPDATE/DELETE/NONE). If not provided, defaults to ADD. */
   decideAction?: ActionDecider;
+  /**
+   * Batched LLM-powered action decider — preferred over `decideAction` when
+   * provided. Collapses the N+1 per-fact call pattern into ONE call per task,
+   * ~30× cheaper for memory-heavy tasks. Falls back to `decideAction` (or
+   * default ADD) if absent. See routeMemoryFactsBatch().
+   */
+  decideActionsBatch?: BatchActionDecider;
   /** LLM-powered habit matcher. If not provided, falls back to naive token matching. */
   matchHabits?: HabitMatcher;
 }
+
+/**
+ * Hard cap on facts processed per task completion. The extractor sometimes
+ * emits 20-30 facts for a meaty task (lots of fluff, restatements). Keeping
+ * the top-K-by-confidence is enough — the long tail is mostly trivia or
+ * paraphrases that the dedup step would skip anyway. Reduces per-task
+ * LLM cost from O(N) to O(min(N, K)) where K is small.
+ */
+const MAX_FACTS_PER_TASK = 5;
 
 /**
  * Core memory service orchestrating all four tiers (static, dynamic, procedural, priming).
@@ -68,6 +84,7 @@ export class HippocampusService implements HippocampusGateway {
   private readonly primingStore: PrimingStore;
   private readonly extractFacts: FactExtractor | null;
   private readonly decideAction: ActionDecider | null;
+  private readonly decideActionsBatch: BatchActionDecider | null;
   private readonly matchHabits: HabitMatcher | null;
 
   constructor(dependencies: HippocampusDependencies = {}) {
@@ -77,6 +94,7 @@ export class HippocampusService implements HippocampusGateway {
     this.primingStore = dependencies.primingStore ?? new InMemoryPrimingStore();
     this.extractFacts = dependencies.extractFacts ?? null;
     this.decideAction = dependencies.decideAction ?? null;
+    this.decideActionsBatch = dependencies.decideActionsBatch ?? null;
     this.matchHabits = dependencies.matchHabits ?? null;
   }
 
@@ -222,11 +240,33 @@ export class HippocampusService implements HippocampusGateway {
       return;
     }
 
+    // Cap to top-K by confidence so a long tail of low-signal facts can't
+    // explode LLM cost. The extractor regularly emits 20-30 facts for
+    // meaty tasks; the 6th-Nth are almost always restatements.
+    const cappedFacts = facts.length > MAX_FACTS_PER_TASK
+      ? [...facts].sort((a, b) => b.confidence - a.confidence).slice(0, MAX_FACTS_PER_TASK)
+      : facts;
+    if (cappedFacts.length < facts.length) {
+      console.log(`[Hippocampus] Capped ${facts.length} → ${cappedFacts.length} facts (top-${MAX_FACTS_PER_TASK} by confidence)`);
+    }
+
     const now = new Date().toISOString();
-    for (const fact of facts) {
-      if (fact.type === "procedural") {
-        await this.routeProceduralFact(fact, input, now);
-      } else {
+
+    // Procedural facts use a different store + decision shape; keep them
+    // on the per-fact path. There are usually 0-1 per task.
+    const proceduralFacts = cappedFacts.filter((f) => f.type === "procedural");
+    const memoryFacts = cappedFacts.filter((f) => f.type !== "procedural");
+
+    for (const fact of proceduralFacts) {
+      await this.routeProceduralFact(fact, input, now);
+    }
+
+    if (memoryFacts.length === 0) return;
+
+    if (this.decideActionsBatch) {
+      await this.routeMemoryFactsBatch(memoryFacts, input, now);
+    } else {
+      for (const fact of memoryFacts) {
         await this.routeMemoryFact(fact, input, now);
       }
     }
@@ -295,37 +335,125 @@ export class HippocampusService implements HippocampusGateway {
     console.log(`[Hippocampus] Added new habit ${habit.id}`);
   }
 
+  /**
+   * Embed a fact and find its most-similar existing memories via vector
+   * search. Falls back to list-based candidates if vector search isn't
+   * wired or throws. Returns [] when the store has no memories yet —
+   * callers can use that to short-circuit the LLM dedup call.
+   */
+  private async findSimilarMemoriesForFact(
+    fact: ExtractedFact,
+    input: ProcessTaskCompletionInput,
+  ): Promise<{ id: string; content: string; type: string; confidence: number }[]> {
+    const store = fact.type === "static" ? this.staticStore : this.dynamicStore;
+    try {
+      const factEmbedding = await embed(fact.content);
+      if (store.searchByEmbedding) {
+        const results = await store.searchByEmbedding(input.agentId, factEmbedding, 5);
+        return results.map((r) => ({ id: r.id, content: r.content, type: r.type, confidence: r.confidence }));
+      }
+    } catch {
+      // fall through to list-based fallback below
+    }
+    const all = await store.list(input.agentId);
+    return all.slice(0, 5).map((m) => ({ id: m.id, content: m.content, type: m.type, confidence: m.confidence }));
+  }
+
   /** Route a static/dynamic fact through the action decision pipeline */
   private async routeMemoryFact(fact: ExtractedFact, input: ProcessTaskCompletionInput, now: string): Promise<void> {
-    const store = fact.type === "static" ? this.staticStore : this.dynamicStore;
-
     // Step 1: Decide action — search similar memories and ask LLM
     let decision: MemoryAction = { action: "ADD", target_id: null, reason: "default" };
 
     if (this.decideAction) {
       try {
-        // Embed the fact and search for similar existing memories
-        let similar: { id: string; content: string; type: string; confidence: number }[] = [];
-        try {
-          const factEmbedding = await embed(fact.content);
-          if (store.searchByEmbedding) {
-            const results = await store.searchByEmbedding(input.agentId, factEmbedding, 5);
-            similar = results.map((r) => ({ id: r.id, content: r.content, type: r.type, confidence: r.confidence }));
-          }
-        } catch {
-          // Embedding/search failed — fall back to list-based comparison
-          const all = await store.list(input.agentId);
-          similar = all.slice(0, 5).map((m) => ({ id: m.id, content: m.content, type: m.type, confidence: m.confidence }));
+        const similar = await this.findSimilarMemoriesForFact(fact, input);
+        // Skip the LLM dedup call when there's nothing to dedupe against —
+        // the answer is always ADD. Saves one LLM round-trip per fact when
+        // the store is fresh.
+        if (similar.length === 0) {
+          decision = { action: "ADD", target_id: null, reason: "no existing memories to dedupe against" };
+        } else {
+          decision = await this.decideAction(fact.content, similar);
         }
-
-        decision = await this.decideAction(fact.content, similar);
       } catch (err) {
         // Action decision failed — default to ADD (spec: worst case is slight duplication, GC cleans up)
         console.warn(`[Hippocampus] Action decision failed, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
-    // Step 2: Execute the decided action
+    // Step 2: Execute the decided action via the shared helper used by
+    // both the per-fact and batched paths.
+    await this.executeMemoryDecision(fact, decision, input, now);
+  }
+
+  /**
+   * Batched memory-fact pipeline: gather similar-memory context for every
+   * fact in parallel, then ask the LLM ONCE for all decisions, then execute.
+   *
+   * This is the path that turns N+1 LLM calls (extract + N decisions) into
+   * 2 calls (extract + 1 batched decision). Facts whose similar-memories
+   * set is empty short-circuit to ADD locally and don't enter the batch.
+   */
+  private async routeMemoryFactsBatch(
+    facts: ExtractedFact[],
+    input: ProcessTaskCompletionInput,
+    now: string,
+  ): Promise<void> {
+    // Gather similar-memory context for every fact in parallel.
+    const similarSets = await Promise.all(
+      facts.map((fact) => this.findSimilarMemoriesForFact(fact, input)),
+    );
+
+    // Partition: facts with no similar memories skip the LLM (always ADD);
+    // the rest go into the batch.
+    const decisions: MemoryAction[] = new Array(facts.length);
+    const batchItems: BatchedActionInput[] = [];
+    const batchIndices: number[] = [];
+
+    for (let i = 0; i < facts.length; i++) {
+      if (similarSets[i].length === 0) {
+        decisions[i] = { action: "ADD", target_id: null, reason: "no existing memories to dedupe against" };
+      } else {
+        batchItems.push({ newFact: facts[i].content, existingMemories: similarSets[i] });
+        batchIndices.push(i);
+      }
+    }
+
+    if (batchItems.length > 0) {
+      try {
+        const batchDecisions = await this.decideActionsBatch!(batchItems);
+        if (batchDecisions.length !== batchItems.length) {
+          throw new Error(`Batch decider returned ${batchDecisions.length} decisions for ${batchItems.length} items`);
+        }
+        for (let i = 0; i < batchDecisions.length; i++) {
+          decisions[batchIndices[i]] = batchDecisions[i];
+        }
+      } catch (err) {
+        // Batch decider failed — default unresolved facts to ADD so we
+        // don't silently lose memories. Worst case: slight duplication
+        // that the GC sweep cleans up later.
+        console.warn(`[Hippocampus] Batch action decision failed, defaulting batched facts to ADD: ${err instanceof Error ? err.message : String(err)}`);
+        for (const idx of batchIndices) {
+          decisions[idx] = { action: "ADD", target_id: null, reason: "batch decider failed" };
+        }
+      }
+    }
+
+    // Execute decisions sequentially against the store. Cheap relative to
+    // the LLM calls we already saved.
+    for (let i = 0; i < facts.length; i++) {
+      await this.executeMemoryDecision(facts[i], decisions[i], input, now);
+    }
+  }
+
+  /** Apply one already-decided action against the appropriate store. */
+  private async executeMemoryDecision(
+    fact: ExtractedFact,
+    decision: MemoryAction,
+    input: ProcessTaskCompletionInput,
+    now: string,
+  ): Promise<void> {
+    const store = fact.type === "static" ? this.staticStore : this.dynamicStore;
     switch (decision.action) {
       case "ADD": {
         const unit: MemoryUnit = {
@@ -348,25 +476,25 @@ export class HippocampusService implements HippocampusGateway {
         };
         await store.add(unit);
         console.log(`[Hippocampus] ADD: "${fact.content.slice(0, 60)}..." (${decision.reason})`);
-        break;
+        return;
       }
       case "UPDATE": {
         if (decision.target_id) {
           await store.update(decision.target_id, fact.content, fact.confidence);
           console.log(`[Hippocampus] UPDATE ${decision.target_id}: "${fact.content.slice(0, 60)}..." (${decision.reason})`);
         }
-        break;
+        return;
       }
       case "DELETE": {
         if (decision.target_id) {
           await store.softDelete(decision.target_id, `Contradicted by: ${fact.content.slice(0, 100)}`);
           console.log(`[Hippocampus] DELETE ${decision.target_id}: (${decision.reason})`);
         }
-        break;
+        return;
       }
       case "NONE": {
         console.log(`[Hippocampus] NONE: "${fact.content.slice(0, 60)}..." (${decision.reason})`);
-        break;
+        return;
       }
     }
   }

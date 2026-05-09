@@ -47,6 +47,16 @@ export const memoryActionSchema = z.object({
   reason: z.string(),
 });
 
+/**
+ * Schema for the BATCHED action-decider response. The LLM receives N facts
+ * and returns N decisions in the same order. We validate length matches at
+ * the call site so a drifting LLM that drops/adds entries fails loudly
+ * instead of silently misaligning facts to decisions.
+ */
+export const memoryActionsBatchSchema = z.object({
+  decisions: z.array(memoryActionSchema),
+});
+
 export const habitMatcherSchema = z.object({
   habit_ids: z.array(z.string()),
 });
@@ -131,6 +141,55 @@ export async function memoryAgentDecideAction(
   );
 }
 
+const BATCH_DECISION_SYSTEM_PROMPT = [
+  ACTION_DECISION_SYSTEM_PROMPT,
+  "",
+  "BATCH MODE: You will receive N facts, each paired with its own list of",
+  "existing similar memories. Return EXACTLY N decisions in the SAME ORDER",
+  "as the input facts — index 0 of `decisions` corresponds to the first fact,",
+  "index 1 to the second, and so on. Do not reorder, drop, or merge entries.",
+].join("\n");
+
+function buildBatchedActionDecisionUserPrompt(
+  items: { newFact: string; existingMemories: { id: string; content: string; type: string; confidence: number }[] }[],
+): string {
+  const lines = [
+    `Decide an action for each of the ${items.length} facts below.`,
+    "Return one decision per fact, in order.",
+    "",
+  ];
+  items.forEach((item, idx) => {
+    lines.push(`--- FACT ${idx + 1} ---`);
+    lines.push(buildActionDecisionUserPrompt(item.newFact, item.existingMemories));
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+
+/**
+ * Batched variant of `memoryAgentDecideAction` — collapses N per-fact LLM
+ * calls into ONE call per task. Returns decisions in the same order as the
+ * input items. Caller is responsible for verifying length matches; the
+ * service layer treats a length mismatch as a batch failure and falls
+ * back to ADD for the affected facts.
+ */
+export async function memoryAgentDecideActionsBatch(
+  items: { newFact: string; existingMemories: { id: string; content: string; type: string; confidence: number }[] }[],
+): Promise<MemoryAction[]> {
+  if (items.length === 0) return [];
+  const result = await structuredCompletion(
+    "workerDeployment",
+    [
+      { role: "system", content: BATCH_DECISION_SYSTEM_PROMPT },
+      { role: "user", content: buildBatchedActionDecisionUserPrompt(items) },
+    ],
+    memoryActionsBatchSchema,
+    "memory_action_decisions_batch",
+    { temperature: 0.1 },
+  );
+  return result.decisions;
+}
+
 /** Match a task description against known habits and return matching habit IDs. */
 export async function llmHabitMatcher(
   taskDescription: string,
@@ -168,5 +227,6 @@ export const hippocampus = createHippocampusService({
   ...pgStores,
   extractFacts: memoryAgentExtractFacts,
   decideAction: memoryAgentDecideAction,
+  decideActionsBatch: memoryAgentDecideActionsBatch,
   matchHabits: llmHabitMatcher,
 });
