@@ -69,6 +69,7 @@ export const ALL_ARCEUS_TOOLS = [
   "artifact_create",
   "artifact_write_to_workspace",
   "workspace_checkpoint",
+  "workspace_start_preview",
   "workspace_probe_preview",
   "workspace_get_preview_url",
   "workspace_get_build_health",
