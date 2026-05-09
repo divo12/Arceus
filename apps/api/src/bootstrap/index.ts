@@ -4,13 +4,19 @@
  *
  * Owns the boot order:
  *   1. installObservabilitySinks         (sinks before any logging)
- *   2. initWorkspaceAndPersistence       (build dir, hydrate, active company,
+ *   2. initSkillEvolution                (pattern learner, mutator, ATA,
+ *                                         skill-registry write-through deps)
+ *      MUST run before initWorkspaceAndPersistence: the skill-registry
+ *      hydration in step 3 calls seedExistingSkills, which fires
+ *      onSkillUpserted callbacks. If the deps aren't wired yet, newly-
+ *      seeded disk skills never reach Postgres and stay invisible across
+ *      restarts.
+ *   3. initWorkspaceAndPersistence       (build dir, hydrate, active company,
  *                                         skill registries)
- *   3. createHeartbeatRuntime            (HeartbeatEngine + reactive event wire)
- *   4. createMeetingRuntime              (MeetingPipeline + MeetingScheduler)
- *   5. registerCors / registerSecurityHooks / registerRoutes
- *   6. cpHydrateTrustScores              (governance trust)
- *   7. initSkillEvolution                (pattern learner, mutator, ATA)
+ *   4. createHeartbeatRuntime            (HeartbeatEngine + reactive event wire)
+ *   5. createMeetingRuntime              (MeetingPipeline + MeetingScheduler)
+ *   6. registerCors / registerSecurityHooks / registerRoutes
+ *   7. cpHydrateTrustScores              (governance trust)
  *   8. startSkillScheduler               (skill evolution scheduler — opt-in)
  *   9. flush                             (persist any startup mutations)
  *  10. autoResumeIfActiveSprint          (sweep stranded → start engines)
@@ -48,6 +54,13 @@ const BEAT_LIFECYCLE_TYPES = new Set(["beat_started", "beat_completed", "beat_fa
 export async function startServer(app: FastifyInstance): Promise<void> {
   installObservabilitySinks();
 
+  // MUST run before initWorkspaceAndPersistence: hydrateSkillRegistries
+  // inside that step calls seedExistingSkills, which fires
+  // onSkillUpserted callbacks. Wiring the deps first guarantees newly-
+  // seeded disk skills are persisted to Postgres on every boot instead
+  // of staying as in-memory ghosts.
+  initSkillEvolution();
+
   await initWorkspaceAndPersistence();
 
   const { engine: heartbeatEngine } = createHeartbeatRuntime();
@@ -80,7 +93,9 @@ export async function startServer(app: FastifyInstance): Promise<void> {
   await registerRoutes(app, { heartbeatEngine, meetingScheduler });
 
   await cpHydrateTrustScores();
-  initSkillEvolution();
+  // initSkillEvolution() is now called at the very top of startServer so
+  // skill-registry write-through callbacks are wired before the boot-time
+  // seeding inside initWorkspaceAndPersistence runs.
   startSkillScheduler();
 
   await flush();
