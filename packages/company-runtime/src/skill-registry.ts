@@ -459,6 +459,68 @@ function parseSkillFrontmatter(content: string): { frontmatter: Record<string, s
   return { frontmatter, body: match[2].trim() };
 }
 
+/**
+ * Canonical role names. `seedExistingSkills` normalizes incoming
+ * frontmatter values against this set, and `all` expands into the full
+ * list. Kept inline rather than importing from contracts to avoid a
+ * cross-package dep cycle (skill-registry → contracts already happens
+ * elsewhere; this list is small and stable).
+ */
+const CANONICAL_SEED_ROLES = [
+  "ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead",
+] as const;
+
+const SEED_ROLE_ALIASES: Record<string, string> = {
+  qa: "tester",
+  dev: "developer",
+  sl: "skills_lead",
+  ui: "ui_designer",
+  mkt: "marketing",
+};
+
+/**
+ * Resolve a SKILL.md `role:` frontmatter value into one or more canonical
+ * role strings. Handles:
+ *   - Single canonical role (`developer`, `cto`, …)             → [role]
+ *   - Aliases (`qa`, `dev`, `sl`, `ui`, `mkt`)                   → [canonical]
+ *   - Wildcard `all`                                             → all 8 roles
+ *   - Comma-separated lists (`cto, pm`)                          → split + normalize
+ *   - JSON-array-ish syntax (`[ceo, cto, pm]`)                   → strip brackets, split
+ *   - Placeholder templates (`<original roles>`, `<one or…>`)   → []
+ *
+ * Returns `[]` to signal "skip this skill, contributor must fix the
+ * frontmatter" — caller logs a warn and moves on.
+ */
+function resolveSeedSkillRoles(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  // Drop unfilled placeholder templates: anything that is purely
+  // `<...>` or contains the words "one or more" / "original roles".
+  if (/^<.*>$/.test(trimmed)) return [];
+  if (/one or more role enums|original roles/i.test(trimmed)) return [];
+
+  if (trimmed.toLowerCase() === "all") return [...CANONICAL_SEED_ROLES];
+
+  // Tolerate JSON-array-ish syntax like `[ceo, cto, pm]`.
+  const stripped = trimmed.replace(/^\[/, "").replace(/]$/, "");
+
+  const tokens = stripped
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+
+  const resolved = new Set<string>();
+  for (const token of tokens) {
+    const canonical = SEED_ROLE_ALIASES[token]
+      ?? ((CANONICAL_SEED_ROLES as readonly string[]).includes(token) ? token : null);
+    if (canonical) resolved.add(canonical);
+    else console.warn(`[SkillRegistry] Unknown role token "${token}" in seed frontmatter — dropping.`);
+  }
+
+  return [...resolved];
+}
+
 export interface SeedSkillsOptions {
   /** Override the directory to seed from. Defaults to `<repoRoot>/.arceus/skills-seed`. */
   skillsDir?: string;
@@ -535,49 +597,77 @@ export function seedExistingSkillsDetailed(
     const { frontmatter, body } = parseSkillFrontmatter(raw);
 
     const name = frontmatter.name || entry.name;
-    const role = frontmatter.role || "developer";
+    const rawRole = frontmatter.role || "developer";
     const resources = readSkillResources(skillDir);
 
-    const existing = getSkillHistory(companyId, name);
-    if (existing.length > 0) {
-      if (mode === "overwrite-content") {
-        const latest = existing[existing.length - 1];
-        updateSkill(latest.id, {
-          role,
-          trigger: frontmatter.description || name,
-          content: body,
-          resources,
-        });
-        updatedCount++;
-      } else {
-        skippedCount++;
-      }
+    // Normalize the `role:` frontmatter value into a list of canonical
+    // role strings. Seed library historically used aliases (`qa`, `dev`,
+    // `sl`, `ui`, `mkt`), the keyword `all`, comma-lists, and bracketed
+    // arrays — none of which `getSkillsForRole` matched. Without this
+    // normalization, ~67% of seed skills were silently invisible.
+    const targetRoles = resolveSeedSkillRoles(rawRole);
+    if (targetRoles.length === 0) {
+      // Placeholder template (e.g. `<original roles>`) or unparseable —
+      // skip with a warn so contributors notice. Never silent-default.
+      console.warn(`[SkillRegistry] Seed skill "${name}" has unresolvable role "${rawRole}" — skipping.`);
       continue;
     }
 
-    const skill: SkillArtifact = {
-      id: `skill-${name}-v1`,
-      companyId,
-      name,
-      role,
-      version: 1,
-      status: "active",
-      trigger: frontmatter.description || name,
-      content: body,
-      resources,
-      testCases: [],
-      successRate: 0.7,    // seed skills start at 0.7 (trusted baseline)
-      usageCount: 0,
-      lastUsedAt: null,
-      mutatedFromId: null,
-      mutatedBy: null,
-      mutationReason: null,
-      createdAt: new Date().toISOString(),
-      approvedAt: new Date().toISOString(),
-    };
+    // Approach A: register one artifact per target role. Per-role rows
+    // keep mutation lineage and usage metrics separable — `escalation-
+    // protocol` for ceo can diverge from the developer's copy without
+    // a fork operation.
+    for (const role of targetRoles) {
+      // Existence check is role-aware: same name under a different role
+      // is a separate artifact, not a duplicate. Without this filter
+      // the second loop iteration would always hit `skipped` for `all`
+      // skills because the first iteration already registered the name.
+      const existing = getSkillHistory(companyId, name).filter((s) => s.role === role);
+      if (existing.length > 0) {
+        if (mode === "overwrite-content") {
+          const latest = existing[existing.length - 1];
+          updateSkill(latest.id, {
+            role,
+            trigger: frontmatter.description || name,
+            content: body,
+            resources,
+          });
+          updatedCount++;
+        } else {
+          skippedCount++;
+        }
+        continue;
+      }
 
-    registerSkill(skill);
-    seededCount++;
+      const skill: SkillArtifact = {
+        // Suffix the id with role so multi-role seed skills don't
+        // collide on `skillsById`. Single-role seeds keep their familiar
+        // shape (`skill-<name>-<role>-v1`) — the prior `skill-<name>-v1`
+        // pattern was already inadequate once seedExistingSkills was
+        // called for more than one company.
+        id: `skill-${name}-${role}-v1`,
+        companyId,
+        name,
+        role,
+        version: 1,
+        status: "active",
+        trigger: frontmatter.description || name,
+        content: body,
+        resources,
+        testCases: [],
+        successRate: 0.7,    // seed skills start at 0.7 (trusted baseline)
+        usageCount: 0,
+        lastUsedAt: null,
+        mutatedFromId: null,
+        mutatedBy: null,
+        mutationReason: null,
+        createdAt: new Date().toISOString(),
+        approvedAt: new Date().toISOString(),
+      };
+
+      registerSkill(skill);
+      seededCount++;
+    }
   }
 
   // Only mark seeded if we actually registered skills. If count=0 (all files
