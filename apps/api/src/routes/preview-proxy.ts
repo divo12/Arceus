@@ -157,19 +157,21 @@ export function registerPreviewProxy(app: FastifyInstance): void {
 
   // WebSocket upgrade path. Fastify's onRequest hook does NOT fire for
   // upgrade requests — those go straight to `server.on("upgrade", ...)`
-  // and bypass the HTTP request lifecycle. We register late (after the
-  // server is listening) by hooking into Fastify's ready callback.
-  app.ready((err) => {
-    if (err) return;
-    app.server.on("upgrade", (req, socket, head) => {
-      const host = req.headers.host;
-      if (typeof host !== "string") return;
-      const slug = previewSubdomainOf(host);
-      if (slug === null) return;
-      // Cast: socket is a Duplex but in HTTP-server upgrade events
-      // it is always a net.Socket — typings are loose because the
-      // contract predates the unified Duplex type.
-      proxyUpgradeToPreview(req, socket as Socket, head);
-    });
+  // and bypass the HTTP request lifecycle.
+  //
+  // Register directly on app.server (the raw Node HTTP server) which
+  // exists at Fastify instantiation time. Do NOT use app.ready(cb) here
+  // — that triggers Fastify's ready lifecycle, which finalises the
+  // plugin tree and puts the instance into "started" state before
+  // subsequent addHook / register calls in the boot sequence run.
+  app.server.on("upgrade", (req, socket, head) => {
+    const host = req.headers.host;
+    if (typeof host !== "string") return;
+    const slug = previewSubdomainOf(host);
+    if (slug === null) return;
+    // Cast: socket is a Duplex but in HTTP-server upgrade events
+    // it is always a net.Socket — typings are loose because the
+    // contract predates the unified Duplex type.
+    proxyUpgradeToPreview(req, socket as Socket, head);
   });
 }
