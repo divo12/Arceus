@@ -62,7 +62,11 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
           : `Beat ${result.verdict}`,
         tokensUsed: result.tokensUsed,
         actionsCount: 1,
-        toolCalls: 0,
+        // Drained from the per-beat accumulator (azure-openai.ts), populated
+        // by the MCP middleware (arceus_*) and the watchdog-reset endpoint
+        // (built-in tools posted by the plugin). Replaces the historical
+        // hardcoded 0 that made heartbeat_runs.tool_call_count useless.
+        toolCalls: result.toolCalls,
         completed: result.verdict === "pass",
       };
     },

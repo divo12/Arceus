@@ -11,6 +11,7 @@ import { observability, parseRoleStrict, type RoleType } from "@arceus/contracts
 import { routeToTool } from "./route-to-tool.js";
 import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
 import { swallowAndAudit } from "../../observability/swallow.js";
+import { bumpBeatToolCallAccumulator } from "../../infra/azure-openai.js";
 
 interface McpRequestContext {
   companyId: string;
@@ -156,6 +157,13 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
       pending.toolCallCount += 1;
     }
   }
+
+  // Spec 32 — per-beat tool-call accumulator. Drained by runBeat into
+  // heartbeat_runs.tool_call_count so the column reflects actual activity
+  // instead of the hardcoded 0 it carried previously. Built-in OpenCode
+  // tools are bumped via the watchdog-reset endpoint when the plugin
+  // posts a tool body (see beats.routes.ts).
+  if (beatId) bumpBeatToolCallAccumulator(beatId);
 };
 
 const RATE_LIMIT = 10_000;

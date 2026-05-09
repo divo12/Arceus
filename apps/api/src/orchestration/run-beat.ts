@@ -21,7 +21,12 @@ import { cleanupBeatScratch } from "../infra/beat-paths.js";
 import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
 import { registerPromptCompletion } from "../prompts/llm.js";
-import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
+import {
+  startBeatTokenAccumulator,
+  drainBeatTokenAccumulator,
+  startBeatToolCallAccumulator,
+  drainBeatToolCallAccumulator,
+} from "../infra/azure-openai.js";
 import { startHeartbeatRun, finishHeartbeatRun, bindSession, unbindSession } from "./beat-lifecycle.js";
 import { updateTrustScore } from "../governance/trust.js";
 import { persistSkillUsageEvent } from "../skills/usage-persistence.js";
@@ -39,6 +44,8 @@ interface BeatResult {
   verdict: "pass" | "fail";
   cause?: string;
   tokensUsed: number;
+  /** Total tool calls observed during the beat (arceus_* MCP + built-in OpenCode tools). */
+  toolCalls: number;
 }
 
 /**
@@ -72,6 +79,7 @@ export async function runBeat(input: {
   const beatId = input.beatId ?? `beat_${crypto.randomBytes(6).toString("hex")}`;
   const beatStartedAt = Date.now();
   startBeatTokenAccumulator(beatId);
+  startBeatToolCallAccumulator(beatId);
 
   // Step 3: create session
   const session = await createBeatSession(input.role, beatId);
@@ -135,6 +143,7 @@ export async function runBeat(input: {
     unregisterSessionContext(sessionId);
     await destroyBeatSession(sessionId);
     const tokensUsed = drainBeatTokenAccumulator(beatId);
+    const toolCalls = drainBeatToolCallAccumulator(beatId);
     await finishHeartbeatRun({ runDbId, beatId, verdict: "pass", cause: "no-work", totalTokens: tokensUsed });
     await unbindSession(sessionId);
     swallowAndAudit("trust.update.no_work", () => updateTrustScore(input.role, input.companyId, "pass"), {
@@ -151,7 +160,7 @@ export async function runBeat(input: {
       durationMs: Date.now() - beatStartedAt,
       ts: Date.now(),
     });
-    return { beatId, sessionId, verdict: "pass", cause: "no-work", tokensUsed };
+    return { beatId, sessionId, verdict: "pass", cause: "no-work", tokensUsed, toolCalls };
   }
 
   // Step 5: materialize skills + swap symlink
@@ -363,6 +372,7 @@ export async function runBeat(input: {
     await cleanupBeatScratch(beatId);
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
+    const toolCalls = drainBeatToolCallAccumulator(beatId);
     const beatEndedAt = Date.now();
 
     // Spec 31 Phase 5 — close out the run + binding, EMA-update trust.
@@ -388,6 +398,6 @@ export async function runBeat(input: {
     });
 
     // eslint-disable-next-line no-unsafe-finally
-    return { beatId, sessionId, verdict, cause, tokensUsed };
+    return { beatId, sessionId, verdict, cause, tokensUsed, toolCalls };
   }
 }

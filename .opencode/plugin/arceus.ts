@@ -141,6 +141,49 @@ export const ArceusPlugin: Plugin = async () => {
     });
   };
 
+  /**
+   * Built-in tool event back-channel. Posts every non-arceus tool call to
+   * the watchdog-reset endpoint with a body so the API can:
+   *   - bump heartbeat_runs.tool_call_count via the per-beat accumulator
+   *   - bump pending.toolCallCount so the no_tool_invoked deadline correctly
+   *     sees built-in activity (read/edit/bash/skill/…)
+   *   - emit tool.invoked / tool.result events into activity_log so the
+   *     inspector and DB queries see the same shape they already see for
+   *     arceus_* tools (no source-special-casing downstream)
+   *
+   * NOT debounced — every built-in tool call must be observed individually
+   * to keep the deadline counter and DB row count accurate. The arceus_*
+   * path keeps the debounced bodyless POST since MCP middleware already
+   * logs those tools and bumps the accumulator on its own.
+   */
+  const postBuiltinToolEvent = (
+    beatId: string,
+    body: {
+      tool: string;
+      status: "ok" | "error";
+      cause?: string;
+      latencyMs?: number | null;
+      role?: string;
+      sessionId: string;
+      args?: unknown;
+    },
+  ): void => {
+    const api = process.env.ARCEUS_API;
+    const token = process.env.ARCEUS_TOKEN;
+    if (!api || !token || !beatId) return;
+
+    void fetch(`${api}/api/internal/v1/beats/${beatId}/watchdog-reset`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }).catch(() => {
+      // Fire-and-forget — telemetry must never affect the beat.
+    });
+  };
+
   const postSkillUsage = (entry: SkillManifestEntry, beatId: string): void => {
     const api = process.env.ARCEUS_API;
     const token = process.env.ARCEUS_TOKEN;
@@ -264,9 +307,31 @@ export const ArceusPlugin: Plugin = async () => {
       }
 
       // Beat watchdog reset — bump lastActivityAt so multi-tool beats don't
-      // false-fire the watchdog. Debounced to 1×/sec per beat in the plugin.
+      // false-fire the watchdog. arceus_* tools go through the debounced
+      // bodyless watchdog reset (MCP middleware already logs them + bumps
+      // the per-beat counter). Built-in tools (read/grep/edit/write/bash/
+      // skill/webfetch/tool_help) go through the non-debounced tool-event
+      // POST so each invocation lands in activity_log, the per-beat counter
+      // increments accurately, and the no_tool_invoked deadline counter
+      // resets — without those, developer beats reading 5 files via `read`
+      // get reaped at 90s as "thinking but not acting."
       const wctx = await ensureCtx(input.sessionID);
-      if (wctx?.beatId) postWatchdogReset(wctx.beatId);
+      if (wctx?.beatId) {
+        if (input.tool.startsWith("arceus_")) {
+          postWatchdogReset(wctx.beatId);
+        } else {
+          const status: "ok" | "error" = envelope.status === "error" ? "error" : "ok";
+          postBuiltinToolEvent(wctx.beatId, {
+            tool: input.tool,
+            status,
+            cause: envelope.cause ?? undefined,
+            latencyMs,
+            role: wctx.role,
+            sessionId: input.sessionID,
+            args: (output as { args?: unknown }).args,
+          });
+        }
+      }
 
       // Skill-usage back-channel: when the agent invokes OpenCode's built-in
       // `skill` tool, record the hit against the SkillArtifact registry via
