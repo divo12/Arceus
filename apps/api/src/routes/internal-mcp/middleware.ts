@@ -134,16 +134,23 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
   // proof of agent activity; resetting `lastActivityAt` on the HTTP path
   // works regardless of whether OpenCode's SSE stream is alive. The SSE
   // hook in event-bridge.ts:184 stays — both signals reset the same
-  // timer. We only have a sessionId to look up if the caller passed one
-  // (heartbeat beat tools always do; the chat path uses its own
-  // registration so it's already covered there).
+  // timer.
   //
   // Layer B — also bump `toolCallCount` here so the early-exit poller
   // in pollPendingPromptCompletions can detect "thinking but not acting"
   // beats and abort them at NO_TOOL_INVOKED_DEADLINE_MS instead of
   // letting them burn the full Azure round-trip.
-  if (sessionId) {
-    const pending = pendingPromptCompletions.get(sessionId);
+  //
+  // CRITICAL: use the RESOLVED sessionId from `ctx`, not the raw header.
+  // The MCP client routinely omits `x-session-id` (see session-context.ts
+  // comment) and relies on role-based fallback. Reading the header alone
+  // missed those requests, so toolCallCount stayed at 0 even when the
+  // agent was actively calling tools — and the early-exit then killed
+  // productive beats. ctx.sessionId is set whenever sessionContextMap
+  // had a hit, which covers both the header path and the role fallback.
+  const resolvedSessionId = ctx?.sessionId ?? sessionId;
+  if (resolvedSessionId) {
+    const pending = pendingPromptCompletions.get(resolvedSessionId);
     if (pending) {
       pending.lastActivityAt = Date.now();
       pending.toolCallCount += 1;
