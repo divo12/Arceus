@@ -123,7 +123,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     }
 
     try {
-      const result = await createSprintWithTasks(parsed);
+      const result = await createSprintWithTasks(parsed, req.mcp.companyId);
       const sprintId = (result as { sprintId?: string; id?: string }).sprintId
         ?? (result as { sprintId?: string; id?: string }).id
         ?? "unknown";

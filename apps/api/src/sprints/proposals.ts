@@ -90,13 +90,16 @@ function topoSortTasksByDependency(tasks: Task[]): Task[] {
  *
  * Pure mechanical work: create records, wire dependencies, activate sprint.
  * All reasoning about WHAT to build comes from the CEO agent.
+ *
+ * `companyId` must be the per-user/per-session company, not the global
+ * active company. The MCP route passes `req.mcp.companyId` here.
  */
-export async function createSprintWithTasks(input: SprintCreateInput) {
-  // Spec 31 Phase 7.B.4 — snapshot reads now go through the
-  // canonical-backed view. The store remains authoritative for
-  // mutations until B.4.2 swaps the mutators.
-  const companyId = requireActiveCompanyId();
-  const snapshot = await buildSnapshotView(companyId);
+export async function createSprintWithTasks(input: SprintCreateInput, companyId?: string) {
+  // Prefer the caller-supplied companyId (per-user MCP session) over the
+  // global active company. Without this, all users share the single
+  // active-company singleton and cross-user sprint guards fire falsely.
+  const resolvedCompanyId = companyId ?? requireActiveCompanyId();
+  const snapshot = await buildSnapshotView(resolvedCompanyId);
 
   // Guard: can't start a new sprint while one is active
   const currentSprint = snapshot.sprints.find((s) => s.id === snapshot.company.currentSprintId);
@@ -111,7 +114,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   const sprint = await createSprintRecord(
     {
       upsertSprint,
-      updateCompanySprint: (sprintId, number) => updateCompanySprint(companyId, sprintId, number),
+      updateCompanySprint: (sprintId, number) => updateCompanySprint(resolvedCompanyId, sprintId, number),
       emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void,
     },
     snapshot,
@@ -127,7 +130,7 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   await persistSprint(sprint);
   // Re-fetch the view after the sprint write so createWorkflowTask sees
   // the new sprint id when it computes task dependencies.
-  const freshSnapshot = await buildSnapshotView(companyId);
+  const freshSnapshot = await buildSnapshotView(resolvedCompanyId);
 
   // Create tasks from agent-provided list
   const taskTitleToId = new Map<string, string>();
@@ -214,13 +217,13 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
   );
 
   setActiveExecution({
-    companyId,
+    companyId: resolvedCompanyId,
     buildTaskId: "",
     previewTaskId: "",
     reviewTaskId: "",
   });
 
-  await beginSprintExecution();
+  await beginSprintExecution(undefined, resolvedCompanyId);
 
   return { sprintId: sprint.id, sprintNumber: sprint.number, taskCount: createdTasks.length };
 }
@@ -230,10 +233,9 @@ export async function createSprintWithTasks(input: SprintCreateInput) {
  */
 async function beginSprintExecution(
   onStartEventBridge?: () => Promise<void>,
+  companyIdOverride?: string,
 ): Promise<void> {
-  // Spec 31 Phase 7.B.4 — only reads `company.id` from the snapshot
-  // bridge; full snapshot view not needed for this entry point.
-  const companyId = requireActiveCompanyId();
+  const companyId = companyIdOverride ?? requireActiveCompanyId();
 
   setExecutionStatus("executing");
 
