@@ -116,6 +116,22 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
  */
 const BEAT_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 
+/**
+ * No-tool-invoked early-exit deadline. If the LLM has been thinking for
+ * this long with ZERO MCP tool calls, the beat is producing prose instead
+ * of action — abort early instead of letting the prompt run to completion
+ * and burn a full Azure round-trip.
+ *
+ * Tracked via `toolCallCount` on the pending entry, incremented by the
+ * MCP middleware. The 10-min stall guard above stays as the final floor
+ * for legitimate long beats with productive work.
+ *
+ * 90s is generous: even a slow Azure round-trip with reasoning tokens
+ * usually streams its first tool call within 30-45s. A beat that has
+ * been silent on the MCP path past 90s is "thinking but not acting."
+ */
+const NO_TOOL_INVOKED_DEADLINE_MS = 90 * 1000;
+
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
@@ -129,7 +145,15 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       pendingPromptCompletions.delete(sessionId);
       reject(new Error(`OpenCode prompt timed out after ${timeoutMs}ms for session ${sessionId}`));
     }, timeoutMs);
-    pendingPromptCompletions.set(sessionId, { resolve, reject, timer, lastActivityAt: Date.now() });
+    const now = Date.now();
+    pendingPromptCompletions.set(sessionId, {
+      resolve,
+      reject,
+      timer,
+      startedAt: now,
+      lastActivityAt: now,
+      toolCallCount: 0,
+    });
     startPromptCompletionPoller();
   });
 }
@@ -208,6 +232,25 @@ async function pollPendingPromptCompletions() {
       if (Date.now() - entry.lastActivityAt > BEAT_STALL_TIMEOUT_MS) {
         emitEmployeeActivity("system", "info", `Stall detected: session ${sessionId.slice(0, 12)}… silent for ${BEAT_STALL_TIMEOUT_MS / 1000}s — rejecting`);
         rejectPromptCompletion(sessionId, new Error(`Beat session ${sessionId} stalled: no SSE activity for ${BEAT_STALL_TIMEOUT_MS}ms`));
+        continue;
+      }
+
+      // Layer B no-tool-invoked early-exit: the LLM has been "thinking" past
+      // NO_TOOL_INVOKED_DEADLINE_MS without making a single tool call. That's
+      // a behavioral failure — the model is producing prose instead of action.
+      // Beats like this would otherwise burn the full Azure round-trip (we've
+      // seen 6+ minute "no_tool_invoked" beats). Abort early so the role can
+      // get re-dispatched on its next interval.
+      if (entry.toolCallCount === 0 && Date.now() - entry.startedAt > NO_TOOL_INVOKED_DEADLINE_MS) {
+        emitEmployeeActivity(
+          "system",
+          "info",
+          `No-tool deadline: session ${sessionId.slice(0, 12)}… ${Math.round((Date.now() - entry.startedAt) / 1000)}s without a tool call — rejecting`,
+        );
+        rejectPromptCompletion(
+          sessionId,
+          new Error(`Beat session ${sessionId} produced no tool calls within ${NO_TOOL_INVOKED_DEADLINE_MS}ms`),
+        );
         continue;
       }
 

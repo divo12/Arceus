@@ -137,9 +137,17 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
   // timer. We only have a sessionId to look up if the caller passed one
   // (heartbeat beat tools always do; the chat path uses its own
   // registration so it's already covered there).
+  //
+  // Layer B — also bump `toolCallCount` here so the early-exit poller
+  // in pollPendingPromptCompletions can detect "thinking but not acting"
+  // beats and abort them at NO_TOOL_INVOKED_DEADLINE_MS instead of
+  // letting them burn the full Azure round-trip.
   if (sessionId) {
     const pending = pendingPromptCompletions.get(sessionId);
-    if (pending) pending.lastActivityAt = Date.now();
+    if (pending) {
+      pending.lastActivityAt = Date.now();
+      pending.toolCallCount += 1;
+    }
   }
 };
 

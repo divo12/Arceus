@@ -79,8 +79,22 @@ export interface PendingPromptCompletion {
   resolve: () => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+  /**
+   * Epoch ms when this completion was registered. Stable — never updated.
+   * Used by the no-tool-invoked early-exit guard to measure how long the
+   * agent has been "thinking but not acting." Distinct from lastActivityAt
+   * (which resets on any signal — SSE event or MCP request).
+   */
+  startedAt: number;
   /** Epoch ms of the last SSE event seen for this session. Used by the poller to detect stuck agents. */
   lastActivityAt: number;
+  /**
+   * Number of MCP tool invocations seen for this session since registration.
+   * Incremented by `mcpRequestContext` middleware on every tool call. Read
+   * by `pollPendingPromptCompletions` to early-exit beats that the LLM has
+   * been "thinking about" for too long without taking any action.
+   */
+  toolCallCount: number;
 }
 
 type ReactiveEmitter = (
