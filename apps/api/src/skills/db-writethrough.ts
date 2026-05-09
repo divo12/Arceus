@@ -70,12 +70,22 @@ export function isSkillsDbWritethroughEnabled(): boolean {
  * registry's existing dedup-by-name logic upstream means collisions
  * here are practically impossible.
  */
-function deriveSlug(name: string): string {
-  return name
+function deriveSlug(name: string, role?: string): string {
+  // Slug must be unique per (company_id, slug) — schema enforces this via
+  // skill_artifacts_company_slug_idx. The seeder fans out multi-role
+  // frontmatter (e.g. `role: cto,pm`) into one skill row per role, all
+  // sharing the same `name`. Including the role in the slug guarantees
+  // each row gets a distinct slug; without it the second insert hits a
+  // unique-constraint violation on conflict resolution that targets only
+  // `id`. Single-role skills omit the suffix to preserve existing slugs.
+  const base = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 64) || "skill";
+    .replace(/^_+|_+$/g, "");
+  const slug = role
+    ? `${base}__${role.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`
+    : base;
+  return slug.slice(0, 64) || "skill";
 }
 
 interface SkillRowValues {
@@ -108,7 +118,7 @@ function toSkillRow(skill: SkillArtifact): SkillRowValues {
     id: friendlyToUuid(skill.id),
     companyId: companiesRepo.toDbId(skill.companyId),
     friendlyId: skill.id,
-    slug: deriveSlug(skill.name),
+    slug: deriveSlug(skill.name, skill.role),
     name: skill.name,
     role: skill.role,
     version: skill.version,
