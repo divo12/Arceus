@@ -73,9 +73,12 @@ const createArtifactBody = z.object({
   attachToTaskIds: z.array(z.string()).max(10).optional(),
 });
 
+// `role` is deliberately not a body field — the calling agent's role is
+// resolved per-request via `req.mcp.role` (header → session-context).
+// The MCP server's process env doesn't carry per-beat role, so duplicating
+// role into the body produced empty-string validation failures.
 const workspaceWriteBody = z.object({
   taskId: z.string().min(1),
-  role: z.string().min(1),
   slug: z
     .string()
     .min(1)
@@ -145,7 +148,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
       }
 
       try {
-        await writeArtifactToWorkspace(body.taskId, body.role, body.slug, artifact.content);
+        await writeArtifactToWorkspace(body.taskId, req.mcp!.role, body.slug, artifact.content);
       } catch (error) {
         return reply.code(503).send(
           failure(

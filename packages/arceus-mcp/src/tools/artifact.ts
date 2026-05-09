@@ -49,7 +49,11 @@ export const registerArtifactTools = (
       },
     },
     async ({ artifactId, taskId, slug }) => {
-      const body = { taskId, role: ctx.role, slug };
+      // `role` is NOT sent in the body — the route resolves it per-request
+      // via req.mcp.role (x-role header → session-context). Putting
+      // ctx.role here produced empty strings because the MCP server's
+      // process env carries no per-beat role.
+      const body = { taskId, slug };
       const res = await client.request<ToolResult>({
         method: "POST",
         path: `${ARTIFACTS}/${artifactId}/workspace-writes`,
