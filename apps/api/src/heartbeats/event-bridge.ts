@@ -176,12 +176,25 @@ async function processEvent(event: OpenCodeEvent) {
   if (!props) return;
 
   const sessionId: string | undefined = props.info?.sessionID ?? props.part?.sessionID ?? props.sessionID;
+  // P3 — Diagnostic instrumentation for the stall investigation. Logs:
+  //   - event.type
+  //   - whether sessionId was extracted (proves SSE events have it)
+  //   - whether it matched an in-flight beat (proves the reset CAN fire)
+  // Stalls in beats 9/12/17/13 fired at exactly beat-start + timeout
+  // despite tool calls happening — this log lets us see at runtime which
+  // events actually reach the bridge during the silence window. Volume:
+  // a few events/sec per active session — bounded.
+  const pendingCompletion = sessionId ? pendingPromptCompletions.get(sessionId) : undefined;
+  if (process.env.ARCEUS_SSE_DEBUG === "1" || !sessionId || pendingCompletion) {
+    const sessTag = sessionId ? sessionId.slice(0, 12) : "<none>";
+    const pendTag = sessionId ? (pendingCompletion ? "hit" : "miss") : "n/a";
+    console.log(`[sse] type=${event.type} session=${sessTag} pending=${pendTag}`);
+  }
   if (!sessionId) return;
 
   // Reset the stall clock for any session that has a pending completion — this
   // includes beat sessions which aren't in agentSessions and would otherwise
   // fall through the `!role` guard below before we could touch them.
-  const pendingCompletion = pendingPromptCompletions.get(sessionId);
   if (pendingCompletion) {
     pendingCompletion.lastActivityAt = Date.now();
   }

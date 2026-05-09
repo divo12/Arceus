@@ -6,6 +6,7 @@ import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
 import { resolveBearerToken } from "../../auth/bearer.js";
 import { hashBody, lookupIdempotency, rememberIdempotency, releaseIdempotency, IDEMPOTENCY_FAILURES } from "./idempotency.js";
 import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
+import { pendingPromptCompletions } from "../../orchestration/state.js";
 import { observability, parseRoleStrict, type RoleType } from "@arceus/contracts";
 import { routeToTool } from "./route-to-tool.js";
 import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
@@ -128,6 +129,18 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
 
   req.mcp = { beatId, companyId, role, requestId, idempotencyKey: idempotencyKey ?? null };
   void reply.header("x-request-id", requestId);
+
+  // P0a — Defense in depth for the stall-guard. Tool calls are concrete
+  // proof of agent activity; resetting `lastActivityAt` on the HTTP path
+  // works regardless of whether OpenCode's SSE stream is alive. The SSE
+  // hook in event-bridge.ts:184 stays — both signals reset the same
+  // timer. We only have a sessionId to look up if the caller passed one
+  // (heartbeat beat tools always do; the chat path uses its own
+  // registration so it's already covered there).
+  if (sessionId) {
+    const pending = pendingPromptCompletions.get(sessionId);
+    if (pending) pending.lastActivityAt = Date.now();
+  }
 };
 
 const RATE_LIMIT = 10_000;

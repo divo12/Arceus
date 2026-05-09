@@ -45,7 +45,12 @@ import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
 
 interface OpencodeInstance {
-  server: { url: string; close(): void };
+  // close() is async because resetOpencodeConnection MUST wait for the
+  // spawned subprocess to actually exit before allowing a fresh
+  // getOpencode() to spawn a new one. Without the wait, SIGTERM is in
+  // flight, port 4096 stays bound, and the next launch falls back to a
+  // random port — producing the dual-boot cascade we kept seeing in logs.
+  server: { url: string; close(): Promise<void> | void };
   client: ReturnType<typeof createOpencodeClient>;
 }
 
@@ -204,7 +209,7 @@ async function detectExistingOpencodeServer(url: string) {
 }
 
 /** Create an authenticated OpenCode SDK client connected to the given URL. */
-async function connectOpencodeClient(url: string, close: () => void): Promise<OpencodeInstance> {
+async function connectOpencodeClient(url: string, close: () => Promise<void> | void): Promise<OpencodeInstance> {
   const client = createOpencodeClient({ baseUrl: url });
 
   await client.auth.set({
@@ -415,9 +420,7 @@ export async function getOpencode() {
         { share: "disabled" }
       );
 
-      return connectOpencodeClient(url, () => {
-        proc.kill();
-      });
+      return connectOpencodeClient(url, () => waitForProcExit(proc));
     })();
 
     opencodePromise = attempt;
@@ -442,12 +445,60 @@ export async function resetOpencodeConnection() {
   if (opencodePromise) {
     try {
       const instance = await opencodePromise;
-      instance.server.close();
+      // AWAIT close() so the spawned subprocess fully exits and releases
+      // the port before the next getOpencode() can spawn a replacement.
+      // Fire-and-forget kill produced the dual-boot port cascade.
+      await instance.server.close();
     } catch {
       // Instance never resolved — nothing to kill
     }
   }
   opencodePromise = null;
+}
+
+/**
+ * SIGTERM the OpenCode subprocess and wait for it to actually exit so the
+ * port it held is fully released. Falls back to SIGKILL after 5s grace if
+ * the process ignores SIGTERM. Resolves once the process is gone (or the
+ * SIGKILL grace window elapses); never rejects.
+ */
+function waitForProcExit(proc: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      resolve();
+      return;
+    }
+
+    const onExit = () => {
+      clearTimeout(killTimer);
+      resolve();
+    };
+    proc.once("exit", onExit);
+
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // Process already dead between the check above and the kill.
+      proc.off("exit", onExit);
+      resolve();
+      return;
+    }
+
+    const killTimer = setTimeout(() => {
+      // SIGTERM ignored — escalate. The "exit" listener is still attached;
+      // it'll fire (and clear the no-op fallback timer below) once the
+      // process actually terminates.
+      try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+      // Final safety: if even SIGKILL doesn't yield an exit event within
+      // another 2s (e.g. process is uninterruptible), give up and resolve
+      // so resetOpencodeConnection can't deadlock the rest of the system.
+      setTimeout(() => {
+        proc.off("exit", onExit);
+        resolve();
+      }, 2000).unref();
+    }, 5000);
+    killTimer.unref();
+  });
 }
 
 /** Clear the cached CEO chat session so the next chat turn creates a fresh one. */

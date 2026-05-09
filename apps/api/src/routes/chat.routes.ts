@@ -63,6 +63,13 @@ export default async function chatRoutes(app: FastifyInstance) {
           companyId: getActiveCompanyId() ?? undefined,
         });
       }
+      // SSE headers already flushed — frontend EventSource is open. We must
+      // write an explicit `error` event before closing or the UI hangs in
+      // its skeleton/loading state forever (no signal that the stream died).
+      try {
+        const message = error instanceof Error ? error.message : "CEO stream failed.";
+        reply.raw.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
+      } catch { /* stream already broken */ }
       try { reply.raw.end(); } catch { /* already ended */ }
       return reply;
     }
