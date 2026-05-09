@@ -293,7 +293,11 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       .filter((t) => t.dependsOnTaskIds.includes(taskId) && (t.status === "created" || t.status === "planned"))
       .map((t) => t.id);
 
-    await persistTask(taskId);
+    // No persistTask: setTaskStatus already commits via a row-locked
+    // db.transaction in updateTask. The legacy "barrier" did a
+    // non-transactional read-then-write that raced concurrent fire-
+    // and-forget mutations and clobbered the just-committed status —
+    // see the persistTask race analysis.
     return cacheAndSend(req, reply, 200, success(
       `Task ${taskId} marked completed.`,
       { taskId, status: "completed", unblockedDependents: unblocked },
@@ -308,8 +312,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
+    // setTaskStatus commits transactionally via updateTask — no need
+    // for a post-write persistTask barrier. See persistTask race notes
+    // in /completion above.
     await setTaskStatus(taskId, "blocked", body.reason);
-    await persistTask(taskId);
     return cacheAndSend(req, reply, 200, success(`Task ${taskId} blocked.`, { taskId, status: "blocked", reason: body.reason }));
   });
 
@@ -336,8 +342,11 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    appendTaskResult(taskId, body.entry);
-    await persistTask(taskId);
+    // Await the mutation — appendTaskResult is now async and commits
+    // via updateTask's row-locked transaction. The previous fire-and-
+    // forget shape + post-write `persistTask(taskId)` raced against
+    // concurrent setTaskStatus/append calls and clobbered the row.
+    await appendTaskResult(taskId, body.entry);
     return cacheAndSend(req, reply, 200, success(`Result appended to ${taskId}.`, { taskId }));
   });
 
@@ -348,8 +357,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    appendTaskCommand(taskId, body.command);
-    await persistTask(taskId);
+    await appendTaskCommand(taskId, body.command);
     return cacheAndSend(req, reply, 200, success(`Command appended to ${taskId}.`, { taskId }));
   });
 
@@ -360,8 +368,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    appendTaskPlanStep(taskId, body.step);
-    await persistTask(taskId);
+    await appendTaskPlanStep(taskId, body.step);
     return cacheAndSend(req, reply, 200, success(`Plan step appended to ${taskId}.`, { taskId }));
   });
 

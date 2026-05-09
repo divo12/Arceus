@@ -231,7 +231,7 @@ async function processEvent(event: OpenCodeEvent) {
           const registered = await registerReportedPreviewUrl(previewUrl);
           if (registered && activeExecution) {
             setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
-            appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
+            void appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
             emitEmployeeActivity(role, "info", `${role} reported preview URL → ${previewUrl}`, {
               taskId: activeExecution.buildTaskId,
             });
@@ -338,7 +338,7 @@ async function processEvent(event: OpenCodeEvent) {
           detail: linesChanged ? { linesChanged } : null,
         });
         if (resolvedTaskId) {
-          appendTaskResult(resolvedTaskId, `edited:${filePath}`);
+          void appendTaskResult(resolvedTaskId, `edited:${filePath}`);
         }
       } else if (isInvocation && toolName === "bash") {
         const cmd = (typeof args.command === "string" ? args.command : "").slice(0, 180);
@@ -351,7 +351,7 @@ async function processEvent(event: OpenCodeEvent) {
           taskId: resolvedTaskId,
         });
         if (resolvedTaskId) {
-          appendTaskCommand(resolvedTaskId, cmd);
+          void appendTaskCommand(resolvedTaskId, cmd);
         }
       } else if (isInvocation && toolName) {
         emitEmployeeActivity(role, "tool_call", `tool: ${toolName}`, {
@@ -359,7 +359,7 @@ async function processEvent(event: OpenCodeEvent) {
           detail: { toolName, args: sanitizeToolArgs(args) },
         });
         if (resolvedTaskId) {
-          appendTaskResult(resolvedTaskId, `tool:${toolName}`);
+          void appendTaskResult(resolvedTaskId, `tool:${toolName}`);
         }
       }
     }

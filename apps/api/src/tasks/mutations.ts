@@ -17,7 +17,7 @@ import {
 } from "../observability/graph-emitter/index.js";
 import { describePgError } from "../infra/pg-errors.js";
 import { workspaceManager } from "../workspace/manager.js";
-import { swallowAndAudit } from "../observability/swallow.js";
+import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 import {
   processTaskOutcome,
   runATAPipeline,
@@ -154,13 +154,19 @@ async function buildTaskMemoryOutput(task: Task, feedback?: string | null): Prom
 /**
  * Append a result string to a task's executor results (capped at 50).
  *
- * Sync export: `updateTask` is async (it persists to canonical), but
- * the in-memory append must happen on call. Fire-and-forget the DB
- * write through `swallowAndAudit` so failures surface to observability
- * instead of becoming an unhandled rejection.
+ * Now awaitable (was fire-and-forget). Routes that mutate-then-respond
+ * MUST await this — the prior fire-and-forget shape raced against
+ * `persistTask`'s read-then-write barrier in the calling route, which
+ * could clobber the just-completed status with stale state. See the
+ * persistTask race analysis: routes now await this and skip the
+ * post-mutation `persistTask` call entirely.
+ *
+ * `void`-prefixed callers (event-bridge, workspace monitor) keep
+ * fire-and-forget semantics — `swallowAndReport` still routes failures
+ * through the same observability sinks as `swallowAndAudit`.
  */
-export function appendTaskResult(taskId: string, result: string) {
-  swallowAndAudit("task.append_result", () =>
+export async function appendTaskResult(taskId: string, result: string): Promise<void> {
+  await swallowAndReport("task.append_result", () =>
     updateTask(taskId, (task) => ({
       ...task,
       executorState: {
@@ -234,9 +240,9 @@ export function hydrateTaskFromSpec(taskId: string, spec: {
   );
 }
 
-/** Append a plan step to the task's planner state (deduped, capped at 12). Fire-and-forget. */
-export function appendTaskPlanStep(taskId: string, step: string) {
-  swallowAndAudit("task.append_plan_step", () =>
+/** Append a plan step to the task's planner state (deduped, capped at 12). Awaitable. */
+export async function appendTaskPlanStep(taskId: string, step: string): Promise<void> {
+  await swallowAndReport("task.append_plan_step", () =>
     updateTask(taskId, (task) => ({
       ...task,
       plannerState: {
@@ -248,9 +254,9 @@ export function appendTaskPlanStep(taskId: string, step: string) {
   );
 }
 
-/** Record a command execution on the task's executor state (capped at 50). Fire-and-forget. */
-export function appendTaskCommand(taskId: string, command: string) {
-  swallowAndAudit("task.append_command", () =>
+/** Record a command execution on the task's executor state (capped at 50). Awaitable. */
+export async function appendTaskCommand(taskId: string, command: string): Promise<void> {
+  await swallowAndReport("task.append_command", () =>
     updateTask(taskId, (task) => ({
       ...task,
       executorState: {

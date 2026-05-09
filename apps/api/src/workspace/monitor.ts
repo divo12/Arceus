@@ -102,7 +102,7 @@ async function pollDeveloperWorkspaceChanges() {
     emitEmployeeActivity("developer", "file_edit", filePath, {
       taskId: activeExecution.buildTaskId,
     });
-    appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
+    void appendTaskResult(activeExecution.buildTaskId, `edited:${filePath}`);
   }
 
   const fileChangeSprintId = resolveActiveSprintId();
@@ -159,7 +159,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   }
 
   setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
-  appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
+  void appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
   emitEmployeeActivity("developer", "info", `Live preview available during implementation → ${previewUrl}`, {
     taskId: activeExecution.buildTaskId,
   });
