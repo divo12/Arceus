@@ -12,7 +12,7 @@ import type { RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
 import { updateSuccessRate, ROLE_SOULS, getSkillById } from "@arceus/company-runtime";
 import { createBeatSession, destroyBeatSession } from "../infra/opencode.js";
-import { getOpencode } from "../infra/opencode.js";
+import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
 import { buildBeatContext, prepareBeatRender } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
@@ -39,6 +39,28 @@ interface BeatResult {
   verdict: "pass" | "fail";
   cause?: string;
   tokensUsed: number;
+}
+
+/**
+ * Classify an error as an OpenCode connection failure that warrants
+ * invalidating the cached `opencodePromise`. Covers undici's generic
+ * "fetch failed", explicit ECONNREFUSED / ECONNRESET, and the SDK's
+ * own connection-related messages. We deliberately match on substrings
+ * because the SDK wraps undici errors and the .cause chain isn't
+ * reliably exposed across all paths.
+ */
+function isOpencodeConnectionFailure(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { message?: string; cause?: { code?: string; message?: string } };
+  const msg = `${e.message ?? ""} ${e.cause?.message ?? ""}`.toLowerCase();
+  if (e.cause?.code === "ECONNREFUSED" || e.cause?.code === "ECONNRESET") return true;
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnreset") ||
+    msg.includes("socket hang up") ||
+    msg.includes("other side closed")
+  );
 }
 
 export async function runBeat(input: {
@@ -199,6 +221,21 @@ export async function runBeat(input: {
       beatId,
       ts: Date.now(),
     });
+
+    // Cascade breaker: when the failure is a connection/fetch error to
+    // OpenCode (TypeError: fetch failed, ECONNREFUSED, socket hang up,
+    // undici-stack network errors), the cached `opencodePromise` is
+    // pointing at a dead subprocess. Without invalidating it, every
+    // subsequent beat resolves the same dead instance and fails the
+    // exact same way — we observed 11+ consecutive beat_failed events
+    // in production after a single OpenCode death.
+    //
+    // Fire-and-forget so we don't delay this beat's cleanup. Next
+    // beat's getOpencode() will see opencodePromise === null and
+    // respawn against whatever port is actually free. Self-healing.
+    if (isOpencodeConnectionFailure(e)) {
+      void resetOpencodeConnection().catch(() => { /* best effort */ });
+    }
   } finally {
     // Steps 16–22: scoring + cleanup, always runs
     const verdict = cause === "beat_hard_cap"
