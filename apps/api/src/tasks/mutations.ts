@@ -31,6 +31,7 @@ import { productDir, type Artifact } from "../orchestration/state.js";
 import { getDb } from "@arceus/db";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import { hippocampus } from "../memory/extractors.js";
+import { checkSprintCompletion } from "../sprints/lifecycle.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Artifact helpers
@@ -519,5 +520,18 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
         );
       }
     }
+
+    // Sprint progression — auto-trigger completion check on every terminal
+    // task transition. Without this, a sprint with all tasks done sits in
+    // `executing` forever because `checkSprintCompletion` was only wired
+    // into the manual `approveBoardReview` path. The function is idempotent
+    // (sprintCompletionGate.runExclusive) so concurrent terminal-status
+    // transitions can't race to flip the sprint twice. Routed through
+    // swallowAndAudit so a snapshot-read or DB hiccup surfaces to operators
+    // instead of silently leaving the sprint stuck again.
+    swallowAndAudit("sprint.check_completion_on_task_terminal", () =>
+      checkSprintCompletion(),
+      { companyId, detail: { taskId, status } },
+    );
   }
 }
