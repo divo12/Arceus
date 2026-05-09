@@ -18,6 +18,7 @@ import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { resetOpencodeConnection, resetCeoChatSession } from "../infra/opencode.js";
 import { cancelInFlightBeatsForCompany } from "../prompts/llm.js";
+import { stopLocalPreview } from "../workspace/preview.js";
 import { getDatabaseHealth } from "@arceus/db";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
@@ -110,6 +111,19 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
         } catch (err) {
           request.log?.warn?.({ err }, "Cascade cleanup of governance rows failed");
         }
+      }
+
+      // Tear down the local preview server: kills the Vite/dev process,
+      // closes the static-server fallback, and resets previewState to
+      // status="idle" with all URLs nulled. Without this, a Vite server
+      // from the previous company keeps serving the old workspace
+      // contents on 127.0.0.1:3210 and the preview iframe renders the
+      // stale app instead of the "No preview available yet" placeholder.
+      // Best-effort — never block reset if process termination errors.
+      try {
+        await stopLocalPreview();
+      } catch (err) {
+        request.log?.warn?.({ err }, "stopLocalPreview during reset failed (non-fatal)");
       }
 
       resetEmployeeActivityLog();
