@@ -143,37 +143,37 @@ export async function checkSprintCompletion(): Promise<boolean> {
       emitReactive(bugFields.assignedRole, "bug_reported");
     }
   } else {
-    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — awaiting tester verification`, {
+    // Pre-review build gate passed. The sprint plan already includes
+    // tester + CTO review tasks (those completed alongside other tasks
+    // before this gate ran), so re-running an LLM-driven verification
+    // here is redundant. Trust the build gate as the automated safety
+    // net and finalize the sprint directly.
+    //
+    // Trade-off (see commit message): we lose the inline preview probe,
+    // entry-point import check, and rework-loop. Build failures still
+    // route through the FAIL branch above and create a bug task. Taken
+    // because in practice agents include verification work as real
+    // sprint tasks, and the redundant LLM round-trip was eating 2-3
+    // minutes per sprint with no signal the build gate didn't already
+    // cover.
+    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — finalizing sprint directly (Option A: skip tester_verification + final_gate)`, {
       detail: { gateResult },
     });
-    reviewState.phase = "tester_verification";
-
-    // Surface the preview URL to the user as soon as the gate passes — this
-    // is the "ship it" moment from the user's POV. Tester still needs to
-    // verify, but the user can poke at the preview now.
-    const preview = getLocalPreviewState();
-    const previewUrl = preview.url ?? preview.entryUrl ?? preview.validationUrl;
-    if (previewUrl) {
-      await appendChatMessage({
-        id: `chat_${crypto.randomUUID()}`,
-        companyId: snapshot.company.id,
-        sprintId: currentSprintId,
-        agentId: null,
-        role: "system",
-        content: `🚀 Preview ready for Sprint ${currentSprint.number}: ${previewUrl} — tester verifying now.`,
-        cardType: "status_update",
-        cardData: { previewUrl, sprintNumber: currentSprint.number, phase: "pre_review_passed" },
-        createdAt: nowIso(),
-      });
-    }
-
-    emitReactive("tester", "task_assigned");
+    reviewState.phase = "complete";
   }
 
   await updateSprint(currentSprintId, (sprint) => ({
     ...sprint,
     reviewState,
   }));
+
+    if (gateResult.passed) {
+      // Run finalizeSprintCompletion outside the updateSprint above so
+      // the reviewState write lands first. finalizeSprintCompletion is
+      // idempotent (early-returns on sprint.status === "completed") and
+      // does its own sprint update + chat-message emission.
+      await finalizeSprintCompletion(currentSprintId);
+    }
 
     return true;
   });
