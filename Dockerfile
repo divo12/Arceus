@@ -52,6 +52,12 @@ COPY packages/ ./packages/
 COPY apps/api/ ./apps/api/
 COPY opencode.json* ./
 COPY .opencode/ ./.opencode/
+# .arceus/skills-seed contains the canonical SKILL.md library that
+# seedExistingSkills() reads at boot. Without it, the seeder's
+# `existsSync(fallbackNew)` check returns false and silently falls back
+# to packages/company-runtime/skills (the legacy 8-skill stub),
+# leaving every employee prompt's skill references unresolved in prod.
+COPY .arceus/ ./.arceus/
 
 # Compile every workspace the API imports from. `--if-present` keeps it
 # tolerant of packages without a build script.
@@ -97,6 +103,7 @@ COPY --from=build --chown=arceus:arceus /app/packages ./packages
 COPY --from=build --chown=arceus:arceus /app/apps/api ./apps/api
 COPY --from=build --chown=arceus:arceus /app/opencode.json ./opencode.json
 COPY --from=build --chown=arceus:arceus /app/.opencode ./.opencode
+COPY --from=build --chown=arceus:arceus /app/.arceus ./.arceus
 
 # Per-company workspace root + bundle cache.
 # /app/workspace is a fixed path OpenCode mkdir's at warm-up time;
