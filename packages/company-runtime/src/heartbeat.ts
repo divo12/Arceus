@@ -135,6 +135,11 @@ class BeatLockManager {
     this.locks.delete(agentId);
   }
 
+  /** Drop every lock — used by engine.reset() on company switch. */
+  clear(): void {
+    this.locks.clear();
+  }
+
   isLocked(agentId: string): boolean {
     return this.locks.has(agentId);
   }
@@ -171,6 +176,13 @@ class Semaphore {
 
   release(): void {
     this.current = Math.max(0, this.current - 1);
+  }
+
+  /** Force-zero the slot count — used by engine.reset() so a beat that
+   * was mid-flight at company switch can't permanently strand the slot.
+   */
+  reset(): void {
+    this.current = 0;
   }
 
   get available(): number {
@@ -423,8 +435,17 @@ export class HeartbeatEngine {
 
   /**
    * Clear per-company state when the company is reset.
-   * Keeps the scheduler running and retains config/locks so the next company
-   * inherits a warm scheduler without a restart. Safe to call repeatedly.
+   * Keeps the scheduler running so the next company inherits a warm
+   * scheduler without a restart. Safe to call repeatedly.
+   *
+   * Also force-releases the global semaphore and clears all agent locks.
+   * Without this, a beat that was mid-flight at reset time keeps its
+   * slot/lock forever — the next company's heartbeat ticks then bail at
+   * `semaphore.available <= 0` silently and no beats ever fire. The
+   * caller is expected to also reject pending prompt completions
+   * (cancelInFlightBeatsForCompany) so the orphan beat's run-beat
+   * finally block runs cleanly; this reset is the safety net for any
+   * code path where that cancellation didn't reach the pending entry.
    */
   reset() {
     this.beatCounter = 0;
@@ -432,6 +453,8 @@ export class HeartbeatEngine {
     this.lastBeatAt.clear();
     this.stagedMutations = [];
     this.eventQueue.clear();
+    this.locks.clear();
+    this.semaphore.reset();
   }
 
   // ── Scheduler tick ───────────────────────────────────────

@@ -17,6 +17,7 @@ import { resetEmployeeActivityLog } from "../observability/activity.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { deletePersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { resetOpencodeConnection, resetCeoChatSession } from "../infra/opencode.js";
+import { cancelInFlightBeatsForCompany } from "../prompts/llm.js";
 import { getDatabaseHealth } from "@arceus/db";
 import type { HeartbeatEngine, MeetingScheduler } from "@arceus/company-runtime";
 
@@ -74,6 +75,19 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
 
       await resetOrchestratorState();
       heartbeatEngine.stop();
+      // Cancel in-flight beats for the previous company BEFORE clearing
+      // session contexts (a few lines down). cancelInFlightBeatsForCompany
+      // resolves session→company via getSessionContext; if we've already
+      // wiped that map, every lookup misses and zero beats get rejected,
+      // leaving the global semaphore stuck at 0. Calling here also gives
+      // the rejected promises' finally blocks a microtask to release the
+      // slot before engine.reset() force-zeros it as a safety net.
+      if (companyId) {
+        const cancelled = cancelInFlightBeatsForCompany(companyId);
+        if (cancelled > 0) {
+          request.log?.info?.({ companyId, cancelled }, "Cancelled in-flight beats during reset");
+        }
+      }
       heartbeatEngine.reset();
       meetingScheduler.stop();
       // Spec 31 Phase 7.C.1 — workspace archive is keyed by companyId
