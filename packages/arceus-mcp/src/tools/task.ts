@@ -82,15 +82,16 @@ export const registerTaskTools = (
   server.registerTool(
     "task_set_preview_url",
     {
-      description: "Set the preview URL slot on a task. Replaces any prior value.",
-      inputSchema: { taskId: z.string(), url: z.string().url().nullable() },
+      description:
+        "Publish the running preview server's URL to this task so the chat preview pane renders. The server reads the live preview state — DO NOT pass a URL. Call `workspace_start_preview` first; this tool fails with 409 if no preview is running.",
+      inputSchema: { taskId: z.string() },
     },
-    async ({ taskId, url }) => {
+    async ({ taskId }) => {
       const res = await client.request<ToolResult>({
         method: "PUT",
         path: `${TASKS}/${taskId}/preview-url`,
-        body: { url },
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_set_preview_url", { taskId, url }),
+        body: {},
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_set_preview_url", { taskId }),
       });
       return res.status === 204
         ? toMcpContent(success("Preview URL set.", { taskId }))

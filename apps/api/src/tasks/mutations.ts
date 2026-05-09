@@ -202,9 +202,14 @@ export async function attachArtifactToTask(taskId: string, artifactId: string): 
   }
 }
 
-/** Update the task's local preview URL. Fire-and-forget. */
-export function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null) {
-  swallowAndAudit("task.set_preview_url", () =>
+/**
+ * Update the task's local preview URL. Awaitable so the route returning a
+ * 204 to the agent can guarantee the write is durable before next read —
+ * same pattern as appendTaskResult/Command/PlanStep. The non-awaiting
+ * callers (event-bridge, monitor) intentionally `void` the result.
+ */
+export async function setTaskPreviewUrl(taskId: string, localPreviewUrl: string | null): Promise<void> {
+  await swallowAndReport("task.set_preview_url", () =>
     updateTask(taskId, (task) => ({
       ...task,
       localPreviewUrl,

@@ -17,6 +17,7 @@ import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 import { readTaskHybrid, persistTask, CLAIM_FAILURES } from "./task-persistence.js";
+import { getLocalPreviewState } from "../../workspace/preview.js";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 
@@ -136,8 +137,14 @@ const progressBody = z.object({
   filesModified: z.array(z.string()).optional(),
 });
 
+// task_set_preview_url no longer accepts a URL from the agent — agents kept
+// passing locally-bound URLs like `http://127.0.0.1:4173/` from `vite preview`,
+// which the public proxy can't reach. The route now reads the live preview
+// state (started via `workspace_start_preview`) and stores the canonical URL
+// from `buildPreviewPublicBaseUrl()`. We accept an empty body, but tolerate
+// `{ url }` from older clients to avoid 422 churn during rollout.
 const previewUrlBody = z.object({
-  url: z.string().url().nullable(),
+  url: z.string().nullable().optional(),
 });
 
 const hydrateBody = z.object({
@@ -395,14 +402,33 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
   });
 
   // PUT /tasks/:taskId/preview-url
+  // The agent does NOT pass a URL — we read live preview state and store the
+  // canonical public URL. If no preview is running, return 409 so the agent
+  // calls `workspace_start_preview` first.
   app.put<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/preview-url`, async (req, reply) => {
-    const body = parseOrFail(previewUrlBody, req.body, reply);
-    if (!body) return reply;
+    const parsedBody = parseOrFail(previewUrlBody, req.body ?? {}, reply);
+    if (!parsedBody) return reply;
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    setTaskPreviewUrl(taskId, body.url);
-    await persistTask(taskId);
+    // Allow null to explicitly clear the slot (used by sweepers/tests).
+    if (parsedBody.url === null) {
+      await setTaskPreviewUrl(taskId, null);
+      const status = 204;
+      cacheSuccessfulResponse(req, { status, body: "", locationHeader: null });
+      return reply.code(status).send();
+    }
+
+    const previewState = getLocalPreviewState();
+    const canonicalUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
+    if (!canonicalUrl || (previewState.status !== "ready" && previewState.status !== "starting")) {
+      return sendConflict(
+        reply,
+        `No preview server is running. Call workspace_start_preview before task_set_preview_url.`,
+      );
+    }
+
+    await setTaskPreviewUrl(taskId, canonicalUrl);
     const status = 204;
     cacheSuccessfulResponse(req, { status, body: "", locationHeader: null });
     return reply.code(status).send();

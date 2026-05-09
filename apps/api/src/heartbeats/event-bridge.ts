@@ -230,7 +230,7 @@ async function processEvent(event: OpenCodeEvent) {
         for (const previewUrl of extractPreviewUrls(textContent)) {
           const registered = await registerReportedPreviewUrl(previewUrl);
           if (registered && activeExecution) {
-            setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
+            void setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
             void appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
             emitEmployeeActivity(role, "info", `${role} reported preview URL → ${previewUrl}`, {
               taskId: activeExecution.buildTaskId,

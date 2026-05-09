@@ -134,7 +134,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   if (previewState.status === "starting" || previewState.status === "ready") {
     const previewUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
     if (previewUrl) {
-      setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
+      void setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
     }
     return;
   }
@@ -158,7 +158,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     return;
   }
 
-  setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
+  void setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
   void appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);
   emitEmployeeActivity("developer", "info", `Live preview available during implementation → ${previewUrl}`, {
     taskId: activeExecution.buildTaskId,
