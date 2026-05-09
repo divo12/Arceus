@@ -13,7 +13,7 @@
  * (workspace archive) and in-memory state reset outside the
  * transaction — those aren't database operations.
  */
-import { getDb, isDatabaseConfigured, trustScoresTable, policyViolations as policyViolationsCanonical, heartbeatRuns } from "@arceus/db";
+import { getDb, isDatabaseConfigured, trustScoresTable, policyViolations as policyViolationsCanonical, heartbeatRuns, sprints, tasks, meetings, artifacts, companies } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { inArray, eq } from "drizzle-orm";
@@ -48,11 +48,21 @@ export async function resetCompanyTx(companyId: string): Promise<ResetCompanyRes
   const dbCompanyId = companiesRepo.toDbId(companyId);
 
   await db.transaction(async (tx) => {
-    // Delete heartbeat_runs first (company_id FK, no cascade from reset).
+    // Delete work data: tasks → sprints → meetings → artifacts (cascade-safe order)
+    await tx.delete(tasks).where(eq(tasks.companyId, dbCompanyId));
+    await tx.delete(sprints).where(eq(sprints.companyId, dbCompanyId));
+    await tx.delete(meetings).where(eq(meetings.companyId, dbCompanyId));
+    await tx.delete(artifacts).where(eq(artifacts.companyId, dbCompanyId));
+
+    // Reset company sprint pointer so the UI shows the initial state
+    await tx
+      .update(companies)
+      .set({ currentSprintId: null, currentSprintNumber: null })
+      .where(eq(companies.id, dbCompanyId));
+
+    // Delete heartbeat_runs (company_id FK, no cascade from reset).
     await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.companyId, dbCompanyId));
 
-    // Spec 31 Phase 7.B.5.3 — companyId is now a uuid FK on the
-    // canonical `policy_violations` table; map the friendly id.
     const pv = await tx
       .delete(policyViolationsCanonical)
       .where(eq(policyViolationsCanonical.companyId, dbCompanyId))

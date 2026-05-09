@@ -277,6 +277,14 @@ function countOpenTasks(ctx: BeatRenderContext, role: Role): number {
   ).length;
 }
 
+/**
+ * Statuses the DB `claimTask` CAS actually accepts. Must stay in sync
+ * with `claimableStatuses` in `packages/db/src/repos/tasks/claim.ts`.
+ * `blocked` is intentionally excluded — a blocked task must be cleared
+ * with `task_resolve_blocker` before it can be claimed.
+ */
+const DB_CLAIMABLE_STATUSES: readonly Task["status"][] = ["created", "planned"];
+
 /** Snapshot of what the role sees in `## Your Tasks` (for diagnostic events). */
 function summarizeShownTasks(
   ctx: BeatRenderContext,
@@ -285,11 +293,12 @@ function summarizeShownTasks(
   return ctx.tasks
     .filter((t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status))
     .map((t) => {
-      const unmet = (t.dependsOnTaskIds ?? []).some((depId) => {
+      const depsUnmet = (t.dependsOnTaskIds ?? []).some((depId) => {
         const dep = ctx.tasks.find((d) => d.id === depId);
         return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
       });
-      return { id: t.id, title: t.title, status: t.status, claimable: !unmet };
+      const claimable = DB_CLAIMABLE_STATUSES.includes(t.status) && !depsUnmet;
+      return { id: t.id, title: t.title, status: t.status, claimable };
     });
 }
 
@@ -303,9 +312,14 @@ function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
     const unmetDeps = (t.dependsOnTaskIds ?? [])
       .map((depId) => ctx.tasks.find((d) => d.id === depId))
       .filter((d): d is NonNullable<typeof d> => !!d && !(["completed", "verified"] as string[]).includes(d.status));
-    const readiness = unmetDeps.length > 0
-      ? ` ⛔ NOT CLAIMABLE — waiting on: ${unmetDeps.map((d) => `"${d.title}" [${d.status}]`).join(", ")}`
-      : " ✅ claimable";
+    let readiness: string;
+    if (t.status === "blocked") {
+      readiness = " 🚫 BLOCKED — call `task_resolve_blocker({ taskId })` to clear before claiming";
+    } else if (unmetDeps.length > 0) {
+      readiness = ` ⛔ NOT CLAIMABLE — waiting on: ${unmetDeps.map((d) => `"${d.title}" [${d.status}]`).join(", ")}`;
+    } else {
+      readiness = " ✅ claimable";
+    }
     lines.push(`- [${t.status}] **${t.title}** (${t.id})${readiness}`);
     if (t.description) lines.push(`  ${t.description}`);
   }
@@ -485,13 +499,16 @@ function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
   const myTasks = ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
+  const blockedTasks = myTasks.filter((t) => t.status === "blocked");
   const claimable = myTasks.filter((t) => {
+    if (!DB_CLAIMABLE_STATUSES.includes(t.status)) return false;
     const unmet = (t.dependsOnTaskIds ?? []).filter((depId) => {
       const dep = ctx.tasks.find((d) => d.id === depId);
       return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
     });
     return unmet.length === 0;
   });
+
   if (myTasks.length === 0) {
     return [
       "## How to work this beat",
@@ -500,17 +517,29 @@ function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
       "Do not invent work. Do not create placeholder or no-op artifacts.",
     ].join("\n");
   }
-  if (claimable.length === 0) {
-    return [
-      "## How to work this beat",
+
+  const lines: string[] = ["## How to work this beat — Task Lifecycle Contract", ""];
+
+  if (blockedTasks.length > 0) {
+    lines.push(
+      `You have ${blockedTasks.length} blocked task(s) marked 🚫 in \`## Your Tasks\`.`,
+      "Blocked tasks CANNOT be claimed — do NOT call `task_claim` on them.",
+      "The system will automatically create a follow-up task to resolve the blocker. Wait for it to appear in your task list.",
       "",
-      "You have open tasks but **none are claimable** — every one is waiting on an upstream dependency (see ⛔ markers in `## Your Tasks`).",
-      "End your turn now. Do not call `task_claim` (it will return `deps_unmet`). Do not invent work.",
-    ].join("\n");
+    );
   }
-  return [
-    "## How to work this beat — Task Lifecycle Contract",
-    "",
+
+  if (claimable.length === 0) {
+    lines.push(
+      "You have open tasks but **none are directly claimable** right now:",
+      "- 🚫 BLOCKED tasks: call `task_resolve_blocker` (see above).",
+      "- ⛔ NOT CLAIMABLE tasks: waiting on upstream dependencies — end your turn and wait.",
+      "Do not call `task_claim`. Do not invent work.",
+    );
+    return lines.join("\n");
+  }
+
+  lines.push(
     "This is a **strict 3-step contract**. Skipping a step or going out of order is a bug.",
     "",
     "**Step 1 — Claim**",
@@ -532,7 +561,8 @@ function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
     "",
     "**Step 4 — End turn**",
     "- After `task_complete` (or `task_block`), end your turn. Do not invent extra work.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 // ── Task-specific context ────────────────────────────────

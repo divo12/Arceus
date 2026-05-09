@@ -38,7 +38,7 @@ export async function claimTask(
   assignedAgentId?: string,
 ): Promise<ClaimResult> {
   const now = new Date();
-  const claimableStatuses: TaskStatus[] = ["created", "planned", "ready"];
+  const claimableStatuses: TaskStatus[] = ["created", "planned"];
   const dbTaskId = toDbId(taskId);
   const dbRunId = toDbId(runId);
   const dbAgentId = assignedAgentId ? toDbId(assignedAgentId) : undefined;
