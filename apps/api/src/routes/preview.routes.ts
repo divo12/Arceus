@@ -1,12 +1,16 @@
 /** @module preview.routes — Routes for local preview lifecycle (start/stop/status). */
 import type { FastifyInstance } from "fastify";
+import { existsSync } from "node:fs";
 import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 export default async function previewRoutes(app: FastifyInstance) {
-  app.post("/api/preview/start", { preHandler: [requireUserAuth] }, async (request) => {
+  app.post("/api/preview/start", { preHandler: [requireUserAuth] }, async (request, reply) => {
     const productDir = workspaceManager.getLocalPath(request.companyId!);
+    if (!existsSync(productDir)) {
+      return reply.code(409).send({ error: "Workspace not initialized yet", status: "not_found" });
+    }
     const state = await startLocalPreview(productDir);
     return { status: state.status, url: state.url, entryUrl: state.entryUrl, error: state.lastError };
   });

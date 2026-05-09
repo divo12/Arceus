@@ -91,10 +91,15 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
       const db = getDb();
       const companies = await companiesRepo.listCompanies(db);
       const roster: { agentId: string; role: ReturnType<typeof parseRoleStrict>; companyId: string }[] = [];
-      for (const company of companies) {
-        const companyId = companiesRepo.fromDbId(company.id, company.friendlyId);
-        if (pausedCompanies.has(companyId)) continue;
-        const agents = await agentsRepo.listAgentsByCompany(db, companyId);
+      const nonPaused = companies
+        .map(c => companiesRepo.fromDbId(c.id, c.friendlyId))
+        .filter(id => !pausedCompanies.has(id));
+      const results = await Promise.all(
+        nonPaused.map(companyId =>
+          agentsRepo.listAgentsByCompany(db, companyId).then(agents => ({ companyId, agents })),
+        ),
+      );
+      for (const { companyId, agents } of results) {
         for (const a of agents) {
           try {
             roster.push({ agentId: a.id, role: parseRoleStrict(a.role), companyId });

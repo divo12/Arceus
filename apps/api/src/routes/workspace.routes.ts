@@ -5,19 +5,20 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
-import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "../workspace/preview.js";
+import { getLocalPreviewState, stopLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "../persistence/supabase-storage.js";
 
 export default async function workspaceRoutes(app: FastifyInstance) {
-  app.get("/api/product/overview", async (request) => {
-    const companyId = request.companyId ?? getActiveCompanyId();
-    const workspace = companyId ? await workspaceManager.get(companyId) : null;
-    const files = companyId ? (await workspaceManager.listFiles(companyId)).files : [];
+  app.get("/api/product/overview", async (request, reply) => {
+    const companyId = request.companyId;
+    if (!companyId) return reply.code(401).send({ error: "Missing company context" });
+    const workspace = await workspaceManager.get(companyId);
+    const files = (await workspaceManager.listFiles(companyId)).files;
 
     return {
-      root: workspace?.localPath ?? (companyId ? workspaceManager.getLocalPath(companyId) : null),
+      root: workspace?.localPath ?? workspaceManager.getLocalPath(companyId),
       workspace,
       preview: getLocalPreviewState(),
       files,

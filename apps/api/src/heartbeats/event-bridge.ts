@@ -227,7 +227,7 @@ async function processEvent(event: OpenCodeEvent) {
     touchAgentSession(sessionKey);
     if (caps.ownsProductWorkspace) {
       // Track the active developer session key so watchdog/monitor can resolve it.
-      setCurrentDeveloperSessionKey(sessionKey);
+      setCurrentDeveloperSessionKey(sessionKey.split(":")[0], sessionKey);
       if (agentState.status === "working") {
         scheduleDeveloperWatchdog(failDeveloperStall);
       }

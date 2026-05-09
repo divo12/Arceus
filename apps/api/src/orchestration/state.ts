@@ -109,14 +109,13 @@ export function agentSessionKey(companyId: string, role: string): string {
 }
 
 /**
- * The compound `companyId:role` key for the active developer session.
- * Updated by the event-bridge when a developer session becomes active
- * so that watchdog/monitor helpers (which have no request context) can
- * still resolve the right map entry without being threaded a companyId.
+ * Per-company `companyId:role` keys for active developer sessions.
+ * Keyed by companyId so concurrent multi-tenant developer sessions
+ * don't overwrite each other.
  */
-let _currentDeveloperSessionKey = "";
-export function setCurrentDeveloperSessionKey(key: string) { _currentDeveloperSessionKey = key; }
-export function getCurrentDeveloperSessionKey() { return _currentDeveloperSessionKey; }
+const _developerSessionKeys = new Map<string, string>();
+export function setCurrentDeveloperSessionKey(companyId: string, key: string) { _developerSessionKeys.set(companyId, key); }
+export function getCurrentDeveloperSessionKey(companyId: string): string { return _developerSessionKeys.get(companyId) ?? ""; }
 
 // ─── Mutable-cell accessors (replace prior `export let X`) ────────
 /** Get the current execution status string. */

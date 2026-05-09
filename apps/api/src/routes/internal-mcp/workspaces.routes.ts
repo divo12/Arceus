@@ -282,7 +282,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
 
     const root = workspaceManager.getLocalPath(req.mcp!.companyId);
     const abs = resolvePath(root, body.modulePath);
-    if (!abs.startsWith(root)) {
+    if (!abs.startsWith(root + "/") && abs !== root) {
       return reply.code(422).send(failure("modulePath must stay inside the workspace.", "validation", "never", "payload_fixed"));
       return;
     }

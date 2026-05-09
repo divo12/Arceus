@@ -25,7 +25,9 @@ async function getSigningKey(): Promise<CryptoKey> {
     }
     console.warn("[auth] Using dev default ARCEUS_JWT_SECRET. Set it before deploying.");
   }
-  const raw = new TextEncoder().encode(secret ?? "arceus-dev-jwt-secret-change-this!");
+  const raw = new TextEncoder().encode(
+    (!secret || secret.length < 32) ? "arceus-dev-jwt-secret-change-this!" : secret,
+  );
   cachedKey = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
   return cachedKey;
 }

@@ -31,24 +31,24 @@ export function clearDeveloperWatchdog() {
 }
 
 /** (Re)schedule the developer stall timer; fires the callback after the configured timeout. */
-export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: string) => Promise<void>) {
+export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: string, devKey: string) => Promise<void>) {
   clearDeveloperWatchdog();
 
-  if (!getActiveExecution() || getExecutionStatus() !== "executing") return;
+  const activeExecution = getActiveExecution();
+  if (!activeExecution || getExecutionStatus() !== "executing") return;
 
-  const devKey = getCurrentDeveloperSessionKey();
+  const devKey = getCurrentDeveloperSessionKey(activeExecution.companyId);
   const developerSession = devKey ? agentSessions.get(devKey) : null;
   if (developerSession?.status !== "working") return;
 
   const timer = setTimeout(() => {
-    void failDeveloperStallFn(developerSession.sessionId);
+    void failDeveloperStallFn(developerSession.sessionId, devKey);
   }, DEVELOPER_STALL_TIMEOUT_MS);
   setDeveloperWatchdog(timer);
 }
 
 /** Mark the developer session as stalled, fail the build task, and escalate via meeting. */
-export async function failDeveloperStall(sessionId: string) {
-  const devKey = getCurrentDeveloperSessionKey();
+export async function failDeveloperStall(sessionId: string, devKey: string) {
   const developerSession = devKey ? agentSessions.get(devKey) : null;
   const activeExecution = getActiveExecution();
   if (!activeExecution || getExecutionStatus() !== "executing") return;

@@ -106,6 +106,20 @@ const PUBLIC_MUTATION_ALLOWLIST = new Set<string>([
 ]);
 
 /**
+ * Path prefixes for mutating routes that accept a user JWT in place of the
+ * admin token. Every route under these prefixes must have its own
+ * `requireUserAuth` preHandler — the prefix list gates the bypass, not auth.
+ */
+const USER_MUTATION_PREFIXES: string[] = [
+  "/api/preview/",
+  "/api/orchestrator/",
+  "/api/chat/",
+  "/api/company/",
+  "/api/heartbeat/",
+  "/api/sprints",
+];
+
+/**
  * Audit C4 (F-428) — debug/seed/simulate/check routes that the audit
  * flagged as "mounted unconditionally in prod". `isDebugPath` is the
  * single source of truth for which paths get the debug treatment:
@@ -153,10 +167,10 @@ export async function requireAdminAuth(
   if (path.startsWith("/api/internal/")) return;
   if (PUBLIC_MUTATION_ALLOWLIST.has(path)) return;
 
-  // Authenticated users (valid user JWT decoded by userJwtPlugin) bypass the
-  // admin token gate — they're already verified. Admin token is only required
-  // for unauthenticated backend callers (scripts, curl, etc.).
-  if (req.userId) return;
+  // Authenticated users bypass the admin token gate only for routes that are
+  // explicitly user-facing (listed in USER_MUTATION_PREFIXES). Routes outside
+  // that list still require the admin token even if a valid JWT is present.
+  if (req.userId && USER_MUTATION_PREFIXES.some(p => path.startsWith(p))) return;
 
   const auth = req.headers.authorization;
   const token = typeof auth === "string" && auth.startsWith("Bearer ")

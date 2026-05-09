@@ -90,7 +90,7 @@ async function pollDeveloperWorkspaceChanges() {
     return;
   }
 
-  const devKey = getCurrentDeveloperSessionKey() || "developer";
+  const devKey = getCurrentDeveloperSessionKey(activeExecution.companyId) || "developer";
   touchAgentSession(devKey);
   updateAgentSessionState(devKey, {
     lastWorkspaceChangeAt: nowIso(),

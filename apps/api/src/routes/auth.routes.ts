@@ -5,6 +5,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { observability } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as usersRepo from "@arceus/db/src/repos/users.js";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
@@ -58,7 +59,7 @@ export default async function authRoutes(app: FastifyInstance) {
       const token = await signJwt({ userId: user.id, companyId });
       return reply.code(201).send({ token, userId: user.id, companyId });
     } catch (err) {
-      console.error("[auth/register] unexpected error:", err);
+      observability.logEvent({ event: "error", where: "auth.register", message: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined, ts: Date.now() });
       return reply.code(500).send({ error: "Registration failed due to an internal error." });
     }
   });
@@ -104,7 +105,7 @@ export default async function authRoutes(app: FastifyInstance) {
       const token = await signJwt({ userId: user.id, companyId });
       return reply.code(200).send({ token, userId: user.id, companyId });
     } catch (err) {
-      console.error("[auth/login] unexpected error:", err);
+      observability.logEvent({ event: "error", where: "auth.login", message: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined, ts: Date.now() });
       return reply.code(500).send({ error: "Login failed due to an internal error." });
     }
   });
