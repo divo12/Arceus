@@ -22,7 +22,9 @@
  * This preserves streaming responses, content-types, headers, etc.
  */
 import http from "node:http";
+import { Socket } from "node:net";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { IncomingMessage } from "node:http";
 import { previewConfig } from "../config/index.js";
 
 const RESERVED_SUBDOMAINS = new Set(["app", "api", "www", "admin"]);
@@ -86,9 +88,60 @@ function proxyToPreview(req: FastifyRequest, reply: FastifyReply): void {
 }
 
 /**
+ * Forward a WebSocket upgrade request to the preview server. Vite's
+ * dev-mode HMR client opens `wss://<slug>.<apex>/` which arrives here
+ * as an HTTP upgrade. We open a TCP connection to the local Vite
+ * server, replay the upgrade request line + headers (with Host
+ * rewritten so Vite's allowedHosts check sees a familiar value), and
+ * pipe the two sockets together.
+ *
+ * Without this, the only fix-up path was disabling HMR — which broke
+ * dev-mode style injection in some component trees and produced the
+ * "blank page through the public preview URL" symptom.
+ */
+function proxyUpgradeToPreview(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
+  // Defensive — Node sets pause/resume timing here; if the client
+  // already half-closed the upgrade, just drop the connection.
+  if (clientSocket.destroyed) return;
+
+  const upstream = new Socket();
+  upstream.connect(previewConfig.port, previewConfig.host, () => {
+    const path = req.url ?? "/";
+    const lines: string[] = [];
+    lines.push(`${req.method ?? "GET"} ${path} HTTP/1.1`);
+    for (const [name, value] of Object.entries(req.headers)) {
+      if (value === undefined) continue;
+      if (name.toLowerCase() === "host") continue;
+      const values = Array.isArray(value) ? value : [value];
+      for (const v of values) lines.push(`${name}: ${v}`);
+    }
+    lines.push(`host: ${previewConfig.host}:${previewConfig.port}`);
+    lines.push("", "");
+    upstream.write(lines.join("\r\n"));
+    if (head && head.length > 0) upstream.write(head);
+    upstream.pipe(clientSocket);
+    clientSocket.pipe(upstream);
+  });
+
+  const closeBoth = () => {
+    try { upstream.destroy(); } catch { /* already closed */ }
+    try { clientSocket.destroy(); } catch { /* already closed */ }
+  };
+  upstream.on("error", closeBoth);
+  upstream.on("close", closeBoth);
+  clientSocket.on("error", closeBoth);
+  clientSocket.on("close", closeBoth);
+}
+
+/**
  * Register the proxy as the very first onRequest hook so it fires
  * before CORS, auth, and route handlers. Non-preview hosts fall
  * through to normal Fastify routing.
+ *
+ * Also hooks the underlying Node HTTP server's `upgrade` event to
+ * forward WebSocket connections (Vite HMR uses these). Fastify
+ * doesn't model WS upgrades at the route layer, so we attach to
+ * `app.server` directly.
  */
 export function registerPreviewProxy(app: FastifyInstance): void {
   app.addHook("onRequest", async (req, reply) => {
@@ -100,5 +153,23 @@ export function registerPreviewProxy(app: FastifyInstance): void {
     // Take ownership of the response — Fastify won't try to send anything else.
     reply.hijack();
     proxyToPreview(req, reply);
+  });
+
+  // WebSocket upgrade path. Fastify's onRequest hook does NOT fire for
+  // upgrade requests — those go straight to `server.on("upgrade", ...)`
+  // and bypass the HTTP request lifecycle. We register late (after the
+  // server is listening) by hooking into Fastify's ready callback.
+  app.ready((err) => {
+    if (err) return;
+    app.server.on("upgrade", (req, socket, head) => {
+      const host = req.headers.host;
+      if (typeof host !== "string") return;
+      const slug = previewSubdomainOf(host);
+      if (slug === null) return;
+      // Cast: socket is a Duplex but in HTTP-server upgrade events
+      // it is always a net.Socket — typings are loose because the
+      // contract predates the unified Duplex type.
+      proxyUpgradeToPreview(req, socket as Socket, head);
+    });
   });
 }
