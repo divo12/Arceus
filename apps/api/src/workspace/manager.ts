@@ -430,6 +430,20 @@ class WorkspaceManager {
   async tagSprint(companyId: string, sprintNumber: number, snapshot: CompanySnapshot) {
     const warnings: string[] = [];
     const localPath = await this.ensureLocal(companyId);
+
+    // Auto-commit before tagging. Agents write files via Edit/Write tools
+    // but nothing in the runtime calls `git commit` per beat, so a fresh
+    // workspace at sprint completion has files on disk but no HEAD ref.
+    // git tag then fails with "fatal: Failed to resolve 'HEAD' as a valid
+    // ref" and the sprint is HELD in `reviewing` forever. commitAllChanges
+    // is no-op-safe (uses --allow-empty when there's no diff and no HEAD)
+    // and returns the resulting SHA so the tag has something to attach to.
+    try {
+      await commitAllChanges(localPath, `Sprint ${sprintNumber} snapshot`);
+    } catch (error) {
+      warnings.push(`pre-tag commit failed: ${error instanceof Error ? error.message : "Unknown commit error"}`);
+    }
+
     const tagName = await tagWorkspace(localPath, `sprint-${sprintNumber}`);
     const bundlePath = await createBundleFromWorkspace(localPath, resolve(getCompanyCachePath(companyId), `${tagName}.bundle`));
     const manifest = await listWorkspaceManifest(localPath, localPath);
