@@ -46,6 +46,22 @@ The runtime aborts the beat with cause \`read_loop\` if you make 20+
 \`artifact_create\`. If you find yourself near that limit, stop
 gathering and act on what you have.
 
+### 4. \`bash\` is for genuine shell work only
+\`bash\` exists for things only a shell can do: run a build, run a
+test suite, \`git diff\`, install a dep, invoke a CLI. It is NOT a
+generic "do something" tool, and calls like \`bash({true})\`,
+\`bash({command: "echo ok"})\`, or \`bash({command: "ls"})\` to
+"check something" are pure noise — they bump the tool counter
+without producing evidence. Before reaching for \`bash\`, ask:
+- Reading a file? → use \`read\`.
+- Editing a file? → use \`edit\` / \`write\`.
+- Listing a workspace? → use \`grep\` or the workspace tools.
+- Verifying types/tests? → use \`workspace_run_typecheck\` or the
+  specific test command (one \`bash\` call, not three).
+Two consecutive \`bash\` calls with no obvious shell purpose is a
+behavioral failure. Prefer one purposeful invocation over a chain
+of small probes.
+
 ## Concurrency: \`snapshot_stale\` recovery
 At concurrency > 1, your beat may receive \`error.cause: "snapshot_stale"\`
 on \`task_complete\`, \`task_block\`, or similar — it means your claim
