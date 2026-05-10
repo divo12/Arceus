@@ -278,12 +278,37 @@ function countOpenTasks(ctx: BeatRenderContext, role: Role): number {
 }
 
 /**
- * Statuses the DB `claimTask` CAS actually accepts. Must stay in sync
- * with `claimableStatuses` in `packages/db/src/repos/tasks/claim.ts`.
- * `blocked` is intentionally excluded — a blocked task must be cleared
- * with `task_resolve_blocker` before it can be claimed.
+ * Soft-dep policy (concurrency-friendly).
+ *
+ * Pre-concurrency, a task was claimable only if every depended-on task
+ * was `completed` or `verified`. That's correct for hard-handoff edges
+ * (e.g. CTO architecture must finalize before developer codes), but
+ * unnecessarily strict for spec-style edges where the depended-on task
+ * has already produced a usable artifact mid-flight (PM ships a spec
+ * draft → designer can start interpreting it; doesn't have to wait for
+ * PM to formally `task_complete`).
+ *
+ * Rule: a dep is satisfied if the dep is in a terminal state OR the
+ * dep has produced at least one attached artifact. This is materially
+ * looser than "completed only" but the artifact gate keeps the implicit
+ * contract — work cannot start before there is something to read.
+ *
+ * If the dep later changes its artifact (revision), the dependent's
+ * `incomingArtifactIds` is updated by the early-promotion hook in the
+ * artifact_create route, so the dependent always sees the latest spec
+ * on its next `task_get`.
+ *
+ * If the dep is BLOCKED, the dep is treated as still-unmet — a blocked
+ * task is escalating, not progressing, and downstream work would be
+ * rebuilding on a contested foundation. Escalation must resolve first.
  */
-const DB_CLAIMABLE_STATUSES: readonly Task["status"][] = ["created", "planned"];
+function isDepSatisfied(dep: BeatRenderContext["tasks"][number] | undefined): boolean {
+  if (!dep) return false;
+  if (dep.status === "blocked" || dep.status === "failed" || dep.status === "cancelled") return false;
+  if ((["completed", "verified"] as string[]).includes(dep.status)) return true;
+  // Soft-met: dep is in flight but has produced at least one artifact.
+  return (dep.artifactIds?.length ?? 0) > 0;
+}
 
 /** Snapshot of what the role sees in `## Your Tasks` (for diagnostic events). */
 function summarizeShownTasks(
@@ -295,7 +320,7 @@ function summarizeShownTasks(
     .map((t) => {
       const depsUnmet = (t.dependsOnTaskIds ?? []).some((depId) => {
         const dep = ctx.tasks.find((d) => d.id === depId);
-        return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
+        return !isDepSatisfied(dep);
       });
       const claimable = DB_CLAIMABLE_STATUSES.includes(t.status) && !depsUnmet;
       return { id: t.id, title: t.title, status: t.status, claimable };
@@ -311,17 +336,37 @@ function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
   for (const t of tasks) {
     const unmetDeps = (t.dependsOnTaskIds ?? [])
       .map((depId) => ctx.tasks.find((d) => d.id === depId))
-      .filter((d): d is NonNullable<typeof d> => !!d && !(["completed", "verified"] as string[]).includes(d.status));
+      .filter((d): d is NonNullable<typeof d> => !!d && !isDepSatisfied(d));
+    // Soft-dep marker: a dep that's in_progress with attached artifacts
+    // counts as claimable but is worth flagging so the agent knows the
+    // upstream may still iterate. Pure-terminal deps get the cleaner
+    // "✅ claimable" label.
+    const softDeps = (t.dependsOnTaskIds ?? [])
+      .map((depId) => ctx.tasks.find((d) => d.id === depId))
+      .filter((d): d is NonNullable<typeof d> =>
+        !!d
+        && !(["completed", "verified"] as string[]).includes(d.status)
+        && (d.artifactIds?.length ?? 0) > 0,
+      );
     let readiness: string;
-    if (t.status === "blocked") {
-      readiness = " 🚫 BLOCKED — call `task_resolve_blocker({ taskId })` to clear before claiming";
-    } else if (unmetDeps.length > 0) {
+    if (unmetDeps.length > 0) {
       readiness = ` ⛔ NOT CLAIMABLE — waiting on: ${unmetDeps.map((d) => `"${d.title}" [${d.status}]`).join(", ")}`;
+    } else if (softDeps.length > 0) {
+      readiness = ` 🟡 claimable (draft artifact available — upstream still in progress: ${softDeps.map((d) => `"${d.title}"`).join(", ")})`;
     } else {
       readiness = " ✅ claimable";
     }
     lines.push(`- [${t.status}] **${t.title}** (${t.id})${readiness}`);
     if (t.description) lines.push(`  ${t.description}`);
+    // For previously-blocked tasks, surface the prior block reason
+    // so the agent can decide between (a) retry-claim with a real fix,
+    // or (b) leave it blocked and report idle. Without this, the agent
+    // sees `[blocked]` but has no hint why — and tends to either ignore
+    // it or hallucinate a new reason.
+    if (t.status === "blocked" && t.verifierState?.feedback) {
+      const reason = t.verifierState.feedback;
+      lines.push(`  🔁 Previously blocked: "${reason}" — re-claim to retry.`);
+    }
   }
   return lines.join("\n");
 }

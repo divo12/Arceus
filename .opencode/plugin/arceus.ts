@@ -60,7 +60,16 @@ export const ArceusPlugin: Plugin = async () => {
     denyReason: "Tool not in this beat's allowlist.",
   };
   const circuitTally = new Map<string, number>();
-  const pendingCalls = new Map<string, { tool: string; startedAt: number }>();
+  // Per-call scratch keyed by callID so the after-hook can read what
+  // was passed in. Crucially `args` is stashed here at BEFORE-hook time
+  // because `output` in the after-hook carries the tool RESULT
+  // (`output.output`), not the call arguments — `output.args` is
+  // undefined post-execute. Without this, the back-channel POST and
+  // postSkillUsage's slug lookup both lose the args silently.
+  const pendingCalls = new Map<
+    string,
+    { tool: string; startedAt: number; args: unknown }
+  >();
 
   // ── Session-context cache (Phase 6.5 package F) ────────
   const sessionCtxCache = new Map<string, BeatContext>();
@@ -141,6 +150,49 @@ export const ArceusPlugin: Plugin = async () => {
     });
   };
 
+  /**
+   * Built-in tool event back-channel. Posts every non-arceus tool call to
+   * the watchdog-reset endpoint with a body so the API can:
+   *   - bump heartbeat_runs.tool_call_count via the per-beat accumulator
+   *   - bump pending.toolCallCount so the no_tool_invoked deadline correctly
+   *     sees built-in activity (read/edit/bash/skill/…)
+   *   - emit tool.invoked / tool.result events into activity_log so the
+   *     inspector and DB queries see the same shape they already see for
+   *     arceus_* tools (no source-special-casing downstream)
+   *
+   * NOT debounced — every built-in tool call must be observed individually
+   * to keep the deadline counter and DB row count accurate. The arceus_*
+   * path keeps the debounced bodyless POST since MCP middleware already
+   * logs those tools and bumps the accumulator on its own.
+   */
+  const postBuiltinToolEvent = (
+    beatId: string,
+    body: {
+      tool: string;
+      status: "ok" | "error";
+      cause?: string;
+      latencyMs?: number | null;
+      role?: string;
+      sessionId: string;
+      args?: unknown;
+    },
+  ): void => {
+    const api = process.env.ARCEUS_API;
+    const token = process.env.ARCEUS_TOKEN;
+    if (!api || !token || !beatId) return;
+
+    void fetch(`${api}/api/internal/v1/beats/${beatId}/watchdog-reset`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }).catch(() => {
+      // Fire-and-forget — telemetry must never affect the beat.
+    });
+  };
+
   const postSkillUsage = (entry: SkillManifestEntry, beatId: string): void => {
     const api = process.env.ARCEUS_API;
     const token = process.env.ARCEUS_TOKEN;
@@ -185,6 +237,78 @@ export const ArceusPlugin: Plugin = async () => {
     s.length > max ? `${s.slice(0, max)}…` : s;
 
   return {
+    // Strip `_sessionId` from the parameter schema sent to the LLM.
+    // The MCP server augments every arceus_* input schema with a
+    // required `_sessionId` field so plugin-injected per-call session
+    // ids survive Zod validation server-side. But exposing it to the
+    // model causes two real problems:
+    //   1) Azure strict tool-calling treats the verbose description as
+    //      noise and sometimes drops the tool from its callable set.
+    //   2) The model occasionally trades schema budget — packing
+    //      _sessionId into args while omitting required fields like
+    //      `payload`, producing 422 validation rejections.
+    // tool.definition fires when OpenCode publishes the tool list to
+    // the LLM, so this is the right place to hide _sessionId from the
+    // model. The server-side Zod schema is untouched — plugin still
+    // injects _sessionId in tool.execute.before, the MCP server still
+    // validates it, the wrapper still strips it before the handler
+    // runs. Only the LLM's view of the schema changes.
+    "tool.definition": async (input, output) => {
+      // Defensive wrapper: any throw from this hook propagates into
+      // OpenCode's plugin runtime and (depending on OpenCode's handling)
+      // can affect the tool registration for OTHER tools in the same
+      // batch — `skill`, `read`, `bash`, etc. Hide every error inside
+      // a try/catch so a breakage here can't poison the broader tool
+      // list. The breadcrumb to stderr keeps the failure visible.
+      try {
+        // toolID type-guard. OpenCode types this as string, but a
+        // runtime mismatch (SDK drift, internal rename) would make
+        // `.startsWith()` throw before the early-return guard.
+        const toolID =
+          typeof input?.toolID === "string" ? input.toolID : "";
+        if (!toolID.startsWith("arceus_")) return;
+
+        const params = output?.parameters as
+          | { properties?: Record<string, unknown>; required?: string[] }
+          | undefined;
+        if (!params || typeof params !== "object") return;
+
+        // delete + property assignment can throw on a frozen/proxied
+        // params object. Guard each mutation independently so a
+        // failure on `required` doesn't skip the `properties` clean
+        // (or vice versa).
+        if (
+          params.properties
+          && Object.prototype.hasOwnProperty.call(params.properties, "_sessionId")
+        ) {
+          try {
+            delete params.properties._sessionId;
+          } catch (delErr) {
+            process.stderr.write(
+              `[arceus-plugin] tool.definition: failed to delete _sessionId from ${toolID}.properties: ${delErr instanceof Error ? delErr.message : String(delErr)}\n`,
+            );
+          }
+        }
+
+        if (Array.isArray(params.required)) {
+          try {
+            params.required = params.required.filter((k) => k !== "_sessionId");
+          } catch (assignErr) {
+            process.stderr.write(
+              `[arceus-plugin] tool.definition: failed to filter _sessionId from ${toolID}.required: ${assignErr instanceof Error ? assignErr.message : String(assignErr)}\n`,
+            );
+          }
+        }
+      } catch (err) {
+        // Catch-all: anything outside the inner try/catch ladder
+        // (typeof checks, property access on a hostile proxy, etc.).
+        // Hook returns successfully; tool definition is published as-is.
+        process.stderr.write(
+          `[arceus-plugin] tool.definition hook crashed: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    },
+
     "tool.execute.before": async (input, output) => {
       // Resolve beat context from session; fall back to env-based governance
       const ctx = await ensureCtx(input.sessionID);
@@ -205,6 +329,22 @@ export const ArceusPlugin: Plugin = async () => {
         .map(([k]) => k.split("::")[1]);
       if (causes.length > 0) {
         throw new Error(`[arceus-circuit] tool=${input.tool} tripped on cause(s)=${causes.join(",")}`);
+      }
+
+      // Per-call session id propagation. The MCP server's stdio transport
+      // can't carry per-call OpenCode sessionID through a static
+      // environment, so the only channel available is the tool args.
+      // The MCP server's registerTool wrapper extends every arceus_*
+      // schema with `_sessionId: z.string().optional()`, strips it
+      // before the real handler, and stashes it in AsyncLocalStorage
+      // so http-client.request() resolves the right beat/role/company
+      // headers per call. Without this, concurrency>1 leaves the API
+      // unable to disambiguate between simultaneously-active beats.
+      if (input.tool.startsWith("arceus_")) {
+        if (!output.args || typeof output.args !== "object") {
+          output.args = {};
+        }
+        (output.args as Record<string, unknown>)._sessionId = input.sessionID;
       }
 
       // ── Path guard: reject file operations that escape the workspace ──
@@ -230,7 +370,14 @@ export const ArceusPlugin: Plugin = async () => {
         }
       }
 
-      pendingCalls.set(input.callID, { tool: input.tool, startedAt: Date.now() });
+      pendingCalls.set(input.callID, {
+        tool: input.tool,
+        startedAt: Date.now(),
+        // Stash args from the BEFORE hook — they're not present on
+        // `output` in the after hook, so we must capture them here for
+        // the post-execute back-channel + postSkillUsage slug lookup.
+        args: output.args,
+      });
       emitAudit({
         phase: "before",
         tool: input.tool,
@@ -264,16 +411,49 @@ export const ArceusPlugin: Plugin = async () => {
       }
 
       // Beat watchdog reset — bump lastActivityAt so multi-tool beats don't
-      // false-fire the watchdog. Debounced to 1×/sec per beat in the plugin.
+      // false-fire the watchdog. arceus_* tools go through the debounced
+      // bodyless watchdog reset (MCP middleware already logs them + bumps
+      // the per-beat counter). Built-in tools (read/grep/edit/write/bash/
+      // skill/webfetch/tool_help) go through the non-debounced tool-event
+      // POST so each invocation lands in activity_log, the per-beat counter
+      // increments accurately, and the no_tool_invoked deadline counter
+      // resets — without those, developer beats reading 5 files via `read`
+      // get reaped at 90s as "thinking but not acting."
       const wctx = await ensureCtx(input.sessionID);
-      if (wctx?.beatId) postWatchdogReset(wctx.beatId);
+      if (wctx?.beatId) {
+        if (input.tool.startsWith("arceus_")) {
+          postWatchdogReset(wctx.beatId);
+        } else {
+          const status: "ok" | "error" = envelope.status === "error" ? "error" : "ok";
+          postBuiltinToolEvent(wctx.beatId, {
+            tool: input.tool,
+            status,
+            cause: envelope.cause ?? undefined,
+            latencyMs,
+            role: wctx.role,
+            sessionId: input.sessionID,
+            // Args were stashed from the BEFORE hook because they live
+            // on `output` only pre-execute. Reading `output.args` here
+            // returns undefined and silently strips the args from
+            // `activity_log` (read-tool path, skill name, edit
+            // filePath, …) so we can't tell which file was read or
+            // which skill slug was loaded.
+            args: pending?.args,
+          });
+        }
+      }
 
       // Skill-usage back-channel: when the agent invokes OpenCode's built-in
       // `skill` tool, record the hit against the SkillArtifact registry via
       // the internal HTTP route. Uses ctx.beatId from session context.
+      // Args read from the BEFORE-hook stash — `output.args` is undefined
+      // post-execute and reading it returned `slug = null` for every
+      // invocation, leaving skill_usage_events empty even though the
+      // agent was calling `skill` (confirmed via activity_log tool='skill'
+      // rows once the back-channel landed).
       if (input.tool === "skill") {
         await ensureManifest();
-        const slug = resolveSkillSlug((output as { args?: unknown }).args);
+        const slug = resolveSkillSlug(pending?.args);
         const entry = slug ? manifest[slug] : undefined;
         const ctx = await ensureCtx(input.sessionID);
         if (entry && ctx) postSkillUsage(entry, ctx.beatId);

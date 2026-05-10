@@ -156,6 +156,38 @@ const hydrateBody = z.object({
   priority: z.enum(["low", "medium", "high", "critical"]),
 });
 
+// ── Concurrency Phase B — claim ownership guard ───────────────────────────
+//
+// Returns a 409 reply (and `true`) when the calling beat does not currently
+// own the task's claim — typically a stranded beat's late tool call landing
+// after `releaseClaimsForBeat` already cleared the row. Caller should
+// short-circuit on `true`. Uses `cause: "snapshot_stale"` so the agent
+// prompt's failure_modes table can route the recovery (re-claim or block).
+//
+// Read-only check; not race-free against an in-flight reclaim. The
+// downstream `setTaskStatus`/`appendTaskResult` mutations all run under
+// `updateTask`'s row lock (lockForUpdate inside db.transaction), so the
+// actual write is still atomic — this guard only filters the obvious
+// wrong-owner case before the mutation fires.
+async function rejectIfNotOwner(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  taskId: string,
+): Promise<boolean> {
+  const beatId = req.mcp?.beatId;
+  if (!beatId) return false; // No beat context → fall through to existing
+                             // session-required envelope from middleware.
+  const owned = await tasksRepo.isTaskClaimedBy(getDb(), taskId, beatId);
+  if (owned) return false;
+  void reply.code(409).send(failure(
+    `Task ${taskId} is no longer claimed by this beat — claim was released or reassigned.`,
+    "snapshot_stale",
+    "never",
+    "reclaim_or_block",
+  ));
+  return true;
+}
+
 // ── Routes ───────────────────────────────────────────────
 
 export default async function internalMcpTasksRoutes(app: FastifyInstance): Promise<void> {
@@ -291,6 +323,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return sendConflict(reply, `Task ${taskId} is already failed; cannot complete.`);
       return;
     }
+    // Concurrency Phase B — refuse a completion from a beat that no
+    // longer owns this task's claim. Catches stranded-beat late
+    // arrivals before they overwrite the legitimate owner's state.
+    if (await rejectIfNotOwner(req, reply, taskId)) return reply;
 
     await setTaskStatus(taskId, "completed");
     // Spec 31 Phase 7.B.5 — read unblocked dependents from canonical instead
@@ -318,6 +354,9 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     if (!body) return reply;
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
+    // Concurrency Phase B — same reasoning as /completion: a stranded
+    // beat shouldn't be able to block a task another beat now owns.
+    if (await rejectIfNotOwner(req, reply, taskId)) return reply;
 
     // setTaskStatus commits transactionally via updateTask — no need
     // for a post-write persistTask barrier. See persistTask race notes
@@ -479,7 +518,21 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return;
     }
 
-    // Dependency check — all `dependsOnTaskIds` must be completed/verified.
+    // Dependency check — soft-claimable policy (concurrency-friendly).
+    // A dep is satisfied if EITHER:
+    //   - terminal-good: status in {completed, verified}, OR
+    //   - in_progress with at least one attached artifact (downstream
+    //     can read the draft via incomingArtifactIds; upstream may
+    //     still iterate, agent re-reads on next beat)
+    // Hard-unmet: cancelled, failed, blocked-without-artifacts. Blocked
+    // WITH artifacts is also soft-met — the artifact is real even if
+    // the producer's task is in escalation-recovery.
+    //
+    // This must mirror beat-context-builder.ts:isDepSatisfied so what
+    // the agent SEES as ✅/🟡 in `## Your Tasks` matches what the
+    // route actually accepts. Drift between the two layers caused
+    // task_claim 409 deps_unmet on tasks the agent had been told were
+    // claimable.
     if (existing.dependsOnTaskIds.length > 0) {
       // Spec 31 Phase 7.B.5 — fetch each dep from canonical via repo. N+1 is
       // bounded (deps list is small) so this is cheaper than a full company
@@ -489,7 +542,11 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       );
       const missing = existing.dependsOnTaskIds.filter((depId, i) => {
         const dep = deps[i];
-        return !dep || !["completed", "verified"].includes(dep.status);
+        if (!dep) return true;
+        if (["cancelled", "failed"].includes(dep.status)) return true;
+        if (["completed", "verified"].includes(dep.status)) return false;
+        // in_progress / blocked / planned / created: soft-met iff has artifacts
+        return (dep.artifactIds?.length ?? 0) === 0;
       });
       if (missing.length > 0) {
         return reply.code(409).send({

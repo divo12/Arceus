@@ -52,6 +52,24 @@ export function emitReactiveBroadcast(event: BeatEventTrigger): void {
 }
 
 /**
+ * Whether the auto-escalation pipeline is allowed to fire when a task
+ * transitions to `blocked`. OFF by default — at concurrency > 1 we
+ * observe gpt-5.4-mini hallucinating block reasons (e.g. "validation
+ * failed" when no error envelope ever fired), and firing a sync
+ * meeting on every block creates idle time + ties up the manager
+ * agent on bogus escalations. Recovery happens via the agent's next
+ * beat re-claiming the blocked task instead.
+ *
+ * Set `ARCEUS_ESCALATION_MEETINGS_ENABLED=1` in production to restore
+ * the original behavior once block-reason hallucinations are
+ * controlled (prompt rule "truth in tool errors" + observation that
+ * the rate has dropped).
+ */
+function escalationMeetingsEnabled(): boolean {
+  return process.env.ARCEUS_ESCALATION_MEETINGS_ENABLED === "1";
+}
+
+/**
  * Trigger an escalation meeting for a blocked task. Called from
  * `setTaskStatus()` when a task transitions to "blocked".
  *
@@ -61,12 +79,34 @@ export function emitReactiveBroadcast(event: BeatEventTrigger): void {
  * `createEscalationMeeting` API still takes a full snapshot —
  * reshaping it is a separate B.4 follow-up). The 5+ callers stay
  * sync because the meeting is best-effort.
+ *
+ * Gated by `ARCEUS_ESCALATION_MEETINGS_ENABLED`. When disabled, we
+ * audit the suppression so operators can see in `activity_log` that
+ * a block fired without escalating, and rely on the agent's own
+ * next beat to re-claim and retry.
  */
 export function triggerEscalationMeeting(taskId: string, blockerDetail: string): void {
-  const scheduler = getMeetingSchedulerRef();
-  if (!scheduler) return;
   const companyId = getActiveCompanyId();
   if (!companyId) return;
+
+  if (!escalationMeetingsEnabled()) {
+    // Best-effort audit so the inspector + ops can observe the
+    // suppression. Not an error — this is the configured policy.
+    swallowAndAudit("reactive.escalation_meeting_suppressed", async () => {
+      // No-op DB work; the audit row is the whole point of this path.
+    }, {
+      companyId,
+      detail: {
+        taskId,
+        blockerDetail: blockerDetail.slice(0, 200),
+        reason: "ARCEUS_ESCALATION_MEETINGS_ENABLED is not set; agent should re-claim blocked task on next beat",
+      },
+    });
+    return;
+  }
+
+  const scheduler = getMeetingSchedulerRef();
+  if (!scheduler) return;
 
   swallowAndAudit("reactive.escalation_meeting", async () => {
     const task = await tasksRepo.findByIdHydrated(getDb(), taskId);

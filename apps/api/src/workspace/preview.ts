@@ -7,6 +7,22 @@ import { previewConfig } from "../config/index.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getDb } from "@arceus/db";
 import { findCompanyById } from "@arceus/db/src/repos/companies.js";
+import { withKeyedLock } from "./async-queue.js";
+
+/**
+ * Lock key for the singleton preview lifecycle. The system has ONE
+ * preview slot (one port, one ChildProcess, one previewState). Every
+ * mutating operation — start, stop, register-reported-url — runs under
+ * this single key so two concurrent beats can't race on `previewState`,
+ * leak ChildProcesses, or hand the agent a stale URL.
+ *
+ * Pure reads (`getLocalPreviewState`, `hasReportedPreviewCandidate`,
+ * `probePreviewHealth`) are NOT locked — they're allowed to observe
+ * a brief inconsistency rather than queue behind a 30-second
+ * `startLocalPreview`. The inspector and the live-status endpoint
+ * depend on these reads being fast.
+ */
+const PREVIEW_LOCK_KEY = "local-preview";
 
 /**
  * Build the public-facing base URL for the preview, in priority order:
@@ -427,8 +443,7 @@ export function hasReportedPreviewCandidate() {
 }
 
 
-/** Register an agent-reported preview URL, stopping any existing preview first. */
-export async function registerReportedPreviewUrl(url: string) {
+async function registerReportedPreviewUrlUnlocked(url: string) {
   const normalizedUrl = normalizePreviewUrl(url);
   if (!normalizedUrl) {
     return false;
@@ -443,9 +458,16 @@ export async function registerReportedPreviewUrl(url: string) {
     reportedAt: new Date().toISOString(),
   };
 
-  await stopLocalPreview();
+  // Calling the unlocked version because we already hold the lock —
+  // re-entering withKeyedLock under the same key would deadlock.
+  await stopLocalPreviewUnlocked();
   const applied = await applyReportedPreviewCandidate();
   return Boolean(applied);
+}
+
+/** Register an agent-reported preview URL, stopping any existing preview first. */
+export async function registerReportedPreviewUrl(url: string) {
+  return withKeyedLock(PREVIEW_LOCK_KEY, () => registerReportedPreviewUrlUnlocked(url));
 }
 
 /** Return the current preview state (status, URLs, runtime info). */
@@ -534,8 +556,7 @@ async function terminatePreviewProcessTree(childProcess: ChildProcess) {
   childProcess.kill("SIGTERM");
 }
 
-/** Terminate the preview process/server and reset all preview state to idle. */
-export async function stopLocalPreview() {
+async function stopLocalPreviewUnlocked() {
   if (previewProcess) {
     await terminatePreviewProcessTree(previewProcess);
     previewProcess = null;
@@ -564,6 +585,11 @@ export async function stopLocalPreview() {
   previewState.targetPath = null;
   previewState.lastError = null;
   previewState.startedAt = null;
+}
+
+/** Terminate the preview process/server and reset all preview state to idle. */
+export async function stopLocalPreview() {
+  return withKeyedLock(PREVIEW_LOCK_KEY, () => stopLocalPreviewUnlocked());
 }
 
 async function startStaticPreviewServer(rootDir: string) {
@@ -603,9 +629,18 @@ async function startStaticPreviewServer(rootDir: string) {
 /**
  * Detect and launch a local preview server for the product workspace.
  * Tries agent-reported URLs first, then auto-detects Node/Python dev servers.
+ *
+ * Public entry: locked under PREVIEW_LOCK_KEY so two concurrent beats
+ * calling workspace_start_preview can't race on previewState or leak
+ * ChildProcesses. The body lives in `startLocalPreviewUnlocked` so the
+ * lock-held internal call to `stopLocalPreviewUnlocked` doesn't deadlock.
  */
 export async function startLocalPreview(productDir: string, preferredTargetPath?: string | null) {
-  await stopLocalPreview();
+  return withKeyedLock(PREVIEW_LOCK_KEY, () => startLocalPreviewUnlocked(productDir, preferredTargetPath));
+}
+
+async function startLocalPreviewUnlocked(productDir: string, preferredTargetPath?: string | null) {
+  await stopLocalPreviewUnlocked();
 
   const reportedPreview = await applyReportedPreviewCandidate();
   if (reportedPreview) {

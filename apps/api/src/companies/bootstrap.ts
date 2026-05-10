@@ -27,6 +27,7 @@ import * as ideasRepo from "@arceus/db/src/repos/ideas.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
 import { setActiveCompanyId } from "../persistence/active-company.js";
 import { seedExistingSkills } from "@arceus/company-runtime";
+import { materializeStaticSkillsForCompany } from "../opencode/materialize-static-skills.js";
 
 function titleCase(value: string) {
   return value
@@ -156,6 +157,17 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
   // into Postgres, giving us a starting baseline EMA + usage count for the
   // company's first beat. Sync; no DB roundtrip beyond the per-skill upsert.
   seedExistingSkills(companyId);
+
+  // V1 simplification: drop the seed corpus straight onto disk at the
+  // shared workspace skills path so OpenCode's `skill` tool can resolve
+  // `skill({name: <slug>})` for the new active company. Replaces the
+  // per-beat `materializeBeatSkills` call inside runBeat. Best-effort —
+  // a materialize failure must not roll back company creation.
+  try {
+    await materializeStaticSkillsForCompany(companyId);
+  } catch (err) {
+    console.warn(`[bootstrap] static skill materialization failed for ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   return { company, idea, strategy };
 }

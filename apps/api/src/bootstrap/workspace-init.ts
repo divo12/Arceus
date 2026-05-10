@@ -18,9 +18,10 @@ import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { seedExistingSkills } from "@arceus/company-runtime";
 import { hydrate } from "../persistence/mutations/index.js";
 import { cpSetBuildCheckDir } from "../persistence/control-plane/index.js";
-import { loadActiveCompanyIdFromCanonical, getActiveCompanyId } from "../persistence/active-company.js";
+import { getActiveCompanyId, loadActiveCompanyIdFromCanonical } from "../persistence/active-company.js";
 import { hydrateSkillRegistryFromDb } from "../skills/db-writethrough.js";
 import { workspaceManager } from "../workspace/manager.js";
+import { materializeStaticSkillsForCompany } from "../opencode/materialize-static-skills.js";
 
 export async function initWorkspaceAndPersistence(): Promise<void> {
   const persistenceMode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
@@ -54,6 +55,20 @@ async function hydrateSkillRegistries(): Promise<void> {
     }
     if (companies.length > 0) {
       console.log(`[STARTUP] Skill registry hydrated for ${companies.length} compan${companies.length === 1 ? "y" : "ies"}.`);
+    }
+
+    // V1 simplification: materialize the active company's skill set once
+    // to the shared workspace dir instead of re-running materialization
+    // per beat. The runtime is single-active-company, so the dir reflects
+    // the company beats currently target. New-company creation also
+    // triggers a materialize via companies/bootstrap.ts.
+    const activeCompanyId = getActiveCompanyId();
+    if (activeCompanyId) {
+      try {
+        await materializeStaticSkillsForCompany(activeCompanyId);
+      } catch (err) {
+        console.warn(`[STARTUP] Static skill materialization failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   } catch (err) {
     console.warn(`[STARTUP] Skill registry hydration failed: ${err instanceof Error ? err.message : String(err)}`);

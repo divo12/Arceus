@@ -95,6 +95,20 @@ export interface PendingPromptCompletion {
    * been "thinking about" for too long without taking any action.
    */
   toolCallCount: number;
+  /**
+   * Number of consecutive `read` calls (built-in OpenCode read tool) since
+   * the last "action" tool fired. Bumped by the watchdog-reset endpoint
+   * when the plugin posts a tool body with `tool === "read"`. Reset to 0
+   * by the MCP middleware on `task_claim` or `artifact_create` (and any
+   * other tool that meaningfully transitions state).
+   *
+   * The poller rejects with cause `read_loop` once this exceeds the
+   * READ_LOOP_THRESHOLD — protects against the gpt-5.4-mini pathology
+   * where the model re-reads the same SKILL.md file line-by-line via
+   * `read({limit: 1, offset: N})` for hundreds of round-trips with zero
+   * progress (observed in beat_4_1778410838848).
+   */
+  readsSinceAction: number;
 }
 
 type ReactiveEmitter = (

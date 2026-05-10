@@ -51,6 +51,36 @@ export function drainBeatTokenAccumulator(beatId: string): number {
   return tokens;
 }
 
+// ── Per-beat tool-call accumulator ────────────────────────
+// Counts every tool invocation observed during a beat window — both
+// arceus_* MCP tools (bumped by the MCP middleware on each request) and
+// built-in OpenCode tools (bumped by the watchdog-reset endpoint when the
+// plugin posts a tool body). Drained by runBeat so heartbeat_runs.
+// tool_call_count carries an accurate signal instead of the hardcoded 0
+// it carried previously. The map only retains entries for beats whose
+// accumulator was explicitly started; out-of-band bumps (e.g. a stray
+// late tool result) are silently dropped to avoid leaking memory.
+const beatToolCallAccumulators = new Map<string, number>();
+
+/** Begin counting tool calls for a beat. Call once at beat start. */
+export function startBeatToolCallAccumulator(beatId: string) {
+  beatToolCallAccumulators.set(beatId, 0);
+}
+
+/** Increment the tool-call counter for a beat. No-op if not started. */
+export function bumpBeatToolCallAccumulator(beatId: string, by = 1): void {
+  const current = beatToolCallAccumulators.get(beatId);
+  if (current === undefined) return;
+  beatToolCallAccumulators.set(beatId, current + by);
+}
+
+/** Read and clear the accumulated tool-call count for a beat. */
+export function drainBeatToolCallAccumulator(beatId: string): number {
+  const count = beatToolCallAccumulators.get(beatId) ?? 0;
+  beatToolCallAccumulators.delete(beatId);
+  return count;
+}
+
 // ── Per-meeting token accumulator (Phase 8) ────────────────
 // Tracks total tokens consumed during a meeting pipeline run.
 const meetingTokenAccumulators = new Map<string, number>();
