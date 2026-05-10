@@ -80,6 +80,54 @@ function fmtTime(ts: number): string {
   return d.toISOString().slice(11, 23); // HH:MM:SS.mmm
 }
 
+/**
+ * Pull the most informative single field out of a tool-call args object so
+ * the inspector line can show it inline. Built-in OpenCode tools don't
+ * carry args through the MCP middleware (they go through the watchdog-
+ * reset back-channel from the plugin); the plugin sends them in the
+ * BEFORE-hook stash so `ev.args` is the raw call-args object.
+ *
+ * Examples after rendering:
+ *   pm        → skill {ui-theme-catalog}
+ *   developer → read {/workspace/src/App.tsx}
+ *   developer → bash {npm run typecheck}
+ *   ui_designer → glob {**\/*.tsx}
+ *   developer → webfetch {https://example.com}
+ */
+function summarizeToolArgs(tool: unknown, args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  const a = args as Record<string, unknown>;
+  const truncate = (s: string, n = 60): string =>
+    s.length > n ? `${s.slice(0, n)}…` : s;
+  const t = String(tool ?? "");
+  // Built-in OpenCode tools — pick the most useful single field
+  if (t === "skill" && typeof a.name === "string") return ` {${a.name}}`;
+  if ((t === "read" || t === "edit" || t === "write" || t === "create")
+      && typeof a.filePath === "string") {
+    return ` {${truncate(a.filePath, 70)}}`;
+  }
+  if (t === "bash" && typeof a.command === "string") {
+    return ` {${truncate(a.command, 70)}}`;
+  }
+  if (t === "glob" && typeof a.pattern === "string") {
+    return ` {${truncate(a.pattern, 60)}}`;
+  }
+  if (t === "grep" && typeof a.pattern === "string") {
+    return ` {${truncate(a.pattern, 60)}}`;
+  }
+  if (t === "webfetch" && typeof a.url === "string") {
+    return ` {${truncate(a.url, 60)}}`;
+  }
+  // Arceus_* tools: surface the most-common id-ish keys when present.
+  for (const key of ["taskId", "artifactId", "sprintId", "skillId", "name", "title"]) {
+    const v = a[key];
+    if (typeof v === "string" && v.length > 0) {
+      return ` {${key}=${truncate(v, 40)}}`;
+    }
+  }
+  return "";
+}
+
 function summary(ev: AnyEvent): string {
   switch (ev.event) {
     case "beat.started":
@@ -97,7 +145,7 @@ function summary(ev: AnyEvent): string {
     case "sprint.completed":
       return `sprint ${ev.sprintId} done`;
     case "tool.invoked":
-      return `${ev.role} → ${ev.tool}${ev.idempotencyKey ? ` [idem:${String(ev.idempotencyKey).slice(0, 8)}]` : ""}`;
+      return `${ev.role} → ${ev.tool}${summarizeToolArgs(ev.tool, ev.args)}${ev.idempotencyKey ? ` [idem:${String(ev.idempotencyKey).slice(0, 8)}]` : ""}`;
     case "tool.result":
       return `${ev.tool} · ${ev.ok ? "ok" : "FAIL"}${ev.cause ? ` (${ev.cause})` : ""} · ${ev.durationMs}ms`;
     case "tool.denied":
