@@ -183,6 +183,56 @@ function summary(ev: AnyEvent): string {
   }
 }
 
+/**
+ * Track all beats currently mid-flight by walking the event stream.
+ * A beat is "live" if its beat.started has no matching beat.completed
+ * (or beat.failed). Used to drive the live-status pills so we don't
+ * poll the status endpoint for already-finished beats.
+ */
+function deriveLiveBeats(events: AnyEvent[]): Array<{ beatId: string; role?: string }> {
+  const seen = new Map<string, { role?: string; done: boolean }>();
+  for (const ev of events) {
+    if (typeof ev.beatId !== "string") continue;
+    if (ev.event === "beat.started") {
+      seen.set(ev.beatId, { role: typeof ev.role === "string" ? ev.role : undefined, done: false });
+    } else if (ev.event === "beat.completed" || ev.event === "beat.failed") {
+      const existing = seen.get(ev.beatId);
+      if (existing) existing.done = true;
+    }
+  }
+  const live: Array<{ beatId: string; role?: string }> = [];
+  for (const [beatId, info] of seen) {
+    if (!info.done) live.push({ beatId, role: info.role });
+  }
+  // Cap at the 8 most recently started so the polling loop stays cheap;
+  // older "live" beats are almost certainly stranded and will be reaped.
+  return live.slice(-8);
+}
+
+interface BeatStatus {
+  phase: "active" | "idle_short" | "idle_long" | "stalled" | "unknown";
+  lastTool: string | null;
+  role: string | null;
+  secondsSinceActivity: number | null;
+  secondsRunning: number | null;
+}
+
+const PHASE_STYLE: Record<BeatStatus["phase"], string> = {
+  active: "bg-green-900 text-green-200 border-green-600",
+  idle_short: "bg-yellow-900 text-yellow-200 border-yellow-600",
+  idle_long: "bg-orange-900 text-orange-200 border-orange-600",
+  stalled: "bg-red-900 text-red-200 border-red-600",
+  unknown: "bg-gray-900 text-gray-400 border-gray-700",
+};
+
+const PHASE_LABEL: Record<BeatStatus["phase"], string> = {
+  active: "active",
+  idle_short: "thinking",
+  idle_long: "idle",
+  stalled: "STALLED",
+  unknown: "—",
+};
+
 export default function InspectorPage() {
   const [events, setEvents] = useState<AnyEvent[]>([]);
   const [paused, setPaused] = useState(false);
@@ -192,6 +242,7 @@ export default function InspectorPage() {
   const [filterRole, setFilterRole] = useState<string>("all");
   const [filterBeat, setFilterBeat] = useState<string>("");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [beatStatuses, setBeatStatuses] = useState<Record<string, BeatStatus>>({});
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pausedRef = useRef(paused);
@@ -221,6 +272,40 @@ export default function InspectorPage() {
       bottomRef.current.scrollIntoView({ behavior: "auto" });
     }
   }, [events, autoScroll]);
+
+  // Live-status poller — poll /beats/:beatId/status for every beat the
+  // event stream says is mid-flight. 5s tick is the sweet spot between
+  // freshness ("am I still alive?") and not hammering the API. The
+  // endpoint is in-memory only so per-call cost is microseconds.
+  const liveBeats = useMemo(() => deriveLiveBeats(events), [events]);
+  useEffect(() => {
+    if (liveBeats.length === 0) return;
+    let cancelled = false;
+    const tick = async () => {
+      const next: Record<string, BeatStatus> = {};
+      await Promise.all(
+        liveBeats.map(async ({ beatId }) => {
+          try {
+            const res = await fetch(apiUrl(`/internal/v1/beats/${beatId}/status`));
+            if (!res.ok) return;
+            const env = (await res.json()) as { data?: BeatStatus };
+            if (env.data) next[beatId] = env.data;
+          } catch {
+            // network hiccup — leave the previous state for this beat in place
+          }
+        }),
+      );
+      if (!cancelled) {
+        setBeatStatuses((prev) => ({ ...prev, ...next }));
+      }
+    };
+    void tick();
+    const interval = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [liveBeats]);
 
   const handleScroll = () => {
     const el = containerRef.current;
@@ -281,6 +366,37 @@ export default function InspectorPage() {
             </span>
           ))}
         </div>
+
+        {/* Live beat-status pills — answers "is this beat thinking or stalled?" */}
+        {liveBeats.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[0.65rem]">
+            {liveBeats.map(({ beatId, role }) => {
+              const s = beatStatuses[beatId];
+              const phase = s?.phase ?? "unknown";
+              const tool = s?.lastTool ?? "—";
+              const since = s?.secondsSinceActivity;
+              const running = s?.secondsRunning;
+              return (
+                <button
+                  key={beatId}
+                  onClick={() => setFilterBeat(beatId)}
+                  title={`beat=${beatId}\nlast tool: ${tool}\nrunning: ${running ?? "?"}s`}
+                  className={`rounded border px-1.5 py-0.5 font-mono ${PHASE_STYLE[phase]}`}
+                >
+                  <span className="opacity-80">{role ?? s?.role ?? "?"}</span>
+                  {" · "}
+                  <span className="font-bold">{PHASE_LABEL[phase]}</span>
+                  {since !== null && since !== undefined ? (
+                    <span className="opacity-80"> · {since}s</span>
+                  ) : null}
+                  {tool !== "—" ? (
+                    <span className="opacity-60"> · {tool}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </header>
 
       {/* Toolbar */}

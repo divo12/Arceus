@@ -17,6 +17,7 @@ import { ensureDeployment } from "../config/index.js";
 import { buildBeatContext, prepareBeatRender } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
+import { forgetBeatActivity } from "../heartbeats/watchdog.js";
 import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
 import { registerPromptCompletion } from "../prompts/llm.js";
@@ -370,6 +371,7 @@ export async function runBeat(input: {
     unregisterSessionContext(sessionId);
     await destroyBeatSession(sessionId);
     await cleanupBeatScratch(beatId);
+    forgetBeatActivity(beatId);
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
     const toolCalls = drainBeatToolCallAccumulator(beatId);

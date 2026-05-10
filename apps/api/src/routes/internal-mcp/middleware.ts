@@ -12,6 +12,7 @@ import { routeToTool } from "./route-to-tool.js";
 import { recordPolicyDeny, type DenyReason } from "../../governance/policy.js";
 import { swallowAndAudit } from "../../observability/swallow.js";
 import { bumpBeatToolCallAccumulator } from "../../infra/azure-openai.js";
+import { recordBeatActivity } from "../../heartbeats/watchdog.js";
 
 interface McpRequestContext {
   companyId: string;
@@ -164,6 +165,16 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
   // tools are bumped via the watchdog-reset endpoint when the plugin
   // posts a tool body (see beats.routes.ts).
   if (beatId) bumpBeatToolCallAccumulator(beatId);
+
+  // Live-status tracker — records the most recent tool name per beat so
+  // GET /api/internal/v1/beats/:beatId/status can answer "what is this
+  // beat doing right now?" without DB roundtrips. Built-in tools land
+  // here from the plugin's /watchdog-reset POST (see beats.routes.ts).
+  if (beatId) {
+    const routeUrl = (req.routeOptions as { url?: string } | undefined)?.url ?? req.url;
+    const toolName = routeToTool(req.method, routeUrl);
+    recordBeatActivity(beatId, toolName, role);
+  }
 };
 
 const RATE_LIMIT = 10_000;

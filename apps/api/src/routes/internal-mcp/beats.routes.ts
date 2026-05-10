@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { cpGetBeatHistory } from "../../persistence/control-plane/index.js";
-import { recordBeatActivity } from "../../heartbeats/watchdog.js";
+import { recordBeatActivity, getBeatActivity } from "../../heartbeats/watchdog.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import { success, failure } from "./envelope.js";
@@ -94,11 +94,17 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
       if (!beatId) {
         return reply.code(400).send(failure("beatId is required.", "validation", "never", "payload_fixed"));
       }
-      const ts = recordBeatActivity(beatId);
-
       // Body is optional — bodyless calls preserve the watchdog-only
       // contract used by the plugin for arceus_* tools.
       const body = (req.body ?? {});
+
+      // Record activity with tool/role context so the live-status endpoint
+      // can answer "what is this beat currently doing?"
+      const ts = recordBeatActivity(
+        beatId,
+        typeof body.tool === "string" && body.tool.length > 0 ? body.tool : undefined,
+        typeof body.role === "string" && body.role.length > 0 ? body.role : undefined,
+      );
 
       if (typeof body.tool === "string" && body.tool.length > 0) {
         const tool = body.tool;
@@ -160,6 +166,71 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
       return reply.code(200).send(success("Watchdog reset.", {
         beatId,
         lastActivityAt: new Date(ts).toISOString(),
+      }));
+    },
+  );
+
+  /**
+   * GET /api/internal/v1/beats/:beatId/status
+   *
+   * Live "is this beat thinking or stalled?" probe. Reads the in-memory
+   * watchdog tracker and classifies the beat into a phase based on
+   * seconds since the last tool call:
+   *   • active      — tool fired in the last 30s; model is interleaving
+   *                   tool calls, productive
+   *   • idle_short  — 30–90s; one long thought turn, normal for design
+   *                   work + complex reasoning
+   *   • idle_long   — 90s–10min; past the no_tool_invoked deadline
+   *                   guard but stall poller hasn't killed yet — suspect
+   *   • stalled     — 10min+; the next stall-poller tick will reject
+   *   • unknown     — beat id not in the tracker (already finished or
+   *                   never started)
+   *
+   * Polled by the inspector to render a live status pill on the active
+   * beat row, so operators can tell "model is thinking" from "model is
+   * dead" without waiting for the 10-min stall guard.
+   */
+  app.get<{ Params: { beatId: string } }>(
+    `${BEATS_BASE}/:beatId/status`,
+    async (req, reply) => {
+      const { beatId } = req.params;
+      if (!beatId) {
+        return reply.code(400).send(failure("beatId is required.", "validation", "never", "payload_fixed"));
+      }
+
+      const activity = getBeatActivity(beatId);
+      if (!activity) {
+        return reply.code(200).send(success("Beat not in active tracker.", {
+          beatId,
+          phase: "unknown" as const,
+          lastActivityAt: null,
+          lastTool: null,
+          role: null,
+          secondsSinceActivity: null,
+          secondsRunning: null,
+        }));
+      }
+
+      const now = Date.now();
+      const secondsSinceActivity = Math.floor((now - activity.lastActivityAt) / 1000);
+      const secondsRunning = Math.floor((now - activity.startedAt) / 1000);
+      const phase: "active" | "idle_short" | "idle_long" | "stalled" =
+        secondsSinceActivity < 30
+          ? "active"
+          : secondsSinceActivity < 90
+          ? "idle_short"
+          : secondsSinceActivity < 600
+          ? "idle_long"
+          : "stalled";
+
+      return reply.code(200).send(success("Beat status.", {
+        beatId,
+        phase,
+        lastActivityAt: new Date(activity.lastActivityAt).toISOString(),
+        lastTool: activity.lastTool,
+        role: activity.role,
+        secondsSinceActivity,
+        secondsRunning,
       }));
     },
   );
