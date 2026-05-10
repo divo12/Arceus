@@ -38,6 +38,16 @@ export interface HeartbeatRuntime {
  */
 const pausedCompanies = new Set<string>();
 
+/**
+ * Cursor for rotating which company gets the lead position in the
+ * roster each tick. Bumped once per `getAgentRoster()` call so that
+ * over N ticks (N = number of non-paused companies) each tenant
+ * lands first exactly once — preventing the alphabetically-first
+ * company from monopolising both maxConcurrentBeats slots when
+ * overdueness ties.
+ */
+let rosterRotationCursor = 0;
+
 export function pauseCompanyHeartbeat(companyId: string): void {
   pausedCompanies.add(companyId);
 }
@@ -92,9 +102,23 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
       // Return agents for ALL companies so the engine schedules beats for
       // every user in parallel. Companies in the paused set are excluded
       // so individual users can stop/resume without affecting others.
+      //
+      // Tenant fairness — two structural moves so one user can't starve
+      // another when maxConcurrentBeats >= 2:
+      //
+      //   1. Rotate company order each tick (rosterRotationCursor).
+      //      Over N ticks each tenant is the lead company exactly once,
+      //      so the stable-sort tiebreaker in HeartbeatEngine.tick doesn't
+      //      hand every slot to the alphabetically-first company.
+      //
+      //   2. Interleave (round-robin) by agent index within each company,
+      //      so the roster reads [A.ceo, B.ceo, A.cto, B.cto, ...] not
+      //      [A.ceo, A.cto, …A.skills_lead, B.ceo, …]. Without this, the
+      //      engine sees all of A's same-priority roles before any of B's,
+      //      and a full slot count of A's roles fires before B's first
+      //      beat lands.
       const db = getDb();
       const companies = await companiesRepo.listCompanies(db);
-      const roster: { agentId: string; role: ReturnType<typeof parseRoleStrict>; companyId: string }[] = [];
       const nonPaused = companies
         .map(c => companiesRepo.fromDbId(c.id, c.friendlyId))
         .filter(id => !pausedCompanies.has(id));
@@ -103,8 +127,24 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
           agentsRepo.listAgentsByCompany(db, companyId).then(agents => ({ companyId, agents })),
         ),
       );
-      for (const { companyId, agents } of results) {
-        for (const a of agents) {
+
+      // (1) Rotating lead. Spliced rotation rather than slicing so
+      // the relative order of trailing companies stays stable.
+      if (results.length > 1) {
+        const offset = rosterRotationCursor % results.length;
+        rosterRotationCursor = (rosterRotationCursor + 1) >>> 0;
+        if (offset > 0) {
+          results.push(...results.splice(0, offset));
+        }
+      }
+
+      // (2) Round-robin zip across companies by agent index.
+      const roster: { agentId: string; role: ReturnType<typeof parseRoleStrict>; companyId: string }[] = [];
+      const maxLen = results.reduce((m, r) => Math.max(m, r.agents.length), 0);
+      for (let i = 0; i < maxLen; i++) {
+        for (const { companyId, agents } of results) {
+          const a = agents[i];
+          if (!a) continue;
           try {
             roster.push({ agentId: a.id, role: parseRoleStrict(a.role), companyId });
           } catch {
