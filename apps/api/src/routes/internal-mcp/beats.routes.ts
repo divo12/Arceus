@@ -122,11 +122,15 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
         // Mirror the no_tool_invoked deadline counter so a developer reading
         // 5 files via built-in `read` for 90s isn't reaped as "thinking but
         // not acting." Resolved via sessionId if the plugin sent one.
+        // Also bumps `readsSinceAction` on `read` so the poller can detect
+        // the gpt-5.4-mini line-by-line read-loop pathology and reject
+        // before HARD_CAP_MS (see READ_LOOP_THRESHOLD in prompts/llm.ts).
         if (typeof body.sessionId === "string" && body.sessionId.length > 0) {
           const pending = pendingPromptCompletions.get(body.sessionId);
           if (pending) {
             pending.lastActivityAt = Date.now();
             pending.toolCallCount += 1;
+            if (tool === "read") pending.readsSinceAction += 1;
           }
         }
 

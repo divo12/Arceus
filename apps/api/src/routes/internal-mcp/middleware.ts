@@ -39,6 +39,37 @@ declare module "fastify" {
 
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9:_.\-]{8,128}$/;
 
+/**
+ * MCP tools whose firing proves the agent has transitioned from
+ * "gathering context" to "doing work" — used to reset the
+ * `readsSinceAction` counter so the read-loop guard (READ_LOOP_THRESHOLD
+ * in prompts/llm.ts) doesn't false-fire on a long but legitimate
+ * verify/explore phase that ends with an action.
+ *
+ * Names match the tool keys produced by routeToTool() in
+ * route-to-tool.ts. Keep this set narrow — auxiliary tools like
+ * task_append_plan_step or task_update_progress do NOT count as
+ * actions; they're narration of the current gather phase.
+ */
+const ACTION_TOOLS_RESETTING_READ_LOOP = new Set<string>([
+  "task_claim",
+  "task_complete",
+  "task_block",
+  "task_report_bug",
+  "task_verify",
+  "artifact_create",
+  "artifact_persist",
+  "artifact_write_to_workspace",
+  "workspace_checkpoint",
+  "workspace_start_preview",
+  "task_set_preview_url",
+  "task_create",
+  "sprint_create",
+  "approval_decide",
+  "approval_request",
+  "meeting_record",
+]);
+
 const getHeader = (req: FastifyRequest, name: string): string | null => {
   const raw = req.headers[name.toLowerCase()];
   if (Array.isArray(raw)) return raw[0] ?? null;
@@ -156,6 +187,16 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
     if (pending) {
       pending.lastActivityAt = Date.now();
       pending.toolCallCount += 1;
+      // Read-loop guard: any "action" tool firing means the agent is
+      // making real progress, so reset the consecutive-read counter.
+      // The route URL is the cleanest signal here — derive the tool
+      // name once to test for action-tool membership.
+      const routeUrlForReset =
+        (req.routeOptions as { url?: string } | undefined)?.url ?? req.url;
+      const toolForReset = routeToTool(req.method, routeUrlForReset);
+      if (ACTION_TOOLS_RESETTING_READ_LOOP.has(toolForReset)) {
+        pending.readsSinceAction = 0;
+      }
     }
   }
 

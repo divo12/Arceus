@@ -132,6 +132,21 @@ const BEAT_STALL_TIMEOUT_MS = 10 * 60 * 1000;
  */
 const NO_TOOL_INVOKED_DEADLINE_MS = 90 * 1000;
 
+/**
+ * Read-loop threshold. If the agent fires this many consecutive built-in
+ * `read` calls without any "action" tool firing in between (task_claim,
+ * artifact_create, task_complete, etc.), the beat is in a context-
+ * gathering loop and will not progress. Reject early with cause
+ * `read_loop` instead of letting it burn HARD_CAP_MS.
+ *
+ * Counter is `readsSinceAction` on the pending entry — bumped by the
+ * watchdog-reset endpoint on `tool === "read"`, reset by the MCP
+ * middleware on action tools. 20 is generous: a legitimate page-by-page
+ * read of a large file uses ~5 calls; 20 is the gpt-5.4-mini pathology
+ * threshold where the model is iterating offsets one line at a time.
+ */
+const READ_LOOP_THRESHOLD = 20;
+
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
@@ -153,6 +168,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       startedAt: now,
       lastActivityAt: now,
       toolCallCount: 0,
+      readsSinceAction: 0,
     });
     startPromptCompletionPoller();
   });
@@ -250,6 +266,27 @@ async function pollPendingPromptCompletions() {
         rejectPromptCompletion(
           sessionId,
           new Error(`Beat session ${sessionId} produced no tool calls within ${NO_TOOL_INVOKED_DEADLINE_MS}ms`),
+        );
+        continue;
+      }
+
+      // Layer C read-loop guard: the agent has fired READ_LOOP_THRESHOLD
+      // consecutive `read` calls without any action tool resetting the
+      // counter. The pathology: gpt-5.4-mini iterating offsets one line
+      // at a time over a SKILL.md file the `skill()` tool already loaded
+      // (observed in beat_4_1778410838848 — 54 consecutive reads, 0
+      // artifact_create, 0 task_complete, ended in failure after 2:51).
+      // Reject with cause `read_loop` so the orchestrator surfaces the
+      // pattern instead of letting it burn HARD_CAP_MS.
+      if (entry.readsSinceAction >= READ_LOOP_THRESHOLD) {
+        emitEmployeeActivity(
+          "system",
+          "info",
+          `Read-loop: session ${sessionId.slice(0, 12)}… ${entry.readsSinceAction} consecutive reads w/o action — rejecting`,
+        );
+        rejectPromptCompletion(
+          sessionId,
+          new Error(`Beat session ${sessionId} hit read_loop: ${entry.readsSinceAction} consecutive read calls without an action tool firing`),
         );
         continue;
       }
