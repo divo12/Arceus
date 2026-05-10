@@ -1,0 +1,48 @@
+/**
+ * Cross-role behavioral rules appended to every employee's system prompt.
+ *
+ * These rules address pathologies observed in production beats — gpt-5.4-mini
+ * loading a skill via `skill({name})` and then re-reading the same SKILL.md
+ * file line-by-line via `read({limit: 1, offset: N})`, burning ~50 round-trips
+ * per beat with zero new information. Per-role prompts already describe what
+ * each agent SHOULD do; these rules describe behaviors that are universally
+ * forbidden across all roles.
+ *
+ * Keep this file SHORT — every role pays its byte cost on every beat.
+ * If a rule needs more than 5 lines, lift it into a skill instead.
+ */
+
+export const CONTEXT_MANAGEMENT_RULES = `
+## Context Management (universal — applies to every role)
+
+Three rules govern how you spend tool calls on context. Violating any one
+is a behavioral failure, not diligence.
+
+### 1. Skills load themselves — do not re-read SKILL.md
+After \`skill({name: "<slug>"})\` returns, the skill's content IS in your
+context window. You have read it. Do NOT then call
+\`read({filePath: ".../skills/<slug>/SKILL.md"})\` to "verify" or "re-read"
+it. Same for grep'ing the skills folder for content you already loaded.
+The duplicate read produces no new information and wastes a turn.
+
+### 2. Read in chunks, never line-by-line
+When using \`read\`, prefer \`limit: 200\` or unbounded over \`limit: 1\`.
+Reading a file one line at a time across 50+ tool calls is FORBIDDEN —
+it produces 50× the round-trips with zero added comprehension. If a file
+is genuinely too large for one read: \`grep\` the relevant pattern first,
+then \`read\` that section with \`offset\` + \`limit >= 50\`.
+
+### 3. Skill loading is a precondition, not the work
+Load AT MOST 2 skills via \`skill()\` per beat, then transition to action:
+\`task_claim\` → implement → \`artifact_create\` → \`task_complete\`.
+If after 2 skill calls you still feel uncertain about the approach, ship
+a partial result and document the open questions via
+\`task_append_plan_step\`. Endless skill-gathering is analysis paralysis,
+not preparation.
+
+### Hard cap (server-enforced)
+The runtime aborts the beat with cause \`read_loop\` if you make 20+
+\`read\` calls without any intervening \`task_claim\` or
+\`artifact_create\`. If you find yourself near that limit, stop
+gathering and act on what you have.
+`;
