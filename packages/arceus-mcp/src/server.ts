@@ -38,7 +38,17 @@ export const createArceusMcpServer = (ctx: McpContext): McpServer => {
       ...config,
       inputSchema: {
         ...(config.inputSchema ?? {}),
-        _sessionId: z.string().optional(),
+        // Required (not .optional()) to stay compatible with Azure
+        // OpenAI strict tool-calling, which rejects schemas where any
+        // declared property is missing from `required`. The
+        // description tells the model to leave it empty — the plugin
+        // overwrites whatever the model puts here with the real
+        // OpenCode session id before the call reaches this wrapper.
+        _sessionId: z
+          .string()
+          .describe(
+            "INTERNAL: leave as empty string. Runtime overwrites this with the per-call session id; manual values are discarded.",
+          ),
       },
     };
     const wrapped = (async (args: Record<string, unknown>, extra: unknown) => {
