@@ -61,6 +61,25 @@ const OPEN_TASK_STATUSES: readonly Task["status"][] = [
   "blocked",
 ];
 
+/**
+ * Statuses the DB `claimTask` CAS will actually accept on a fresh
+ * claim attempt. Kept in sync with `claimableStatuses` in
+ * packages/db/src/repos/tasks/claim.ts. Used by the renderer to
+ * label tasks as ✅ claimable vs ⛔ not-yet-claimable so the agent's
+ * `task_claim` call has matching expectations.
+ *
+ * Note: `blocked` is included because the re-claim policy added in
+ * 5bc3011 lets an agent re-claim its own blocked task to retry the
+ * work. The label in renderOpenTasksForRole surfaces the prior
+ * block reason via the "🔁 Previously blocked" line so the agent
+ * decides between re-claim and idle.
+ */
+const DB_CLAIMABLE_STATUSES: readonly Task["status"][] = [
+  "created",
+  "planned",
+  "blocked",
+];
+
 const URGENCY_RANK: Record<HandoffUrgency, number> = { high: 0, normal: 1, low: 2 };
 const MAX_INCOMING_HANDOFFS = 5;
 const HANDOFF_RECENCY_MS = 24 * 60 * 60 * 1000; // last 24h
