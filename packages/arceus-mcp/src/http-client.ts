@@ -1,12 +1,15 @@
 import type { McpContext } from "./context.js";
 import { resolveSessionContext } from "./context-resolver.js";
+import { sessionAls } from "./session-als.js";
 
 interface ArceusRequestInit {
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   path: string;
   body?: unknown;
   idempotencyKey?: string;
-  /** When provided, resolves beat context from session-context API if env is empty. */
+  /** When provided, resolves beat context from session-context API if env is empty.
+   *  When omitted, the AsyncLocalStorage store populated by the registerTool
+   *  wrapper supplies the per-call OpenCode sessionID injected by the plugin. */
   sessionId?: string;
 }
 
@@ -25,8 +28,9 @@ export class ArceusHttpClient {
     let companyId = this.ctx.companyId;
     let role = this.ctx.role;
 
-    if ((!beatId || !companyId || !role) && init.sessionId) {
-      const resolved = await resolveSessionContext(init.sessionId);
+    const sessionId = init.sessionId ?? sessionAls.getStore()?.sessionId;
+    if ((!beatId || !companyId || !role) && sessionId) {
+      const resolved = await resolveSessionContext(sessionId);
       if (resolved) {
         beatId = resolved.beatId;
         companyId = resolved.companyId;

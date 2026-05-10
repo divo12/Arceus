@@ -259,6 +259,22 @@ export const ArceusPlugin: Plugin = async () => {
         throw new Error(`[arceus-circuit] tool=${input.tool} tripped on cause(s)=${causes.join(",")}`);
       }
 
+      // Per-call session id propagation. The MCP server's stdio transport
+      // can't carry per-call OpenCode sessionID through a static
+      // environment, so the only channel available is the tool args.
+      // The MCP server's registerTool wrapper extends every arceus_*
+      // schema with `_sessionId: z.string().optional()`, strips it
+      // before the real handler, and stashes it in AsyncLocalStorage
+      // so http-client.request() resolves the right beat/role/company
+      // headers per call. Without this, concurrency>1 leaves the API
+      // unable to disambiguate between simultaneously-active beats.
+      if (input.tool.startsWith("arceus_")) {
+        if (!output.args || typeof output.args !== "object") {
+          output.args = {};
+        }
+        (output.args as Record<string, unknown>)._sessionId = input.sessionID;
+      }
+
       // ── Path guard: reject file operations that escape the workspace ──
       const WORKSPACE_ROOT = process.cwd();
       const FILE_TOOLS = new Set(["edit", "write", "create"]);
