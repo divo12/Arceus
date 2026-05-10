@@ -22,8 +22,40 @@ import type {
   BeatTrigger,
   BeatEventTrigger,
 } from "@arceus/contracts";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { runChecklist, type ChecklistResult } from "./heartbeat-checklist";
 import { swallowAndAudit } from "./swallow.js";
+
+// ── Per-beat staging scope ────────────────────────────────
+//
+// Each beat needs its own staged-mutations buffer so that two
+// concurrent beats (maxConcurrentBeats > 1) don't share state. With a
+// single engine-level array, Beat A's flushStagedMutations would also
+// flush mutations Beat B staged but hadn't flushed yet — attributing
+// B's writes to A's causation, leaving B's flush a silent no-op, and
+// (worse) tying B's writes to A's expectedVersion CAS check.
+//
+// AsyncLocalStorage scopes the buffer to the async-context stack
+// spawned inside `triggerBeat`. Calls to stageMutation from anywhere
+// inside that context (sync or awaited descendants) read THIS beat's
+// store; calls from outside any beat throw, since staging without a
+// beat causation is meaningless.
+interface BeatScope {
+  stagedMutations: { type: string; [key: string]: unknown }[];
+}
+const beatScopeAls = new AsyncLocalStorage<BeatScope>();
+
+const requireBeatScope = (op: string): BeatScope => {
+  const scope = beatScopeAls.getStore();
+  if (!scope) {
+    throw new Error(
+      `${op} called outside an active beat. Mutations must be staged ` +
+      `inside the executor invoked from triggerBeat — staging without a ` +
+      `beat scope has no causation and would corrupt audit attribution.`,
+    );
+  }
+  return scope;
+};
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -207,13 +239,14 @@ export class HeartbeatEngine {
   private readonly eventQueue = new Map<string, { companyId: string; role: AgentIdentity["role"]; event: BeatEventTrigger }[]>();
 
   // ── Staged mutations (P4.3) ──────────────────────────────
-  // Beats stage mutations during Phase 3 (Execute) and flush
-  // them atomically in Phase 4 (Serialize).
-  private stagedMutations: { type: string; [key: string]: unknown }[] = [];
+  // Beats stage mutations during Phase 3 (Execute) and flush them
+  // atomically in Phase 4 (Serialize). Buffer is scoped per-beat via
+  // AsyncLocalStorage (see BeatScope at top of file) so concurrent
+  // beats can't cross-contaminate.
 
   /** Stage a mutation to be flushed at the end of the current beat. */
   stageMutation(mutation: { type: string; [key: string]: unknown }) {
-    this.stagedMutations.push(mutation);
+    requireBeatScope("stageMutation").stagedMutations.push(mutation);
   }
 
   /** Flush all staged mutations via applyMutations, then clear. */
@@ -222,20 +255,27 @@ export class HeartbeatEngine {
     causation: { eventId?: string; summary?: string },
     expectedVersion?: number,
   ): Promise<{ version: number; applied: number; errors: string[] }> {
-    if (this.stagedMutations.length === 0 || !this.deps) {
+    const scope = requireBeatScope("flushStagedMutations");
+    if (scope.stagedMutations.length === 0 || !this.deps) {
       return { version: expectedVersion ?? 0, applied: 0, errors: [] };
     }
-    const result = await this.deps.applyMutations(companyId, this.stagedMutations, causation, expectedVersion);
-    this.stagedMutations = [];
+    const result = await this.deps.applyMutations(
+      companyId,
+      scope.stagedMutations,
+      causation,
+      expectedVersion,
+    );
+    scope.stagedMutations = [];
     return result;
   }
 
   private clearStagedMutations() {
-    this.stagedMutations = [];
+    const scope = beatScopeAls.getStore();
+    if (scope) scope.stagedMutations = [];
   }
 
   getStagedMutationCount(): number {
-    return this.stagedMutations.length;
+    return beatScopeAls.getStore()?.stagedMutations.length ?? 0;
   }
 
   /** Legacy BeatExecutor for backward compat. Overridden when deps are supplied. */
@@ -318,7 +358,14 @@ export class HeartbeatEngine {
     }
 
     try {
-      const record = await this.executor(request, beatId);
+      // Run the executor inside an isolated AsyncLocalStorage scope so
+      // any stageMutation calls during this beat's tool/serialize work
+      // land in THIS beat's buffer — not a sibling beat's. Required for
+      // maxConcurrentBeats > 1.
+      const record = await beatScopeAls.run(
+        { stagedMutations: [] },
+        () => this.executor(request, beatId),
+      );
       this.lastBeatAt.set(request.agentId, Date.now());
       this.recordHistory(record);
       // Persist to DB (fire-and-forget — don't block the caller).
@@ -451,7 +498,11 @@ export class HeartbeatEngine {
     this.beatCounter = 0;
     this.beatHistory.length = 0;
     this.lastBeatAt.clear();
-    this.stagedMutations = [];
+    // Staged mutations live in per-beat AsyncLocalStorage scopes now;
+    // an in-flight beat's scope is captured in its async stack and
+    // cannot be cleared from outside. The semaphore.reset() below
+    // releases any slot the orphan beat held; its stale staging
+    // disappears with the beat's promise resolution.
     this.eventQueue.clear();
     this.locks.clear();
     this.semaphore.reset();

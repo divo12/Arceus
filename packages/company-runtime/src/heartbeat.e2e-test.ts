@@ -373,19 +373,22 @@ async function testStagedMutations() {
   appliedMutations.length = 0;
 
   const config = makeConfig();
+  let stagedDuringExec: number | null = null;
   const deps = makeDeps({
     executeTask: async (_ctx, _beatId) => {
-      // The engine exposes stageMutation for callers to use
-      // In real code, the orchestrator would call this.
+      // Stage from inside the beat's executor — this is the only valid
+      // call site now that staging is scoped per-beat via ALS. Calling
+      // engine.stageMutation outside an active beat throws.
+      engine.stageMutation({ type: "task_status", taskId: "task_001", status: "completed" });
+      engine.stageMutation({ type: "task_status", taskId: "task_002", status: "in_progress" });
+      stagedDuringExec = engine.getStagedMutationCount();
       return { summary: "staged work", tokensUsed: 100, actionsCount: 1, toolCalls: 1, completed: true };
     },
   });
   const engine = new HeartbeatEngine(config, deps);
 
-  // Stage some mutations before triggering
-  engine.stageMutation({ type: "task_status", taskId: "task_001", status: "completed" });
-  engine.stageMutation({ type: "task_status", taskId: "task_002", status: "in_progress" });
-  assertEqual(engine.getStagedMutationCount(), 2, "2 staged mutations before beat");
+  // Outside a beat: counter reads 0, staging would throw.
+  assertEqual(engine.getStagedMutationCount(), 0, "no staged mutations before beat (no scope)");
 
   const record = await engine.triggerBeat({
     companyId: "company_test",
@@ -394,14 +397,16 @@ async function testStagedMutations() {
     trigger: { type: "interval", scheduledAt: new Date().toISOString() },
   });
 
-  // Note: fourPhaseExecutor clears staged on start, then stages agent_status
-  // So pre-beat staging gets cleared. The beat itself stages agent_status.
   assert(record !== null, "beat completed");
-  // Verify that the agent_status mutation was applied
+  // 2 staged from executeTask + 1 (agent_status) staged in serialize = 3.
+  assertEqual(stagedDuringExec, 2, "2 mutations staged during execute");
+  // Serialize flushed all of them in one batch.
   assert(appliedMutations.length >= 1, "at least 1 mutation batch applied");
   const lastBatch = appliedMutations[appliedMutations.length - 1];
   assert(lastBatch.some((m) => m.type === "agent_status"), "agent_status mutation was flushed");
-  assertEqual(engine.getStagedMutationCount(), 0, "staged mutations cleared after beat");
+  assert(lastBatch.some((m) => m.type === "task_status" && m.taskId === "task_001"), "task_001 mutation flushed under beat causation");
+  // Outside the beat scope again, count is 0.
+  assertEqual(engine.getStagedMutationCount(), 0, "no staged mutations after beat (scope ended)");
 }
 
 async function testEngineState() {
