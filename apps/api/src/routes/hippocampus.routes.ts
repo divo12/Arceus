@@ -2,14 +2,20 @@
  * @module hippocampus.routes
  * Routes for the hippocampus memory system — seeding, test extraction, and context retrieval.
  */
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { getActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { hippocampus } from "../memory/index.js";
+
+/** Prefer JWT-derived companyId; fall back to singleton for legacy paths. */
+function resolveCompanyId(request: FastifyRequest): string | null {
+  return request.companyId ?? getActiveCompanyId();
+}
 
 export default async function hippocampusRoutes(app: FastifyInstance) {
   // Audit C12 (F-426): Zod parse for both seed and test-extraction.
@@ -20,10 +26,10 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
     output: z.string().max(20000).optional(),
   });
 
-  app.post("/api/hippocampus/seed", async (request) => {
+  app.post("/api/hippocampus/seed", { preHandler: [requireUserAuth] }, async (request) => {
     const parsed = seedBody.safeParse(request.body ?? {});
     const taskId = parsed.success ? parsed.data.taskId : undefined;
-    const companyId = getActiveCompanyId();
+    const companyId = resolveCompanyId(request);
     if (!companyId) return { status: "error", seeded: 0, message: "No active company." };
     const db = getDb();
     const allTasks = await tasksRepo.listByCompanyHydrated(db, companyId);
@@ -60,14 +66,14 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
     return { status: "success", seeded, message: `Seeded ${seeded} task completions into hippocampus` };
   });
 
-  app.post("/api/hippocampus/test-extraction", async (request, reply) => {
+  app.post("/api/hippocampus/test-extraction", { preHandler: [requireUserAuth] }, async (request, reply) => {
     const parsed = testExtractionBody.safeParse(request.body ?? {});
     if (!parsed.success) {
       reply.code(422);
       return { error: "Invalid test-extraction payload.", details: parsed.error.issues };
     }
     const { role, taskTitle, output } = parsed.data;
-    const companyId = getActiveCompanyId();
+    const companyId = resolveCompanyId(request);
     if (!companyId) return { status: "error", message: "No active company." };
     const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role ?? "developer");
     if (!agent) return { status: "error", message: `No agent with role ${role ?? "developer"}` };
@@ -109,12 +115,12 @@ export default async function hippocampusRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/hippocampus/context", async (request) => {
+  app.get("/api/hippocampus/context", { preHandler: [requireUserAuth] }, async (request) => {
     const { agentId, task, role } = request.query as { agentId?: string; task?: string; role?: string };
 
     let resolvedAgentId = agentId;
     if (!resolvedAgentId && role) {
-      const companyId = getActiveCompanyId();
+      const companyId = resolveCompanyId(request);
       if (companyId) {
         const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
         resolvedAgentId = agent?.id;

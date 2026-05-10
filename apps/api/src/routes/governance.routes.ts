@@ -2,9 +2,15 @@
  * @module governance.routes
  * Routes for governance — trust scores, policy violations, sprint budgets, and mutation checks.
  */
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
+
+/** Prefer JWT-derived companyId; fall back to singleton for legacy paths. */
+function resolveCompanyId(request: FastifyRequest): string | null {
+  return request.companyId ?? getActiveCompanyId();
+}
 import { cpGetAllTrustScores, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpHydrateTrustScores } from "../persistence/control-plane/index.js";
 import { BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";
 import { getDb, isDatabaseConfigured, trustScoresTable } from "@arceus/db";
@@ -15,9 +21,9 @@ import { getSprintBudget, getAllSprintBudgets, SPRINT_EVOLUTION_BUDGET_CENTS, MA
 import { parseOptionalInt, HARD_LIST_CAP } from "./_helpers.js";
 
 export default async function governanceRoutes(app: FastifyInstance) {
-  app.get("/api/governance/trust-scores", async () => {
+  app.get("/api/governance/trust-scores", { preHandler: [requireUserAuth] }, async (request) => {
     const scores = cpGetAllTrustScores();
-    const companyId = getActiveCompanyId();
+    const companyId = resolveCompanyId(request);
     const agents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
     const agentById = new Map(agents.map((a) => [a.id, a]));
     const roleFromId = (id: string): string | null => {
@@ -35,7 +41,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     });
   });
 
-  app.get("/api/governance/trust-scores/:agentId", async (request) => {
+  app.get("/api/governance/trust-scores/:agentId", { preHandler: [requireUserAuth] }, async (request) => {
     const { agentId } = request.params as { agentId: string };
     const score = await cpLoadTrustScore(agentId);
     return { ...score, tier: getTrustTier(score.score) };
@@ -52,7 +58,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
   });
   const adjustParams = z.object({ agentId: z.string().min(1) });
 
-  app.post("/api/governance/trust-scores/:agentId/adjust", async (request, reply) => {
+  app.post("/api/governance/trust-scores/:agentId/adjust", { preHandler: [requireUserAuth] }, async (request, reply) => {
     const params = adjustParams.safeParse(request.params);
     const body = adjustTrustBody.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -70,11 +76,11 @@ export default async function governanceRoutes(app: FastifyInstance) {
     return { ...updated, tier: getTrustTier(updated.score) };
   });
 
-  app.post("/api/governance/trust-scores/cleanup", async () => {
+  app.post("/api/governance/trust-scores/cleanup", { preHandler: [requireUserAuth] }, async (request) => {
     if (!isDatabaseConfigured()) {
       return { deletedCount: 0, reason: "database not configured" };
     }
-    const companyId = getActiveCompanyId();
+    const companyId = resolveCompanyId(request);
     const liveAgents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
     const liveAgentIds = new Set(liveAgents.map((a) => a.id));
     const db = getDb();
@@ -85,7 +91,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     return { deletedCount: orphanIds.length };
   });
 
-  app.get("/api/governance/violations", async (request) => {
+  app.get("/api/governance/violations", { preHandler: [requireUserAuth] }, async (request) => {
     const query = request.query as { agentId?: string; limit?: string };
     return cpGetPolicyViolations({
       agentId: query.agentId,
@@ -96,7 +102,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     });
   });
 
-  app.get("/api/governance/policies", async () => {
+  app.get("/api/governance/policies", { preHandler: [requireUserAuth] }, async () => {
     return BASE_POLICY_RULES.map((r) => ({
       id: r.id,
       name: r.name,
@@ -109,10 +115,10 @@ export default async function governanceRoutes(app: FastifyInstance) {
     }));
   });
 
-  app.get("/api/governance/stats", async () => {
+  app.get("/api/governance/stats", { preHandler: [requireUserAuth] }, async (request) => {
     const scores = cpGetAllTrustScores();
     const violations = await cpGetPolicyViolations({ limit: 200 });
-    const companyId = getActiveCompanyId();
+    const companyId = resolveCompanyId(request);
     const agents = companyId ? await agentsRepo.listAgentsByCompany(getDb(), companyId) : [];
     return {
       agentCount: agents.length,
@@ -136,7 +142,7 @@ export default async function governanceRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/governance/sprint-budget/:sprintId", async (request) => {
+  app.get("/api/governance/sprint-budget/:sprintId", { preHandler: [requireUserAuth] }, async (request) => {
     const { sprintId } = request.params as { sprintId: string };
     const budget = getSprintBudget(sprintId);
     return {
@@ -150,8 +156,8 @@ export default async function governanceRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/governance/budgets", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/governance/budgets", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     if (companyId) {
       const sprints = await sprintsRepo.listSprintsByCompany(getDb(), companyId);
       for (const sprint of sprints) {
@@ -178,14 +184,14 @@ export default async function governanceRoutes(app: FastifyInstance) {
     estimatedCostCents: z.number().nonnegative().optional(),
   });
 
-  app.post("/api/governance/check", async (request, reply) => {
+  app.post("/api/governance/check", { preHandler: [requireUserAuth] }, async (request, reply) => {
     const parsed = governanceCheckBody.safeParse(request.body);
     if (!parsed.success) {
       reply.code(422);
       return { error: "Invalid governance check payload.", details: parsed.error.issues };
     }
     const body = parsed.data;
-    const companyId = getActiveCompanyId() ?? "";
+    const companyId = resolveCompanyId(request) ?? "";
     const decision = await canProposeMutation({
       proposerAgentId: body.proposerAgentId,
       proposerRole: body.proposerRole,

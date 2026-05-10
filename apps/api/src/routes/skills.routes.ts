@@ -2,9 +2,22 @@
  * @module skills.routes
  * Routes for the skill registry — CRUD, mutations, ATA pipeline, pattern learning, and cross-sprint promotion.
  */
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
+
+/**
+ * Multi-tenant company resolver. Prefers the JWT-derived companyId
+ * decorated by user-jwt-middleware; falls back to the legacy
+ * single-active-company singleton so non-auth bootstrap paths still
+ * work in dev. The `requireUserAuth` preHandler on each route below
+ * guarantees `request.companyId` is set in production, so the
+ * fallback is dead code on the hot path.
+ */
+function resolveCompanyId(request: FastifyRequest): string {
+  return request.companyId ?? getActiveCompanyId() ?? "";
+}
 import {
   getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory,
   getMutationsForCompany, getAttributionsForCompany,
@@ -20,8 +33,8 @@ import { swallowAndAudit } from "../observability/swallow.js";
 import { parseOptionalInt } from "./_helpers.js";
 
 export default async function skillsRoutes(app: FastifyInstance) {
-  app.get("/api/skills", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/skills", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     const skills = companyId ? getAllSkills(companyId) : [];
     return {
       skills: skills.map((s) => ({
@@ -40,20 +53,20 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/skills/health", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/skills/health", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     return getSkillHealth(companyId);
   });
 
-  app.get("/api/skills/:name/history", async (request) => {
+  app.get("/api/skills/:name/history", { preHandler: [requireUserAuth] }, async (request) => {
     const { name } = request.params as { name: string };
-    const companyId = getActiveCompanyId() ?? "";
+    const companyId = resolveCompanyId(request);
     const history = registryGetSkillHistory(companyId, name);
     return { name, versions: history };
   });
 
-  app.get("/api/skills/mutations", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/skills/mutations", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     const mutations = getMutationsForCompany(companyId);
     return {
       mutations: mutations.map((m) => ({
@@ -72,15 +85,15 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/skills/mutations/:id", async (request) => {
+  app.get("/api/skills/mutations/:id", { preHandler: [requireUserAuth] }, async (request) => {
     const { id } = request.params as { id: string };
     const mutation = getMutationById(id);
     if (!mutation) return { error: "not found" };
     return { mutation };
   });
 
-  app.get("/api/skills/attributions", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/skills/attributions", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     return {
       attributions: getAttributionsForCompany(companyId),
     };
@@ -98,14 +111,14 @@ export default async function skillsRoutes(app: FastifyInstance) {
     sprintId: z.string().optional(),
   });
 
-  app.post("/api/skills/simulate-task-outcome", async (request, reply) => {
+  app.post("/api/skills/simulate-task-outcome", { preHandler: [requireUserAuth] }, async (request, reply) => {
     const parsed = simulateTaskOutcomeBody.safeParse(request.body);
     if (!parsed.success) {
       reply.code(422);
       return { error: "Invalid simulate-task-outcome payload.", details: parsed.error.issues };
     }
     const body = parsed.data;
-    const companyId = getActiveCompanyId() ?? "";
+    const companyId = resolveCompanyId(request);
 
     const preMatchedSkills = registryMatchSkills(
       companyId,
@@ -160,7 +173,7 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/api/skills/mutations/:id/run-ata", async (request) => {
+  app.post("/api/skills/mutations/:id/run-ata", { preHandler: [requireUserAuth] }, async (request) => {
     const { id } = request.params as { id: string };
     const mutation = getMutationById(id);
     if (!mutation) {
@@ -182,8 +195,8 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   // ── Pattern Learning ──
 
-  app.get("/api/patterns", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/patterns", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     const patterns = getPatternsForCompany(companyId);
     return {
       companyId,
@@ -208,25 +221,25 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/patterns/clusters", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/patterns/clusters", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     return {
       companyId,
       clusters: clusterPatterns(companyId),
     };
   });
 
-  app.get("/api/patterns/candidates", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/patterns/candidates", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     return {
       companyId,
       candidates: checkSkillCandidates(companyId),
     };
   });
 
-  app.post("/api/patterns/promote/:clusterId", async (request) => {
+  app.post("/api/patterns/promote/:clusterId", { preHandler: [requireUserAuth] }, async (request) => {
     const { clusterId } = request.params as { clusterId: string };
-    const companyId = getActiveCompanyId() ?? "";
+    const companyId = resolveCompanyId(request);
     const candidate = checkSkillCandidates(companyId).find((c) => c.clusterId === clusterId);
     if (!candidate) {
       return {
@@ -247,8 +260,8 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/api/patterns/sweep", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.post("/api/patterns/sweep", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     if (!companyId) {
       return { companyId, candidatesFound: 0, mutationsProposed: 0, mutationsRefused: 0, reason: "no active company" };
     }
@@ -265,8 +278,8 @@ export default async function skillsRoutes(app: FastifyInstance) {
 
   // ── Unused / underperforming skills ──
 
-  app.get("/api/skills/unused", async () => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/skills/unused", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     const staleDays = 30;
     return {
       staleDays,
@@ -274,8 +287,8 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/skills/underperforming", async (request) => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/skills/underperforming", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     const query = request.query as { threshold?: string };
     const threshold = query.threshold ? Number.parseFloat(query.threshold) : 0.6;
     return {
@@ -284,8 +297,8 @@ export default async function skillsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/skills/sprint-candidates/:sprintId", async (request) => {
-    const companyId = getActiveCompanyId() ?? "";
+  app.get("/api/skills/sprint-candidates/:sprintId", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = resolveCompanyId(request);
     const { sprintId } = request.params as { sprintId: string };
     const query = request.query as { minFrequency?: string };
     // Audit C13 (F-434): NaN-safe parse with reasonable bounds. minFrequency is a clustering
