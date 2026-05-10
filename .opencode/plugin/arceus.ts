@@ -237,6 +237,36 @@ export const ArceusPlugin: Plugin = async () => {
     s.length > max ? `${s.slice(0, max)}…` : s;
 
   return {
+    // Strip `_sessionId` from the parameter schema sent to the LLM.
+    // The MCP server augments every arceus_* input schema with a
+    // required `_sessionId` field so plugin-injected per-call session
+    // ids survive Zod validation server-side. But exposing it to the
+    // model causes two real problems:
+    //   1) Azure strict tool-calling treats the verbose description as
+    //      noise and sometimes drops the tool from its callable set.
+    //   2) The model occasionally trades schema budget — packing
+    //      _sessionId into args while omitting required fields like
+    //      `payload`, producing 422 validation rejections.
+    // tool.definition fires when OpenCode publishes the tool list to
+    // the LLM, so this is the right place to hide _sessionId from the
+    // model. The server-side Zod schema is untouched — plugin still
+    // injects _sessionId in tool.execute.before, the MCP server still
+    // validates it, the wrapper still strips it before the handler
+    // runs. Only the LLM's view of the schema changes.
+    "tool.definition": async (input, output) => {
+      if (!input.toolID.startsWith("arceus_")) return;
+      const params = output.parameters as
+        | { properties?: Record<string, unknown>; required?: string[] }
+        | undefined;
+      if (!params || typeof params !== "object") return;
+      if (params.properties && "_sessionId" in params.properties) {
+        delete params.properties._sessionId;
+      }
+      if (Array.isArray(params.required)) {
+        params.required = params.required.filter((k) => k !== "_sessionId");
+      }
+    },
+
     "tool.execute.before": async (input, output) => {
       // Resolve beat context from session; fall back to env-based governance
       const ctx = await ensureCtx(input.sessionID);
