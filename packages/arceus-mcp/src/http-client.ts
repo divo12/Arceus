@@ -44,17 +44,25 @@ export class ArceusHttpClient {
       authorization: `Bearer ${this.ctx.arceusToken}`,
     };
     if (hasBody) headers["content-type"] = "application/json";
-    // Prefer x-session-id when we have it. The middleware looks up
-    // the session-context by sessionId first (tier 1, exact match)
-    // and only falls back to role-based lookup when the header is
-    // absent. Sending x-session-id avoids the ambiguity where
-    // findActiveSessionContextByRole returns a stale or unrelated
-    // session whose beatId then conflicts with our resolved
-    // x-beat-id, producing a "governance" identity-mismatch error.
-    if (sessionId) headers["x-session-id"] = sessionId;
-    if (beatId) headers["x-beat-id"] = beatId;
-    if (companyId) headers["x-company-id"] = companyId;
-    if (role) headers["x-role"] = role;
+    // Header strategy:
+    //   - When we have a sessionId, send ONLY x-session-id. The
+    //     middleware's tier-1 lookup (getSessionContext) returns the
+    //     authoritative beat context; sending stale x-beat-id /
+    //     x-company-id / x-role from our resolveSessionContext cache
+    //     creates an identity-mismatch failure surface (the cache
+    //     keys by sessionId but a single OpenCode session — e.g. the
+    //     persistent CEO chat session — gets re-registered with a
+    //     fresh beatId every turn, so cached values go stale while
+    //     the server's session-context map updates).
+    //   - When we don't have a sessionId (env-based heartbeat path),
+    //     fall back to sending the legacy headers as before.
+    if (sessionId) {
+      headers["x-session-id"] = sessionId;
+    } else {
+      if (beatId) headers["x-beat-id"] = beatId;
+      if (companyId) headers["x-company-id"] = companyId;
+      if (role) headers["x-role"] = role;
+    }
     if (init.idempotencyKey) {
       headers["idempotency-key"] = init.idempotencyKey;
     }
