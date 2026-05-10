@@ -60,7 +60,16 @@ export const ArceusPlugin: Plugin = async () => {
     denyReason: "Tool not in this beat's allowlist.",
   };
   const circuitTally = new Map<string, number>();
-  const pendingCalls = new Map<string, { tool: string; startedAt: number }>();
+  // Per-call scratch keyed by callID so the after-hook can read what
+  // was passed in. Crucially `args` is stashed here at BEFORE-hook time
+  // because `output` in the after-hook carries the tool RESULT
+  // (`output.output`), not the call arguments — `output.args` is
+  // undefined post-execute. Without this, the back-channel POST and
+  // postSkillUsage's slug lookup both lose the args silently.
+  const pendingCalls = new Map<
+    string,
+    { tool: string; startedAt: number; args: unknown }
+  >();
 
   // ── Session-context cache (Phase 6.5 package F) ────────
   const sessionCtxCache = new Map<string, BeatContext>();
@@ -273,7 +282,14 @@ export const ArceusPlugin: Plugin = async () => {
         }
       }
 
-      pendingCalls.set(input.callID, { tool: input.tool, startedAt: Date.now() });
+      pendingCalls.set(input.callID, {
+        tool: input.tool,
+        startedAt: Date.now(),
+        // Stash args from the BEFORE hook — they're not present on
+        // `output` in the after hook, so we must capture them here for
+        // the post-execute back-channel + postSkillUsage slug lookup.
+        args: output.args,
+      });
       emitAudit({
         phase: "before",
         tool: input.tool,
@@ -328,7 +344,13 @@ export const ArceusPlugin: Plugin = async () => {
             latencyMs,
             role: wctx.role,
             sessionId: input.sessionID,
-            args: (output as { args?: unknown }).args,
+            // Args were stashed from the BEFORE hook because they live
+            // on `output` only pre-execute. Reading `output.args` here
+            // returns undefined and silently strips the args from
+            // `activity_log` (read-tool path, skill name, edit
+            // filePath, …) so we can't tell which file was read or
+            // which skill slug was loaded.
+            args: pending?.args,
           });
         }
       }
@@ -336,9 +358,14 @@ export const ArceusPlugin: Plugin = async () => {
       // Skill-usage back-channel: when the agent invokes OpenCode's built-in
       // `skill` tool, record the hit against the SkillArtifact registry via
       // the internal HTTP route. Uses ctx.beatId from session context.
+      // Args read from the BEFORE-hook stash — `output.args` is undefined
+      // post-execute and reading it returned `slug = null` for every
+      // invocation, leaving skill_usage_events empty even though the
+      // agent was calling `skill` (confirmed via activity_log tool='skill'
+      // rows once the back-channel landed).
       if (input.tool === "skill") {
         await ensureManifest();
-        const slug = resolveSkillSlug((output as { args?: unknown }).args);
+        const slug = resolveSkillSlug(pending?.args);
         const entry = slug ? manifest[slug] : undefined;
         const ctx = await ensureCtx(input.sessionID);
         if (entry && ctx) postSkillUsage(entry, ctx.beatId);
