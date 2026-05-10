@@ -16,7 +16,6 @@ import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
 import { buildBeatContext, prepareBeatRender } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
-import { materializeBeatSkills } from "../opencode/materialize-beat-skills.js";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
 import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
@@ -163,13 +162,14 @@ export async function runBeat(input: {
     return { beatId, sessionId, verdict: "pass", cause: "no-work", tokensUsed, toolCalls };
   }
 
-  // Step 5: materialize skills + swap symlink
-  await materializeBeatSkills({
-    beatId,
-    companyId: input.companyId,
-    role: input.role,
-    trustBand: ctx.trustBand,
-  });
+  // Step 5 (V1): skills are materialized statically at boot (and on
+  // company-create) into productWorkspace/.opencode/skills/ via
+  // materializeStaticSkillsForCompany. The per-beat materialize+symlink
+  // dance is gone — there's no observed scenario where the skill set
+  // changes between beats of the same company, and the per-beat write
+  // was paying for that non-existent invariant. Skill mutations during
+  // runtime do NOT propagate to disk in V1 (deferred to a future hook
+  // off setSkillRegistryDeps); they take effect on next boot.
 
   let cause: string | undefined;
   try {
