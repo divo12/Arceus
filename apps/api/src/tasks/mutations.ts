@@ -187,9 +187,13 @@ export async function appendTaskResult(taskId: string, result: string): Promise<
  * as null since the updater hadn't run yet. Spec 31 Phase 7.B.4.2.
  */
 export async function attachArtifactToTask(taskId: string, artifactId: string): Promise<void> {
-  const captured: { sprintId: string | null | undefined } = { sprintId: null };
+  const captured: {
+    sprintId: string | null | undefined;
+    childTaskIds: string[];
+  } = { sprintId: null, childTaskIds: [] };
   await updateTask(taskId, (task) => {
     captured.sprintId = task.sprintId;
+    captured.childTaskIds = task.childTaskIds ?? [];
     return {
       ...task,
       artifactIds: task.artifactIds.includes(artifactId) ? task.artifactIds : [...task.artifactIds, artifactId],
@@ -200,6 +204,28 @@ export async function attachArtifactToTask(taskId: string, artifactId: string): 
   if (sprintId) {
     const artifact = await artifactsRepo.findArtifactById(getDb(), artifactId);
     emitGraphArtifactProduced(sprintId, taskId, artifactId, artifact?.kind ?? "output", artifact?.title ?? artifactId);
+  }
+
+  // Concurrency-friendly handoff: propagate the artifact to direct
+  // dependents (childTaskIds) as soon as it lands, rather than waiting
+  // for the producer's task_complete. Combined with the soft-claimable
+  // rule in beat-context-builder.ts (a dep counts as satisfied once it
+  // has at least one artifact), this lets a downstream role start work
+  // against a draft spec while the upstream still iterates — e.g. UI
+  // designer claiming against PM's in-progress spec task as soon as
+  // PM ships v1 of the acceptance-criteria artifact.
+  //
+  // Idempotent: incomingArtifactIds is deduped via uniqueStrings, so
+  // setTaskStatus("completed")'s existing propagation still runs but
+  // is a no-op for the already-flowing artifact ids.
+  for (const childId of captured.childTaskIds) {
+    await updateTask(childId, (t) => ({
+      ...t,
+      incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, artifactId], MAX_INCOMING_ARTIFACT_IDS),
+    }));
+    if (sprintId) {
+      emitGraphArtifactConsumed(sprintId, childId, taskId, [artifactId], null);
+    }
   }
 }
 

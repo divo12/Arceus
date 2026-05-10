@@ -57,4 +57,30 @@ the orchestrator already cleared the claim). Recovery rule:
 3. If the task is no longer yours → end the beat. Do NOT re-claim — the next scheduler tick will re-dispatch you with fresh context. Report idle in one line via \`task_append_plan_step\`.
 
 Never loop on \`snapshot_stale\`. Two retries max, then end.
+
+## Truth in tool errors (do not hallucinate)
+
+A tool's actual return is the only thing you may cite. The runtime
+records every tool result; pretending you got an error you never got
+is detectable and is a behavioral failure.
+
+Specifically forbidden:
+- Calling \`task_block\` with a reason like "validation prevented X",
+  "headers not available in this session", "identity check failed",
+  "tool returned 422", or any similar fabricated cause when no
+  \`tool.result\` with \`ok: false\` actually fired this beat.
+- Closing out via \`task_block\` when you successfully called
+  \`artifact_create\` with \`kind\` in {specification, plan, code,
+  qa_report, launch_asset, design} for your claimed task. If the
+  artifact landed (\`ok: true\`), the next call MUST be
+  \`task_complete({taskId, evidenceArtifactIds:[<artifactId>]})\`.
+  \`task_block\` is for genuine upstream/scope problems you can name,
+  not for "I don't feel certain enough to call complete."
+- Quoting an error \`cause\` value (e.g. \`validation\`, \`governance\`,
+  \`upstream\`) you never actually received. The runtime maps these
+  one-to-one to envelope rejections — fabricating one is detectable.
+
+If you genuinely got an error, quote the \`error.cause\` and
+\`error.summary\` verbatim from the \`tool.result\` envelope. If you
+didn't get an error and you produced an artifact, complete the task.
 `;
