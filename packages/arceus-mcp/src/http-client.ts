@@ -44,6 +44,14 @@ export class ArceusHttpClient {
       authorization: `Bearer ${this.ctx.arceusToken}`,
     };
     if (hasBody) headers["content-type"] = "application/json";
+    // Prefer x-session-id when we have it. The middleware looks up
+    // the session-context by sessionId first (tier 1, exact match)
+    // and only falls back to role-based lookup when the header is
+    // absent. Sending x-session-id avoids the ambiguity where
+    // findActiveSessionContextByRole returns a stale or unrelated
+    // session whose beatId then conflicts with our resolved
+    // x-beat-id, producing a "governance" identity-mismatch error.
+    if (sessionId) headers["x-session-id"] = sessionId;
     if (beatId) headers["x-beat-id"] = beatId;
     if (companyId) headers["x-company-id"] = companyId;
     if (role) headers["x-role"] = role;
