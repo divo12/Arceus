@@ -38,7 +38,15 @@ export async function claimTask(
   assignedAgentId?: string,
 ): Promise<ClaimResult> {
   const now = new Date();
-  const claimableStatuses: TaskStatus[] = ["created", "planned", "ready"];
+  // `blocked` is included so the assigned role can self-retry a task
+  // they previously gave up on — common after a hallucinated
+  // task_block (gpt-5.4-mini fabricates an error reason then bails).
+  // The role gate at the route layer (tasks.routes.ts:515) ensures
+  // only the same assignee can re-claim; cross-role re-claim returns
+  // `wrong_role` before we get here. The DB CAS still atomically
+  // flips the row to in_progress, so two concurrent re-claim attempts
+  // resolve to exactly one winner — same race-safety as a fresh claim.
+  const claimableStatuses: TaskStatus[] = ["created", "planned", "ready", "blocked"];
   const dbTaskId = toDbId(taskId);
   const dbRunId = toDbId(runId);
   const dbAgentId = assignedAgentId ? toDbId(assignedAgentId) : undefined;

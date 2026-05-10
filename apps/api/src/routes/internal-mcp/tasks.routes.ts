@@ -518,7 +518,21 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return;
     }
 
-    // Dependency check — all `dependsOnTaskIds` must be completed/verified.
+    // Dependency check — soft-claimable policy (concurrency-friendly).
+    // A dep is satisfied if EITHER:
+    //   - terminal-good: status in {completed, verified}, OR
+    //   - in_progress with at least one attached artifact (downstream
+    //     can read the draft via incomingArtifactIds; upstream may
+    //     still iterate, agent re-reads on next beat)
+    // Hard-unmet: cancelled, failed, blocked-without-artifacts. Blocked
+    // WITH artifacts is also soft-met — the artifact is real even if
+    // the producer's task is in escalation-recovery.
+    //
+    // This must mirror beat-context-builder.ts:isDepSatisfied so what
+    // the agent SEES as ✅/🟡 in `## Your Tasks` matches what the
+    // route actually accepts. Drift between the two layers caused
+    // task_claim 409 deps_unmet on tasks the agent had been told were
+    // claimable.
     if (existing.dependsOnTaskIds.length > 0) {
       // Spec 31 Phase 7.B.5 — fetch each dep from canonical via repo. N+1 is
       // bounded (deps list is small) so this is cheaper than a full company
@@ -528,7 +542,11 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       );
       const missing = existing.dependsOnTaskIds.filter((depId, i) => {
         const dep = deps[i];
-        return !dep || !["completed", "verified"].includes(dep.status);
+        if (!dep) return true;
+        if (["cancelled", "failed"].includes(dep.status)) return true;
+        if (["completed", "verified"].includes(dep.status)) return false;
+        // in_progress / blocked / planned / created: soft-met iff has artifacts
+        return (dep.artifactIds?.length ?? 0) === 0;
       });
       if (missing.length > 0) {
         return reply.code(409).send({

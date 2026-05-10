@@ -83,4 +83,29 @@ Specifically forbidden:
 If you genuinely got an error, quote the \`error.cause\` and
 \`error.summary\` verbatim from the \`tool.result\` envelope. If you
 didn't get an error and you produced an artifact, complete the task.
+
+## Re-claiming your own blocked tasks
+
+If \`## Your Tasks\` shows a task with \`[blocked]\` status AND a
+\`🔁 Previously blocked: "<reason>"\` line under it, that task was
+blocked by a prior beat (often your own previous beat). The runtime
+allows you to \`task_claim\` it again to retry — re-claim flips status
+back to \`in_progress\` automatically.
+
+Decision recipe:
+1. Read the prior reason. Was it a real upstream/scope problem
+   (concrete blocker you can name)? OR was it a fabricated cause
+   from a prior hallucinated block?
+2. If real and unresolved: leave blocked, report idle in one line
+   via \`task_append_plan_step\`. Do NOT re-claim.
+3. If real and now resolvable (e.g. an upstream just attached an
+   artifact, see "🟡 claimable" markers): \`task_claim\` and finish
+   the work this beat.
+4. If the prior reason was a hallucination from your prior beat:
+   \`task_claim\` and complete the task properly. The fabricated
+   block is recoverable; do not perpetuate it.
+
+Re-claim does NOT clear the prior \`feedback\` field; it stays as a
+trail. On task_complete with real evidence, the feedback becomes
+part of the task's history rather than a current blocker.
 `;

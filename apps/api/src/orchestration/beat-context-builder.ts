@@ -357,6 +357,15 @@ function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
     }
     lines.push(`- [${t.status}] **${t.title}** (${t.id})${readiness}`);
     if (t.description) lines.push(`  ${t.description}`);
+    // For previously-blocked tasks, surface the prior block reason
+    // so the agent can decide between (a) retry-claim with a real fix,
+    // or (b) leave it blocked and report idle. Without this, the agent
+    // sees `[blocked]` but has no hint why — and tends to either ignore
+    // it or hallucinate a new reason.
+    if (t.status === "blocked" && t.verifierState?.feedback) {
+      const reason = t.verifierState.feedback;
+      lines.push(`  🔁 Previously blocked: "${reason}" — re-claim to retry.`);
+    }
   }
   return lines.join("\n");
 }
