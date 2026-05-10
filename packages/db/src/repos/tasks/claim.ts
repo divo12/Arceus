@@ -133,6 +133,39 @@ export async function releaseClaimsForBeat(
   });
 }
 
+// ── Concurrency Phase B — claim ownership check ─────────────────
+//
+// Returns true if the task is currently claimed by `beatId`, false if
+// it's claimed by someone else, unclaimed, or doesn't exist.
+//
+// Used by the route handlers for state-mutating tools (task_complete,
+// task_block, task_verify, task_set_preview_url) to refuse late tool
+// calls from a stranded beat whose claim has already been released by
+// `releaseClaimsForBeat`. Without this check, a dead beat's lingering
+// HTTP request could complete a task another beat now legitimately
+// owns — silent corruption that the orchestrator can't unwind.
+//
+// Read-only (no row lock). Acceptable because the worst case is a
+// false-negative TOCTOU window between this check and the subsequent
+// state mutation: a task reclaimed in that window proceeds to mutate
+// against the new owner. The state mutation itself uses lockForUpdate
+// inside a transaction, so the actual write is still atomic — this
+// helper only filters out the obvious wrong-owner cases.
+
+export async function isTaskClaimedBy(
+  db: DbClient,
+  taskId: string,
+  beatId: string,
+): Promise<boolean> {
+  const expected = toDbId(beatId);
+  const [row] = await db
+    .select({ checkoutRunId: tasks.checkoutRunId })
+    .from(tasks)
+    .where(eq(tasks.id, toDbId(taskId)))
+    .limit(1);
+  return row?.checkoutRunId === expected;
+}
+
 // ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
 //
 // Take a `SELECT id FROM tasks WHERE id = ? FOR UPDATE` row lock so a

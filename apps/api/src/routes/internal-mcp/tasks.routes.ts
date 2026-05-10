@@ -156,6 +156,38 @@ const hydrateBody = z.object({
   priority: z.enum(["low", "medium", "high", "critical"]),
 });
 
+// ── Concurrency Phase B — claim ownership guard ───────────────────────────
+//
+// Returns a 409 reply (and `true`) when the calling beat does not currently
+// own the task's claim — typically a stranded beat's late tool call landing
+// after `releaseClaimsForBeat` already cleared the row. Caller should
+// short-circuit on `true`. Uses `cause: "snapshot_stale"` so the agent
+// prompt's failure_modes table can route the recovery (re-claim or block).
+//
+// Read-only check; not race-free against an in-flight reclaim. The
+// downstream `setTaskStatus`/`appendTaskResult` mutations all run under
+// `updateTask`'s row lock (lockForUpdate inside db.transaction), so the
+// actual write is still atomic — this guard only filters the obvious
+// wrong-owner case before the mutation fires.
+async function rejectIfNotOwner(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  taskId: string,
+): Promise<boolean> {
+  const beatId = req.mcp?.beatId;
+  if (!beatId) return false; // No beat context → fall through to existing
+                             // session-required envelope from middleware.
+  const owned = await tasksRepo.isTaskClaimedBy(getDb(), taskId, beatId);
+  if (owned) return false;
+  void reply.code(409).send(failure(
+    `Task ${taskId} is no longer claimed by this beat — claim was released or reassigned.`,
+    "snapshot_stale",
+    "never",
+    "reclaim_or_block",
+  ));
+  return true;
+}
+
 // ── Routes ───────────────────────────────────────────────
 
 export default async function internalMcpTasksRoutes(app: FastifyInstance): Promise<void> {
@@ -291,6 +323,10 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return sendConflict(reply, `Task ${taskId} is already failed; cannot complete.`);
       return;
     }
+    // Concurrency Phase B — refuse a completion from a beat that no
+    // longer owns this task's claim. Catches stranded-beat late
+    // arrivals before they overwrite the legitimate owner's state.
+    if (await rejectIfNotOwner(req, reply, taskId)) return reply;
 
     await setTaskStatus(taskId, "completed");
     // Spec 31 Phase 7.B.5 — read unblocked dependents from canonical instead
@@ -318,6 +354,9 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     if (!body) return reply;
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
+    // Concurrency Phase B — same reasoning as /completion: a stranded
+    // beat shouldn't be able to block a task another beat now owns.
+    if (await rejectIfNotOwner(req, reply, taskId)) return reply;
 
     // setTaskStatus commits transactionally via updateTask — no need
     // for a post-write persistTask barrier. See persistTask race notes

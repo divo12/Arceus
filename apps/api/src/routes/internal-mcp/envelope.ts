@@ -65,6 +65,12 @@ const ERROR_CAUSES = [
   "handoff_too_large",
   // Spec 31 Phase 3B — idempotency placeholder still mid-flight (DB-backed cache)
   "in_flight",
+  // Concurrency Phase B — caller's claim/version was superseded between
+  // beat start and the mutating request landing. Examples: stranded
+  // beat's late tool call hits after the task was released; two
+  // concurrent state mutations that pass the row lock find the task in
+  // a state inconsistent with the caller's expectations.
+  "snapshot_stale",
 ] as const;
 
 export type ErrorCause = (typeof ERROR_CAUSES)[number];
@@ -103,4 +109,5 @@ export const causeToStatus: Record<ErrorCause, number> = {
   target_role_unknown: 422,
   handoff_too_large: 413,
   in_flight: 409,
+  snapshot_stale: 409,
 };

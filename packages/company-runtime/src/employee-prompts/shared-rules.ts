@@ -45,4 +45,16 @@ The runtime aborts the beat with cause \`read_loop\` if you make 20+
 \`read\` calls without any intervening \`task_claim\` or
 \`artifact_create\`. If you find yourself near that limit, stop
 gathering and act on what you have.
+
+## Concurrency: \`snapshot_stale\` recovery
+At concurrency > 1, your beat may receive \`error.cause: "snapshot_stale"\`
+on \`task_complete\`, \`task_block\`, or similar — it means your claim
+on that task was released (e.g. your beat was reaped for stalling and
+the orchestrator already cleared the claim). Recovery rule:
+
+1. Call \`task_get(taskId)\` to refresh state.
+2. If the task is now \`in_progress\` under your beat → genuine race; retry the original call ONCE. If it errors again with \`snapshot_stale\`, stop.
+3. If the task is no longer yours → end the beat. Do NOT re-claim — the next scheduler tick will re-dispatch you with fresh context. Report idle in one line via \`task_append_plan_step\`.
+
+Never loop on \`snapshot_stale\`. Two retries max, then end.
 `;
