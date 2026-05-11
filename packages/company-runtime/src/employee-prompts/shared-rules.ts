@@ -1,101 +1,31 @@
 /**
- * Cross-role behavioral rules appended to every employee's system prompt.
+ * Cross-role behavioral rules appended to the END of every employee's
+ * system prompt (CEO excluded — CEO has its own minimal soul).
  *
- * These rules address pathologies observed in production beats — gpt-5.4-mini
- * loading a skill via `skill({name})` and then re-reading the same SKILL.md
- * file line-by-line via `read({limit: 1, offset: N})`, burning ~50 round-trips
- * per beat with zero new information. Per-role prompts already describe what
- * each agent SHOULD do; these rules describe behaviors that are universally
- * forbidden across all roles.
- *
- * Keep this file SHORT — every role pays its byte cost on every beat.
- * If a rule needs more than 5 lines, lift it into a skill instead.
+ * Kept short on purpose. Every role pays the byte cost on every beat;
+ * anything that needs >5 lines belongs in a skill, not here.
  */
 
 export const CONTEXT_MANAGEMENT_RULES = `
-## Context Management (universal — applies to every role)
+## Universal rules (apply to every role)
 
-Three rules govern how you spend tool calls on context. Violating any one
-is a behavioral failure, not diligence.
+### Context budget
+- After \`skill({name})\` returns, the SKILL.md content IS in your context. Do NOT then \`read\` that SKILL.md file. The duplicate read is forbidden.
+- \`read\` files in chunks: \`limit: 200\` or unbounded. \`limit: 1\` line-by-line scans are forbidden. Use \`grep\` to locate first, then read the section.
+- AT MOST 2 \`skill()\` calls per beat before transitioning to action (\`task_claim\` → implement → \`artifact_create\` → \`task_complete\`).
+- Server-enforced cap: the beat aborts with cause \`read_loop\` if you make 20+ \`read\` calls without an intervening \`task_claim\` or \`artifact_create\`.
 
-### 1. Skills load themselves — do not re-read SKILL.md
-After \`skill({name: "<slug>"})\` returns, the skill's content IS in your
-context window. You have read it. Do NOT then call
-\`read({filePath: ".../skills/<slug>/SKILL.md"})\` to "verify" or "re-read"
-it. Same for grep'ing the skills folder for content you already loaded.
-The duplicate read produces no new information and wastes a turn.
+### bash discipline
+\`bash\` is for genuine shell work only (run a build/test, \`git diff\`, install a dep, invoke a CLI). NOT for checking if something exists (use \`read\`/\`grep\`/\`workspace_*\` tools instead). Two consecutive bashes with no clear shell purpose is a behavioral failure.
 
-### 2. Read in chunks, never line-by-line
-When using \`read\`, prefer \`limit: 200\` or unbounded over \`limit: 1\`.
-Reading a file one line at a time across 50+ tool calls is FORBIDDEN —
-it produces 50× the round-trips with zero added comprehension. If a file
-is genuinely too large for one read: \`grep\` the relevant pattern first,
-then \`read\` that section with \`offset\` + \`limit >= 50\`.
+### Concurrency: snapshot_stale
+If a tool returns \`error.cause: "snapshot_stale"\`, your claim was released (beat was reaped or another beat raced you). Recovery:
+1. \`task_get(taskId)\` to refresh state.
+2. Task still yours? Retry the original call ONCE. If it errors again with snapshot_stale, stop.
+3. Task no longer yours? End the beat — do NOT re-claim. Report idle via \`task_append_plan_step\`.
 
-### 3. Skill loading is a precondition, not the work
-Load AT MOST 2 skills via \`skill()\` per beat, then transition to action:
-\`task_claim\` → implement → \`artifact_create\` → \`task_complete\`.
-If after 2 skill calls you still feel uncertain about the approach, ship
-a partial result and document the open questions via
-\`task_append_plan_step\`. Endless skill-gathering is analysis paralysis,
-not preparation.
+Never loop on snapshot_stale. Two retries max, then end.
 
-### Hard cap (server-enforced)
-The runtime aborts the beat with cause \`read_loop\` if you make 20+
-\`read\` calls without any intervening \`task_claim\` or
-\`artifact_create\`. If you find yourself near that limit, stop
-gathering and act on what you have.
-
-### 4. \`bash\` is for genuine shell work only
-\`bash\` exists for things only a shell can do: run a build, run a
-test suite, \`git diff\`, install a dep, invoke a CLI. It is NOT a
-generic "do something" tool, and calls like \`bash({true})\`,
-\`bash({command: "echo ok"})\`, or \`bash({command: "ls"})\` to
-"check something" are pure noise — they bump the tool counter
-without producing evidence. Before reaching for \`bash\`, ask:
-- Reading a file? → use \`read\`.
-- Editing a file? → use \`edit\` / \`write\`.
-- Listing a workspace? → use \`grep\` or the workspace tools.
-- Verifying types/tests? → use \`workspace_run_typecheck\` or the
-  specific test command (one \`bash\` call, not three).
-Two consecutive \`bash\` calls with no obvious shell purpose is a
-behavioral failure. Prefer one purposeful invocation over a chain
-of small probes.
-
-## Concurrency: \`snapshot_stale\` recovery
-At concurrency > 1, your beat may receive \`error.cause: "snapshot_stale"\`
-on \`task_complete\`, \`task_block\`, or similar — it means your claim
-on that task was released (e.g. your beat was reaped for stalling and
-the orchestrator already cleared the claim). Recovery rule:
-
-1. Call \`task_get(taskId)\` to refresh state.
-2. If the task is now \`in_progress\` under your beat → genuine race; retry the original call ONCE. If it errors again with \`snapshot_stale\`, stop.
-3. If the task is no longer yours → end the beat. Do NOT re-claim — the next scheduler tick will re-dispatch you with fresh context. Report idle in one line via \`task_append_plan_step\`.
-
-Never loop on \`snapshot_stale\`. Two retries max, then end.
-
-## Re-claiming your own blocked tasks
-
-If \`## Your Tasks\` shows a task with \`[blocked]\` status AND a
-\`🔁 Previously blocked: "<reason>"\` line under it, that task was
-blocked by a prior beat (often your own previous beat). The runtime
-allows you to \`task_claim\` it again to retry — re-claim flips status
-back to \`in_progress\` automatically.
-
-Decision recipe:
-1. Read the prior reason. Was it a real upstream/scope problem
-   (concrete blocker you can name)? OR was it a fabricated cause
-   from a prior hallucinated block?
-2. If real and unresolved: leave blocked, report idle in one line
-   via \`task_append_plan_step\`. Do NOT re-claim.
-3. If real and now resolvable (e.g. an upstream just attached an
-   artifact, see "🟡 claimable" markers): \`task_claim\` and finish
-   the work this beat.
-4. If the prior reason was a hallucination from your prior beat:
-   \`task_claim\` and complete the task properly. The fabricated
-   block is recoverable; do not perpetuate it.
-
-Re-claim does NOT clear the prior \`feedback\` field; it stays as a
-trail. On task_complete with real evidence, the feedback becomes
-part of the task's history rather than a current blocker.
+### Re-claiming a blocked task
+\`## Your Tasks\` shows a task as \`[blocked]\` with a \`🔁 Previously blocked\` line → the runtime allows you to \`task_claim\` it again. Re-claim ONLY if the prior block reason is now resolvable (upstream attached an artifact, etc.) OR was a hallucination from a prior beat. Otherwise leave it blocked and report idle.
 `;
