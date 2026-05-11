@@ -89,9 +89,16 @@ export type BeatExecutor = (request: BeatRequest, beatId: string) => Promise<Bea
  * so the API layer supplies these callbacks at construction time.
  */
 export interface BeatDependencies {
-  /** Spec 31 Phase 7.C.d-cp — async to read from canonical via buildSnapshotView. */
+  /**
+   * Spec 31 Phase 7.C.d-cp — async to read from canonical via buildSnapshotView.
+   * `companyId` MUST be the company the beat is firing for. Multi-tenant: the
+   * scheduler builds a roster spanning every tenant, so the impl can't fall
+   * back to the active-company singleton — it would load the wrong tenant's
+   * snapshot and the requested agentId would be missing, surfacing as
+   * "Agent X not found in snapshot".
+   */
   loadAgentContext: (
-    agentId: string, beatId: string, beatNumber: number, trigger: BeatTrigger,
+    companyId: string, agentId: string, beatId: string, beatNumber: number, trigger: BeatTrigger,
     config: { beatTokenBudget: number; beatCostCeilingCents: number }
   ) => Promise<AgentBeatContext | null>;
 
@@ -691,7 +698,7 @@ export class HeartbeatEngine {
 
     const snapshotVersionRead = deps.getSnapshotVersion();
     const ctx = await deps.loadAgentContext(
-      request.agentId, beatId, this.beatCounter, request.trigger,
+      request.companyId, request.agentId, beatId, this.beatCounter, request.trigger,
       { beatTokenBudget: this.config.beatTokenBudget, beatCostCeilingCents: this.config.beatCostCeilingCents }
     );
 

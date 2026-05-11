@@ -256,15 +256,24 @@ function buildSkillsLeadContext(companyId: string, currentSprintId: string | nul
  * the agent is not on the org chart.
  */
 export async function cpLoadAgentContext(
+  companyId: string,
   agentId: string,
   beatId: string,
   beatNumber: number,
   trigger: BeatRecord["trigger"],
   config: { beatTokenBudget: number; beatCostCeilingCents: number },
 ): Promise<AgentBeatContext | null> {
-  const companyId = getActiveCompanyId();
-  if (!companyId) return null;
-  const snap = await buildSnapshotView(companyId);
+  // Multi-tenant: companyId comes from the BeatRequest (sourced from the
+  // roster entry) and identifies WHICH tenant this beat is firing for. The
+  // active-company singleton is fallback ONLY — used for the small set of
+  // legacy paths that still call this without a beat-shaped companyId.
+  // Without the explicit param, the scheduler could pick agent X from
+  // tenant B while getActiveCompanyId() returns tenant A's id, and the
+  // tenant-A snapshot has no agent X → SKIPPED "Agent X not found in
+  // snapshot" for every cross-tenant beat.
+  const effectiveCompanyId = companyId || getActiveCompanyId();
+  if (!effectiveCompanyId) return null;
+  const snap = await buildSnapshotView(effectiveCompanyId);
   const agent = snap.agents.find((a) => a.id === agentId);
   if (!agent) return null;
 

@@ -62,8 +62,8 @@ export function isCompanyHeartbeatPaused(companyId: string): boolean {
 
 export function createHeartbeatRuntime(): HeartbeatRuntime {
   const beatDeps: BeatDependencies = {
-    loadAgentContext: async (agentId, beatId, beatNumber, trigger, config) =>
-      cpLoadAgentContext(agentId, beatId, beatNumber, trigger, config),
+    loadAgentContext: async (companyId, agentId, beatId, beatNumber, trigger, config) =>
+      cpLoadAgentContext(companyId, agentId, beatId, beatNumber, trigger, config),
     getSnapshotVersion: () => cpGetSnapshotVersion(),
     applyMutations: async (companyId, mutations, causation, expectedVersion) =>
       cpApplyMutations(companyId, mutations as Parameters<typeof cpApplyMutations>[1], causation, expectedVersion),
