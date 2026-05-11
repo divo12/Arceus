@@ -112,6 +112,7 @@ function makeConfig(overrides: Partial<HeartbeatConfig> = {}): HeartbeatConfig {
     executionMode: "heartbeat",
     schedulerIntervalMs: 100,
     maxConcurrentBeats: 3,
+    maxConcurrentBeatsPerCompany: 3,
     roleIntervals: {
       ceo: 500, cto: 400, pm: 400, developer: 300,
       tester: 600, ui_designer: 600, marketing: 800, skills_lead: 1000,

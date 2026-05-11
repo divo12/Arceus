@@ -62,7 +62,20 @@ const requireBeatScope = (op: string): BeatScope => {
 export interface HeartbeatConfig {
   executionMode: "orchestrator" | "heartbeat";
   schedulerIntervalMs: number;
+  /**
+   * GLOBAL ceiling on concurrent beats across every tenant. Acts as a
+   * safety valve so a fleet of 20 tenants × 2-per-company doesn't open
+   * 40 simultaneous Azure requests. Sized for the worker pool, not for
+   * per-tenant throughput.
+   */
   maxConcurrentBeats: number;
+  /**
+   * Per-company concurrent-beat budget. Each tenant gets its own slot
+   * pool so one company's hung beat cannot starve another's. Defaults
+   * to the same value as the single-tenant `maxConcurrentBeats` legacy
+   * cap so single-tenant behavior is unchanged.
+   */
+  maxConcurrentBeatsPerCompany: number;
   roleIntervals: Record<AgentIdentity["role"], number>;
   beatTimeoutMs: number;
   beatTokenBudget: number;
@@ -235,7 +248,21 @@ export class HeartbeatEngine {
   private readonly config: HeartbeatConfig;
   private readonly deps: BeatDependencies | null;
   private readonly locks = new BeatLockManager();
-  private readonly semaphore: Semaphore;
+  /**
+   * GLOBAL semaphore — caps total in-flight beats across all tenants
+   * so a busy multi-tenant fleet can't open unbounded Azure/DB
+   * connections. Acquired AFTER the per-company semaphore in
+   * triggerBeat so a tenant at its per-company limit doesn't block
+   * the global slot it didn't get.
+   */
+  private readonly globalSemaphore: Semaphore;
+  /**
+   * Per-company semaphores — each tenant has its own slot pool so one
+   * company's stuck beat cannot starve another. Lazily created on first
+   * use; released via `releaseCompany()` when a tenant is removed (so
+   * the map doesn't grow unbounded over time).
+   */
+  private readonly perCompanySemaphores = new Map<string, Semaphore>();
   private readonly lastBeatAt = new Map<string, number>(); // agentId → epoch ms
   private beatCounter = 0;
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -299,10 +326,37 @@ export class HeartbeatEngine {
   constructor(config: HeartbeatConfig, deps?: BeatDependencies, legacyExecutor?: BeatExecutor) {
     this.config = config;
     this.deps = deps ?? null;
-    this.semaphore = new Semaphore(config.maxConcurrentBeats);
+    this.globalSemaphore = new Semaphore(config.maxConcurrentBeats);
     this.executor = deps
       ? (req, beatId) => this.fourPhaseExecutor(req, beatId)
       : legacyExecutor ?? this.stubExecutor.bind(this);
+  }
+
+  /**
+   * Resolve the per-company semaphore, creating it lazily on first use.
+   * The cap comes from `maxConcurrentBeatsPerCompany` — a config patch
+   * via `patchConfig` does NOT resize existing semaphores. Restart
+   * required to apply a different per-tenant budget.
+   */
+  private getCompanySemaphore(companyId: string): Semaphore {
+    let sem = this.perCompanySemaphores.get(companyId);
+    if (!sem) {
+      sem = new Semaphore(this.config.maxConcurrentBeatsPerCompany);
+      this.perCompanySemaphores.set(companyId, sem);
+    }
+    return sem;
+  }
+
+  /**
+   * Drop a company's per-company semaphore when the tenant is deleted
+   * so the map doesn't grow unbounded over time. Safe to call when the
+   * tenant has no in-flight beats; if a beat is in flight, calling this
+   * is a bug — the slot would leak and the next bootstrap of a tenant
+   * with the same id would start at full capacity. Call from the
+   * company-delete path, AFTER cancelInFlightBeatsForCompany.
+   */
+  releaseCompany(companyId: string): void {
+    this.perCompanySemaphores.delete(companyId);
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -316,7 +370,7 @@ export class HeartbeatEngine {
     this.running = true;
     this.schedulerTimer = setInterval(() => void this.tick(), this.config.schedulerIntervalMs);
     console.log(
-      `[HEARTBEAT] Engine started (interval=${this.config.schedulerIntervalMs}ms, maxConcurrent=${this.config.maxConcurrentBeats})`
+      `[HEARTBEAT] Engine started (interval=${this.config.schedulerIntervalMs}ms, maxConcurrentGlobal=${this.config.maxConcurrentBeats}, maxConcurrentPerCompany=${this.config.maxConcurrentBeatsPerCompany})`
     );
   }
 
@@ -351,8 +405,18 @@ export class HeartbeatEngine {
       return null;
     }
 
-    // Concurrency
-    if (!this.semaphore.tryAcquire()) {
+    // Concurrency — acquire BOTH the per-company slot and the global
+    // slot. Per-company first: if the tenant is at its budget we don't
+    // touch the global counter (no false positive that would skew
+    // global-slot accounting). If the global cap fails after the
+    // per-company succeeded, release the per-company slot before
+    // bailing.
+    const companySem = this.getCompanySemaphore(request.companyId);
+    if (!companySem.tryAcquire()) {
+      return null;
+    }
+    if (!this.globalSemaphore.tryAcquire()) {
+      companySem.release();
       return null;
     }
 
@@ -360,7 +424,8 @@ export class HeartbeatEngine {
 
     // Agent lock
     if (!this.locks.acquire(request.agentId, beatId)) {
-      this.semaphore.release();
+      this.globalSemaphore.release();
+      companySem.release();
       return null;
     }
 
@@ -392,7 +457,8 @@ export class HeartbeatEngine {
       return record;
     } finally {
       this.locks.release(request.agentId);
-      this.semaphore.release();
+      this.globalSemaphore.release();
+      companySem.release();
       // Drain any events that were queued while this agent was mid-beat
       this.drainEventQueue(request.agentId);
     }
@@ -481,7 +547,10 @@ export class HeartbeatEngine {
     return {
       running: this.running,
       activeLocks: this.locks.activeCount,
-      semaphoreAvailable: this.semaphore.available,
+      semaphoreAvailable: this.globalSemaphore.available,
+      perCompanyAvailable: Object.fromEntries(
+        Array.from(this.perCompanySemaphores, ([companyId, sem]) => [companyId, sem.available]),
+      ),
       totalBeats: this.beatCounter,
       lastBeatAt: Object.fromEntries(this.lastBeatAt),
     };
@@ -512,7 +581,13 @@ export class HeartbeatEngine {
     // disappears with the beat's promise resolution.
     this.eventQueue.clear();
     this.locks.clear();
-    this.semaphore.reset();
+    this.globalSemaphore.reset();
+    // Reset every per-company semaphore in place (don't drop the entry
+    // — same companies will keep firing beats; we just clear stuck
+    // counters from any orphan in-flight beat).
+    for (const sem of this.perCompanySemaphores.values()) {
+      sem.reset();
+    }
   }
 
   // ── Scheduler tick ───────────────────────────────────────
@@ -566,8 +641,12 @@ export class HeartbeatEngine {
       // Skip if already locked
       if (this.locks.isLocked(agent.agentId)) continue;
 
-      // Skip if at capacity
-      if (this.semaphore.available <= 0) break;
+      // Skip if global capacity exhausted — break out, nothing else can
+      // fire this tick. Per-company capacity is checked inside
+      // triggerBeat; a per-company-full tenant just causes the
+      // triggerBeat to no-op and the loop moves on to the next agent
+      // (potentially in a different tenant that still has slots).
+      if (this.globalSemaphore.available <= 0) break;
 
       // Pre-flight claimability check — skip the entire beat if this
       // role has no claimable task for this company. Saves the full

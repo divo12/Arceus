@@ -5,7 +5,9 @@
   "executionMode": "heartbeat",
 
   "schedulerIntervalMs": 15000,
-  "maxConcurrentBeats": 2,
+  "$comment_concurrency": "maxConcurrentBeats = global ceiling across ALL tenants (safety valve so 20 tenants × 2-per-company can't open 40 Azure requests). maxConcurrentBeatsPerCompany = per-tenant slot pool — one company's hung beat cannot starve another's. Total in-flight = min(global, sum of per-company active).",
+  "maxConcurrentBeats": 8,
+  "maxConcurrentBeatsPerCompany": 2,
 
   "roleIntervals": {
     "ceo": 60000,

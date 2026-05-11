@@ -15,6 +15,7 @@ interface HeartbeatDefaults {
   executionMode: "orchestrator" | "heartbeat";
   schedulerIntervalMs: number;
   maxConcurrentBeats: number;
+  maxConcurrentBeatsPerCompany: number;
   roleIntervals: Record<AgentIdentity["role"], number>;
   beatTimeoutMs: number;
   beatTokenBudget: number;
@@ -33,8 +34,24 @@ export const heartbeatConfig = {
   /** Global interval between scheduler tick checks (ms). */
   schedulerIntervalMs: readNumberEnv("ARCEUS_HEARTBEAT_SCHEDULER_INTERVAL_MS", defaults.schedulerIntervalMs),
 
-  /** Max concurrent beats across all agents. */
+  /**
+   * Global ceiling on concurrent beats across ALL tenants. Acts as a
+   * safety valve so a busy multi-tenant fleet can't open unbounded
+   * Azure/DB connections.
+   */
   maxConcurrentBeats: readNumberEnv("ARCEUS_HEARTBEAT_MAX_CONCURRENT", defaults.maxConcurrentBeats),
+
+  /**
+   * Per-company concurrent-beat budget. Each tenant gets its own slot
+   * pool so one company's hung beat cannot starve another's. With this
+   * separate from the global cap, single-tenant behavior is unchanged
+   * (set both to the same value); multi-tenant scales linearly until
+   * the global cap is hit.
+   */
+  maxConcurrentBeatsPerCompany: readNumberEnv(
+    "ARCEUS_HEARTBEAT_MAX_CONCURRENT_PER_COMPANY",
+    defaults.maxConcurrentBeatsPerCompany,
+  ),
 
   /** Per-role beat intervals. How often each role wakes up (ms). */
   roleIntervals: {
