@@ -80,12 +80,30 @@ async function buildPreviewPublicBaseUrl(companyId: string, slot: PreviewSlot): 
   return `http://${previewConfig.publicHost}:${slot.state.port}`;
 }
 
+/**
+ * Slugify a company name to the SHORT brand form for the vanity
+ * subdomain.
+ *
+ * CEO strategies are verbose descriptors — "AquaGrid B2B Marketplace
+ * for Water Bottle Brands" is a legitimate strategy_title that we
+ * adopt as `companies.name` for display (see applyStrategyTx). But
+ * the slug only needs the brand, not the descriptor — visitors don't
+ * want `aquagrid-b2b-marketplace-for-water-bottle-brands.arceus.sh`,
+ * they want `aquagrid-b2b.arceus.sh`.
+ *
+ * Heuristic: lowercase, split on non-alphanumeric, take the first 2
+ * tokens (covers common shapes like "AquaGrid B2B", "Acme Corp",
+ * "Notion Clone", and degenerate single-word cases). Two tokens
+ * preserves enough context to disambiguate sibling brands ("Acme
+ * Marketplace" vs "Acme Studio") without leaking the whole pitch.
+ */
 function slugifyCompanyName(name: string): string {
-  const slug = name
+  const tokens = name
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "preview";
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return "preview";
+  return tokens.slice(0, 2).join("-");
 }
 
 type PreviewStatus = "idle" | "starting" | "ready" | "error";
