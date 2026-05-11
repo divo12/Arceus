@@ -2,7 +2,7 @@
  * Tasks repo — read queries.
  * Spec 34 v3 PR 6.
  */
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { tasks } from "../../schema/tasks.js";
 import type { DbClient } from "../_helpers.js";
 import { toDbId } from "./ids.js";
@@ -25,12 +25,19 @@ export async function listTasksByCompany(db: DbClient, companyId: string): Promi
  */
 /**
  * Pre-flight claimability check used by the heartbeat scheduler tick
- * to skip beats for roles that have no work to do. Hits the indexed
- * `(company_id, assigned_role, status)` path and returns at the first
- * unclaimed claimable row.
+ * to skip beats for roles that have no work to do.
  *
- * "Claimable" here means: status in (created|planned|ready) AND
- * checkout_run_id IS NULL — same predicate used by claimTask's CAS.
+ * "Claimable" here means: unclaimed AND (
+ *   status = planned  — sprint creation promotes no-dep tasks to planned,
+ *                       so planned reliably means deps are met, OR
+ *   status = created  AND depends_on_task_ids is empty — tasks that were
+ *                       not yet promoted but have no blocking deps.
+ * )
+ *
+ * `created` tasks with non-empty depends_on_task_ids are excluded: they
+ * are waiting on upstream work. Without this exclusion, such tasks make
+ * the heartbeat engine always wake the agent (LLM path), while the
+ * checklist path — which creates "Fix blocker" follow-ups — never fires.
  */
 export async function hasClaimableTasksForRole(
   db: DbClient,
@@ -44,8 +51,14 @@ export async function hasClaimableTasksForRole(
       and(
         eq(tasks.companyId, toDbId(companyId)),
         eq(tasks.assignedRole, role),
-        inArray(tasks.status, ["created", "planned", "ready"] as TaskStatus[]),
         isNull(tasks.checkoutRunId),
+        or(
+          eq(tasks.status, "planned" as TaskStatus),
+          and(
+            eq(tasks.status, "created" as TaskStatus),
+            sql`cardinality(${tasks.dependsOnTaskIds}) = 0`,
+          ),
+        ),
       ),
     )
     .limit(1);

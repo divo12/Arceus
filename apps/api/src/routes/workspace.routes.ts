@@ -5,41 +5,40 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getActiveCompanyId } from "../persistence/active-company.js";
-import { getLocalPreviewState, startLocalPreview, stopLocalPreview } from "../workspace/preview.js";
+import { getLocalPreviewState, stopLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { getDatabaseHealth } from "@arceus/db";
 import { getSupabaseEndpointHealth } from "../persistence/supabase-storage.js";
 
 export default async function workspaceRoutes(app: FastifyInstance) {
-  const productDir = workspaceManager.getLegacyProductDir();
-
-  app.get("/api/product/overview", async () => {
-    const companyId = getActiveCompanyId();
-    const workspace = companyId ? await workspaceManager.get(companyId) : null;
-    const files = companyId ? (await workspaceManager.listFiles(companyId)).files : [];
+  app.get("/api/product/overview", async (request, reply) => {
+    const companyId = request.companyId;
+    if (!companyId) return reply.code(401).send({ error: "Missing company context" });
+    const workspace = await workspaceManager.get(companyId);
+    const files = (await workspaceManager.listFiles(companyId)).files;
 
     return {
-      root: workspace?.localPath ?? productDir,
+      root: workspace?.localPath ?? workspaceManager.getLocalPath(companyId),
       workspace,
-      preview: getLocalPreviewState(),
+      preview: getLocalPreviewState(companyId),
       files,
     };
   });
 
-  app.get("/api/workspace", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/workspace", async (request) => {
+    const companyId = request.companyId ?? getActiveCompanyId();
     if (!companyId) {
       return {
         workspace: null,
         snapshots: [],
-        preview: getLocalPreviewState(),
+        preview: getLocalPreviewState(null),
       };
     }
 
     return {
       workspace: await workspaceManager.getWorkspaceInfo(companyId),
       snapshots: await workspaceManager.listSprintSnapshots(companyId),
-      preview: getLocalPreviewState(),
+      preview: getLocalPreviewState(companyId),
     };
   });
 

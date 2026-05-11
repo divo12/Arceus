@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 import { audit } from "../observability/audit-ledger.js";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "../agents/chat.js";
 import { sanitizeError } from "../observability/sanitize.js";
@@ -46,15 +47,17 @@ export default async function chatRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/api/chat/ceo/stream", async (request, reply) => {
+  app.get("/api/chat/ceo/stream", { preHandler: [requireUserAuth] }, async (request, reply) => {
+    console.log("[chat/stream] userId=%s companyId=%s", request.userId, request.companyId);
     try {
       const query = z.object({
         message: z.string().min(1),
         mode: z.enum(["ask", "instruct", "store"]).default("instruct"),
       }).parse(request.query);
-      await streamBoardMessageToCeo(reply, query.message, query.mode);
+      await streamBoardMessageToCeo(reply, query.message, query.mode, request.userId!, request.companyId);
       return reply;
     } catch (error) {
+      console.error("[chat/stream] error:", error);
       request.log?.error?.(error);
       if (!reply.raw.headersSent && !reply.sent) {
         reply.code(500);
@@ -78,16 +81,16 @@ export default async function chatRoutes(app: FastifyInstance) {
   // ── Spec 35 — chat surface ──────────────────────────────────────
 
   /** POST a user message + mode and stream the CEO reply (SSE). */
-  app.post("/api/chat/messages", async (request, reply) => {
+  app.post("/api/chat/messages", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const body = messagesPostSchema.parse(request.body);
       audit({
-        companyId: getActiveCompanyId() ?? "",
+        companyId: request.companyId ?? getActiveCompanyId() ?? "",
         category: "board",
         eventType: "board_message_sent",
         summary: `Board (${body.mode}) → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}`,
       });
-      await streamBoardMessageToCeo(reply, body.message, body.mode);
+      await streamBoardMessageToCeo(reply, body.message, body.mode, request.userId!, request.companyId);
       return reply;
     } catch (error) {
       request.log?.error?.(error);
@@ -104,12 +107,12 @@ export default async function chatRoutes(app: FastifyInstance) {
   });
 
   /** Paginated transcript for the active company (newest first, last 100). */
-  app.get("/api/chat/history", async (request, reply) => {
+  app.get("/api/chat/history", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const query = z.object({
         limit: z.coerce.number().int().positive().max(500).default(100),
       }).parse(request.query);
-      const companyId = getActiveCompanyId();
+      const companyId = request.companyId ?? getActiveCompanyId();
       if (!companyId) {
         return { messages: [] };
       }
@@ -131,11 +134,11 @@ export default async function chatRoutes(app: FastifyInstance) {
    * Injects a synthetic user message ("[user picked: X]") into the
    * transcript so the next CEO turn naturally sees the resolution.
    */
-  app.post("/api/chat/cards/:id/decide", async (request, reply) => {
+  app.post("/api/chat/cards/:id/decide", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const params = z.object({ id: z.string().min(1) }).parse(request.params);
       const body = decideSchema.parse(request.body);
-      const companyId = requireActiveCompanyId();
+      const companyId = request.companyId ?? requireActiveCompanyId();
 
       const updated = await boardMessagesRepo.markCardDecided(
         getDb(),

@@ -27,6 +27,7 @@ import { flush } from "../persistence/mutations/index.js";
 import { ensureAgentSession } from "../prompts/llm.js";
 import { runPromptText } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
+import { agentSessionKey } from "../orchestration/state.js";
 import { applyGovernanceToMutation } from "../skills/governance.js";
 import { eventBridgeOnce } from "../orchestration/state.js";
 import { registerSessionContext, unregisterSessionContext } from "../orchestration/session-context.js";
@@ -330,7 +331,8 @@ async function handleFreeformLlmAction(
     // snapshot input and downstream agent lookups.
     const snapshot = await buildSnapshotView(_ctx.company.id);
     const soul = getRoleSoul(role);
-    const session = await ensureAgentSession(snapshot, role);
+    const beatCompanyId = _ctx.company.id;
+    const session = await ensureAgentSession(snapshot, role, beatCompanyId);
 
     // Register session context so MCP tool calls can resolve identity
     // via findSoleActiveSessionContext / findActiveSessionContextByRole.
@@ -338,7 +340,7 @@ async function handleFreeformLlmAction(
     registerSessionContext({
       beatId,
       sessionId: session.sessionId,
-      companyId: _ctx.company.id,
+      companyId: beatCompanyId,
       sprintId: _ctx.currentSprint?.id ?? null,
       role,
       trustBand: "standard",
@@ -347,13 +349,13 @@ async function handleFreeformLlmAction(
       incomingHandoffs: [],
     });
 
-    touchAgentSession(role, "working");
+    touchAgentSession(agentSessionKey(beatCompanyId, role), "working");
     emitEmployeeActivity(role, "working", `${shortBeat(beatId)}: ${action.suggestedAction}`, { beatId });
 
     const prompt = `You are the ${role.toUpperCase()}. Current situation: ${action.detail}. Action needed: ${action.suggestedAction}. Analyze and take the appropriate action. Respond with a structured summary of what you did.`;
     emitEmployeeActivity(role, "prompt", `${shortBeat(beatId)}: sending to LLM`, { beatId, detail: { promptLength: prompt.length } });
-    const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt);
-    touchAgentSession(role, "idle");
+    const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt, undefined, beatCompanyId);
+    touchAgentSession(agentSessionKey(beatCompanyId, role), "idle");
 
     emitEmployeeActivity(role, "context", `${shortBeat(beatId)}: action completed`, {
       beatId, detail: { outputLength: output?.length ?? 0, outputPreview: output?.slice(0, 200) },
@@ -364,7 +366,7 @@ async function handleFreeformLlmAction(
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 1, toolCalls: 1,
     };
   } catch (err) {
-    touchAgentSession(role, "idle");
+    touchAgentSession(agentSessionKey(_ctx.company.id, role), "idle");
     emitEmployeeActivity(role, "error", `${shortBeat(beatId)}: failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
     finish("failed", `${role} checklist action failed`, 0);
     return {

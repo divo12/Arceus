@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   MessageSquare,
   LayoutDashboard,
@@ -15,8 +15,10 @@ import {
   Moon,
   CalendarDays,
   Activity,
+  LogOut,
 } from "lucide-react";
 import { useTheme } from "../theme-provider";
+import { useAuth } from "../../contexts/auth-context";
 import { cn } from "../../lib/utils";
 
 const NAV_GROUPS: ReadonlyArray<{
@@ -52,7 +54,14 @@ const NAV_GROUPS: ReadonlyArray<{
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
+  const { user, logout } = useAuth();
+
+  function handleLogout() {
+    logout();
+    router.push("/");
+  }
 
   return (
     <aside className="flex h-full w-44 shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--rail)]">
@@ -91,7 +100,7 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="mono border-t border-[var(--rule)] px-3 py-2.5 text-[10px] text-[var(--ink-3)]">
+      <div className="mono border-t border-[var(--rule)] px-3 py-2.5 text-[10px] text-[var(--ink-3)] flex flex-col gap-0.5">
         <button
           onClick={toggleTheme}
           className="flex w-full items-center justify-between gap-2 rounded-[4px] px-1 py-1 hover:text-[var(--ink-2)]"
@@ -102,6 +111,15 @@ export function Sidebar() {
           </span>
           <span className="text-[var(--ink-4)]">v0.1</span>
         </button>
+        {user && (
+          <button
+            onClick={handleLogout}
+            className="flex w-full items-center gap-1.5 rounded-[4px] px-1 py-1 text-[var(--ink-3)] hover:text-red-500 transition-colors"
+          >
+            <LogOut className="h-3 w-3 shrink-0" />
+            <span className="truncate">{user.userId.slice(0, 8)}… · sign out</span>
+          </button>
+        )}
       </div>
     </aside>
   );

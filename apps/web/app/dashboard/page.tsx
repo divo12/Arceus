@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { PageShell } from "../../components/layout/page-shell";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
+import { useAuth } from "../../contexts/auth-context";
 import {
   Activity,
   CheckSquare,
@@ -117,6 +118,7 @@ function StatusDot({ status }: { status: string }) {
 }
 
 export default function DashboardPage() {
+  const { token } = useAuth();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [orchestrator, setOrchestrator] = useState<OrchestratorStatus | null>(null);
   const [heartbeat, setHeartbeat] = useState<HeartbeatStatus | null>(null);
@@ -126,9 +128,9 @@ export default function DashboardPage() {
     async function poll() {
       try {
         const [snapRes, orchRes, hbRes] = await Promise.all([
-          fetch(apiUrl("/company"), { cache: "no-store" }),
-          fetch(apiUrl("/orchestrator/status"), { cache: "no-store" }),
-          fetch(apiUrl("/heartbeat/status"), { cache: "no-store" }),
+          fetchWithAuth("/company", token, { cache: "no-store" }),
+          fetchWithAuth("/orchestrator/status", token, { cache: "no-store" }),
+          fetchWithAuth("/heartbeat/status", token, { cache: "no-store" }),
         ]);
         if (!active) return;
         if (snapRes.ok) setSnapshot(await snapRes.json());
@@ -139,7 +141,7 @@ export default function DashboardPage() {
     poll();
     const id = setInterval(poll, 3000);
     return () => { active = false; clearInterval(id); };
-  }, []);
+  }, [token]);
 
   const company = snapshot?.company;
   const tasks = snapshot?.tasks ?? [];

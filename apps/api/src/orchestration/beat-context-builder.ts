@@ -40,7 +40,7 @@ import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
-import { productDir } from "./state.js";
+import { getProductDir } from "./state.js";
 import { computeTrustBand } from "../governance/trust.js";
 
 /**
@@ -58,6 +58,25 @@ const OPEN_TASK_STATUSES: readonly Task["status"][] = [
   "created",
   "planned",
   "in_progress",
+  "blocked",
+];
+
+/**
+ * Statuses the DB `claimTask` CAS will actually accept on a fresh
+ * claim attempt. Kept in sync with `claimableStatuses` in
+ * packages/db/src/repos/tasks/claim.ts. Used by the renderer to
+ * label tasks as ✅ claimable vs ⛔ not-yet-claimable so the agent's
+ * `task_claim` call has matching expectations.
+ *
+ * Note: `blocked` is included because the re-claim policy added in
+ * 5bc3011 lets an agent re-claim its own blocked task to retry the
+ * work. The label in renderOpenTasksForRole surfaces the prior
+ * block reason via the "🔁 Previously blocked" line so the agent
+ * decides between re-claim and idle.
+ */
+const DB_CLAIMABLE_STATUSES: readonly Task["status"][] = [
+  "created",
+  "planned",
   "blocked",
 ];
 
@@ -318,11 +337,12 @@ function summarizeShownTasks(
   return ctx.tasks
     .filter((t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status))
     .map((t) => {
-      const unmet = (t.dependsOnTaskIds ?? []).some((depId) => {
+      const depsUnmet = (t.dependsOnTaskIds ?? []).some((depId) => {
         const dep = ctx.tasks.find((d) => d.id === depId);
         return !isDepSatisfied(dep);
       });
-      return { id: t.id, title: t.title, status: t.status, claimable: !unmet };
+      const claimable = DB_CLAIMABLE_STATUSES.includes(t.status) && !depsUnmet;
+      return { id: t.id, title: t.title, status: t.status, claimable };
     });
 }
 
@@ -510,11 +530,11 @@ function renderIncomingHandoffsSection(handoffs: IncomingHandoff[]): string {
   return lines.join("\n").trimEnd();
 }
 
-function renderWorkspaceContext(existingFiles?: string[]): string {
+function renderWorkspaceContext(companyId: string, existingFiles?: string[]): string {
   const preview = getLocalPreviewState();
   const lines = [
     "## Workspace",
-    `- **Product directory:** ${productDir}`,
+    `- **Product directory:** ${getProductDir(companyId)}`,
     `- **Preview status:** ${preview.status}`,
   ];
   if (preview.url) lines.push(`- **Preview URL:** ${preview.url}`);
@@ -543,13 +563,16 @@ function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
   const myTasks = ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
+  const blockedTasks = myTasks.filter((t) => t.status === "blocked");
   const claimable = myTasks.filter((t) => {
+    if (!DB_CLAIMABLE_STATUSES.includes(t.status)) return false;
     const unmet = (t.dependsOnTaskIds ?? []).filter((depId) => {
       const dep = ctx.tasks.find((d) => d.id === depId);
       return !dep || !(["completed", "verified"] as string[]).includes(dep.status);
     });
     return unmet.length === 0;
   });
+
   if (myTasks.length === 0) {
     return [
       "## How to work this beat",
@@ -558,17 +581,29 @@ function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
       "Do not invent work. Do not create placeholder or no-op artifacts.",
     ].join("\n");
   }
-  if (claimable.length === 0) {
-    return [
-      "## How to work this beat",
+
+  const lines: string[] = ["## How to work this beat — Task Lifecycle Contract", ""];
+
+  if (blockedTasks.length > 0) {
+    lines.push(
+      `You have ${blockedTasks.length} blocked task(s) marked 🚫 in \`## Your Tasks\`.`,
+      "Blocked tasks CANNOT be claimed — do NOT call `task_claim` on them.",
+      "The system will automatically create a follow-up task to resolve the blocker. Wait for it to appear in your task list.",
       "",
-      "You have open tasks but **none are claimable** — every one is waiting on an upstream dependency (see ⛔ markers in `## Your Tasks`).",
-      "End your turn now. Do not call `task_claim` (it will return `deps_unmet`). Do not invent work.",
-    ].join("\n");
+    );
   }
-  return [
-    "## How to work this beat — Task Lifecycle Contract",
-    "",
+
+  if (claimable.length === 0) {
+    lines.push(
+      "You have open tasks but **none are directly claimable** right now:",
+      "- 🚫 BLOCKED tasks: call `task_resolve_blocker` (see above).",
+      "- ⛔ NOT CLAIMABLE tasks: waiting on upstream dependencies — end your turn and wait.",
+      "Do not call `task_claim`. Do not invent work.",
+    );
+    return lines.join("\n");
+  }
+
+  lines.push(
     "This is a **strict 3-step contract**. Skipping a step or going out of order is a bug.",
     "",
     "**Step 1 — Claim**",
@@ -590,7 +625,8 @@ function renderBeatProcedure(ctx: BeatRenderContext, role: Role): string {
     "",
     "**Step 4 — End turn**",
     "- After `task_complete` (or `task_block`), end your turn. Do not invent extra work.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 // ── Task-specific context ────────────────────────────────
@@ -664,7 +700,7 @@ export async function prepareBeatRender(
     ? [
         renderIncomingHandoffsBanner(incomingHandoffs),
         renderTaskContext(task),
-        renderWorkspaceContext(existingFiles),
+        renderWorkspaceContext(companyId, existingFiles),
         renderCompanyState(ctx),
         renderBudget(ctx),
         renderSprintHistory(ctx),

@@ -24,9 +24,6 @@ import { workspaceManager } from "../workspace/manager.js";
 import { materializeStaticSkillsForCompany } from "../opencode/materialize-static-skills.js";
 
 export async function initWorkspaceAndPersistence(): Promise<void> {
-  const productDir = workspaceManager.getLegacyProductDir();
-  cpSetBuildCheckDir(productDir);
-
   const persistenceMode = (process.env.ARCEUS_PERSISTENCE_MODE ?? "local").trim().toLowerCase();
   console.log(`[STARTUP] Company state persistence mode: ${persistenceMode}`);
   await hydrate();
@@ -35,6 +32,15 @@ export async function initWorkspaceAndPersistence(): Promise<void> {
   // sync callers (route handlers, fire-and-forget reactive paths) can resolve
   // companyId immediately on first request after a restart.
   await loadActiveCompanyIdFromCanonical();
+
+  // Set build-check dir to the per-company workspace now that the active
+  // company is known. Falls back to the shared workspace root on first boot
+  // (no company yet).
+  const activeCompanyId = getActiveCompanyId();
+  const productDir = activeCompanyId
+    ? workspaceManager.getLocalPath(activeCompanyId)
+    : workspaceManager.getLegacyProductDir();
+  cpSetBuildCheckDir(productDir);
 
   await hydrateSkillRegistries();
 }

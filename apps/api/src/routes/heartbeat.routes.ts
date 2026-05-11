@@ -5,7 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { roleTypeSchema, beatTriggerSchema, beatEventTriggerSchema } from "@arceus/contracts";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 import { cpGetBeatHistory } from "../persistence/control-plane/index.js";
 import type { HeartbeatEngine, MeetingScheduler, HeartbeatConfig } from "@arceus/company-runtime";
 import { heartbeatConfig } from "../config/heartbeat.js";
@@ -71,7 +71,7 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     return { status: "stopped", ...heartbeatEngine.getStatus() };
   });
 
-  app.post("/api/heartbeat/trigger", async (request, reply) => {
+  app.post("/api/heartbeat/trigger", { preHandler: [requireUserAuth] }, async (request, reply) => {
     const parsed = triggerBodySchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400);
@@ -82,7 +82,7 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     }
     const body = parsed.data;
 
-    const companyId = getActiveCompanyId();
+    const companyId = request.companyId;
     if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
@@ -132,16 +132,15 @@ export default async function heartbeatRoutes(app: FastifyInstance, opts: Heartb
     };
   });
 
-  app.get("/api/heartbeat/history", async (request) => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/heartbeat/history", { preHandler: [requireUserAuth] }, async (request) => {
+    const companyId = request.companyId;
     if (!companyId) return [];
     const query = request.query as Record<string, string>;
     // Audit C13 (F-434): NaN-safe limit parse. `Math.min(Number(garbage), 500)` was
     // returning NaN which Postgres rejected on the LIMIT clause.
     const limit = parseListLimit(query.limit, { default: 100 });
     const agentId = query.agentId || undefined;
-    const dbHistory = await cpGetBeatHistory(companyId, { limit, agentId });
-    return dbHistory.length > 0 ? dbHistory : heartbeatEngine.getHistory(companyId);
+    return cpGetBeatHistory(companyId, { limit, agentId });
   });
 
   app.patch("/api/heartbeat/config", async (request, reply) => {

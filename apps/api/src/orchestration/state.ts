@@ -16,7 +16,7 @@
 import type { AgentIdentity, BeatEventTrigger, CompanySnapshot, Task } from "@arceus/contracts";
 import type { MeetingScheduler } from "@arceus/company-runtime";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { isInternalAgentRole } from "@arceus/company-runtime";
 import { orchestratorConfig } from "../config/index.js";
 import { companyRuntime } from "./company-runtime.js";
@@ -82,17 +82,40 @@ export const MAX_FINDINGS_PER_TASK = 6;
 export const CEO_PROPOSAL_FAILURES_BEFORE_COOLDOWN = 3;
 export const CEO_PROPOSAL_COOLDOWN_MS = 2 * 60 * 1000;
 
-// ─── Workspace paths (unchanged — these are pure constants) ───────
+// ─── Workspace paths ──────────────────────────────────────────────
 export const workspaceRoot = resolve(process.cwd(), "..", "..");
+// Base workspace root — contains one sub-folder per company.
 export const productDir = existsSync(resolve(workspaceRoot, "workspace")) || !process.cwd().startsWith("/app")
   ? resolve(workspaceRoot, "workspace")
   : resolve(process.cwd(), "workspace");
+// Per-company isolated directory. All file I/O should use this.
+export function getProductDir(companyId: string): string {
+  return join(productDir, companyId);
+}
 
 // ─── Stable references (Maps + gates — safe to re-export by ref) ──
 export const agentSessions = companyRuntime.agentSessions;
 export const pendingPromptCompletions = companyRuntime.pendingPromptCompletions;
 export const eventBridgeOnce = companyRuntime.eventBridgeOnce;
 export const sprintCompletionGate = companyRuntime.sprintCompletionGate;
+
+/**
+ * Build the compound key used to isolate agent sessions per company.
+ * Format: `<companyId>:<role>` — ensures two companies' "developer"
+ * sessions never overwrite each other in the shared map.
+ */
+export function agentSessionKey(companyId: string, role: string): string {
+  return `${companyId}:${role}`;
+}
+
+/**
+ * Per-company `companyId:role` keys for active developer sessions.
+ * Keyed by companyId so concurrent multi-tenant developer sessions
+ * don't overwrite each other.
+ */
+const _developerSessionKeys = new Map<string, string>();
+export function setCurrentDeveloperSessionKey(companyId: string, key: string) { _developerSessionKeys.set(companyId, key); }
+export function getCurrentDeveloperSessionKey(companyId: string): string { return _developerSessionKeys.get(companyId) ?? ""; }
 
 // ─── Mutable-cell accessors (replace prior `export let X`) ────────
 /** Get the current execution status string. */

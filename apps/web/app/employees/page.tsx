@@ -5,8 +5,9 @@ import { Activity, BrainCircuit, CheckCircle2, ShieldAlert, Sparkles, Users } fr
 import type { AgentIdentity, MemorySummary } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
 import { PageShell } from "../../components/layout/page-shell";
+import { useAuth } from "../../contexts/auth-context";
 
 type EmployeeDirectoryEntry = {
   id: string;
@@ -57,13 +58,14 @@ function renderList(items: string[], empty: string) {
 }
 
 export default function EmployeesPage() {
+  const { token } = useAuth();
   const [employees, setEmployees] = useState<EmployeeDirectoryEntry[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
-        const response = await fetch(apiUrl("/employees"), { cache: "no-store" });
+        const response = await fetchWithAuth("/employees", token, { cache: "no-store" });
         if (response.ok) {
           setEmployees((await response.json()) as EmployeeDirectoryEntry[]);
         }
@@ -75,7 +77,7 @@ export default function EmployeesPage() {
     void load();
     const interval = setInterval(() => void load(), 1500);
     return () => clearInterval(interval);
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     if (!selectedEmployeeId && employees[0]) {

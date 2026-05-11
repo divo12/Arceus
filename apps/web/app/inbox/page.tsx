@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { PageShell } from "../../components/layout/page-shell";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
+import { useAuth } from "../../contexts/auth-context";
 import { Bell, CheckCircle, XCircle, Clock, MessageSquare, GitPullRequest } from "lucide-react";
 
 type Approval = {
@@ -65,6 +66,7 @@ function ItemIcon({ kind, status }: { kind: string; status: string }) {
 }
 
 export default function InboxPage() {
+  const { token } = useAuth();
   const [items, setItems] = useState<InboxItem[]>([]);
   const [filter, setFilter] = useState<"all" | "approvals" | "messages" | "meetings">("all");
 
@@ -73,8 +75,8 @@ export default function InboxPage() {
     async function load() {
       try {
         const [snapRes, meetingsRes] = await Promise.all([
-          fetch(apiUrl("/company"), { cache: "no-store" }),
-          fetch(apiUrl("/meetings"), { cache: "no-store" }),
+          fetchWithAuth("/company", token, { cache: "no-store" }),
+          fetchWithAuth("/meetings", token, { cache: "no-store" }),
         ]);
         if (!active) return;
 
@@ -137,7 +139,7 @@ export default function InboxPage() {
     load();
     const id = setInterval(load, 3000);
     return () => { active = false; clearInterval(id); };
-  }, []);
+  }, [token]);
 
   const filtered = filter === "all" ? items : items.filter((i) =>
     filter === "approvals" ? i.kind === "approval" :

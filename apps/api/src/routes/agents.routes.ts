@@ -3,11 +3,11 @@
  * Routes for the employee/agent directory, memories, and activity stream.
  */
 import type { FastifyInstance } from "fastify";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getAgentSessions } from "../orchestration/state.js";
 import { getEmployeeActivityLog, streamEmployeeActivity } from "../observability/activity.js";
 import { ROLE_DEPLOYMENT_MODEL } from "@arceus/company-runtime";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 interface LiveSessionState {
   sessionId: string;
@@ -32,12 +32,12 @@ interface LiveSessionState {
 }
 
 export default async function agentsRoutes(app: FastifyInstance) {
-  app.get("/api/employees", async () => {
-    return getEmployeeDirectory();
+  app.get("/api/employees", { preHandler: [requireUserAuth] }, async (request) => {
+    return getEmployeeDirectory(request.companyId ?? null);
   });
 
-  app.get("/api/employee-memories", async () => {
-    const directory = await getEmployeeDirectory();
+  app.get("/api/employee-memories", { preHandler: [requireUserAuth] }, async (request) => {
+    const directory = await getEmployeeDirectory(request.companyId ?? null);
     return directory.map((employee) => ({
       id: employee.id,
       name: employee.name,
@@ -78,8 +78,7 @@ export default async function agentsRoutes(app: FastifyInstance) {
  * (the in-memory orchestration state map) which is updated by the
  * heartbeat lifecycle.
  */
-async function getEmployeeDirectory() {
-  const companyId = getActiveCompanyId();
+async function getEmployeeDirectory(companyId: string | null) {
   if (!companyId) return [];
 
   const snapshot = await buildSnapshotView(companyId);

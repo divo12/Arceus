@@ -37,7 +37,8 @@ import { createMeetingRuntime } from "../meetings/runtime.js";
 import { setMeetingScheduler, setHeartbeatEngineRef } from "../orchestration/state.js";
 import { startStrandedRunSweeper, sweepStrandedRunsOnBoot } from "../orchestration/stranded-run-sweeper.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { getDb } from "@arceus/db";
+import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { cpHydrateTrustScores } from "../persistence/control-plane/index.js";
 import { flush } from "../persistence/mutations/index.js";
 import { initSkillEvolution } from "../skills/evolution.js";
@@ -117,24 +118,38 @@ async function autoResumeIfActiveSprint(
   heartbeatEngine: ReturnType<typeof createHeartbeatRuntime>["engine"],
   meetingScheduler: ReturnType<typeof createMeetingRuntime>["scheduler"],
 ): Promise<void> {
-  // Re-seed service registry on startup if a company already exists (survives server restarts).
-  // Spec 31 Phase 7.C.c — read from canonical via the seam helper + buildSnapshotView.
-  const startupCompanyId = getActiveCompanyId();
-  if (!startupCompanyId) {
-    console.log("[STARTUP] Company state: no active company");
+  // Check ALL companies for active sprints so every user's work resumes
+  // after a server restart, not just the most-recently-created company.
+  const companies = await companiesRepo.listCompanies(getDb());
+  if (companies.length === 0) {
+    console.log("[STARTUP] Company state: no companies found");
     return;
   }
-  const snap = await buildSnapshotView(startupCompanyId);
-  console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
-  // Auto-resume heartbeat if there's an active sprint (executing or reviewing)
-  const activeSprint = snap.sprints.find(
-    (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),
-  );
-  if (!activeSprint) return;
+
+  let resumeCount = 0;
+  for (const company of companies) {
+    const companyId = companiesRepo.fromDbId(company.id, company.friendlyId);
+    let snap;
+    try {
+      snap = await buildSnapshotView(companyId);
+    } catch (err) {
+      console.warn(`[STARTUP] Skipping company ${companyId} — snapshot load failed: ${err instanceof Error ? err.message : err}`);
+      continue;
+    }
+    console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
+    const activeSprint = snap.sprints.find(
+      (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),
+    );
+    if (activeSprint && snap.agents.length > 0) {
+      console.log(`[STARTUP] Auto-resuming heartbeat for company ${companyId} — Sprint ${activeSprint.number} is ${activeSprint.status}`);
+      resumeCount++;
+    }
+  }
+
+  if (resumeCount === 0) return;
 
   // Audit C7 (F-212/F-233): clear stranded `running` rows from the
-  // previous deploy/crash BEFORE the engine starts, so trust scoring
-  // and sprint completion gates don't observe ghost beats.
+  // previous deploy/crash BEFORE the engine starts.
   await sweepStrandedRunsOnBoot();
   startStrandedRunSweeper();
   heartbeatEngine.start();
@@ -143,5 +158,5 @@ async function autoResumeIfActiveSprint(
   } else {
     console.log("[STARTUP] Meetings disabled via ARCEUS_MEETINGS_ENABLED=false");
   }
-  console.log(`[STARTUP] Auto-resumed heartbeat + meeting scheduler — Sprint ${activeSprint.number} is ${activeSprint.status}`);
+  console.log(`[STARTUP] Auto-resumed heartbeat for ${resumeCount} compan${resumeCount === 1 ? "y" : "ies"} with active sprints`);
 }

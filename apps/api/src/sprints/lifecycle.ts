@@ -86,16 +86,17 @@ export async function checkSprintCompletion(): Promise<boolean> {
     reviewState,
   }));
 
-  const productDirForGate = workspaceManager.getLegacyProductDir();
+  const companyIdForGate = snapshot.company.id;
+  const productDirForGate = workspaceManager.getLocalPath(companyIdForGate);
 
   // Ensure a preview is running before the gate probes it. The workspace
   // monitor that used to auto-start previews after each developer beat is
   // not wired in this code path, so the gate would otherwise always see
   // "Preview not started" and the tester would force-fail every sprint.
-  const previewBeforeGate = getLocalPreviewState();
+  const previewBeforeGate = getLocalPreviewState(companyIdForGate);
   if (previewBeforeGate.status !== "ready" && previewBeforeGate.status !== "starting") {
     try {
-      const started = await startLocalPreview(productDirForGate);
+      const started = await startLocalPreview(productDirForGate, null, companyIdForGate);
       if (started.status === "ready") {
         const url = started.url ?? started.entryUrl ?? started.validationUrl;
         emitEmployeeActivity("system", "preview", `Preview auto-started before review gate → ${url ?? "(no url)"}`, {
@@ -201,11 +202,12 @@ export async function finalizeSprintCompletion(
   // ensure the user can see what was built by auto-starting preview if
   // one isn't already running. The preview stays alive until the next
   // sprint's workspace setup tears it down.
-  const productDirForPreview = workspaceManager.getLegacyProductDir();
-  const currentPreview = getLocalPreviewState();
+  const companyIdForPreview = snapshot.company.id;
+  const productDirForPreview = workspaceManager.getLocalPath(companyIdForPreview);
+  const currentPreview = getLocalPreviewState(companyIdForPreview);
   if (currentPreview.status !== "ready" && currentPreview.status !== "starting") {
     try {
-      const started = await startLocalPreview(productDirForPreview);
+      const started = await startLocalPreview(productDirForPreview, null, companyIdForPreview);
       const url = started.url ?? started.entryUrl ?? started.validationUrl;
       if (started.status === "ready" && url) {
         emitEmployeeActivity("system", "preview", `Preview auto-started for sprint ${sprint.number} finalization → ${url}`, {

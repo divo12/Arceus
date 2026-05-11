@@ -5,17 +5,19 @@ import { CheckCircle2, Clock3, GitBranch, Lightbulb, MessageSquareQuote, Users }
 import type { CompanySnapshot } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
 import { PageShell } from "../../components/layout/page-shell";
+import { useAuth } from "../../contexts/auth-context";
 
 export default function MeetingsPage() {
+  const { token } = useAuth();
   const [snapshot, setSnapshot] = useState<CompanySnapshot | null>(null);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
-        const response = await fetch(apiUrl("/company"), { cache: "no-store" });
+        const response = await fetchWithAuth("/company", token, { cache: "no-store" });
         if (response.ok) {
           setSnapshot((await response.json()) as CompanySnapshot);
         }
@@ -27,7 +29,7 @@ export default function MeetingsPage() {
     void load();
     const interval = setInterval(() => void load(), 1500);
     return () => clearInterval(interval);
-  }, []);
+  }, [token]);
 
   const agentsById = new Map((snapshot?.agents ?? []).map((agent) => [agent.id, agent]));
   const meetings = snapshot?.meetings ?? [];

@@ -13,6 +13,7 @@ import {
   DEVELOPER_STALL_TIMEOUT_MS,
   getDeveloperWatchdog,
   setDeveloperWatchdog,
+  getCurrentDeveloperSessionKey,
 } from "../orchestration/state.js";
 import { summarizeDeveloperStall } from "../agents/sessions.js";
 import { updateAgentSessionState } from "../agents/sessions.js";
@@ -30,23 +31,25 @@ export function clearDeveloperWatchdog() {
 }
 
 /** (Re)schedule the developer stall timer; fires the callback after the configured timeout. */
-export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: string) => Promise<void>) {
+export function scheduleDeveloperWatchdog(failDeveloperStallFn: (sessionId: string, devKey: string) => Promise<void>) {
   clearDeveloperWatchdog();
 
-  if (!getActiveExecution() || getExecutionStatus() !== "executing") return;
+  const activeExecution = getActiveExecution();
+  if (!activeExecution || getExecutionStatus() !== "executing") return;
 
-  const developerSession = agentSessions.get("developer");
+  const devKey = getCurrentDeveloperSessionKey(activeExecution.companyId);
+  const developerSession = devKey ? agentSessions.get(devKey) : null;
   if (developerSession?.status !== "working") return;
 
   const timer = setTimeout(() => {
-    void failDeveloperStallFn(developerSession.sessionId);
+    void failDeveloperStallFn(developerSession.sessionId, devKey);
   }, DEVELOPER_STALL_TIMEOUT_MS);
   setDeveloperWatchdog(timer);
 }
 
 /** Mark the developer session as stalled, fail the build task, and escalate via meeting. */
-export async function failDeveloperStall(sessionId: string) {
-  const developerSession = agentSessions.get("developer");
+export async function failDeveloperStall(sessionId: string, devKey: string) {
+  const developerSession = devKey ? agentSessions.get(devKey) : null;
   const activeExecution = getActiveExecution();
   if (!activeExecution || getExecutionStatus() !== "executing") return;
   if (developerSession?.sessionId !== sessionId || developerSession.status !== "working") return;
@@ -62,11 +65,13 @@ export async function failDeveloperStall(sessionId: string) {
   const detail = summarizeDeveloperStall(developerSession);
   const diagnosticMessage = detail ? `${message} ${detail}` : message;
 
-  updateAgentSessionState("developer", {
-    awaiting: "leadership review after stall",
-    stallReason: diagnosticMessage,
-    lastEventSummary: diagnosticMessage,
-  });
+  if (devKey) {
+    updateAgentSessionState(devKey, {
+      awaiting: "leadership review after stall",
+      stallReason: diagnosticMessage,
+      lastEventSummary: diagnosticMessage,
+    });
+  }
 
   setExecutionStatus("error");
   await setTaskStatus(activeExecution.buildTaskId, "failed", diagnosticMessage);

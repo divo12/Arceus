@@ -31,6 +31,11 @@ const legacyApiWorkspaceDir = resolve(repoRoot, "apps", "api", "workspace");
 const fallbackWorkspaceState = new Map<string, WorkspaceInfo>();
 const fallbackSprintSnapshots = new Map<string, SprintSnapshot[]>();
 
+/** Per-company isolated workspace directory. All developer file I/O goes here. */
+function getCompanyProductDir(companyId: string): string {
+  return resolve(legacyProductDir, companyId);
+}
+
 function buildWorkspaceId(companyId: string) {
   return `workspace_${companyId}`;
 }
@@ -276,14 +281,14 @@ async function listWorkspaceFiles(dir: string, base: string): Promise<WorkspaceF
  * sprint snapshots, bundle export, and archive/cleanup.
  */
 class WorkspaceManager {
-  /** Return the legacy workspace directory path. */
+  /** Return the shared workspace root (contains per-company subdirs). */
   getLegacyProductDir() {
     return legacyProductDir;
   }
 
-  /** Resolve the local filesystem path for a company's workspace. */
-  getLocalPath(_companyId: string) {
-    return legacyProductDir;
+  /** Resolve the per-company isolated filesystem path. */
+  getLocalPath(companyId: string) {
+    return getCompanyProductDir(companyId);
   }
 
   /** Alias for `get()` — retrieve workspace metadata for a company. */
@@ -298,25 +303,27 @@ class WorkspaceManager {
       return persisted;
     }
 
-    if (await pathExists(legacyProductDir)) {
-      return buildWorkspaceInfo(companyId, { localPath: legacyProductDir });
+    const companyDir = getCompanyProductDir(companyId);
+    if (await pathExists(companyDir)) {
+      return buildWorkspaceInfo(companyId, { localPath: companyDir });
     }
 
     return null;
   }
 
-  /** Create and initialise the workspace directory and git repo for a company. */
+  /** Create and initialise the per-company workspace directory and git repo. */
   async provision(companyId: string): Promise<WorkspaceOperationResult> {
     const warnings: string[] = [];
-    await ensureLegacyWorkspaceDir();
+    const companyDir = getCompanyProductDir(companyId);
+    await mkdir(companyDir, { recursive: true });
     await mkdir(persistenceConfig.workspace.root, { recursive: true });
     await mkdir(getCompanyCachePath(companyId), { recursive: true });
-    await ensureGitRepository(legacyProductDir);
+    await ensureGitRepository(companyDir);
 
     const existing = await this.get(companyId);
     const workspace = buildWorkspaceInfo(companyId, {
       ...existing,
-      localPath: legacyProductDir,
+      localPath: companyDir,
       status: "active",
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -328,33 +335,34 @@ class WorkspaceManager {
     };
   }
 
-  /** Ensure the workspace exists locally, restoring from a bundle if needed. */
+  /** Ensure the per-company workspace exists locally, restoring from a bundle if needed. */
   async ensureLocal(companyId: string) {
     const warnings: string[] = [];
     const existing = (await this.get(companyId)) ?? buildWorkspaceInfo(companyId);
+    const companyDir = getCompanyProductDir(companyId);
 
-    await ensureLegacyWorkspaceDir();
+    await mkdir(companyDir, { recursive: true });
     await mkdir(getCompanyCachePath(companyId), { recursive: true });
 
-    if (!(await pathExists(resolve(legacyProductDir, ".git"))) && existing.latestBundleKey && isStorageConfigured()) {
+    if (!(await pathExists(resolve(companyDir, ".git"))) && existing.latestBundleKey && isStorageConfigured()) {
       const bundlePath = resolve(getCompanyCachePath(companyId), "latest.bundle");
       try {
         await downloadWorkspaceBundle(existing.latestBundleKey, bundlePath);
-        await cloneWorkspaceFromBundle(bundlePath, legacyProductDir);
+        await cloneWorkspaceFromBundle(bundlePath, companyDir);
       } catch (error) {
         warnings.push(`workspace restore failed: ${error instanceof Error ? error.message : "Unknown restore error"}`);
       }
     }
 
-    await ensureGitRepository(legacyProductDir);
+    await ensureGitRepository(companyDir);
     await persistWorkspaceInfoSafely(buildWorkspaceInfo(companyId, {
       ...existing,
-      localPath: legacyProductDir,
+      localPath: companyDir,
       status: "active",
       updatedAt: new Date().toISOString(),
     }), warnings);
 
-    return legacyProductDir;
+    return companyDir;
   }
 
   /** Commit all workspace changes and upload the bundle to remote storage. */
@@ -580,7 +588,8 @@ class WorkspaceManager {
   async archive(companyId: string): Promise<WorkspaceOperationResult> {
     const warnings: string[] = [];
     const existing = (await this.get(companyId)) ?? buildWorkspaceInfo(companyId);
-    const cleanupTargets = [legacyProductDir, legacyApiWorkspaceDir, getCompanyCachePath(companyId)];
+    const companyDir = getCompanyProductDir(companyId);
+    const cleanupTargets = [companyDir, legacyApiWorkspaceDir, getCompanyCachePath(companyId)];
 
     for (const target of cleanupTargets) {
       if (!(await pathExists(target))) {
@@ -588,17 +597,7 @@ class WorkspaceManager {
       }
 
       try {
-        if (target === legacyProductDir) {
-          const entries = await readdir(target, { withFileTypes: true });
-          await Promise.all(
-            entries
-              .filter((entry) => entry.name !== ".gitkeep")
-              .map((entry) => rm(resolve(target, entry.name), { recursive: true, force: true }))
-          );
-          await writeFile(resolve(target, ".gitkeep"), "", { flag: "a" });
-        } else {
-          await rm(target, { recursive: true, force: true });
-        }
+        await rm(target, { recursive: true, force: true });
       } catch (error) {
         warnings.push(`${target}: ${error instanceof Error ? error.message : "Unknown filesystem error"}`);
       }

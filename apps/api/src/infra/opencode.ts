@@ -43,6 +43,7 @@ import { serverConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../../.opencode/agent/config.js";
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
+import { getActiveCompanyId } from "../persistence/active-company.js";
 
 interface OpencodeInstance {
   // close() is async because resetOpencodeConnection MUST wait for the
@@ -55,7 +56,8 @@ interface OpencodeInstance {
 }
 
 let opencodePromise: Promise<OpencodeInstance> | null = null;
-let ceoChatSessionPromise: Promise<Session> | null = null;
+/** Per-user CEO chat sessions: Map<userId, Promise<Session>> */
+const ceoChatSessionMap = new Map<string, Promise<Session>>();
 
 /**
  * Resolve the monorepo root.  process.cwd() varies by runner:
@@ -86,9 +88,18 @@ function findMonorepoRoot(): string {
 
 const projectRoot = findMonorepoRoot();
 console.log(`[OpenCode] Monorepo root resolved: ${projectRoot} (cwd=${process.cwd()})`);
-// Product workspace — where agents write code. OpenCode spawns with this as cwd
-// so that all file tools (write, edit, bash) resolve relative to it.
+// Product workspace root — base directory; per-company subdirs live under here.
 export const productWorkspace = resolve(projectRoot, "workspace");
+
+/**
+ * Return the effective workspace directory for the currently active company.
+ * Falls back to the shared workspace root when no company is active yet
+ * (e.g. during a fresh install before the first bootstrap).
+ */
+function getProductWorkspaceDir(): string {
+  const companyId = getActiveCompanyId();
+  return companyId ? resolve(productWorkspace, companyId) : productWorkspace;
+}
 
 /**
  * Load the opencode.json agent definitions from project root and merge
@@ -155,15 +166,16 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   mergedConfig.agent = agentConfig;
 
   // Write resolved config
+  const wsDir = getProductWorkspaceDir();
   writeFileSync(
-    resolve(productWorkspace, "opencode.json"),
+    resolve(wsDir, "opencode.json"),
     JSON.stringify(mergedConfig, null, 2),
     "utf8"
   );
 
   // Copy .opencode/prompts/ so {file:...} references resolve
   const srcPrompts = resolve(projectRoot, ".opencode", "prompts");
-  const dstPrompts = resolve(productWorkspace, ".opencode", "prompts");
+  const dstPrompts = resolve(wsDir, ".opencode", "prompts");
   if (existsSync(srcPrompts)) {
     mkdirSync(dstPrompts, { recursive: true });
     for (const file of readdirSync(srcPrompts)) {
@@ -324,7 +336,7 @@ function spawnOpencodeServer(hostname: string, port: number, config: Record<stri
   const useShell = platform() === "win32";
   const proc = spawn("opencode", args, {
     shell: useShell,
-    cwd: productWorkspace,
+    cwd: getProductWorkspaceDir(),
     env: {
       ...process.env,
       // Custom tools + plugin read these from the OpenCode process env
@@ -501,9 +513,17 @@ function waitForProcExit(proc: ChildProcess): Promise<void> {
   });
 }
 
-/** Clear the cached CEO chat session so the next chat turn creates a fresh one. */
-export function resetCeoChatSession() {
-  ceoChatSessionPromise = null;
+/**
+ * Clear the cached CEO chat session(s).
+ * If userId is provided, only that user's session is cleared.
+ * If omitted, all sessions are cleared (e.g. on full server reset).
+ */
+export function resetCeoChatSession(userId?: string) {
+  if (userId) {
+    ceoChatSessionMap.delete(userId);
+  } else {
+    ceoChatSessionMap.clear();
+  }
 }
 
 /**
@@ -514,9 +534,11 @@ export function resetCeoChatSession() {
  * Phase 6.5 — Package E.
  */
 async function writeSharedOpencodeConfig(): Promise<void> {
-  // 1. Copy plugin into productWorkspace
+  // 1. Copy plugin into workspace dir (create per-company dir if needed)
+  const wsDir = getProductWorkspaceDir();
+  await fsPromises.mkdir(wsDir, { recursive: true });
   const pluginSrc = resolve(projectRoot, ".opencode", "plugin", "arceus.ts");
-  const pluginDst = resolve(productWorkspace, ".opencode", "plugin", "arceus.ts");
+  const pluginDst = resolve(wsDir, ".opencode", "plugin", "arceus.ts");
   await fsPromises.mkdir(dirname(pluginDst), { recursive: true });
   if (existsSync(pluginSrc)) {
     await fsPromises.copyFile(pluginSrc, pluginDst);
@@ -524,7 +546,7 @@ async function writeSharedOpencodeConfig(): Promise<void> {
 
   // 2. Write all agent files
   for (const role of ROLES) {
-    await writeBeatAgent(role, productWorkspace);
+    await writeBeatAgent(role, wsDir);
   }
 
   // 3. Sync merged config (agents + MCP wiring + plugin) into workspace.
@@ -598,42 +620,42 @@ export async function openOpencodeEventStream() {
 }
 
 /**
- * Get (or lazily create) the singleton CEO **chat** session on OpenCode.
+ * Get (or lazily create) the CEO **chat** session for a specific user.
  *
  * Spec 35 — this session is owned exclusively by the user-facing chat
- * surface (`apps/api/src/agents/chat.ts`). The CEO heartbeat path uses
- * `ensureAgentSession("ceo")` (per-role persistent session in
- * `agentSessions`) which is physically separate, so chat and beats no
- * longer collide — the legacy `isCeoStreaming()` skip-guard was removed
- * once these were named distinctly.
+ * surface (`apps/api/src/agents/chat.ts`). Each user gets their own
+ * isolated session so their chat history never bleeds across accounts.
+ * The CEO heartbeat path uses `ensureAgentSession("ceo")` (per-role
+ * persistent session in `agentSessions`) which is physically separate.
  */
-export async function getCeoChatSession() {
-  if (!ceoChatSessionPromise) {
-    const attempt = (async () => {
-      const opencode = await getOpencode();
-      ensureDeployment("ceoDeployment");
+export async function getCeoChatSession(userId: string): Promise<Session> {
+  const existing = ceoChatSessionMap.get(userId);
+  if (existing) return existing;
 
-      const sessionResponse = await opencode.client.session.create({
-        body: { title: "Arceus CEO chat" }
-      });
+  const attempt = (async (): Promise<Session> => {
+    const opencode = await getOpencode();
+    ensureDeployment("ceoDeployment");
 
-      if (!sessionResponse.data) {
-        throw new Error("OpenCode did not return a CEO chat session.");
-      }
-
-      return sessionResponse.data;
-    })();
-
-    ceoChatSessionPromise = attempt;
-
-    attempt.catch(() => {
-      if (ceoChatSessionPromise === attempt) {
-        ceoChatSessionPromise = null;
-      }
+    const sessionResponse = await opencode.client.session.create({
+      body: { title: `Arceus CEO chat – ${userId}` }
     });
-  }
 
-  return ceoChatSessionPromise;
+    if (!sessionResponse.data) {
+      throw new Error("OpenCode did not return a CEO chat session.");
+    }
+
+    return sessionResponse.data;
+  })();
+
+  ceoChatSessionMap.set(userId, attempt);
+
+  attempt.catch(() => {
+    if (ceoChatSessionMap.get(userId) === attempt) {
+      ceoChatSessionMap.delete(userId);
+    }
+  });
+
+  return attempt;
 }
 
 /**

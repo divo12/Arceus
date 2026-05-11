@@ -5,8 +5,9 @@ import { ArrowUpRight, FileCode, Terminal, AlertCircle, Activity, LoaderCircle }
 import type { CompanySnapshot, Task } from "@arceus/contracts";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { apiUrl } from "../../lib/api";
+import { apiUrl, fetchWithAuth } from "../../lib/api";
 import { PageShell } from "../../components/layout/page-shell";
+import { useAuth } from "../../contexts/auth-context";
 
 type EmployeeActivityEvent = {
   id: string;
@@ -87,6 +88,7 @@ const emptyProductOverview: ProductOverview = {
 };
 
 export default function PreviewPage() {
+  const { token } = useAuth();
   const [snapshot, setSnapshot] = useState<CompanySnapshot | null>(null);
   const [productOverview, setProductOverview] = useState<ProductOverview>(emptyProductOverview);
   const [orchestratorStatus, setOrchestratorStatus] = useState<OrchestratorStatus | null>(null);
@@ -94,10 +96,10 @@ export default function PreviewPage() {
 
   async function loadData() {
     const [companyRes, productRes, orchRes, activityRes] = await Promise.allSettled([
-      fetch(apiUrl("/company"), { cache: "no-store" }),
-      fetch(apiUrl("/product/overview"), { cache: "no-store" }),
-      fetch(apiUrl("/orchestrator/status"), { cache: "no-store" }),
-      fetch(apiUrl("/employee-activity"), { cache: "no-store" }),
+      fetchWithAuth("/company", token, { cache: "no-store" }),
+      fetchWithAuth("/product/overview", token, { cache: "no-store" }),
+      fetchWithAuth("/orchestrator/status", token, { cache: "no-store" }),
+      fetchWithAuth("/employee-activity", token, { cache: "no-store" }),
     ]);
     if (companyRes.status === "fulfilled" && companyRes.value.ok) setSnapshot(await companyRes.value.json() as CompanySnapshot);
     if (productRes.status === "fulfilled" && productRes.value.ok) setProductOverview(await productRes.value.json() as ProductOverview);
@@ -109,7 +111,8 @@ export default function PreviewPage() {
     void loadData();
     const interval = setInterval(() => void loadData(), 3000);
     return () => clearInterval(interval);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   useEffect(() => {
     const es = new EventSource(apiUrl("/employee-activity/stream"));

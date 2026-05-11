@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { PageShell } from "../../components/layout/page-shell";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
+import { useAuth } from "../../contexts/auth-context";
 import { Shield, Cpu, GitBranch, Clock } from "lucide-react";
 
 type Agent = {
@@ -65,6 +66,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function AgentsPage() {
+  const { token } = useAuth();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selected, setSelected] = useState<Agent | null>(null);
 
@@ -72,7 +74,7 @@ export default function AgentsPage() {
     let active = true;
     async function poll() {
       try {
-        const res = await fetch(apiUrl("/employees"), { cache: "no-store" });
+        const res = await fetchWithAuth("/employees", token, { cache: "no-store" });
         if (!active) return;
         if (res.ok) {
           const data = await res.json();
@@ -88,7 +90,7 @@ export default function AgentsPage() {
     poll();
     const id = setInterval(poll, 2000);
     return () => { active = false; clearInterval(id); };
-  }, [selected?.id]);
+  }, [selected?.id, token]);
 
   return (
     <PageShell title="Agents" description="Agent roster, capabilities, and live session state">

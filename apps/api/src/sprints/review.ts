@@ -30,7 +30,7 @@ import { ensureAgentSession } from "../prompts/llm.js";
 import { touchAgentSession } from "../agents/sessions.js";
 import { runPromptText } from "../prompts/llm.js";
 import { emitReactive } from "../orchestration/reactive.js";
-import { productDir } from "../orchestration/state.js";
+import { agentSessionKey } from "../orchestration/state.js";
 import { buildGateFailureBugFields, buildBugFixTaskFields, shouldEscalate } from "./review-helpers.js";
 import { runVerificationGate } from "./verification-gate.js";
 import { finalizeSprintCompletion } from "./lifecycle.js";
@@ -177,7 +177,8 @@ export async function executeSprintReviewVerification(
     emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error ?? "unknown"}) — auto-failing sprint verification`, { beatId });
   }
 
-  const sprintEntryCheck = checkEntryPointImports();
+  const reviewProductDir = workspaceManager.getLocalPath(snapshot.company.id);
+  const sprintEntryCheck = checkEntryPointImports(reviewProductDir);
 
   // ── Cycle-over-cycle diff (Fix #5) ───────────────────────────────
   let previousCycleContext = "";
@@ -250,7 +251,7 @@ export async function executeSprintReviewVerification(
     "## Your Verification Steps",
     "1. Review the automated preview health and entry-point results above as context for your verdict.",
     "2. USE YOUR TOOLS to read the actual source files in the product workspace and verify they match the sprint goal.",
-    `   - Read the entry file (start with ${productDir}/src/App.tsx or equivalent) and verify it imports product modules`,
+    `   - Read the entry file (start with ${reviewProductDir}/src/App.tsx or equivalent) and verify it imports product modules`,
     "   - Do NOT produce a theoretical report — cite actual files and import statements you verified",
     "3. Analyze each completed task against its Definition of Done.",
     "4. List concrete, reproducible defects with file evidence. It is valid to return an empty findings list if nothing is broken — do not invent findings to fill the schema.",
@@ -267,12 +268,13 @@ export async function executeSprintReviewVerification(
   ].join("\n");
 
   try {
-    const session = await ensureAgentSession(snapshot, role);
-    touchAgentSession(role, "working");
+    const reviewCompanyId = snapshot.company.id;
+    const session = await ensureAgentSession(snapshot, role, reviewCompanyId);
+    touchAgentSession(agentSessionKey(reviewCompanyId, role), "working");
     emitEmployeeActivity(role, "working", `Beat ${beatId}: running sprint verification for Sprint ${sprint.number}`, { beatId });
 
-    const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt);
-    touchAgentSession(role, "idle");
+    const output = await runPromptText(role, session.sessionId, soul.systemPrompt + getAgentSkills(role), prompt, undefined, reviewCompanyId);
+    touchAgentSession(agentSessionKey(reviewCompanyId, role), "idle");
 
     const tokensUsed = drainBeatTokenAccumulator(beatId);
 
@@ -386,6 +388,7 @@ export async function executeSprintReviewVerification(
         const wiringPrescription = generateOrphanWiringPrescription(
           sprintEntryCheck.orphanedModules,
           sprintEntryCheck.entryFile,
+          reviewProductDir,
         );
         const prescriptionSection = wiringPrescription.length > 0
           ? [
@@ -557,7 +560,7 @@ export async function executeSprintReviewVerification(
       };
     }
   } catch (err) {
-    touchAgentSession(role, "idle");
+    touchAgentSession(agentSessionKey(ctx.company.id, role), "idle");
     emitEmployeeActivity(role, "error", `Beat ${beatId}: sprint verification failed — ${err instanceof Error ? err.message : String(err)}`, { beatId });
     emitGraphBeatCompleted(reviewBeatSprintId, sprintId, reviewBeatId, "failed", err instanceof Error ? err.message : String(err), 0, Date.now() - reviewBeatStart);
     return {
@@ -591,7 +594,7 @@ export async function executeSprintFinalGate(
     return { summary: "No review state", tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0 };
   }
 
-  const productDirForGate = workspaceManager.getLegacyProductDir();
+  const productDirForGate = workspaceManager.getLocalPath(snapshot.company.id);
   const gateResult = await runVerificationGate(productDirForGate, "final");
 
   if (sprintId) {

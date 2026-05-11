@@ -94,7 +94,7 @@ function setupRepoMocks(opts: {
   }));
   mock.module("../workspace/preview.js", () => ({ getLocalPreviewState: () => ({ status: "idle" }) }));
   mock.module("../prompts/artifacts.js", () => ({ resolveIncomingArtifacts: () => [] }));
-  mock.module("./state.js", () => ({ productDir: "/tmp/workspace" }));
+  mock.module("./state.js", () => ({ productDir: "/tmp/workspace", getProductDir: (companyId: string) => `/tmp/workspace/${companyId}` }));
   mock.module("../governance/trust.js", () => ({ computeTrustBand: async () => "standard" }));
   mock.module("../../../../.opencode/agent/config.js", () => ({
     getAllowedArceusTools: () => ["task_claim"],

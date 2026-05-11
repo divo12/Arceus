@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Source_Serif_4, JetBrains_Mono } from "next/font/google";
+import { AuthProvider } from "../contexts/auth-context";
 import { ChatProvider } from "../components/chat/chat-context";
 import { ThemeProvider } from "../components/theme-provider";
 import { ConditionalShell } from "../components/layout/conditional-shell";
@@ -34,11 +35,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en" className={`${inter.variable} ${sourceSerif.variable} ${jetbrainsMono.variable}`} data-theme="light" suppressHydrationWarning>
       <body>
         <ThemeProvider>
-          <ChatProvider>
-            <ConditionalShell>
-              {children}
-            </ConditionalShell>
-          </ChatProvider>
+          <AuthProvider>
+            <ChatProvider>
+              <ConditionalShell>
+                {children}
+              </ConditionalShell>
+            </ChatProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

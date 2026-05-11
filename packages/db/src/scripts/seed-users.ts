@@ -1,12 +1,4 @@
-import "../load-env.js";
-import { seedUsers } from "../seed.js";
-
-seedUsers()
-  .then((count) => {
-    console.log(`[seed-users] seeded ${count} users.`);
-    process.exit(0);
-  })
-  .catch((err: unknown) => {
-    console.error("[seed-users] FAIL:", err);
-    process.exit(1);
-  });
+// Hardcoded seed users removed — users are created via POST /api/auth/register.
+// This script is no longer needed.
+console.log("[seed-users] User seeding is handled by the /api/auth/register endpoint.");
+process.exit(0);

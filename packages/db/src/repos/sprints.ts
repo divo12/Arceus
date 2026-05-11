@@ -46,6 +46,13 @@ export async function updateSprint(
   return row ?? null;
 }
 
+/** Hard-delete a sprint row. Child tables (tasks, artifacts, meetings) have
+ *  `onDelete: "set null"` on sprintId so they are NOT removed, only detached. */
+export async function deleteSprint(db: DbClient, id: string): Promise<boolean> {
+  const result = await db.delete(sprints).where(eq(sprints.id, toDbId(id))).returning({ id: sprints.id });
+  return result.length === 1;
+}
+
 // ── Row-level lock (Spec 33 — C1 Pattern A) ─────────────────────
 //
 // `SELECT id … FOR UPDATE` row lock so a surrounding transaction's

@@ -50,6 +50,11 @@ export async function listCompanies(db: DbClient): Promise<Company[]> {
   return db.select().from(companies);
 }
 
+export async function findCompanyByUserId(db: DbClient, userId: string): Promise<Company | null> {
+  const [row] = await db.select().from(companies).where(eq(companies.userId, userId)).limit(1);
+  return row ?? null;
+}
+
 export async function updateCompany(
   db: DbClient,
   id: string,

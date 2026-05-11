@@ -198,9 +198,10 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     );
     if (!body) return reply;
 
-    const productDir = workspaceManager.getLegacyProductDir();
+    const companyId = req.mcp!.companyId;
+    const productDir = workspaceManager.getLocalPath(companyId);
     try {
-      const state = await startLocalPreview(productDir, body.targetPath);
+      const state = await startLocalPreview(productDir, body.targetPath, companyId);
       const url = state.url ?? state.entryUrl ?? state.validationUrl;
       if (state.status === "ready") {
         return cacheAndSend(req, reply, 200, success(
@@ -225,7 +226,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const body = parseOrFail(previewProbeBody, req.body ?? {}, reply);
     if (!body) return reply;
 
-    const probe = await probePreviewHealth(body.timeoutMs);
+    const probe = await probePreviewHealth(req.mcp!.companyId, body.timeoutMs);
 
     return cacheAndSend(
       req,
@@ -280,9 +281,9 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const body = parseOrFail(checkExportsBody, req.body, reply);
     if (!body) return reply;
 
-    const root = workspaceManager.getLegacyProductDir();
+    const root = workspaceManager.getLocalPath(req.mcp!.companyId);
     const abs = resolvePath(root, body.modulePath);
-    if (!abs.startsWith(root)) {
+    if (!abs.startsWith(root + "/") && abs !== root) {
       return reply.code(422).send(failure("modulePath must stay inside the workspace.", "validation", "never", "payload_fixed"));
       return;
     }
@@ -317,13 +318,13 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const failures: { category: string; errors: string[] }[] = [];
 
     // Typecheck
-    const tsc = await runTsc(workspaceManager.getLegacyProductDir(), timeoutMs ?? 60_000);
+    const tsc = await runTsc(workspaceManager.getLocalPath(req.mcp!.companyId), timeoutMs ?? 60_000);
     recordTypecheck(tsc.ok, tsc.errors);
     if (!tsc.ok) failures.push({ category: "typecheck", errors: tsc.errors.slice(0, 3) });
 
     // Preview probe (optional)
     if (!skipPreview) {
-      const probe = await probePreviewHealth(5000);
+      const probe = await probePreviewHealth(req.mcp!.companyId, 5000);
       recordPreview(probe.reachable, probe.error ? [probe.error] : []);
       if (!probe.reachable) {
         failures.push({ category: "preview", errors: [probe.error ?? "preview unreachable"] });

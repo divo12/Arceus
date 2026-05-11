@@ -2,7 +2,7 @@
  * Tasks repo — CAS claim path and row-level locks.
  * Spec 34 v3 PR 6.
  */
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { tasks } from "../../schema/tasks.js";
 import type { DbClient } from "../_helpers.js";
 import { toDbId } from "./ids.js";
@@ -65,7 +65,12 @@ export async function claimTask(
     .where(
       and(
         eq(tasks.id, dbTaskId),
-        inArray(tasks.status, claimableStatuses),
+        // Accept claimable statuses OR orphaned in_progress (checkoutRunId
+        // cleared by a previous timed-out beat without status reset).
+        or(
+          inArray(tasks.status, claimableStatuses),
+          eq(tasks.status, "in_progress"),
+        ),
         isNull(tasks.checkoutRunId),
       ),
     )
@@ -78,7 +83,9 @@ export async function claimTask(
   // Zero rows affected — figure out why.
   const existing = await findTaskById(db, taskId);
   if (!existing) return { ok: false, cause: "not_found" };
+  // checkoutRunId IS NOT NULL means another beat beat us to the claim.
   if (existing.checkoutRunId) return { ok: false, cause: "already_claimed" };
+  // Status is not claimable (e.g. completed, failed, cancelled, verifying, blocked).
   return { ok: false, cause: "not_claimable" };
 }
 

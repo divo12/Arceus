@@ -97,7 +97,9 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       .map((t, i) => ({ idx: i, role: t.assigned_role, title: t.title }))
       .filter((t) => !hiredRoles.has(t.role as never));
     if (invalid.length > 0) {
-      const validList = Array.from(hiredRoles).sort().join(", ");
+      const validList = hiredRoles.size > 0
+        ? Array.from(hiredRoles).sort().join(", ")
+        : "(none — call strategy_apply first to hire agents)";
       const detail = invalid.map((t) => `task[${t.idx}] "${t.title}" → "${t.role}"`).join("; ");
       return reply.code(422).send({
         ...failure(
@@ -121,7 +123,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
     }
 
     try {
-      const result = await createSprintWithTasks(parsed);
+      const result = await createSprintWithTasks(parsed, req.mcp.companyId);
       const sprintId = (result as { sprintId?: string; id?: string }).sprintId
         ?? (result as { sprintId?: string; id?: string }).id
         ?? "unknown";

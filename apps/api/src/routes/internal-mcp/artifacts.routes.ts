@@ -148,7 +148,7 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
       }
 
       try {
-        await writeArtifactToWorkspace(body.taskId, req.mcp!.role, body.slug, artifact.content);
+        await writeArtifactToWorkspace(body.taskId, req.mcp!.role, body.slug, artifact.content, req.mcp!.companyId);
       } catch (error) {
         return reply.code(503).send(
           failure(

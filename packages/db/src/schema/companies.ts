@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { pgTable, uuid, text, integer, timestamp, index, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { users } from "./users.js";
 
 export const companies = pgTable(
   "companies",
@@ -49,6 +50,8 @@ export const companies = pgTable(
     currentStrategyId: text("current_strategy_id"),
     currentSprintId: text("current_sprint_id"),
     currentSprintNumber: integer("current_sprint_number"),
+
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

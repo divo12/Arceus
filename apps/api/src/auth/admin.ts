@@ -98,12 +98,26 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * Paths that legitimately accept POST without admin auth. Add sparingly —
- * each entry is an attack surface. Empty for now; SSE endpoints all use
- * GET so they don't need exemption.
+ * each entry is an attack surface.
  */
 const PUBLIC_MUTATION_ALLOWLIST = new Set<string>([
-  // (none currently)
+  "/api/auth/register",
+  "/api/auth/login",
 ]);
+
+/**
+ * Path prefixes for mutating routes that accept a user JWT in place of the
+ * admin token. Every route under these prefixes must have its own
+ * `requireUserAuth` preHandler — the prefix list gates the bypass, not auth.
+ */
+const USER_MUTATION_PREFIXES: string[] = [
+  "/api/preview/",
+  "/api/orchestrator/",
+  "/api/chat/",
+  "/api/company/",
+  "/api/heartbeat/",
+  "/api/sprints",
+];
 
 /**
  * Audit C4 (F-428) — debug/seed/simulate/check routes that the audit
@@ -152,6 +166,11 @@ export async function requireAdminAuth(
   // Internal MCP routes have their own auth (apps/api/src/routes/internal-mcp/middleware.ts)
   if (path.startsWith("/api/internal/")) return;
   if (PUBLIC_MUTATION_ALLOWLIST.has(path)) return;
+
+  // Authenticated users bypass the admin token gate only for routes that are
+  // explicitly user-facing (listed in USER_MUTATION_PREFIXES). Routes outside
+  // that list still require the admin token even if a valid JWT is present.
+  if (req.userId && USER_MUTATION_PREFIXES.some(p => path.startsWith(p))) return;
 
   const auth = req.headers.authorization;
   const token = typeof auth === "string" && auth.startsWith("Bearer ")

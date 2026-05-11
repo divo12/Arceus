@@ -5,6 +5,21 @@ dockerfilePath = "Dockerfile"
 [deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 600
-preDeployCommand = "npm run db:migrate --workspace @arceus/db && npm run db:seed-users --workspace @arceus/db"
+# Multi-tenant: users register via POST /api/auth/register (creates user +
+# company in one transaction). The previous `db:seed-users` step is now
+# a no-op (script just prints + exits 0) so it's dropped from preDeploy
+# to keep the pre-deploy phase lean.
+#
+# Required env vars that MUST be set in the Railway dashboard before
+# this deploys:
+#   • ARCEUS_JWT_SECRET — >=32 char random string. Boot fails without
+#     it in production. Generate locally: `openssl rand -base64 48`.
+#   • DATABASE_URL — Postgres connection string (Railway-provided).
+#   • ARCEUS_AZURE_OPENAI_API_KEY / _ENDPOINT — provider credentials.
+# Optional:
+#   • ARCEUS_PREVIEW_PORT_MIN / _PORT_MAX — per-tenant preview port
+#     range (default 3210..3299, 90 slots). Widen for >90 concurrent
+#     tenants.
+preDeployCommand = "npm run db:migrate --workspace @arceus/db"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5

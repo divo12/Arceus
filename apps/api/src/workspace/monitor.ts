@@ -9,7 +9,7 @@ import { join, relative } from "node:path";
 import {
   getActiveExecution,
   getExecutionStatus,
-  productDir,
+  getProductDir,
   getDeveloperWorkspaceMonitor,
   getDeveloperWorkspaceSnapshot,
   getDeveloperStepLoopActive,
@@ -23,11 +23,12 @@ import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphFileChanges, resolveActiveSprintId } from "../observability/graph-emitter/index.js";
 import { getLocalPreviewState, hasReportedPreviewCandidate, hasLocalPreviewCandidate, startLocalPreview } from "./preview.js";
 import { touchAgentSession, updateAgentSessionState } from "../agents/sessions.js";
+import { getCurrentDeveloperSessionKey } from "../orchestration/state.js";
 import { scheduleDeveloperWatchdog, failDeveloperStall } from "./watchdog.js";
 import { appendTaskResult, setTaskPreviewUrl } from "../tasks/mutations.js";
 
 /** Recursively collect file paths and modification times from the product directory. */
-async function collectWorkspaceSnapshot(dir = productDir, base = productDir, result = new Map<string, number>()) {
+async function collectWorkspaceSnapshot(dir: string, base: string, result = new Map<string, number>()) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -74,8 +75,9 @@ async function pollDeveloperWorkspaceChanges() {
     return;
   }
 
+  const companyProductDir = getProductDir(activeExecution.companyId);
   const previousSnapshot = getDeveloperWorkspaceSnapshot();
-  const nextSnapshot = await collectWorkspaceSnapshot();
+  const nextSnapshot = await collectWorkspaceSnapshot(companyProductDir, companyProductDir);
   const changedFiles = Array.from(nextSnapshot.entries())
     .filter(([path, mtime]) => (previousSnapshot.get(path) ?? 0) < mtime)
     .sort((left, right) => right[1] - left[1])
@@ -88,8 +90,9 @@ async function pollDeveloperWorkspaceChanges() {
     return;
   }
 
-  touchAgentSession("developer");
-  updateAgentSessionState("developer", {
+  const devKey = getCurrentDeveloperSessionKey(activeExecution.companyId) || "developer";
+  touchAgentSession(devKey);
+  updateAgentSessionState(devKey, {
     lastWorkspaceChangeAt: nowIso(),
     lastProgressAt: nowIso(),
     lastEventSummary: `Workspace changed: ${changedFiles[0]}${changedFiles.length > 1 ? ` (+${changedFiles.length - 1} more)` : ""}`,
@@ -130,7 +133,8 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     return;
   }
 
-  const previewState = getLocalPreviewState();
+  const companyId = activeExecution.companyId;
+  const previewState = getLocalPreviewState(companyId);
   if (previewState.status === "starting" || previewState.status === "ready") {
     const previewUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
     if (previewUrl) {
@@ -140,7 +144,8 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   }
 
   const preferredTargetPath = changedFiles[0]?.split("/")[0] ?? null;
-  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(productDir, preferredTargetPath);
+  const companyProductDir = getProductDir(companyId);
+  const hasCandidate = hasReportedPreviewCandidate(companyId) || await hasLocalPreviewCandidate(companyProductDir, preferredTargetPath);
   if (!hasCandidate) {
     return;
   }
@@ -149,7 +154,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     taskId: activeExecution.buildTaskId,
   });
 
-  const preview = await startLocalPreview(productDir, preferredTargetPath);
+  const preview = await startLocalPreview(companyProductDir, preferredTargetPath, companyId);
   const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
   if (preview.status !== "ready" || !previewUrl) {
     emitEmployeeActivity("developer", "info", preview.lastError ?? "Live preview attempt did not become reachable yet.", {

@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { PageShell } from "../../components/layout/page-shell";
-import { apiUrl } from "../../lib/api";
+import { fetchWithAuth } from "../../lib/api";
+import { useAuth } from "../../contexts/auth-context";
 import { Settings2, Cpu, Database, Heart, RefreshCw, Trash2 } from "lucide-react";
 
 type HeartbeatConfig = {
@@ -59,6 +60,7 @@ function StatusIndicator({ ok }: { ok: boolean }) {
 }
 
 export default function SettingsPage() {
+  const { token } = useAuth();
   const [hbConfig, setHbConfig] = useState<HeartbeatConfig | null>(null);
   const [cpStatus, setCpStatus] = useState<ControlPlaneStatus | null>(null);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
@@ -68,10 +70,10 @@ export default function SettingsPage() {
   const load = useCallback(async () => {
     try {
       const [hbRes, cpRes, rtRes, dbRes] = await Promise.all([
-        fetch(apiUrl("/heartbeat/config"), { cache: "no-store" }).catch(() => null),
-        fetch(apiUrl("/control-plane/status"), { cache: "no-store" }).catch(() => null),
-        fetch(apiUrl("/runtime"), { cache: "no-store" }).catch(() => null),
-        fetch(apiUrl("/persistence/health"), { cache: "no-store" }).catch(() => null),
+        fetchWithAuth("/heartbeat/config", token, { cache: "no-store" }).catch(() => null),
+        fetchWithAuth("/control-plane/status", token, { cache: "no-store" }).catch(() => null),
+        fetchWithAuth("/runtime", token, { cache: "no-store" }).catch(() => null),
+        fetchWithAuth("/persistence/health", token, { cache: "no-store" }).catch(() => null),
       ]);
       if (hbRes?.ok) {
         const data = await hbRes.json();
@@ -81,7 +83,7 @@ export default function SettingsPage() {
       if (rtRes?.ok) setRuntime(await rtRes.json());
       if (dbRes?.ok) setDbHealth(await dbRes.json());
     } catch { /* ignore */ }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     load();
@@ -92,7 +94,7 @@ export default function SettingsPage() {
   const patchConfig = async (patch: Partial<HeartbeatConfig>) => {
     setSaving(true);
     try {
-      const res = await fetch(apiUrl("/heartbeat/config"), {
+      const res = await fetchWithAuth("/heartbeat/config", token, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -108,7 +110,7 @@ export default function SettingsPage() {
   const resetCompany = async () => {
     if (!confirm("Delete all company state? This cannot be undone.")) return;
     try {
-      await fetch(apiUrl("/company"), { method: "DELETE" });
+      await fetchWithAuth("/company", token, { method: "DELETE" });
       await load();
     } catch { /* ignore */ }
   };

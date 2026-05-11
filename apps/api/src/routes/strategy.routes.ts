@@ -5,6 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
+import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { applyStrategyTx } from "../sprints/strategy.js";
 import { getDb } from "@arceus/db";
@@ -25,10 +26,13 @@ interface StrategyRouteDeps {
 export default async function strategyRoutes(app: FastifyInstance, opts: StrategyRouteDeps) {
   const { heartbeatEngine, meetingScheduler } = opts;
 
-  app.post("/api/company/strategy", async (request, reply) => {
+  app.post("/api/company/strategy", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const { sendBoardMessageToCeo } = await import("../agents/chat.js");
-      const companyId = getActiveCompanyId();
+      // Multi-tenant: prefer the caller's JWT-derived companyId. The
+      // legacy active-company singleton is retained as a fallback for
+      // the non-auth bootstrap path that early versions exercised.
+      const companyId = request.companyId ?? getActiveCompanyId();
       audit({ companyId: companyId ?? "", category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
       const company = companyId ? await companiesRepo.findByIdHydrated(getDb(), companyId) : null;
       return await sendBoardMessageToCeo(company?.goal || "Refine the current idea into a demoable first release.");
@@ -37,18 +41,18 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(500);
       return sanitizeError(error, "Strategy generation failed.", {
         route: "POST /api/strategy",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
       });
     }
   });
 
-  app.post("/api/strategy/approve", async (request, reply) => {
+  app.post("/api/strategy/approve", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const body = strategyOutputSchema.parse(request.body);
       // Spec 31 Phase 7.C.c-bis — applyStrategyTx is atomic; it either
       // commits the entire org chart or rolls back. Surface a 409 if no
       // company has been bootstrapped yet so the board can retry.
-      const companyId = getActiveCompanyId();
+      const companyId = request.companyId ?? getActiveCompanyId();
       if (!companyId) {
         reply.code(409);
         return { error: "No active company to apply strategy to." };
@@ -60,15 +64,15 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(400);
       return sanitizeError(error, "Strategy payload rejected.", {
         route: "POST /api/strategy/approve",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
       });
     }
   });
 
-  app.post("/api/strategy/execute", async (request, reply) => {
+  app.post("/api/strategy/execute", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const body = strategyOutputSchema.parse(request.body);
-      const companyId = getActiveCompanyId();
+      const companyId = request.companyId ?? getActiveCompanyId();
       if (!companyId) {
         reply.code(409);
         return { error: "No active company to apply strategy to." };
@@ -85,7 +89,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(400);
       return sanitizeError(error, "Strategy payload rejected.", {
         route: "POST /api/strategy/execute",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
       });
     }
   });
@@ -95,7 +99,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
     idea: z.string().min(5),
   });
 
-  app.post("/api/quick-execute", async (request, reply) => {
+  app.post("/api/quick-execute", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const { idea } = quickExecuteSchema.parse(request.body);
       emitActivity("system", "transition", `Quick-execute started: "${idea.slice(0, 80)}"`);
@@ -105,22 +109,29 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       // WithWorkspace` returns a snapshot directly so we use it; afterward
       // each stage rebuilds from canonical so the CEO LLM sees the
       // up-to-date view.
+      //
+      // Multi-tenant: when the caller has an authenticated companyId,
+      // start from that company instead of asking the singleton. The
+      // bootstrap branch only fires for the legacy unauthenticated
+      // bootstrap flow.
       let snapshot;
-      if (!getActiveCompanyId()) {
+      const authedCompanyId = request.companyId ?? getActiveCompanyId();
+      if (!authedCompanyId) {
         emitActivity("system", "transition", "Bootstrapping company...");
         snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
         emitActivity("system", "transition", `Company bootstrapped: ${snapshot.company.name}`);
       } else {
-        snapshot = await buildSnapshotView(requireActiveCompanyId());
+        snapshot = await buildSnapshotView(authedCompanyId);
       }
+      const companyId = request.companyId ?? requireActiveCompanyId();
 
       emitActivity("ceo", "transition", "CEO generating strategy...");
       const strategy = await generateStrategy(snapshot);
       emitActivity("ceo", "transition", `Strategy ready: ${strategy.strategy_title}`);
 
       // Spec 31 Phase 7.C.c-bis — applyStrategyTx commits org chart atomically.
-      await applyStrategyTx(requireActiveCompanyId(), strategy);
-      snapshot = await buildSnapshotView(requireActiveCompanyId());
+      await applyStrategyTx(companyId, strategy);
+      snapshot = await buildSnapshotView(companyId);
       emitActivity("system", "transition", `Strategy applied — ${snapshot.agents.length} agents, ${snapshot.tasks.length} tasks`);
 
       heartbeatEngine.start();
@@ -134,7 +145,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(400);
       return sanitizeError(error, "Quick execute failed.", {
         route: "POST /api/quick-execute",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
       });
     }
   });
