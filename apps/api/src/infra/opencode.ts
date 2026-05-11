@@ -43,6 +43,7 @@ import { serverConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../../.opencode/agent/config.js";
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
+import { getRoleSoul } from "@arceus/company-runtime";
 
 interface OpencodeInstance {
   // close() is async because resetOpencodeConnection MUST wait for the
@@ -183,14 +184,28 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
     "utf8"
   );
 
-  // Copy .opencode/prompts/ so {file:...} references resolve
-  const srcPrompts = resolve(projectRoot, ".opencode", "prompts");
+  // Write per-role prompt .txt files from the TS source-of-truth
+  // (packages/company-runtime/src/employee-prompts/<role>.ts → DEVELOPER_PROMPT
+  // etc, exposed via getRoleSoul()). These files are referenced from each
+  // agent's .md frontmatter (prompt: "{file:./.opencode/prompts/<role>-soul.txt}")
+  // and OpenCode reads them when assembling the agent's persona prompt.
+  //
+  // Critical: this REPLACES the prior "copy from <projectRoot>/.opencode/prompts/"
+  // logic. Those static files were stale (last edited Apr 27) and ignored every
+  // TypeScript soul refactor we did. The fix makes the TS constants the single
+  // source of truth — every redeploy overwrites the .txt files with the latest
+  // soul, so prompt edits propagate end-to-end without a separate file sync step.
   const dstPrompts = resolve(wsDir, ".opencode", "prompts");
-  if (existsSync(srcPrompts)) {
-    mkdirSync(dstPrompts, { recursive: true });
-    for (const file of readdirSync(srcPrompts)) {
-      copyFileSync(resolve(srcPrompts, file), resolve(dstPrompts, file));
-    }
+  mkdirSync(dstPrompts, { recursive: true });
+  for (const role of ROLES) {
+    const promptFile = ROLE_CONFIGS[role].promptFile;
+    // promptFile is like "./.opencode/prompts/developer-soul.txt"; we only want
+    // the basename so we can join against the workspace's prompts dir.
+    const basename = promptFile.split("/").pop();
+    if (!basename) continue;
+    const soul = getRoleSoul(role);
+    if (!soul?.systemPrompt) continue;
+    writeFileSync(resolve(dstPrompts, basename), soul.systemPrompt, "utf8");
   }
 }
 
