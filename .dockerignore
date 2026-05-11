@@ -17,3 +17,10 @@ docs/
 deck/
 .omx/
 workspace/
+# Explicit re-include for the canonical scaffold template under
+# packages/workspace-template/. The leaf name (workspace-template) does
+# not match the workspace/ glob above, but we re-include explicitly so a
+# future tightening of the glob (e.g. `workspace*/`) wouldn't silently
+# drop the seed assets from the API image.
+!packages/workspace-template
+!packages/workspace-template/**

@@ -1,0 +1,7 @@
+{
+  "name": "@arceus/workspace-template",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scaffold copied into every new company's workspace at provision time. The files in ./template/ are the source of truth — DO NOT install any of them as monorepo dependencies. apps/api copies the template/ directory verbatim into <productWorkspace>/<companyId>/ before git init.",
+  "type": "module"
+}

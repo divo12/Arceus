@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { persistenceConfig } from "../config/index.js";
 import { cloneWorkspaceFromBundle, commitAllChanges, createBundleFromWorkspace, diffWorkspaceRefs, ensureGitRepository, getHeadSha, tagWorkspace } from "./git-ops.js";
 import { createSignedBucketUrl, downloadWorkspaceBundle, getAssetRecordByObjectKey, getLocalFileInfo, isStorageConfigured, uploadWorkspaceBundle } from "../persistence/supabase-storage.js";
+import { seedWorkspaceIfEmpty } from "./seed.js";
 
 interface WorkspaceOperationResult {
   workspace: WorkspaceInfo;
@@ -318,6 +319,24 @@ class WorkspaceManager {
     await mkdir(companyDir, { recursive: true });
     await mkdir(persistenceConfig.workspace.root, { recursive: true });
     await mkdir(getCompanyCachePath(companyId), { recursive: true });
+
+    // Seed the canonical Vite+React+TS+Tailwind scaffold BEFORE git init
+    // so the initial commit captures it as the starting point. Without
+    // this, the developer agent arrives at an empty workspace and either
+    // stalls trying to scaffold or task_blocks with "missing_workspace"
+    // (contradicting the developer soul's promise of a pre-configured
+    // scaffold). Idempotent: skips when the dir already has product files.
+    try {
+      const seed = await seedWorkspaceIfEmpty(companyDir);
+      if (!seed.seeded && seed.reason && !seed.reason.startsWith("non_empty")) {
+        warnings.push(`workspace seed skipped: ${seed.reason}`);
+      }
+    } catch (err) {
+      warnings.push(
+        `workspace seed failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     await ensureGitRepository(companyDir);
 
     const existing = await this.get(companyId);

@@ -38,6 +38,12 @@ COPY packages/company-runtime/package.json packages/company-runtime/
 COPY packages/runtime-shared/package.json packages/runtime-shared/
 COPY packages/task-engine/package.json packages/task-engine/
 COPY packages/arceus-mcp/package.json packages/arceus-mcp/
+# workspace-template is a static asset bundle (canonical Vite/React/TS
+# scaffold copied into every new company's product dir at provision time).
+# No deps of its own — the inner template/package.json is data, not a
+# monorepo dep. But the outer package.json must exist for npm workspaces
+# to satisfy the packages/* glob without erroring on the install layer.
+COPY packages/workspace-template/package.json packages/workspace-template/
 
 RUN npm ci --include=dev --include=optional \
     || (echo "[deps] lockfile out of sync — falling back to npm install" \
