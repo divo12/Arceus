@@ -409,6 +409,7 @@ export async function runATAPipeline(job: SkillEvolveJob): Promise<PipelineResul
     "plan",
     `Skill apply proposal — ${synthesis.name}`,
     handoffMd,
+    job.companyId,
   );
   const taskId = await createApplyProposalTask({
     companyId: job.companyId,
@@ -496,6 +497,7 @@ async function runRollbackShortCircuit(job: SkillEvolveJob): Promise<PipelineRes
     "plan",
     `Skill rollback proposal — ${slug}`,
     md,
+    job.companyId,
   );
 
   const taskId = `tsk_${randomUUID().slice(0, 12)}`;

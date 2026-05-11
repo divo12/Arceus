@@ -399,83 +399,114 @@ export const ArceusPlugin: Plugin = async () => {
         const workspaceRoot = process.cwd();
         const tenantRoot = resolve(workspaceRoot, tenantId);
 
-        // Resolve a single path arg against the tenant root, and reject
-        // anything that resolves outside it. Accepts both relative and
-        // absolute inputs — absolute paths inside tenantRoot pass through,
-        // anything else is rewritten to be tenant-relative.
+        /**
+         * Map a path arg from the model's view (where "/workspace" is
+         * shorthand for the workspace root, per the developer soul) to
+         * the actual filesystem path for this session's tenant.
+         *
+         *   "/workspace"          → "<tenantRoot>"
+         *   "/workspace/foo"      → "<tenantRoot>/foo"
+         *   "<tenantRoot>/foo"    → unchanged (already correct)
+         *   "<workspaceRoot>/<OTHER>/foo" → REJECT (cross-tenant)
+         *   "/etc/passwd"         → REJECT (outside workspace tree)
+         *   "foo/bar" (relative)  → "<tenantRoot>/foo/bar"
+         *
+         * Wildcards (`*`, `**`, `?`) in `p` are preserved — node:path.join
+         * is string-only and doesn't interpret them, so glob/grep patterns
+         * survive intact through the rewrite.
+         */
         const scopePath = (p: string): string => {
-          // If absolute AND inside tenantRoot, keep as-is.
+          // 1. Soul-prompt alias: "/workspace[/...]" → tenantRoot[/...].
+          if (p === "/workspace") return tenantRoot;
+          if (p.startsWith("/workspace/")) {
+            return join(tenantRoot, p.slice("/workspace/".length));
+          }
+
+          // 2. Already a real absolute path under this tenant's root → keep.
           if (isAbsolute(p) && (p === tenantRoot || p.startsWith(tenantRoot + "/"))) {
             return p;
           }
-          // If absolute but elsewhere (e.g. /etc/...), treat the leading
-          // slash as tenant-relative (strip and resolve under tenant root).
-          // We can't allow truly-absolute reads outside the workspace —
-          // the model writing "/etc/hosts" is almost certainly a bug, and
-          // tenant isolation > convenience.
-          const candidate = isAbsolute(p)
-            ? resolve(tenantRoot, p.replace(/^\/+/, ""))
-            : resolve(tenantRoot, p);
+
+          // 3. Absolute path inside the shared workspace tree but NOT this
+          //    tenant → cross-tenant escape. Block hard.
+          if (isAbsolute(p) && (p === workspaceRoot || p.startsWith(workspaceRoot + "/"))) {
+            throw new Error(
+              `[arceus-tenant-guard] Blocked '${input.tool}' — path "${p}" is inside another tenant's workspace.`,
+            );
+          }
+
+          // 4. Absolute path entirely outside the workspace tree (e.g.
+          //    "/etc/passwd", "/root/.ssh/..."). The model is almost
+          //    certainly hallucinating; tenant isolation wins over
+          //    convenience. Block.
+          if (isAbsolute(p)) {
+            throw new Error(
+              `[arceus-tenant-guard] Blocked '${input.tool}' — absolute path "${p}" is outside the workspace tree.`,
+            );
+          }
+
+          // 5. Relative path → resolve under tenantRoot. Verify the result
+          //    doesn't escape via ".." traversal.
+          const candidate = resolve(tenantRoot, p);
           const rel = relative(tenantRoot, candidate);
           if (rel.startsWith("..") || isAbsolute(rel)) {
             throw new Error(
-              `[arceus-tenant-guard] Blocked '${input.tool}' — path "${p}" escapes tenant ${tenantId}.`,
+              `[arceus-tenant-guard] Blocked '${input.tool}' — relative path "${p}" escapes tenant ${tenantId}.`,
             );
           }
           return candidate;
         };
 
-        // Tools that take a single `filePath` argument.
+        const a = output.args as Record<string, unknown> | undefined;
+
+        // File I/O tools — defensively rewrite EITHER `filePath` or `path`
+        // (OpenCode's tool schemas have varied; both arg names show up in
+        // the wild). At most one will actually be set.
         const FILE_PATH_TOOLS = new Set(["edit", "write", "create", "read", "multiedit"]);
-        if (
-          FILE_PATH_TOOLS.has(input.tool) &&
-          output.args &&
-          typeof (output.args as Record<string, unknown>).filePath === "string"
-        ) {
-          const a = output.args as Record<string, unknown>;
-          a.filePath = scopePath(a.filePath as string);
+        if (FILE_PATH_TOOLS.has(input.tool) && a) {
+          if (typeof a.filePath === "string") a.filePath = scopePath(a.filePath);
+          if (typeof a.path === "string") a.path = scopePath(a.path);
         }
 
-        // Search/list tools take `path`.
-        const PATH_ARG_TOOLS = new Set(["grep", "glob", "list", "ls"]);
-        if (
-          PATH_ARG_TOOLS.has(input.tool) &&
-          output.args &&
-          typeof (output.args as Record<string, unknown>).path === "string"
-        ) {
-          const a = output.args as Record<string, unknown>;
-          a.path = scopePath(a.path as string);
+        // Search tools — `pattern` (the glob/grep pattern, may contain
+        // wildcards) AND `path` (the base directory for the search). Both
+        // need scoping. Pattern is the bug we just observed: model emits
+        // "/workspace/design/**/*" intending the workspace alias; without
+        // rewriting, glob matches against literal /workspace which doesn't
+        // exist on the container.
+        const SEARCH_TOOLS = new Set(["grep", "glob", "list", "ls"]);
+        if (SEARCH_TOOLS.has(input.tool) && a) {
+          if (typeof a.pattern === "string") a.pattern = scopePath(a.pattern);
+          if (typeof a.path === "string") a.path = scopePath(a.path);
         }
 
         // bash: wrap the command in a subshell that cd's into the tenant
-        // root, so chained commands (a && b && c) and pipes (a | b) all
-        // inherit the tenant CWD without us having to parse shell syntax.
-        // Also validate that the command doesn't reference workspace
-        // paths belonging to another tenant.
-        if (
-          input.tool === "bash" &&
-          output.args &&
-          typeof (output.args as Record<string, unknown>).command === "string"
-        ) {
-          const a = output.args as Record<string, unknown>;
-          const cmd = a.command as string;
+        // root so chained commands (a && b) and pipes (a | b) all inherit
+        // the tenant CWD without parsing shell syntax. Also rewrite the
+        // "/workspace/..." alias INSIDE the command, and reject any
+        // workspace-tree absolute paths that point outside the tenant.
+        if (input.tool === "bash" && a && typeof a.command === "string") {
+          let cmd = a.command;
 
-          // Reject any absolute workspace path that points outside this
-          // tenant's root. Patterns like "/app/workspace/<OTHER>/..."
-          // are clear cross-tenant escapes; anything inside tenantRoot
-          // or outside the workspace tree entirely (e.g. /usr/, /tmp/,
-          // /bin/) is fine.
-          //
-          // Match every absolute-looking token; skip quoted-string-escape
-          // heuristics — the goal is "catch the fallible model writing
-          // the wrong literal path", not "defend against an adversary
-          // crafting shell escapes".
+          // 1. Rewrite the "/workspace[/...]" alias to the real tenant
+          //    root anywhere it appears in the command. This is the same
+          //    mapping scopePath does, applied as a literal string
+          //    substitution so it survives quoting / piping / heredocs.
+          //    Word-boundary the match so "/workspace-template" or
+          //    "/workspaceaccountant" isn't rewritten by accident.
+          cmd = cmd.replace(/\/workspace(\/[^\s'"`;|&)]*)?/g, (full, suffix) => {
+            return suffix ? `${tenantRoot}${suffix}` : tenantRoot;
+          });
+
+          // 2. After rewriting, look for any REMAINING absolute path
+           //    that points into the shared workspace tree but outside
+          //    this tenant's root — those are cross-tenant escapes.
+          //    Match every absolute-looking token; heuristic, not an
+          //    adversarial parser.
           const ABS_PATH_RE = /(?:^|[\s'"=`])(\/[A-Za-z0-9_./-]+)/g;
           let m: RegExpExecArray | null;
           while ((m = ABS_PATH_RE.exec(cmd)) !== null) {
             const absPath = m[1].replace(/\/+$/, "");
-            // Only enforce against paths inside the shared workspace tree.
-            // Paths like /usr/bin/node, /tmp/x, /etc/ssl/... are fine.
             if (absPath === workspaceRoot || absPath.startsWith(workspaceRoot + "/")) {
               if (absPath !== tenantRoot && !absPath.startsWith(tenantRoot + "/")) {
                 throw new Error(
@@ -485,9 +516,8 @@ export const ArceusPlugin: Plugin = async () => {
             }
           }
 
-          // Wrap in a subshell so the cd applies to everything in cmd
-          // even when it uses && / || / | / ; — without the subshell,
-          // `cd X && a; b` runs `b` outside X.
+          // 3. Wrap in a subshell so the cd applies to everything even
+          //    with chaining / pipes / sequences.
           a.command = `( cd ${shellQuoteSingle(tenantRoot)} && ${cmd} )`;
         }
       }

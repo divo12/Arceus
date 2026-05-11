@@ -324,6 +324,7 @@ export default async function internalMcpMemoryRoutes(app: FastifyInstance): Pro
         null,
         2,
       ),
+      mcp.companyId,
     );
 
     // Write one memory unit per target. Skip dedup — handoffs are explicit

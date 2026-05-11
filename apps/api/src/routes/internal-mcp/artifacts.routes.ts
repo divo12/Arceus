@@ -96,7 +96,13 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
 
     const agent = body.agent || req.mcp?.role || "unknown";
     // Spec 28 Phase B.1 — durable write before returning success.
-    const artifact = await addArtifactSync(agent, body.kind, body.title, body.content);
+    // companyId MUST be threaded through: addArtifactSync's filesystem
+    // write (writeArtifactToDisk) silently no-ops when companyId is
+    // undefined, leaving the DB row alone but skipping the spec/ or
+    // artifact/ markdown file. The DB-side persist falls back to the
+    // active-company singleton, so the event fires with the correct
+    // companyId either way — but the disk write needs the explicit arg.
+    const artifact = await addArtifactSync(agent, body.kind, body.title, body.content, req.mcp!.companyId);
 
     // Attach to tasks — support both single taskId and array
     const taskIds = body.attachToTaskIds ?? (body.taskId ? [body.taskId] : []);
