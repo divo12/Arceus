@@ -61,7 +61,12 @@ const cacheAndSend = (
 
 const checkpointBody = z.object({
   taskId: z.string().min(1),
-  agentRole: z.string().min(1),
+  // Optional from the wire: the MCP tool's `ctx.role` is the env-based
+  // McpContext role, which is empty in current prod (per-call role
+  // lives in session-context, resolved by middleware on x-session-id).
+  // Trust `req.mcp.role` instead — it's the authoritative role the
+  // middleware resolved from the session map.
+  agentRole: z.string().min(1).optional(),
   message: z.string().min(1).max(1000),
 });
 
@@ -152,13 +157,30 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       return;
     }
 
+    // Authoritative role comes from session-context (req.mcp.role).
+    // Client may send agentRole for compat with older tool versions —
+    // when both are present and disagree, the server wins.
+    const resolvedAgentRole = body.agentRole && body.agentRole.length > 0
+      ? body.agentRole
+      : mcp.role;
+    if (!resolvedAgentRole) {
+      return reply.code(409).send(
+        failure(
+          "Could not resolve agent role from session context or request body.",
+          "validation",
+          "never",
+          "session_provided",
+        ),
+      );
+    }
+
     let commitSha: string;
     let warnings: string[];
     try {
       const result = await workspaceManager.commitAndSync(
         companyId,
         body.taskId,
-        body.agentRole,
+        resolvedAgentRole,
         body.message,
       );
       commitSha = result.commitSha;

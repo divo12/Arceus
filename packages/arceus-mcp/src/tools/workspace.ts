@@ -22,7 +22,11 @@ export const registerWorkspaceTools = (
       },
     },
     async ({ taskId, message }) => {
-      const body = { taskId, agentRole: ctx.role, message };
+      // Don't send agentRole: ctx.role is empty in prod (per-call role
+      // lives in session-context, resolved server-side from x-session-id).
+      // The API derives the role from req.mcp.role and ignores any
+      // client-supplied value when present.
+      const body = { taskId, message };
       const res = await client.request<ToolResult>({
         method: "POST",
         path: `${WORKSPACES}/checkpoints`,
