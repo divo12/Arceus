@@ -120,12 +120,20 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
  *           beat_7_1778460613003 (last tool 00:50:44 → stall fired
  *           01:00:44, 10 min of dead air) down to ~3 min.
  */
-// Lowered from 3min → 1min for fail-fast under multi-tenant Azure TPM pressure.
-// At 3min the slot was held for the full duration even when SSE was clearly
-// dead, blocking other tenants behind a stuck beat. 1min trades some leniency
-// for legitimate slow streams against much faster slot reclamation. Bump back
-// up if you see passing beats get reaped prematurely.
-const BEAT_STALL_TIMEOUT_MS = 60 * 1000;
+// 1min was too aggressive — observed in Naman's beat_10 where
+// workspace_start_preview legitimately ran 62s and the watchdog killed
+// the beat 2s before the tool returned. Tools that can run >60s include
+// workspace_start_preview (Vite cold boot), bash("npm install"),
+// workspace_run_typecheck on a large project, and bash test suites.
+//
+// 2min is the sweet spot: still 33% faster than the original 3min and
+// catches genuinely stuck beats; while leaving headroom for one
+// legit slow tool call mid-beat. The other fail-fast detectors
+// (NO_TOOL_INVOKED=45s for zero-tool beats, NO_PRODUCTIVE_ACTION=2min
+// for meta-loops) cover the model-stall pattern WITHOUT false-firing
+// on slow tools, since those detectors check tool counts not raw SSE
+// silence.
+const BEAT_STALL_TIMEOUT_MS = 2 * 60 * 1000;
 
 /**
  * Productive-action deadline. If a beat has been running this long
