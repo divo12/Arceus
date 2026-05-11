@@ -120,7 +120,12 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
  *           beat_7_1778460613003 (last tool 00:50:44 → stall fired
  *           01:00:44, 10 min of dead air) down to ~3 min.
  */
-const BEAT_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+// Lowered from 3min → 1min for fail-fast under multi-tenant Azure TPM pressure.
+// At 3min the slot was held for the full duration even when SSE was clearly
+// dead, blocking other tenants behind a stuck beat. 1min trades some leniency
+// for legitimate slow streams against much faster slot reclamation. Bump back
+// up if you see passing beats get reaped prematurely.
+const BEAT_STALL_TIMEOUT_MS = 60 * 1000;
 
 /**
  * Productive-action deadline. If a beat has been running this long
@@ -140,7 +145,10 @@ const BEAT_STALL_TIMEOUT_MS = 3 * 60 * 1000;
  * scored as no_productive_action get re-dispatched on the next role
  * interval with fresh context, often unsticking the pattern.
  */
-const NO_PRODUCTIVE_ACTION_DEADLINE_MS = 4 * 60 * 1000;
+// Lowered from 4min → 2min for fail-fast. Beats that loop through
+// task_get/task_append_plan_step without claiming get killed in half the
+// time, returning the slot for a fresh beat with reset context.
+const NO_PRODUCTIVE_ACTION_DEADLINE_MS = 2 * 60 * 1000;
 
 /**
  * No-tool-invoked early-exit deadline. If the LLM has been thinking for
@@ -156,7 +164,10 @@ const NO_PRODUCTIVE_ACTION_DEADLINE_MS = 4 * 60 * 1000;
  * usually streams its first tool call within 30-45s. A beat that has
  * been silent on the MCP path past 90s is "thinking but not acting."
  */
-const NO_TOOL_INVOKED_DEADLINE_MS = 90 * 1000;
+// Lowered from 90s → 45s for fail-fast. A model that hasn't emitted ANY
+// tool call within 45s is in a silent-stall (we observed totalTokens=0
+// beats finishing this way at 90s). Kill it earlier and free the slot.
+const NO_TOOL_INVOKED_DEADLINE_MS = 45 * 1000;
 
 /**
  * Read-loop threshold. If the agent fires this many consecutive built-in
