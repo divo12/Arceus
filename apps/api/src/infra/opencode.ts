@@ -43,7 +43,6 @@ import { serverConfig } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { ROLES, ROLE_CONFIGS, getAllowedArceusTools, type Role } from "../../../../.opencode/agent/config.js";
 import { writeBeatAgent } from "../../../../.opencode/agent/write-beat-agent.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 
 interface OpencodeInstance {
   // close() is async because resetOpencodeConnection MUST wait for the
@@ -92,13 +91,24 @@ console.log(`[OpenCode] Monorepo root resolved: ${projectRoot} (cwd=${process.cw
 export const productWorkspace = resolve(projectRoot, "workspace");
 
 /**
- * Return the effective workspace directory for the currently active company.
- * Falls back to the shared workspace root when no company is active yet
- * (e.g. during a fresh install before the first bootstrap).
+ * Return the OpenCode server's CWD — the SHARED parent of every tenant's
+ * subdir, NOT a single tenant's directory.
+ *
+ * Multi-tenancy: OpenCode runs as one process with one CWD; that CWD used
+ * to be `productWorkspace/<singleton-companyId>` which made tenant B's
+ * built-in tool calls (edit/write/bash/read) land in tenant A's files
+ * whenever the singleton happened to point at A. With CWD = parent, the
+ * arceus plugin's `tool.execute.before` hook rewrites every file-path /
+ * bash command per-session to point at `<parent>/<session.companyId>/`,
+ * so each tool call lands in the correct tenant's subdir regardless of
+ * which tenant the singleton thinks is "active".
+ *
+ * Files OpenCode reads from its CWD (opencode.json, .opencode/plugin/*,
+ * .opencode/agent/*) live at the parent now — they're tenant-agnostic
+ * anyway (same agent defs, same plugin, same MCP wiring per role).
  */
 function getProductWorkspaceDir(): string {
-  const companyId = getActiveCompanyId();
-  return companyId ? resolve(productWorkspace, companyId) : productWorkspace;
+  return productWorkspace;
 }
 
 /**

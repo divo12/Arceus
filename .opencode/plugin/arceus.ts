@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { readFile } from "node:fs/promises";
-import { join, resolve, relative } from "node:path";
+import { isAbsolute, join, resolve, relative } from "node:path";
 
 interface BeatContext {
   beatId: string;
@@ -236,6 +236,16 @@ export const ArceusPlugin: Plugin = async () => {
   const truncate = (s: string, max = 4_000): string =>
     s.length > max ? `${s.slice(0, max)}…` : s;
 
+  /**
+   * Wrap a path in POSIX-single-quotes so it can be embedded inside a bash
+   * subshell prefix without word-splitting on spaces or interpolation on
+   * $-sigils. Escapes any embedded single-quote via the standard
+   * `'\''` trick. Used to build the per-tenant `( cd '<path>' && ... )`
+   * wrapper for bash tool calls.
+   */
+  const shellQuoteSingle = (s: string): string =>
+    `'${s.replace(/'/g, "'\\''")}'`;
+
   return {
     // Strip `_sessionId` from the parameter schema sent to the LLM.
     // The MCP server augments every arceus_* input schema with a
@@ -367,6 +377,118 @@ export const ArceusPlugin: Plugin = async () => {
           throw new Error(
             `[arceus-path-guard] Blocked bash — command references parent directory ("../"): ${truncate(cmd, 80)}`
           );
+        }
+      }
+
+      // ── Multi-tenant path rewrite (built-in tools) ─────────────────
+      //
+      // OpenCode runs as ONE process with cwd = productWorkspace (the
+      // shared parent of every tenant's subdir). Built-in tool calls
+      // (edit/write/read/bash/grep/glob) operate against that CWD. To
+      // route each call to its session's tenant subdir, we rewrite the
+      // path arguments here using the session-context lookup we already
+      // did above.
+      //
+      // Fallback: when companyId can't be resolved (warm-up, pre-bootstrap,
+      // or sessions registered without a tenant), we skip the rewrite.
+      // Tool calls then operate against the parent CWD — which holds only
+      // opencode.json + .opencode/* (no product data), so no cross-tenant
+      // leak from the no-op path.
+      const tenantId = ctx?.companyId;
+      if (tenantId) {
+        const workspaceRoot = process.cwd();
+        const tenantRoot = resolve(workspaceRoot, tenantId);
+
+        // Resolve a single path arg against the tenant root, and reject
+        // anything that resolves outside it. Accepts both relative and
+        // absolute inputs — absolute paths inside tenantRoot pass through,
+        // anything else is rewritten to be tenant-relative.
+        const scopePath = (p: string): string => {
+          // If absolute AND inside tenantRoot, keep as-is.
+          if (isAbsolute(p) && (p === tenantRoot || p.startsWith(tenantRoot + "/"))) {
+            return p;
+          }
+          // If absolute but elsewhere (e.g. /etc/...), treat the leading
+          // slash as tenant-relative (strip and resolve under tenant root).
+          // We can't allow truly-absolute reads outside the workspace —
+          // the model writing "/etc/hosts" is almost certainly a bug, and
+          // tenant isolation > convenience.
+          const candidate = isAbsolute(p)
+            ? resolve(tenantRoot, p.replace(/^\/+/, ""))
+            : resolve(tenantRoot, p);
+          const rel = relative(tenantRoot, candidate);
+          if (rel.startsWith("..") || isAbsolute(rel)) {
+            throw new Error(
+              `[arceus-tenant-guard] Blocked '${input.tool}' — path "${p}" escapes tenant ${tenantId}.`,
+            );
+          }
+          return candidate;
+        };
+
+        // Tools that take a single `filePath` argument.
+        const FILE_PATH_TOOLS = new Set(["edit", "write", "create", "read", "multiedit"]);
+        if (
+          FILE_PATH_TOOLS.has(input.tool) &&
+          output.args &&
+          typeof (output.args as Record<string, unknown>).filePath === "string"
+        ) {
+          const a = output.args as Record<string, unknown>;
+          a.filePath = scopePath(a.filePath as string);
+        }
+
+        // Search/list tools take `path`.
+        const PATH_ARG_TOOLS = new Set(["grep", "glob", "list", "ls"]);
+        if (
+          PATH_ARG_TOOLS.has(input.tool) &&
+          output.args &&
+          typeof (output.args as Record<string, unknown>).path === "string"
+        ) {
+          const a = output.args as Record<string, unknown>;
+          a.path = scopePath(a.path as string);
+        }
+
+        // bash: wrap the command in a subshell that cd's into the tenant
+        // root, so chained commands (a && b && c) and pipes (a | b) all
+        // inherit the tenant CWD without us having to parse shell syntax.
+        // Also validate that the command doesn't reference workspace
+        // paths belonging to another tenant.
+        if (
+          input.tool === "bash" &&
+          output.args &&
+          typeof (output.args as Record<string, unknown>).command === "string"
+        ) {
+          const a = output.args as Record<string, unknown>;
+          const cmd = a.command as string;
+
+          // Reject any absolute workspace path that points outside this
+          // tenant's root. Patterns like "/app/workspace/<OTHER>/..."
+          // are clear cross-tenant escapes; anything inside tenantRoot
+          // or outside the workspace tree entirely (e.g. /usr/, /tmp/,
+          // /bin/) is fine.
+          //
+          // Match every absolute-looking token; skip quoted-string-escape
+          // heuristics — the goal is "catch the fallible model writing
+          // the wrong literal path", not "defend against an adversary
+          // crafting shell escapes".
+          const ABS_PATH_RE = /(?:^|[\s'"=`])(\/[A-Za-z0-9_./-]+)/g;
+          let m: RegExpExecArray | null;
+          while ((m = ABS_PATH_RE.exec(cmd)) !== null) {
+            const absPath = m[1].replace(/\/+$/, "");
+            // Only enforce against paths inside the shared workspace tree.
+            // Paths like /usr/bin/node, /tmp/x, /etc/ssl/... are fine.
+            if (absPath === workspaceRoot || absPath.startsWith(workspaceRoot + "/")) {
+              if (absPath !== tenantRoot && !absPath.startsWith(tenantRoot + "/")) {
+                throw new Error(
+                  `[arceus-tenant-guard] Blocked bash — references workspace path "${absPath}" outside tenant ${tenantId}: ${truncate(cmd, 100)}`,
+                );
+              }
+            }
+          }
+
+          // Wrap in a subshell so the cd applies to everything in cmd
+          // even when it uses && / || / | / ; — without the subshell,
+          // `cd X && a; b` runs `b` outside X.
+          a.command = `( cd ${shellQuoteSingle(tenantRoot)} && ${cmd} )`;
         }
       }
 
