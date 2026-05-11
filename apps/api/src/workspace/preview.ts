@@ -807,11 +807,37 @@ async function startLocalPreviewUnlocked(slot: PreviewSlot, productDir: string, 
     return slot.state;
   }
 
-  // Install dependencies if node_modules is missing (Node projects only)
+  // Install dependencies if node_modules is missing (Node projects only).
+  //
+  // CRITICAL: force NODE_ENV=development for the install. Railway sets
+  // NODE_ENV=production container-wide, which causes `npm install` to
+  // silently strip ALL devDependencies — including `vite`, `tsc`,
+  // `tailwindcss`, `@vitejs/plugin-react`, `postcss`, `autoprefixer`.
+  // node_modules ends up populated (130+ deps shaved off), the launch
+  // step then can't find `./node_modules/.bin/vite`, and the preview
+  // proxy returns ECONNREFUSED to the user because no Vite server
+  // ever bound to the allocated port.
+  //
+  // This is a different code path from the developer's `bash(npm
+  // install)` — that one goes through the OpenCode plugin's tenant
+  // subshell wrapper (which forces NODE_ENV=development too). This
+  // execSync runs in the API process, so the plugin's env override
+  // doesn't apply here; we have to set it explicitly.
+  //
+  // Also pass `--include=dev` for npm so a future
+  // ".npmrc production=true" anywhere up the tree can't re-strip them.
+  // bun ignores NODE_ENV for install purposes by default; the env
+  // still applies so devDeps land regardless of runner.
   if (launch.runtime === "node" && !existsSync(join(launch.cwd, "node_modules"))) {
     const runner = detectNodeRunner();
+    const installArgs = runner === "npm" ? "install --include=dev" : "install";
     try {
-      execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: previewConfig.installTimeoutMs });
+      execSync(`${runner} ${installArgs}`, {
+        cwd: launch.cwd,
+        stdio: "pipe",
+        timeout: previewConfig.installTimeoutMs,
+        env: { ...process.env, NODE_ENV: "development" },
+      });
     } catch (err) {
       slot.state.status = "error";
       slot.state.lastError = `Dependency installation failed: ${err instanceof Error ? err.message : String(err)}`;
