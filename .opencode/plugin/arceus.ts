@@ -517,8 +517,22 @@ export const ArceusPlugin: Plugin = async () => {
           }
 
           // 3. Wrap in a subshell so the cd applies to everything even
-          //    with chaining / pipes / sequences.
-          a.command = `( cd ${shellQuoteSingle(tenantRoot)} && ${cmd} )`;
+          //    with chaining / pipes / sequences. Also force
+          //    NODE_ENV=development inside the subshell so `npm install`
+          //    actually installs devDependencies. Railway's container
+          //    runs with NODE_ENV=production by default, and the bash
+          //    tool inherits that env — without this override, a
+          //    developer's `bash(npm install)` silently strips vite/
+          //    tsc/tailwind/postcss/@vitejs/plugin-react etc. as
+          //    "dev-only", node_modules ends up incomplete, and
+          //    workspace_start_preview later fails with ECONNREFUSED
+          //    because there's no `./node_modules/.bin/vite` to spawn.
+          //    `export` so chained commands (`npm install && npm run
+          //    test`) all see the value. The developer can still
+          //    override on a per-command basis (`NODE_ENV=production
+          //    npm run build`) — inline assignment beats the exported
+          //    default for that single command.
+          a.command = `( cd ${shellQuoteSingle(tenantRoot)} && export NODE_ENV=development && ${cmd} )`;
         }
       }
 

@@ -63,6 +63,8 @@ The three things that absolutely matter to remember inline:
 - The scaffold is Vite + React 18 + TS + Tailwind 3 + the \`cn()\` helper. Pre-installed.
 - DO NOT edit \`vite.config.ts\` — its \`port\`/\`host\`/\`allowedHosts\`/\`strictPort\` settings are required by Arceus's preview pipeline. Touching them breaks \`workspace_start_preview\`.
 - UI Designer's handoff folder is \`/workspace/design/\` (tokens.yaml + layout prototypes for frontend tasks). Empty folder for a UI task → \`task_block(cause:"missing_design")\`.
+
+Adding a dependency? Just \`bash({command:"npm install <pkg>"})\` (or \`npm install -D <pkg>\` for dev-only). Arceus auto-sets \`NODE_ENV=development\` for every \`bash\` call inside your tenant, so devDependencies install correctly — you do NOT need to prefix the command with \`NODE_ENV=...\` yourself. If you ever need a real production build, override inline: \`NODE_ENV=production npm run build\`.
 </workspace_essentials>
 
 <tools_overview>
