@@ -25,7 +25,12 @@ export const registerApprovalTools = (
       },
     },
     async ({ type, title, description, meetingId, agendaItemId }) => {
-      const body = { type, requestedByRole: ctx.role, title, description, meetingId, agendaItemId };
+      // Don't send requestedByRole: ctx.role is empty in prod because
+      // the MCP server runs with no BEAT_ID/COMPANY_ID/ROLE env (per-call
+      // identity lives in session-context). The API resolves the role
+      // from req.mcp.role (x-session-id → session map) and ignores any
+      // client-supplied value when present.
+      const body = { type, title, description, meetingId, agendaItemId };
       const res = await client.request<ToolResult>({
         method: "POST",
         path: APPROVALS,

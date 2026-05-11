@@ -77,7 +77,12 @@ const roleSchema = z.enum([
 
 const createApprovalBody = z.object({
   type: approvalTypeSchema,
-  requestedByRole: roleSchema,
+  // Optional from the wire: the MCP tool's `ctx.role` is the env-based
+  // McpContext role, which is empty in current prod (per-call role
+  // lives in session-context, resolved by middleware on x-session-id).
+  // Server falls back to `req.mcp.role` when client doesn't send a
+  // valid role.
+  requestedByRole: roleSchema.optional(),
   title: z.string().min(1),
   description: z.string().min(1),
   meetingId: z.string().nullable().optional(),
@@ -91,9 +96,23 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
     const body = parseOrFail(createApprovalBody, req.body, reply);
     if (!body) return reply;
 
+    // Authoritative role comes from session-context (req.mcp.role).
+    // Accept client-supplied role for compat but server wins.
+    const resolvedRole = body.requestedByRole ?? req.mcp!.role;
+    if (!resolvedRole) {
+      return reply.code(409).send(
+        failure(
+          "Could not resolve agent role from session context or request body.",
+          "validation",
+          "never",
+          "session_provided",
+        ),
+      );
+    }
+
     const approval = await requestApproval(req.mcp!.companyId, {
       type: body.type as "strategy" | "hire" | "meeting_blocker" | "external_action" | "tool_governance",
-      requestedByRole: body.requestedByRole,
+      requestedByRole: resolvedRole as z.infer<typeof roleSchema>,
       title: body.title,
       description: body.description,
       meetingId: body.meetingId ?? null,
@@ -109,7 +128,7 @@ export default async function internalMcpApprovalsRoutes(app: FastifyInstance): 
         reply,
         409,
         failure(
-          `Agent with role ${body.requestedByRole} is not provisioned; cannot request approval.`,
+          `Agent with role ${resolvedRole} is not provisioned; cannot request approval.`,
           "conflict",
           "never",
           "agent_provisioned",

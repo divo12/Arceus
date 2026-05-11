@@ -27,7 +27,12 @@ export const registerArtifactTools = (
       },
     },
     async ({ kind, title, content, taskId, attachToTaskIds }) => {
-      const body = { agent: ctx.role, kind, title, content, taskId, attachToTaskIds };
+      // Don't send agent: ctx.role is empty in prod (per-call role lives
+      // in session-context, resolved by the API route from req.mcp.role).
+      // The route's fallback `body.agent || req.mcp.role || "unknown"`
+      // already covered this, but stripping the dead field keeps the
+      // payload honest.
+      const body = { kind, title, content, taskId, attachToTaskIds };
       const res = await client.request<ToolResult>({
         method: "POST",
         path: ARTIFACTS,
