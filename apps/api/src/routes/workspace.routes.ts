@@ -20,25 +20,25 @@ export default async function workspaceRoutes(app: FastifyInstance) {
     return {
       root: workspace?.localPath ?? workspaceManager.getLocalPath(companyId),
       workspace,
-      preview: getLocalPreviewState(),
+      preview: getLocalPreviewState(companyId),
       files,
     };
   });
 
-  app.get("/api/workspace", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/workspace", async (request) => {
+    const companyId = request.companyId ?? getActiveCompanyId();
     if (!companyId) {
       return {
         workspace: null,
         snapshots: [],
-        preview: getLocalPreviewState(),
+        preview: getLocalPreviewState(null),
       };
     }
 
     return {
       workspace: await workspaceManager.getWorkspaceInfo(companyId),
       snapshots: await workspaceManager.listSprintSnapshots(companyId),
-      preview: getLocalPreviewState(),
+      preview: getLocalPreviewState(companyId),
     };
   });
 

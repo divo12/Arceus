@@ -248,7 +248,11 @@ async function processEvent(event: OpenCodeEvent) {
       }
       if (caps.ownsProductWorkspace && textContent) {
         for (const previewUrl of extractPreviewUrls(textContent)) {
-          const registered = await registerReportedPreviewUrl(previewUrl);
+          // Route preview URL to the active execution's company slot so
+          // two tenants reporting URLs in parallel don't overwrite each
+          // other's state. Falls back to the singleton when no active
+          // execution is set (legacy non-multi-tenant boot path).
+          const registered = await registerReportedPreviewUrl(previewUrl, activeExecution?.companyId);
           if (registered && activeExecution) {
             void setTaskPreviewUrl(activeExecution.buildTaskId, previewUrl);
             void appendTaskResult(activeExecution.buildTaskId, `preview:${previewUrl}`);

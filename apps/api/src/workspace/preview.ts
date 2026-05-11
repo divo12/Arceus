@@ -10,19 +10,40 @@ import { findCompanyById } from "@arceus/db/src/repos/companies.js";
 import { withKeyedLock } from "./async-queue.js";
 
 /**
- * Lock key for the singleton preview lifecycle. The system has ONE
- * preview slot (one port, one ChildProcess, one previewState). Every
- * mutating operation — start, stop, register-reported-url — runs under
- * this single key so two concurrent beats can't race on `previewState`,
- * leak ChildProcesses, or hand the agent a stale URL.
+ * Per-tenant preview engine.
  *
- * Pure reads (`getLocalPreviewState`, `hasReportedPreviewCandidate`,
+ * Each company owns its own preview slot: state object, child process,
+ * static-server handle, agent-reported candidate, and an allocated port
+ * from `previewConfig.portMin..portMax`. Two users running their
+ * products no longer fight over a single host port — they sit on
+ * different ports simultaneously, and the proxy in `preview-proxy.ts`
+ * routes `<slug>.<publicDomain>` to the right slot via the slug→port
+ * registry populated when each preview starts.
+ *
+ * Public API takes an optional `companyId`. When omitted, it falls
+ * back to `getActiveCompanyId()` for backward compatibility with
+ * call sites that haven't been migrated. The fallback keeps single-
+ * tenant flows working unchanged; multi-tenant flows must thread
+ * `companyId` explicitly.
+ *
+ * Locking is also per-company. Mutating operations on a slot
+ * (`start`, `stop`, `registerReportedUrl`) serialise behind
+ * `local-preview:${companyId}` so concurrent beats for the same
+ * tenant can't race on the slot's process or state. Pure reads
+ * (`getLocalPreviewState`, `hasReportedPreviewCandidate`,
  * `probePreviewHealth`) are NOT locked — they're allowed to observe
- * a brief inconsistency rather than queue behind a 30-second
- * `startLocalPreview`. The inspector and the live-status endpoint
- * depend on these reads being fast.
+ * a brief inconsistency rather than queue behind a 30s start.
  */
-const PREVIEW_LOCK_KEY = "local-preview";
+const previewLockKey = (companyId: string): string => `local-preview:${companyId}`;
+
+/**
+ * Resolve the companyId from an explicit argument or the legacy
+ * single-active-company singleton. Returns null only when neither
+ * is set, in which case callers may return idle state / no-op.
+ */
+function resolveCompanyId(explicit: string | null | undefined): string | null {
+  return explicit ?? getActiveCompanyId() ?? null;
+}
 
 /**
  * Build the public-facing base URL for the preview, in priority order:
@@ -30,34 +51,33 @@ const PREVIEW_LOCK_KEY = "local-preview";
  *      `https://preview.arceus.sh`. Useful when you don't want
  *      per-company subdomains.
  *   2. `<companySlug>.<ARCEUS_PREVIEW_PUBLIC_DOMAIN>` if `publicDomain`
- *      is set and an active company exists. Each company gets its own
- *      vanity subdomain (e.g. `https://quill.arceus.sh`).
- *   3. Fallback: `http://<publicHost>:<port>` — legacy local URL.
- *
- * Async because (2) reads the active company from canonical to derive
- * the slug. The caller must `await` before using the URL.
+ *      is set and the company exists in canonical. Each company gets
+ *      its own vanity subdomain (e.g. `https://quill.arceus.sh`).
+ *   3. Fallback: `http://<publicHost>:<port>` — legacy local URL,
+ *      now using the company's allocated per-tenant port.
  */
-async function buildPreviewPublicBaseUrl(): Promise<string> {
+async function buildPreviewPublicBaseUrl(companyId: string, slot: PreviewSlot): Promise<string> {
   if (previewConfig.publicBaseUrl) {
     return previewConfig.publicBaseUrl.replace(/\/$/, "");
   }
   if (previewConfig.publicDomain) {
-    const companyId = getActiveCompanyId();
-    if (companyId) {
-      try {
-        const row = await findCompanyById(getDb(), companyId);
-        const name = row?.name?.trim();
-        if (name) {
-          const slug = slugifyCompanyName(name);
-          return `https://${slug}.${previewConfig.publicDomain}`;
-        }
-      } catch {
-        // best-effort: fall through to default subdomain on DB error
+    try {
+      const row = await findCompanyById(getDb(), companyId);
+      const name = row?.name?.trim();
+      if (name) {
+        const slug = slugifyCompanyName(name);
+        // Cache slug → companyId so the proxy can resolve incoming
+        // requests for `<slug>.<domain>` back to a port without a
+        // round-trip to canonical on every request.
+        slugToCompanyId.set(slug, companyId);
+        return `https://${slug}.${previewConfig.publicDomain}`;
       }
+    } catch {
+      // best-effort: fall through to default subdomain on DB error
     }
     return `https://preview.${previewConfig.publicDomain}`;
   }
-  return `http://${previewConfig.publicHost}:${previewConfig.port}`;
+  return `http://${previewConfig.publicHost}:${slot.state.port}`;
 }
 
 function slugifyCompanyName(name: string): string {
@@ -94,24 +114,128 @@ interface LocalPreviewState {
   startedAt: string | null;
 }
 
-let previewProcess: ChildProcess | null = null;
-let previewStaticServer: Server | null = null;
-let reportedPreviewCandidate: ReportedPreviewCandidate | null = null;
-const previewState: LocalPreviewState = {
-  status: "idle",
-  url: null,
-  entryUrl: null,
-  validationUrl: null,
-  validationStrategy: null,
-  targetKind: null,
-  runtime: null,
-  framework: null,
-  command: null,
-  targetPath: null,
-  port: previewConfig.port,
-  lastError: null,
-  startedAt: null,
-};
+interface PreviewSlot {
+  companyId: string;
+  state: LocalPreviewState;
+  process: ChildProcess | null;
+  staticServer: Server | null;
+  reportedCandidate: ReportedPreviewCandidate | null;
+}
+
+// ── Per-tenant registries ────────────────────────────────────
+
+const slotsByCompany = new Map<string, PreviewSlot>();
+const portsByCompany = new Map<string, number>();
+
+/**
+ * Slug → companyId index built up by `startLocalPreview` / public URL
+ * construction. Exported for the preview proxy so it can resolve
+ * `<slug>.<domain>` to a slot's port without re-doing the DB lookup
+ * on every incoming request.
+ */
+const slugToCompanyId = new Map<string, string>();
+
+/** Stable, non-cryptographic hash used to seed port allocation. */
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+/**
+ * Allocate (or look up) the port assigned to this company. Stable for
+ * the process lifetime — the same company always gets the same port
+ * until restart. Uses hash-seeded linear probing so two companies
+ * whose ids happen to collide on hash still find free slots.
+ */
+function allocatePort(companyId: string): number {
+  const existing = portsByCompany.get(companyId);
+  if (existing !== undefined) return existing;
+
+  const min = previewConfig.portMin;
+  const max = previewConfig.portMax;
+  if (min > max) {
+    throw new Error(`Invalid preview port range: ${min}..${max}`);
+  }
+  const range = max - min + 1;
+  const taken = new Set(portsByCompany.values());
+  let candidate = min + (hashString(companyId) % range);
+  for (let i = 0; i < range; i++) {
+    if (!taken.has(candidate)) {
+      portsByCompany.set(companyId, candidate);
+      return candidate;
+    }
+    candidate = min + ((candidate - min + 1) % range);
+  }
+  throw new Error(
+    `Preview port pool exhausted: ${portsByCompany.size} companies, range ${min}..${max}. ` +
+    `Widen ARCEUS_PREVIEW_PORT_MIN/MAX or release dead slots.`,
+  );
+}
+
+function createIdleState(port: number): LocalPreviewState {
+  return {
+    status: "idle",
+    url: null,
+    entryUrl: null,
+    validationUrl: null,
+    validationStrategy: null,
+    targetKind: null,
+    runtime: null,
+    framework: null,
+    command: null,
+    targetPath: null,
+    port,
+    lastError: null,
+    startedAt: null,
+  };
+}
+
+function resetSlotState(slot: PreviewSlot) {
+  slot.state.status = "idle";
+  slot.state.url = null;
+  slot.state.entryUrl = null;
+  slot.state.validationUrl = null;
+  slot.state.validationStrategy = null;
+  slot.state.targetKind = null;
+  slot.state.runtime = null;
+  slot.state.framework = null;
+  slot.state.command = null;
+  slot.state.targetPath = null;
+  slot.state.lastError = null;
+  slot.state.startedAt = null;
+  // port stays — allocation is stable across stop/start
+}
+
+function getOrCreateSlot(companyId: string): PreviewSlot {
+  let slot = slotsByCompany.get(companyId);
+  if (!slot) {
+    const port = allocatePort(companyId);
+    slot = {
+      companyId,
+      state: createIdleState(port),
+      process: null,
+      staticServer: null,
+      reportedCandidate: null,
+    };
+    slotsByCompany.set(companyId, slot);
+  }
+  return slot;
+}
+
+/**
+ * Read-only synthetic idle state used when no companyId can be
+ * resolved (e.g. unauthenticated read before any company exists).
+ * Distinct object per call so callers can't accidentally mutate the
+ * frozen baseline.
+ */
+function syntheticIdleState(): LocalPreviewState {
+  return createIdleState(previewConfig.portMin);
+}
+
+// ── Helpers ──────────────────────────────────────────────────
 
 async function exists(path: string) {
   try {
@@ -242,7 +366,7 @@ function sortCandidates(candidates: CandidateWorkspace[], rootDir: string, prefe
   });
 }
 
-async function detectPythonLaunchCommand(productDir: string, preference?: CandidatePreference): Promise<LaunchCommand | null> {
+async function detectPythonLaunchCommand(productDir: string, port: number, preference?: CandidatePreference): Promise<LaunchCommand | null> {
   const candidates = await collectCandidateWorkspaces(productDir);
   sortCandidates(candidates, productDir, preference);
 
@@ -267,7 +391,7 @@ async function detectPythonLaunchCommand(productDir: string, preference?: Candid
 
       return {
         command: "python",
-        args: ["-m", "uvicorn", `${moduleName}:app`, "--port", String(previewState.port), "--host", previewConfig.host],
+        args: ["-m", "uvicorn", `${moduleName}:app`, "--port", String(port), "--host", previewConfig.host],
         kind: "python-uvicorn",
         cwd: candidate.dir,
         targetPath: relative(productDir, candidate.dir) || ".",
@@ -329,7 +453,7 @@ function detectNodeRunner(): string {
   }
 }
 
-async function detectLaunchCommand(productDir: string, preference?: CandidatePreference): Promise<LaunchCommand | null> {
+async function detectLaunchCommand(productDir: string, port: number, preference?: CandidatePreference): Promise<LaunchCommand | null> {
   const candidates = await collectCandidateWorkspaces(productDir);
   sortCandidates(candidates, productDir, preference);
 
@@ -352,7 +476,7 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
       const profile = detectNodePreviewProfile(parsed);
 
       const runner = detectNodeRunner();
-      const npmScriptArgs = ["--", "--port", String(previewState.port), "--host", previewConfig.host];
+      const npmScriptArgs = ["--", "--port", String(port), "--host", previewConfig.host];
       const targetPath = relative(productDir, candidate.dir) || ".";
 
       if (scripts.dev) return { command: runner, args: ["run", "dev", ...npmScriptArgs], kind: "npm-dev", cwd: candidate.dir, targetPath, entryPath: profile.entryPath, validationPath: profile.validationPath, targetKind: profile.targetKind, runtime: profile.runtime, framework: profile.framework };
@@ -364,12 +488,15 @@ async function detectLaunchCommand(productDir: string, preference?: CandidatePre
     // Only real dev servers (npm dev/start/preview, python uvicorn) qualify.
   }
 
-  return detectPythonLaunchCommand(productDir, preference);
+  return detectPythonLaunchCommand(productDir, port, preference);
 }
 
 /** Return true if any workspace directory has a detectable dev server command. */
 export async function hasLocalPreviewCandidate(productDir: string, preferredTargetPath?: string | null) {
-  return (await detectLaunchCommand(productDir, { preferredTargetPath })) !== null;
+  // Detection is read-only and doesn't depend on the slot — use any
+  // port (portMin) just to satisfy the command builder. The actual
+  // port at launch time is the slot's allocated port.
+  return (await detectLaunchCommand(productDir, previewConfig.portMin, { preferredTargetPath })) !== null;
 }
 
 async function waitForUrl(url: string, timeoutMs: number) {
@@ -406,12 +533,12 @@ function normalizePreviewUrl(url: string) {
   }
 }
 
-async function applyReportedPreviewCandidate(timeoutMs = previewConfig.reportedCandidateTimeoutMs) {
-  if (!reportedPreviewCandidate) {
+async function applyReportedPreviewCandidate(slot: PreviewSlot, timeoutMs = previewConfig.reportedCandidateTimeoutMs) {
+  if (!slot.reportedCandidate) {
     return null;
   }
 
-  const normalizedUrl = normalizePreviewUrl(reportedPreviewCandidate.url);
+  const normalizedUrl = normalizePreviewUrl(slot.reportedCandidate.url);
   if (!normalizedUrl) {
     return null;
   }
@@ -422,64 +549,70 @@ async function applyReportedPreviewCandidate(timeoutMs = previewConfig.reportedC
   }
 
   const parsed = new URL(normalizedUrl);
-  previewState.status = "ready";
-  previewState.url = `${parsed.protocol}//${parsed.host}`;
-  previewState.entryUrl = normalizedUrl;
-  previewState.validationUrl = normalizedUrl;
-  previewState.validationStrategy = "entry-url";
-  previewState.targetKind = parsed.pathname && parsed.pathname !== "/" ? "browser" : "service";
-  previewState.runtime = "unknown";
-  previewState.framework = "Agent-reported preview";
-  previewState.command = "developer-reported-preview";
-  previewState.targetPath = "agent-reported";
-  previewState.lastError = null;
-  previewState.startedAt = reportedPreviewCandidate.reportedAt;
-  return previewState;
+  slot.state.status = "ready";
+  slot.state.url = `${parsed.protocol}//${parsed.host}`;
+  slot.state.entryUrl = normalizedUrl;
+  slot.state.validationUrl = normalizedUrl;
+  slot.state.validationStrategy = "entry-url";
+  slot.state.targetKind = parsed.pathname && parsed.pathname !== "/" ? "browser" : "service";
+  slot.state.runtime = "unknown";
+  slot.state.framework = "Agent-reported preview";
+  slot.state.command = "developer-reported-preview";
+  slot.state.targetPath = "agent-reported";
+  slot.state.lastError = null;
+  slot.state.startedAt = slot.reportedCandidate.reportedAt;
+  return slot.state;
 }
 
-/** Return true if an agent has reported a preview URL that hasn't been cleared. */
-export function hasReportedPreviewCandidate() {
-  return reportedPreviewCandidate !== null;
+/** Return true if an agent has reported a preview URL for this company that hasn't been cleared. */
+export function hasReportedPreviewCandidate(companyId?: string | null): boolean {
+  const id = resolveCompanyId(companyId);
+  if (!id) return false;
+  return slotsByCompany.get(id)?.reportedCandidate !== null && slotsByCompany.get(id)?.reportedCandidate !== undefined;
 }
 
-
-async function registerReportedPreviewUrlUnlocked(url: string) {
+async function registerReportedPreviewUrlUnlocked(slot: PreviewSlot, url: string) {
   const normalizedUrl = normalizePreviewUrl(url);
   if (!normalizedUrl) {
     return false;
   }
 
-  if (reportedPreviewCandidate?.url === normalizedUrl && previewState.validationUrl === normalizedUrl && previewState.status === "ready") {
+  if (slot.reportedCandidate?.url === normalizedUrl && slot.state.validationUrl === normalizedUrl && slot.state.status === "ready") {
     return true;
   }
 
-  reportedPreviewCandidate = {
+  slot.reportedCandidate = {
     url: normalizedUrl,
     reportedAt: new Date().toISOString(),
   };
 
   // Calling the unlocked version because we already hold the lock —
   // re-entering withKeyedLock under the same key would deadlock.
-  await stopLocalPreviewUnlocked();
-  const applied = await applyReportedPreviewCandidate();
+  await stopLocalPreviewUnlocked(slot);
+  const applied = await applyReportedPreviewCandidate(slot);
   return Boolean(applied);
 }
 
 /** Register an agent-reported preview URL, stopping any existing preview first. */
-export async function registerReportedPreviewUrl(url: string) {
-  return withKeyedLock(PREVIEW_LOCK_KEY, () => registerReportedPreviewUrlUnlocked(url));
+export async function registerReportedPreviewUrl(url: string, companyId?: string | null) {
+  const id = resolveCompanyId(companyId);
+  if (!id) return false;
+  const slot = getOrCreateSlot(id);
+  return withKeyedLock(previewLockKey(id), () => registerReportedPreviewUrlUnlocked(slot, url));
 }
 
-/** Return the current preview state (status, URLs, runtime info). */
-export function getLocalPreviewState() {
-  return previewState;
+/** Return the current preview state (status, URLs, runtime info) for a company. */
+export function getLocalPreviewState(companyId?: string | null): LocalPreviewState {
+  const id = resolveCompanyId(companyId);
+  if (!id) return syntheticIdleState();
+  return getOrCreateSlot(id).state;
 }
 
 /**
  * Probe the preview URL with a real HTTP request.
  * Returns { reachable, statusCode, error } — never throws.
  */
-export async function probePreviewHealth(timeoutMs = 5000): Promise<{
+export async function probePreviewHealth(timeoutMsOrCompanyId?: number | string | null, maybeTimeoutMs?: number): Promise<{
   reachable: boolean;
   statusCode: number | null;
   error: string | null;
@@ -487,9 +620,31 @@ export async function probePreviewHealth(timeoutMs = 5000): Promise<{
   hasProductContent: boolean;
   bodySnippet: string | null;
 }> {
-  const url = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
-  if (!url || previewState.status !== "ready") {
-    return { reachable: false, statusCode: null, error: previewState.status === "idle" ? "Preview not started" : (previewState.lastError ?? `Preview status: ${previewState.status}`), contentLength: null, hasProductContent: false, bodySnippet: null };
+  // Backward-compat signature: legacy callers pass `(timeoutMs?: number)`.
+  // Multi-tenant callers pass `(companyId: string, timeoutMs?: number)`.
+  // Disambiguate by argument types so we don't have to break the API.
+  let companyId: string | null;
+  let timeoutMs: number;
+  if (typeof timeoutMsOrCompanyId === "string") {
+    companyId = timeoutMsOrCompanyId;
+    timeoutMs = maybeTimeoutMs ?? 5000;
+  } else {
+    companyId = null;
+    timeoutMs = (typeof timeoutMsOrCompanyId === "number" ? timeoutMsOrCompanyId : null) ?? 5000;
+  }
+  const id = resolveCompanyId(companyId);
+  const state = id ? getOrCreateSlot(id).state : syntheticIdleState();
+
+  const url = state.validationUrl ?? state.entryUrl ?? state.url;
+  if (!url || state.status !== "ready") {
+    return {
+      reachable: false,
+      statusCode: null,
+      error: state.status === "idle" ? "Preview not started" : (state.lastError ?? `Preview status: ${state.status}`),
+      contentLength: null,
+      hasProductContent: false,
+      bodySnippet: null,
+    };
   }
   try {
     const controller = new AbortController();
@@ -556,43 +711,35 @@ async function terminatePreviewProcessTree(childProcess: ChildProcess) {
   childProcess.kill("SIGTERM");
 }
 
-async function stopLocalPreviewUnlocked() {
-  if (previewProcess) {
-    await terminatePreviewProcessTree(previewProcess);
-    previewProcess = null;
+async function stopLocalPreviewUnlocked(slot: PreviewSlot) {
+  if (slot.process) {
+    await terminatePreviewProcessTree(slot.process);
+    slot.process = null;
   }
 
-  if (previewStaticServer) {
+  if (slot.staticServer) {
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => { resolve(); }, 3000);
-      previewStaticServer?.close((error) => {
+      slot.staticServer?.close(() => {
         clearTimeout(timeout);
         resolve();
       });
     });
-    previewStaticServer = null;
+    slot.staticServer = null;
   }
 
-  previewState.status = "idle";
-  previewState.url = null;
-  previewState.entryUrl = null;
-  previewState.validationUrl = null;
-  previewState.validationStrategy = null;
-  previewState.targetKind = null;
-  previewState.runtime = null;
-  previewState.framework = null;
-  previewState.command = null;
-  previewState.targetPath = null;
-  previewState.lastError = null;
-  previewState.startedAt = null;
+  resetSlotState(slot);
 }
 
-/** Terminate the preview process/server and reset all preview state to idle. */
-export async function stopLocalPreview() {
-  return withKeyedLock(PREVIEW_LOCK_KEY, () => stopLocalPreviewUnlocked());
+/** Terminate the preview process/server and reset preview state to idle. */
+export async function stopLocalPreview(companyId?: string | null) {
+  const id = resolveCompanyId(companyId);
+  if (!id) return;
+  const slot = getOrCreateSlot(id);
+  return withKeyedLock(previewLockKey(id), () => stopLocalPreviewUnlocked(slot));
 }
 
-async function startStaticPreviewServer(rootDir: string) {
+async function startStaticPreviewServer(slot: PreviewSlot, rootDir: string) {
   // Node's createServer expects a sync handler; wrap the async body so
   // floating-promise lint stays satisfied. Errors land in the inner catch.
   const server = createServer((request, response) => { void (async () => {
@@ -620,38 +767,44 @@ async function startStaticPreviewServer(rootDir: string) {
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(previewState.port, previewConfig.host, () => { resolve(); });
+    server.listen(slot.state.port, previewConfig.host, () => { resolve(); });
   });
 
-  previewStaticServer = server;
+  slot.staticServer = server;
 }
 
 /**
  * Detect and launch a local preview server for the product workspace.
  * Tries agent-reported URLs first, then auto-detects Node/Python dev servers.
  *
- * Public entry: locked under PREVIEW_LOCK_KEY so two concurrent beats
- * calling workspace_start_preview can't race on previewState or leak
- * ChildProcesses. The body lives in `startLocalPreviewUnlocked` so the
- * lock-held internal call to `stopLocalPreviewUnlocked` doesn't deadlock.
+ * Public entry: locked under per-company key so two concurrent beats
+ * for the same tenant calling workspace_start_preview can't race on
+ * the slot's state or leak ChildProcesses. The body lives in
+ * `startLocalPreviewUnlocked` so the lock-held internal call to
+ * `stopLocalPreviewUnlocked` doesn't deadlock.
  */
-export async function startLocalPreview(productDir: string, preferredTargetPath?: string | null) {
-  return withKeyedLock(PREVIEW_LOCK_KEY, () => startLocalPreviewUnlocked(productDir, preferredTargetPath));
+export async function startLocalPreview(productDir: string, preferredTargetPath?: string | null, companyId?: string | null) {
+  const id = resolveCompanyId(companyId);
+  if (!id) {
+    return syntheticIdleState();
+  }
+  const slot = getOrCreateSlot(id);
+  return withKeyedLock(previewLockKey(id), () => startLocalPreviewUnlocked(slot, productDir, preferredTargetPath));
 }
 
-async function startLocalPreviewUnlocked(productDir: string, preferredTargetPath?: string | null) {
-  await stopLocalPreviewUnlocked();
+async function startLocalPreviewUnlocked(slot: PreviewSlot, productDir: string, preferredTargetPath?: string | null) {
+  await stopLocalPreviewUnlocked(slot);
 
-  const reportedPreview = await applyReportedPreviewCandidate();
+  const reportedPreview = await applyReportedPreviewCandidate(slot);
   if (reportedPreview) {
     return reportedPreview;
   }
 
-  const launch = await detectLaunchCommand(productDir, { preferredTargetPath });
+  const launch = await detectLaunchCommand(productDir, slot.state.port, { preferredTargetPath });
   if (!launch) {
-    previewState.status = "error";
-    previewState.lastError = "No preview command detected in workspace.";
-    return previewState;
+    slot.state.status = "error";
+    slot.state.lastError = "No preview command detected in workspace.";
+    return slot.state;
   }
 
   // Install dependencies if node_modules is missing (Node projects only)
@@ -660,29 +813,29 @@ async function startLocalPreviewUnlocked(productDir: string, preferredTargetPath
     try {
       execSync(`${runner} install`, { cwd: launch.cwd, stdio: "pipe", timeout: previewConfig.installTimeoutMs });
     } catch (err) {
-      previewState.status = "error";
-      previewState.lastError = `Dependency installation failed: ${err instanceof Error ? err.message : String(err)}`;
-      return previewState;
+      slot.state.status = "error";
+      slot.state.lastError = `Dependency installation failed: ${err instanceof Error ? err.message : String(err)}`;
+      return slot.state;
     }
   }
 
-  previewState.status = "starting";
-  previewState.command = `${launch.command} ${launch.args.join(" ")} [cwd=${launch.targetPath}]`;
-  previewState.targetPath = launch.targetPath;
-  previewState.startedAt = new Date().toISOString();
-  previewState.lastError = null;
-  previewState.targetKind = launch.targetKind;
-  previewState.runtime = launch.runtime;
-  previewState.framework = launch.framework;
+  slot.state.status = "starting";
+  slot.state.command = `${launch.command} ${launch.args.join(" ")} [cwd=${launch.targetPath}]`;
+  slot.state.targetPath = launch.targetPath;
+  slot.state.startedAt = new Date().toISOString();
+  slot.state.lastError = null;
+  slot.state.targetKind = launch.targetKind;
+  slot.state.runtime = launch.runtime;
+  slot.state.framework = launch.framework;
   // Public-facing URL (vanity subdomain or fixed override) when
   // configured; falls back to the legacy local URL otherwise. The
   // proxy hook in routes/preview-proxy.ts forwards public-subdomain
   // traffic to this same preview server's local port.
-  const publicBaseUrl = await buildPreviewPublicBaseUrl();
+  const publicBaseUrl = await buildPreviewPublicBaseUrl(slot.companyId, slot);
   // Keep an internal local URL for backend health probes — going
   // through the public URL would round-trip via Railway's edge and
   // depends on external DNS/cert state we don't always control here.
-  const localProbeBaseUrl = `http://${previewConfig.host}:${previewState.port}`;
+  const localProbeBaseUrl = `http://${previewConfig.host}:${slot.state.port}`;
   const localProbePath = launch.validationPath
     ? `/${launch.validationPath}`
     : launch.entryPath
@@ -690,22 +843,24 @@ async function startLocalPreviewUnlocked(productDir: string, preferredTargetPath
       : "";
   const localProbeUrl = `${localProbeBaseUrl}${localProbePath}`;
 
-  previewState.url = publicBaseUrl;
-  previewState.entryUrl = launch.targetKind === "browser"
+  slot.state.url = publicBaseUrl;
+  slot.state.entryUrl = launch.targetKind === "browser"
     ? (launch.entryPath ? `${publicBaseUrl}/${launch.entryPath}` : publicBaseUrl)
     : null;
-  previewState.validationUrl = launch.validationPath
+  slot.state.validationUrl = launch.validationPath
     ? `${publicBaseUrl}/${launch.validationPath}`
-    : (previewState.entryUrl ?? publicBaseUrl);
-  previewState.validationStrategy = launch.validationPath === "health"
+    : (slot.state.entryUrl ?? publicBaseUrl);
+  slot.state.validationStrategy = launch.validationPath === "health"
     ? "health-url"
     : launch.entryPath
       ? "entry-url"
       : "root-url";
 
-  // Kill any stale process occupying the preview port before launching
+  // Kill any stale process occupying this slot's port before launching.
+  // Scoped to slot.state.port (per-company allocation), so it can no
+  // longer kill another tenant's preview by accident.
   try {
-    const pids = execSync(`lsof -ti:${previewState.port}`, { encoding: "utf8" }).trim();
+    const pids = execSync(`lsof -ti:${slot.state.port}`, { encoding: "utf8" }).trim();
     if (pids) {
       for (const pid of pids.split("\n")) {
         try { process.kill(Number(pid), "SIGTERM"); } catch { /* already dead */ }
@@ -713,21 +868,21 @@ async function startLocalPreviewUnlocked(productDir: string, preferredTargetPath
     }
   } catch { /* no process on port — good */ }
 
-  previewProcess = spawn(launch.command, launch.args, {
+  slot.process = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     shell: true,
     env: {
       ...process.env,
-      PORT: String(previewState.port),
+      PORT: String(slot.state.port),
       HOST: previewConfig.host,
       BROWSER: "none",
     },
   });
 
-  previewProcess.on("exit", (code) => {
-    if (previewState.status !== "ready") {
-      previewState.status = "error";
-      previewState.lastError = `Preview process exited with code ${code ?? "null"}`;
+  slot.process.on("exit", (code) => {
+    if (slot.state.status !== "ready") {
+      slot.state.status = "error";
+      slot.state.lastError = `Preview process exited with code ${code ?? "null"}`;
     }
   });
 
@@ -745,11 +900,31 @@ async function startLocalPreviewUnlocked(productDir: string, preferredTargetPath
   }
 
   if (!ready) {
-    previewState.status = "error";
-    previewState.lastError = `Preview not reachable at ${localProbeUrl} after ${previewConfig.launchTimeoutMs}ms. Launch: ${previewState.command}. Check if package.json exists at cwd and 'dev' script starts on port ${previewState.port}.`;
-    return previewState;
+    slot.state.status = "error";
+    slot.state.lastError = `Preview not reachable at ${localProbeUrl} after ${previewConfig.launchTimeoutMs}ms. Launch: ${slot.state.command}. Check if package.json exists at cwd and 'dev' script starts on port ${slot.state.port}.`;
+    return slot.state;
   }
 
-  previewState.status = "ready";
-  return previewState;
+  slot.state.status = "ready";
+  return slot.state;
+}
+
+// ── Proxy support ────────────────────────────────────────────
+
+/**
+ * Resolve a public-subdomain slug to the local port serving that
+ * company's preview. Used by `routes/preview-proxy.ts`. Returns null
+ * when the slug isn't recognised (no preview ever started under that
+ * name) — caller should return 404.
+ *
+ * The mapping is populated by `buildPreviewPublicBaseUrl` during
+ * `startLocalPreview`, so it's available before any traffic arrives
+ * at the vanity URL.
+ */
+export function getPreviewTargetForSlug(slug: string): { companyId: string; port: number } | null {
+  const companyId = slugToCompanyId.get(slug);
+  if (!companyId) return null;
+  const port = portsByCompany.get(companyId);
+  if (port === undefined) return null;
+  return { companyId, port };
 }

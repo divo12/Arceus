@@ -26,6 +26,7 @@ import { Socket } from "node:net";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { IncomingMessage } from "node:http";
 import { previewConfig } from "../config/index.js";
+import { getPreviewTargetForSlug } from "../workspace/preview.js";
 
 const RESERVED_SUBDOMAINS = new Set(["app", "api", "www", "admin"]);
 
@@ -40,7 +41,26 @@ function previewSubdomainOf(host: string): string | null {
   return slug;
 }
 
-function proxyToPreview(req: FastifyRequest, reply: FastifyReply): void {
+/**
+ * Resolve the upstream port for a vanity-subdomain slug. Returns the
+ * slot-allocated port for the company that owns this slug. Falls
+ * back to `previewConfig.port` when:
+ *   - The slug hasn't been registered yet (no preview has started for
+ *     that company since process boot), AND
+ *   - There is exactly one active company on the singleton seam — the
+ *     legacy single-tenant path where the slot registry is empty.
+ *
+ * Returns null when neither the per-slug lookup nor the fallback
+ * resolves. The caller should 404 in that case rather than blindly
+ * proxying to a port that may be serving someone else's product.
+ */
+function resolveUpstreamPort(slug: string): number | null {
+  const target = getPreviewTargetForSlug(slug);
+  if (target) return target.port;
+  return null;
+}
+
+function proxyToPreview(req: FastifyRequest, reply: FastifyReply, port: number): void {
   const path = req.raw.url ?? "/";
 
   // Strip the inbound `host` and provide one that matches the upstream
@@ -52,12 +72,12 @@ function proxyToPreview(req: FastifyRequest, reply: FastifyReply): void {
     if (k.toLowerCase() === "host") continue;
     upstreamHeaders[k] = v;
   }
-  upstreamHeaders.host = `${previewConfig.host}:${previewConfig.port}`;
+  upstreamHeaders.host = `${previewConfig.host}:${port}`;
 
   const upstreamReq = http.request(
     {
       host: previewConfig.host,
-      port: previewConfig.port,
+      port,
       method: req.method,
       path,
       headers: upstreamHeaders,
@@ -77,7 +97,7 @@ function proxyToPreview(req: FastifyRequest, reply: FastifyReply): void {
       JSON.stringify({
         error: "Preview server not reachable",
         detail: err instanceof Error ? err.message : String(err),
-        upstream: `http://${previewConfig.host}:${previewConfig.port}`,
+        upstream: `http://${previewConfig.host}:${port}`,
       }),
     );
   });
@@ -99,13 +119,13 @@ function proxyToPreview(req: FastifyRequest, reply: FastifyReply): void {
  * dev-mode style injection in some component trees and produced the
  * "blank page through the public preview URL" symptom.
  */
-function proxyUpgradeToPreview(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
+function proxyUpgradeToPreview(req: IncomingMessage, clientSocket: Socket, head: Buffer, port: number): void {
   // Defensive — Node sets pause/resume timing here; if the client
   // already half-closed the upgrade, just drop the connection.
   if (clientSocket.destroyed) return;
 
   const upstream = new Socket();
-  upstream.connect(previewConfig.port, previewConfig.host, () => {
+  upstream.connect(port, previewConfig.host, () => {
     const path = req.url ?? "/";
     const lines: string[] = [];
     lines.push(`${req.method ?? "GET"} ${path} HTTP/1.1`);
@@ -115,7 +135,7 @@ function proxyUpgradeToPreview(req: IncomingMessage, clientSocket: Socket, head:
       const values = Array.isArray(value) ? value : [value];
       for (const v of values) lines.push(`${name}: ${v}`);
     }
-    lines.push(`host: ${previewConfig.host}:${previewConfig.port}`);
+    lines.push(`host: ${previewConfig.host}:${port}`);
     lines.push("", "");
     upstream.write(lines.join("\r\n"));
     if (head && head.length > 0) upstream.write(head);
@@ -150,9 +170,21 @@ export function registerPreviewProxy(app: FastifyInstance): void {
     const slug = previewSubdomainOf(host);
     if (slug === null) return;
 
+    // Per-tenant routing: each company's preview lives on its own
+    // port (allocated by workspace/preview.ts). Resolve the upstream
+    // port from the slug registry; if unknown, return 404 instead of
+    // blindly proxying to a stale port.
+    const port = resolveUpstreamPort(slug);
+    if (port === null) {
+      reply.hijack();
+      reply.raw.writeHead(404, { "content-type": "application/json" });
+      reply.raw.end(JSON.stringify({ error: "No preview registered for this subdomain", slug }));
+      return;
+    }
+
     // Take ownership of the response — Fastify won't try to send anything else.
     reply.hijack();
-    proxyToPreview(req, reply);
+    proxyToPreview(req, reply, port);
   });
 
   // WebSocket upgrade path. Fastify's onRequest hook does NOT fire for
@@ -169,9 +201,14 @@ export function registerPreviewProxy(app: FastifyInstance): void {
     if (typeof host !== "string") return;
     const slug = previewSubdomainOf(host);
     if (slug === null) return;
+    const port = resolveUpstreamPort(slug);
+    if (port === null) {
+      try { socket.destroy(); } catch { /* already closed */ }
+      return;
+    }
     // Cast: socket is a Duplex but in HTTP-server upgrade events
     // it is always a net.Socket — typings are loose because the
     // contract predates the unified Duplex type.
-    proxyUpgradeToPreview(req, socket as Socket, head);
+    proxyUpgradeToPreview(req, socket as Socket, head, port);
   });
 }

@@ -133,7 +133,8 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     return;
   }
 
-  const previewState = getLocalPreviewState();
+  const companyId = activeExecution.companyId;
+  const previewState = getLocalPreviewState(companyId);
   if (previewState.status === "starting" || previewState.status === "ready") {
     const previewUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
     if (previewUrl) {
@@ -143,8 +144,8 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
   }
 
   const preferredTargetPath = changedFiles[0]?.split("/")[0] ?? null;
-  const companyProductDir = getProductDir(activeExecution.companyId);
-  const hasCandidate = hasReportedPreviewCandidate() || await hasLocalPreviewCandidate(companyProductDir, preferredTargetPath);
+  const companyProductDir = getProductDir(companyId);
+  const hasCandidate = hasReportedPreviewCandidate(companyId) || await hasLocalPreviewCandidate(companyProductDir, preferredTargetPath);
   if (!hasCandidate) {
     return;
   }
@@ -153,7 +154,7 @@ async function maybeStartDeveloperLivePreview(changedFiles: string[]) {
     taskId: activeExecution.buildTaskId,
   });
 
-  const preview = await startLocalPreview(companyProductDir, preferredTargetPath);
+  const preview = await startLocalPreview(companyProductDir, preferredTargetPath, companyId);
   const previewUrl = preview.validationUrl ?? preview.entryUrl ?? preview.url;
   if (preview.status !== "ready" || !previewUrl) {
     emitEmployeeActivity("developer", "info", preview.lastError ?? "Live preview attempt did not become reachable yet.", {

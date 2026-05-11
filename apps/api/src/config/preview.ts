@@ -12,6 +12,20 @@ export const previewConfig = {
   port: readNumberEnv("ARCEUS_PREVIEW_PORT", 3210),
 
   /**
+   * Multi-tenant port range. Each company gets its own port from
+   * [portMin, portMax] inclusive so two users running their products
+   * don't fight over a single host port. Allocation is keyed on
+   * companyId in preview.ts and stable for the process lifetime, so
+   * the proxy can route `<slug>.<domain>` to the right local port
+   * consistently. If only one tenant ever runs (single-host dev),
+   * the range still works — the first company picks one slot and
+   * stays there. Production deployments with more than ~90 concurrent
+   * tenants should widen the range.
+   */
+  portMin: readNumberEnv("ARCEUS_PREVIEW_PORT_MIN", 3210),
+  portMax: readNumberEnv("ARCEUS_PREVIEW_PORT_MAX", 3299),
+
+  /**
    * Public apex domain for preview URLs. The preview-proxy hook routes
    * any `<slug>.<publicDomain>` host (excluding reserved subdomains
    * like `app`, `api`, `www`, `admin`) to the local preview server.

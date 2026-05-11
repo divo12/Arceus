@@ -103,7 +103,9 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
       // stale app instead of the "No preview available yet" placeholder.
       // Best-effort — never block reset if process termination errors.
       try {
-        await stopLocalPreview();
+        // Reset is scoped to the requesting user's company; pass companyId
+        // so we tear down THAT company's preview slot, not the singleton's.
+        await stopLocalPreview(request.companyId);
       } catch (err) {
         request.log?.warn?.({ err }, "stopLocalPreview during reset failed (non-fatal)");
       }

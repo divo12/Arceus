@@ -198,9 +198,10 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     );
     if (!body) return reply;
 
-    const productDir = workspaceManager.getLocalPath(req.mcp!.companyId);
+    const companyId = req.mcp!.companyId;
+    const productDir = workspaceManager.getLocalPath(companyId);
     try {
-      const state = await startLocalPreview(productDir, body.targetPath);
+      const state = await startLocalPreview(productDir, body.targetPath, companyId);
       const url = state.url ?? state.entryUrl ?? state.validationUrl;
       if (state.status === "ready") {
         return cacheAndSend(req, reply, 200, success(
@@ -225,7 +226,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const body = parseOrFail(previewProbeBody, req.body ?? {}, reply);
     if (!body) return reply;
 
-    const probe = await probePreviewHealth(body.timeoutMs);
+    const probe = await probePreviewHealth(req.mcp!.companyId, body.timeoutMs);
 
     return cacheAndSend(
       req,
@@ -323,7 +324,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
 
     // Preview probe (optional)
     if (!skipPreview) {
-      const probe = await probePreviewHealth(5000);
+      const probe = await probePreviewHealth(req.mcp!.companyId, 5000);
       recordPreview(probe.reachable, probe.error ? [probe.error] : []);
       if (!probe.reachable) {
         failures.push({ category: "preview", errors: [probe.error ?? "preview unreachable"] });
