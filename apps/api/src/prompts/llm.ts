@@ -328,28 +328,34 @@ async function pollPendingPromptCompletions() {
         continue;
       }
 
-      // Layer B′ productive-action deadline: the agent has been running
-      // long enough that it should have made a state-changing move by
-      // now (task_claim / task_complete / artifact_create / etc.) but
-      // hasn't. Distinct from NO_TOOL_INVOKED (catches zero-tool beats)
-      // and BEAT_STALL (catches total silence) — this catches the
-      // "task_get + task_append_plan_step → silence" meta loop where
-      // the timeline looks active but no real work is committed.
-      if (
-        Date.now() - entry.lastProductiveActionAt > NO_PRODUCTIVE_ACTION_DEADLINE_MS
-        && entry.toolCallCount > 0
-      ) {
-        emitEmployeeActivity(
-          "system",
-          "info",
-          `No-productive-action deadline: session ${sessionId.slice(0, 12)}… ${Math.round((Date.now() - entry.lastProductiveActionAt) / 1000)}s since last action tool — rejecting`,
-        );
-        rejectPromptCompletion(
-          sessionId,
-          new Error(`Beat session ${sessionId} hit no_productive_action: ${Math.round((Date.now() - entry.lastProductiveActionAt) / 1000)}s since last action tool (read/meta only)`),
-        );
-        continue;
-      }
+      // Layer B′ productive-action deadline — DISABLED.
+      //
+      // History: this watchdog rejected beats that had emitted tools
+      // but none of them in ACTION_TOOLS_RESETTING_READ_LOOP within
+      // NO_PRODUCTIVE_ACTION_DEADLINE_MS. Intended to catch the
+      // "task_get + task_append_plan_step → silence" meta-loop.
+      //
+      // In practice it false-fired on legitimate developer/designer
+      // beats: model emits task_append_plan_step (now 2.6s round-trip),
+      // then patch_progress, then sits on a long read/edit pass — and
+      // gets killed at the 122s mark even though it's actively working.
+      // The earlier mitigation (adding built-in tools to
+      // BUILTIN_PRODUCTIVE_TOOLS in beats.routes.ts) didn't cover the
+      // case where the plugin doesn't POST a body for arceus_* tools,
+      // and the read-loop counter (READ_LOOP_THRESHOLD=200) already
+      // catches the actual pathology this was meant to catch.
+      //
+      // The remaining stall guards are sufficient:
+      //   • BEAT_STALL_TIMEOUT_MS (2 min total SSE silence)
+      //   • NO_TOOL_INVOKED_DEADLINE_MS (45s zero-tool beats)
+      //   • DEFAULT_PROMPT_TIMEOUT_MS / beatTimeoutMs (10 min hard cap)
+      //   • READ_LOOP_THRESHOLD=200 (line-by-line read pathology)
+      //
+      // Keep lastProductiveActionAt populated (it's still useful for
+      // observability + the future "live status" view) but do not
+      // reject on it. To re-enable, restore the if-block AND ensure
+      // every mutating arceus_* / built-in tool resets the counter.
+      void NO_PRODUCTIVE_ACTION_DEADLINE_MS;
 
       // Layer C read-loop guard: the agent has fired READ_LOOP_THRESHOLD
       // consecutive `read` calls without any action tool resetting the

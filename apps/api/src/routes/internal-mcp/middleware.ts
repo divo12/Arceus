@@ -47,9 +47,15 @@ const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9:_.\-]{8,128}$/;
  * verify/explore phase that ends with an action.
  *
  * Names match the tool keys produced by routeToTool() in
- * route-to-tool.ts. Keep this set narrow — auxiliary tools like
- * task_append_plan_step or task_update_progress do NOT count as
- * actions; they're narration of the current gather phase.
+ * route-to-tool.ts.
+ *
+ * Includes task_append_plan_step and task_update_progress (formerly
+ * excluded as "narration only"). In practice these ARE the model
+ * actively committing plan state mid-beat — and excluding them was
+ * killing legitimate developer/designer beats via the
+ * no_productive_action watchdog (now disabled in llm.ts) after they
+ * had only emitted plan-step + progress updates. Treat any MCP write
+ * as a productive action.
  */
 const ACTION_TOOLS_RESETTING_READ_LOOP = new Set<string>([
   "task_claim",
@@ -57,6 +63,8 @@ const ACTION_TOOLS_RESETTING_READ_LOOP = new Set<string>([
   "task_block",
   "task_report_bug",
   "task_verify",
+  "task_append_plan_step",
+  "task_update_progress",
   "artifact_create",
   "artifact_persist",
   "artifact_write_to_workspace",
