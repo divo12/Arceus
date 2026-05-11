@@ -5,9 +5,9 @@
   "executionMode": "heartbeat",
 
   "schedulerIntervalMs": 15000,
-  "$comment_concurrency": "maxConcurrentBeats = global ceiling across ALL tenants (safety valve so 20 tenants × 2-per-company can't open 40 Azure requests). maxConcurrentBeatsPerCompany = per-tenant slot pool — one company's hung beat cannot starve another's. Total in-flight = min(global, sum of per-company active).",
-  "maxConcurrentBeats": 8,
-  "maxConcurrentBeatsPerCompany": 2,
+  "$comment_concurrency": "maxConcurrentBeats = global ceiling across ALL tenants (safety valve so 20 tenants × 2-per-company can't open 40 Azure requests). maxConcurrentBeatsPerCompany = per-tenant slot pool — one company's hung beat cannot starve another's. Total in-flight = min(global, sum of per-company active). Lowered from 8/2 to 4/1 under multi-tenant load: gpt-5.4-mini Azure deployment was hitting TPM saturation at 4+ concurrent beats, manifesting as `totalTokens: 0` silent stalls rather than 429s. Bump these back up after either (a) Azure quota increase, or (b) deployment split (chat vs beats).",
+  "maxConcurrentBeats": 4,
+  "maxConcurrentBeatsPerCompany": 1,
 
   "roleIntervals": {
     "ceo": 60000,
