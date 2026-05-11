@@ -80,7 +80,10 @@ export async function approvePendingBoardApprovals(
     if (approval.requestedByAgentId) {
       const requestor = await agentsRepo.findAgentById(db, approval.requestedByAgentId);
       if (requestor) {
-        emitReactive(parseRoleStrict(requestor.role), "approval_granted");
+        // Use the approval row's companyId (also matches `companyId` param
+        // of approvePendingBoardApprovals) — fires the event on the right
+        // tenant rather than whoever the singleton points at.
+        emitReactive(approval.companyId, parseRoleStrict(requestor.role), "approval_granted");
       }
     }
   }

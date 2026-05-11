@@ -80,7 +80,7 @@ function applyTaskModification(
       correlationId: modification.taskId,
     });
     if (modification.assignedRole) {
-      emitReactive(modification.assignedRole, "task_assigned");
+      emitReactive(companyId, modification.assignedRole, "task_assigned");
     }
   } else if (modification.modificationType === "cancel") {
     audit({

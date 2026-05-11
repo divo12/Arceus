@@ -141,7 +141,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
       reviewState.phase = "rework";
 
       emitGraphNodeAdded(currentSprintId, bugTask);
-      emitReactive(bugFields.assignedRole, "bug_reported");
+      emitReactive(snapshot.company.id, bugFields.assignedRole, "bug_reported");
     }
   } else {
     // Pre-review build gate passed. The sprint plan already includes

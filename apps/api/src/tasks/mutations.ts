@@ -364,7 +364,10 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
 
   // Phase 7: Trigger escalation meeting when a task becomes blocked
   if (status === "blocked" && prevStatus !== "blocked") {
-    triggerEscalationMeeting(taskId, feedback ?? `Task "${prev?.title ?? taskId}" is blocked`);
+    const blockedCompanyId = prev?.companyId ?? getActiveCompanyId();
+    if (blockedCompanyId) {
+      triggerEscalationMeeting(blockedCompanyId, taskId, feedback ?? `Task "${prev?.title ?? taskId}" is blocked`);
+    }
   }
 
   // Auto-promote downstream tasks when a task completes.
@@ -417,7 +420,11 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
           incomingArtifactIds: uniqueStrings([...t.incomingArtifactIds, ...upstreamArtifactIds], MAX_INCOMING_ARTIFACT_IDS),
         }));
         if (task.assignedRole) {
-          emitReactive(task.assignedRole, "task_dependency_met");
+          // companyId resolved at the top of the completion branch (line ~373)
+          // is in scope; passing it through prevents the reactive event from
+          // being sent to the singleton tenant when the task belongs to a
+          // different one.
+          emitReactive(companyId, task.assignedRole, "task_dependency_met");
         }
       }
     }

@@ -3,7 +3,6 @@ import { parseRoleStrict } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "./snapshot-view.js";
 import { getMeetingSchedulerRef, getReactiveEventEmitter } from "./state.js";
 import { swallowAndAudit } from "../observability/swallow.js";
@@ -14,14 +13,15 @@ import { swallowAndAudit } from "../observability/swallow.js";
  * Reactive events are best-effort and fire-and-forget so the
  * surface stays sync — the 15+ callers don't have to async-cascade.
  *
- * `companyId` still derives from the in-memory snapshot until B.5
- * threads it through via `companyContext`.
+ * Multi-tenancy: `companyId` is the tenant the event belongs to. It
+ * MUST come from the caller's scope (task.companyId, sprint.companyId,
+ * snapshot.company.id, etc.) — NOT from a process-wide singleton.
+ * Calling with the wrong companyId wakes an agent in the wrong tenant
+ * and silently drops the originating tenant's reactive signal.
  */
-export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigger): void {
+export function emitReactive(companyId: string, role: AgentIdentity["role"], event: BeatEventTrigger): void {
   const emitter = getReactiveEventEmitter();
-  if (!emitter) return;
-  const companyId = getActiveCompanyId();
-  if (!companyId) return;
+  if (!emitter || !companyId) return;
   swallowAndAudit("reactive.emit_reactive", async () => {
     const agent = await agentsRepo.findAgentByRole(getDb(), companyId, role);
     if (!agent) return;
@@ -32,15 +32,14 @@ export function emitReactive(role: AgentIdentity["role"], event: BeatEventTrigge
 }
 
 /**
- * Emit a reactive event to ALL agents. Spec 31 Phase 7.B.3 —
- * `agentsRepo.listAgentsByCompany` replaces `snapshot.agents`.
- * Fire-and-forget like `emitReactive`.
+ * Emit a reactive event to ALL agents of a tenant. Spec 31 Phase 7.B.3
+ * — `agentsRepo.listAgentsByCompany` replaces `snapshot.agents`.
+ * Fire-and-forget like `emitReactive`. `companyId` MUST be the tenant
+ * the broadcast targets; without it the broadcast goes nowhere.
  */
-export function emitReactiveBroadcast(event: BeatEventTrigger): void {
+export function emitReactiveBroadcast(companyId: string, event: BeatEventTrigger): void {
   const emitter = getReactiveEventEmitter();
-  if (!emitter) return;
-  const companyId = getActiveCompanyId();
-  if (!companyId) return;
+  if (!emitter || !companyId) return;
   swallowAndAudit("reactive.broadcast", async () => {
     const agents = await agentsRepo.listAgentsByCompany(getDb(), companyId);
     for (const agent of agents) {
@@ -85,8 +84,7 @@ function escalationMeetingsEnabled(): boolean {
  * a block fired without escalating, and rely on the agent's own
  * next beat to re-claim and retry.
  */
-export function triggerEscalationMeeting(taskId: string, blockerDetail: string): void {
-  const companyId = getActiveCompanyId();
+export function triggerEscalationMeeting(companyId: string, taskId: string, blockerDetail: string): void {
   if (!companyId) return;
 
   if (!escalationMeetingsEnabled()) {

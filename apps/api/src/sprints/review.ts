@@ -474,7 +474,7 @@ export async function executeSprintReviewVerification(
         updatedReviewState.escalatedToCto = true;
         if (!updatedReviewState.escalatedAt) updatedReviewState.escalatedAt = nowIso();
         emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} rework limit reached (${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles}) — escalating to CTO`, { beatId });
-        emitReactive("cto", "escalation_received");
+        emitReactive(snapshot.company.id, "cto", "escalation_received");
         emitGraphDecision(sprintId, null, "escalation",
           `Sprint ${sprint.number} rework limit reached — escalating to CTO`,
           `Rework cycle ${updatedReviewState.reworkCycleCount}/${updatedReviewState.maxReworkCycles} exhausted`,
@@ -487,7 +487,7 @@ export async function executeSprintReviewVerification(
       }));
 
       for (const bugRole of rolesWithBugs) {
-        emitReactive(bugRole, "bug_reported");
+        emitReactive(snapshot.company.id, bugRole, "bug_reported");
       }
 
       await persistRuntimeArtifact(snapshot.company.id, {
@@ -517,7 +517,7 @@ export async function executeSprintReviewVerification(
 
       if (willEscalate) {
         emitEmployeeActivity("tester", "transition", `Sprint ${sprint.number} parse-failure limit reached — escalating to CTO`, { beatId });
-        emitReactive("cto", "escalation_received");
+        emitReactive(snapshot.company.id, "cto", "escalation_received");
       }
 
       await updateSprint(sprintId, (s) => ({
@@ -634,7 +634,7 @@ export async function executeSprintFinalGate(
       );
       await persistTask(bugTask);
       newBugIds.push(bugTask.id);
-      emitReactive(bugFields.assignedRole, "bug_reported");
+      emitReactive(snapshot.company.id, bugFields.assignedRole, "bug_reported");
     }
 
     const newReworkCount = reviewState.reworkCycleCount + 1;
@@ -655,7 +655,7 @@ export async function executeSprintFinalGate(
 
     if (escalate) {
       emitEmployeeActivity("system", "transition", `Sprint ${sprint.number} rework limit exceeded — escalating to CTO`, { beatId });
-      emitReactive("cto", "escalation_received");
+      emitReactive(snapshot.company.id, "cto", "escalation_received");
     }
 
     return {
@@ -787,7 +787,7 @@ export async function executeCtoBeatEscalationReview(
       }));
       for (const bugTask of bugTasks) {
         if (bugTask?.assignedRole) {
-          emitReactive(bugTask.assignedRole, "bug_reported");
+          emitReactive(snapshot.company.id, bugTask.assignedRole, "bug_reported");
         }
       }
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO granted extra rework cycle — Sprint ${sprint.number} back to rework`, { beatId });
@@ -815,7 +815,7 @@ export async function executeCtoBeatEscalationReview(
         } : s.reviewState,
       }));
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO aborted Sprint ${sprint.number} — will need re-planning`, { beatId });
-      emitReactive("ceo", "sprint_completed");
+      emitReactive(snapshot.company.id, "ceo", "sprint_completed");
     }
 
     return {

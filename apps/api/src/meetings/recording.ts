@@ -113,7 +113,7 @@ export async function recordMeeting(params: {
   if (params.type === "escalation") {
     for (const role of params.participantRoles) {
       if (role !== params.facilitatorRole) {
-        emitReactive(role, "escalation_received");
+        emitReactive(companyId, role, "escalation_received");
       }
     }
   }
@@ -310,7 +310,7 @@ export async function recordCeoCardMeeting(card: CeoCard, boardMessage: string, 
 
   // Reactive: wake each participant agent (board directive)
   for (const role of participantRoles) {
-    if (role !== "ceo") emitReactive(role, "board_message");
+    if (role !== "ceo") emitReactive(companyId, role, "board_message");
   }
 
   return meeting;

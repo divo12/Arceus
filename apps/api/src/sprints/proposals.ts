@@ -115,7 +115,10 @@ export async function createSprintWithTasks(input: SprintCreateInput, companyId?
     {
       upsertSprint,
       updateCompanySprint: (sprintId, number) => updateCompanySprint(resolvedCompanyId, sprintId, number),
-      emitReactiveBroadcast: emitReactiveBroadcast as (event: string) => void,
+      // Curry the tenant id so createSprintRecord's dependency surface
+      // stays single-arg while the underlying broadcast targets THIS
+      // tenant's agents only (not the singleton's).
+      emitReactiveBroadcast: ((event: string) => { emitReactiveBroadcast(resolvedCompanyId, event as Parameters<typeof emitReactiveBroadcast>[1]); }),
     },
     snapshot,
     `Sprint ${(snapshot.company.currentSprintNumber ?? 0) + 1}: ${input.goal}`,
