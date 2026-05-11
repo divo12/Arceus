@@ -39,6 +39,12 @@ import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
+import {
+  walkWorkspaceManifest,
+  formatSize,
+  formatRelativeTime,
+  type WorkspaceManifestEntry,
+} from "../workspace/manifest.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
 import { getProductDir } from "./state.js";
 import { computeTrustBand } from "../governance/trust.js";
@@ -530,11 +536,14 @@ function renderIncomingHandoffsSection(handoffs: IncomingHandoff[]): string {
   return lines.join("\n").trimEnd();
 }
 
-function renderWorkspaceContext(companyId: string, existingFiles?: string[]): string {
+function renderWorkspaceContext(
+  companyId: string,
+  manifest?: WorkspaceManifestEntry[],
+): string {
   const preview = getLocalPreviewState();
   const lines = [
     "## Workspace",
-    `- **Product directory:** ${getProductDir(companyId)}`,
+    `- **Product directory:** ${getProductDir(companyId)} (referenced as \`/workspace\` in tools — plugin handles tenant routing)`,
     `- **Preview status:** ${preview.status}`,
   ];
   if (preview.url) lines.push(`- **Preview URL:** ${preview.url}`);
@@ -545,11 +554,24 @@ function renderWorkspaceContext(companyId: string, existingFiles?: string[]): st
   if (preview.runtime) lines.push(`- **Runtime:** ${preview.runtime}`);
   if (preview.framework) lines.push(`- **Framework:** ${preview.framework}`);
 
-  if (existingFiles && existingFiles.length > 0) {
-    lines.push("", `### Existing files (${existingFiles.length})`);
-    const shown = existingFiles.slice(0, 100);
-    for (const f of shown) lines.push(`- ${f}`);
-    if (existingFiles.length > 100) lines.push(`... and ${existingFiles.length - 100} more`);
+  if (manifest && manifest.length > 0) {
+    lines.push(
+      "",
+      `### Workspace state (beyond seed scaffold — see skill(developer-workspace-layout) for the scaffold)`,
+      `${manifest.length} file(s) the team has produced or imported into this workspace. Open these in priority over discovering with glob.`,
+      "",
+    );
+    const shown = manifest.slice(0, 40);
+    for (const e of shown) {
+      lines.push(`- \`/workspace/${e.path}\`  (${formatSize(e.size)}, ${formatRelativeTime(e.modifiedAt)})`);
+    }
+    if (manifest.length > 40) lines.push(`... and ${manifest.length - 40} more`);
+  } else {
+    lines.push(
+      "",
+      `### Workspace state (beyond seed scaffold)`,
+      `_Workspace contains only the seed scaffold so far. See skill(developer-workspace-layout) for the scaffold map. Nothing else exists yet — your edits will be the first product code._`,
+    );
   }
 
   return lines.join("\n");
@@ -675,7 +697,7 @@ export async function prepareBeatRender(
   role: Role,
   companyId: string,
   task?: Task,
-  existingFiles?: string[],
+  _existingFiles?: string[],  // deprecated: superseded by manifest walker below
 ): Promise<{
   ctx: BeatRenderContext;
   stateText: string;
@@ -686,8 +708,18 @@ export async function prepareBeatRender(
   const ctx = await loadBeatRenderContext(companyId, role);
   const incomingHandoffs = drainIncomingHandoffs(ctx);
 
+  // Walk the workspace once and reuse for both render paths. The walker
+  // filters out the scaffold seed (skill(developer-workspace-layout)
+  // already documents it) plus runtime noise (node_modules, .git,
+  // dist, .opencode). So this manifest is "what beats produced or
+  // imported into the workspace beyond the seed" — exactly what the
+  // model needs to skip its glob-discovery phase.
+  const productDir = getProductDir(companyId);
+  const manifest = await walkWorkspaceManifest(productDir, { maxDepth: 4, maxEntries: 40 });
+
   const baseSections = [
     renderCompanyState(ctx),
+    renderWorkspaceContext(companyId, manifest),
     renderOpenTasksForRole(ctx, role),
     renderRecentArtifacts(ctx, 10),
     renderRoleMemory(ctx),
@@ -700,7 +732,7 @@ export async function prepareBeatRender(
     ? [
         renderIncomingHandoffsBanner(incomingHandoffs),
         renderTaskContext(task),
-        renderWorkspaceContext(companyId, existingFiles),
+        renderWorkspaceContext(companyId, manifest),
         renderCompanyState(ctx),
         renderBudget(ctx),
         renderSprintHistory(ctx),
