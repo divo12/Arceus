@@ -4,15 +4,31 @@ import react from "@vitejs/plugin-react";
 /**
  * Vite config for an Arceus-scaffolded product workspace.
  *
- * `server.allowedHosts: "all"` is REQUIRED. The preview is served behind a
- * wildcard subdomain that proxies to the local Vite port; without this,
- * Vite 5+ blocks the request as DNS-rebinding mitigation and the user sees
- * a blank page. Developer soul prompts also enforce this rule.
+ * Three settings are REQUIRED for Arceus's preview pipeline:
+ *
+ *   port:         must come from process.env.PORT. The API allocates a
+ *                 per-tenant port (from `previewConfig.portMin..portMax`)
+ *                 and passes it via the PORT env when spawning the dev
+ *                 server. Vite does NOT honor PORT env by default — we
+ *                 have to wire it explicitly. Without this, Vite binds
+ *                 5173 and the API's probe of the assigned port (e.g.
+ *                 4123) gets connection refused → preview "upstream"
+ *                 failure.
+ *
+ *   host:         "0.0.0.0" (or env-supplied) so the API's loopback probe
+ *                 AND the wildcard-subdomain proxy can both reach it.
+ *
+ *   allowedHosts: "all" — the preview is served behind a Railway public
+ *                 subdomain that proxies to this local port. Without this,
+ *                 Vite 5+ blocks the request as DNS-rebinding mitigation
+ *                 and the user sees a blank page.
  */
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: "0.0.0.0",
+    host: process.env.HOST || "0.0.0.0",
+    port: Number(process.env.PORT) || 5173,
     allowedHosts: "all",
+    strictPort: !!process.env.PORT,
   },
 });
