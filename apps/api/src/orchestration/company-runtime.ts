@@ -96,6 +96,19 @@ export interface PendingPromptCompletion {
    */
   toolCallCount: number;
   /**
+   * Epoch ms when the agent last invoked a *productive* action tool
+   * (task_claim, task_complete, artifact_create, workspace_checkpoint,
+   * etc. — same set that resets the read-loop counter). Distinct from
+   * `lastActivityAt`, which is bumped by ANY SSE event including
+   * reasoning/text tokens and read-only tool calls.
+   *
+   * Used by the productive-action deadline guard to kill beats that
+   * have spent N minutes in meta loops (task_get + task_append_plan_step
+   * → silence → repeat) without ever making a state-changing move.
+   * Defaults to `startedAt` so the first window starts at registration.
+   */
+  lastProductiveActionAt: number;
+  /**
    * Number of consecutive `read` calls (built-in OpenCode read tool) since
    * the last "action" tool fired. Bumped by the watchdog-reset endpoint
    * when the plugin posts a tool body with `tool === "read"`. Reset to 0

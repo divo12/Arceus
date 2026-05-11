@@ -105,16 +105,42 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
  * Iteration log:
  *   4 min — original eb44642 default
  *   6 min — bumped after observing single Azure round-trips >4 min
- *  10 min — current. Three production stalls (beats 9/12/17) all fired
- *           at exactly beat-start + 6 min regardless of intervening
- *           tool activity, suggesting the lastActivityAt reset hook in
- *           event-bridge.ts isn't firing for arceus tool events. Until
- *           that's fixed, this constant acts as a hard total-beat budget.
- *           10 min covers most legitimate dev work (build + test + a few
- *           LLM iterations) while still being well under the 15-min
- *           HARD_CAP_MS so genuinely dead sessions still fail fast.
+ *  10 min — bumped because the lastActivityAt reset hook in
+ *           event-bridge.ts wasn't firing for arceus tool events.
+ *           Acted as a hard total-beat budget while the bump was
+ *           unreliable.
+ *   3 min — current. d34f15e made the MCP middleware reliably bump
+ *           lastActivityAt on every arceus_* call (x-session-id is
+ *           now always sent + resolved tier-1). With reliable
+ *           bumping, 3 min of TOTAL silence — no tool calls, no SSE
+ *           tokens, no reasoning — means the agent is genuinely
+ *           hung. Healthy beats stream reasoning + tool calls
+ *           continuously and never let lastActivityAt drift this
+ *           far. Cuts the 10-min stall delay observed in
+ *           beat_7_1778460613003 (last tool 00:50:44 → stall fired
+ *           01:00:44, 10 min of dead air) down to ~3 min.
  */
-const BEAT_STALL_TIMEOUT_MS = 10 * 60 * 1000;
+const BEAT_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+
+/**
+ * Productive-action deadline. If a beat has been running this long
+ * without any *progress-making* tool firing (task_claim, task_complete,
+ * artifact_create, workspace_checkpoint, etc. — see
+ * ACTION_TOOLS_RESETTING_READ_LOOP in mcp/middleware.ts), the beat is
+ * stuck in a meta loop: task_get → task_append_plan_step → silence,
+ * never committing real state.
+ *
+ * Distinct from NO_TOOL_INVOKED (which only checks count==0) and from
+ * BEAT_STALL (which fires on total SSE silence). Catches the case where
+ * the agent looks busy on the tool-call timeline but isn't actually
+ * advancing the world.
+ *
+ * 4 minutes is generous — even a thoughtful pre-claim read sequence
+ * should land a task_claim or task_block within that window. Beats
+ * scored as no_productive_action get re-dispatched on the next role
+ * interval with fresh context, often unsticking the pattern.
+ */
+const NO_PRODUCTIVE_ACTION_DEADLINE_MS = 4 * 60 * 1000;
 
 /**
  * No-tool-invoked early-exit deadline. If the LLM has been thinking for
@@ -167,6 +193,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       timer,
       startedAt: now,
       lastActivityAt: now,
+      lastProductiveActionAt: now,
       toolCallCount: 0,
       readsSinceAction: 0,
     });
@@ -266,6 +293,29 @@ async function pollPendingPromptCompletions() {
         rejectPromptCompletion(
           sessionId,
           new Error(`Beat session ${sessionId} produced no tool calls within ${NO_TOOL_INVOKED_DEADLINE_MS}ms`),
+        );
+        continue;
+      }
+
+      // Layer B′ productive-action deadline: the agent has been running
+      // long enough that it should have made a state-changing move by
+      // now (task_claim / task_complete / artifact_create / etc.) but
+      // hasn't. Distinct from NO_TOOL_INVOKED (catches zero-tool beats)
+      // and BEAT_STALL (catches total silence) — this catches the
+      // "task_get + task_append_plan_step → silence" meta loop where
+      // the timeline looks active but no real work is committed.
+      if (
+        Date.now() - entry.lastProductiveActionAt > NO_PRODUCTIVE_ACTION_DEADLINE_MS
+        && entry.toolCallCount > 0
+      ) {
+        emitEmployeeActivity(
+          "system",
+          "info",
+          `No-productive-action deadline: session ${sessionId.slice(0, 12)}… ${Math.round((Date.now() - entry.lastProductiveActionAt) / 1000)}s since last action tool — rejecting`,
+        );
+        rejectPromptCompletion(
+          sessionId,
+          new Error(`Beat session ${sessionId} hit no_productive_action: ${Math.round((Date.now() - entry.lastProductiveActionAt) / 1000)}s since last action tool (read/meta only)`),
         );
         continue;
       }
