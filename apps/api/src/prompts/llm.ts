@@ -153,10 +153,15 @@ const BEAT_STALL_TIMEOUT_MS = 2 * 60 * 1000;
  * scored as no_productive_action get re-dispatched on the next role
  * interval with fresh context, often unsticking the pattern.
  */
-// Lowered from 4min → 2min for fail-fast. Beats that loop through
-// task_get/task_append_plan_step without claiming get killed in half the
-// time, returning the slot for a fresh beat with reset context.
-const NO_PRODUCTIVE_ACTION_DEADLINE_MS = 2 * 60 * 1000;
+// 2min was too aggressive — we observed a UI designer reaped 122s
+// after a successful apply_patch (which IS productive work but wasn't
+// classified as such — only arceus_* action tools counted, not
+// built-in edit/write/apply_patch). Bumped to 3min and the classifier
+// in beats.routes.ts now counts built-in mutating tools too. Trade-off
+// of an extra minute is worth keeping legitimate work from getting
+// killed on roles whose work is built-in file edits (developer,
+// ui_designer, tester author).
+const NO_PRODUCTIVE_ACTION_DEADLINE_MS = 3 * 60 * 1000;
 
 /**
  * No-tool-invoked early-exit deadline. If the LLM has been thinking for
@@ -190,7 +195,14 @@ const NO_TOOL_INVOKED_DEADLINE_MS = 45 * 1000;
  * read of a large file uses ~5 calls; 20 is the gpt-5.4-mini pathology
  * threshold where the model is iterating offsets one line at a time.
  */
-const READ_LOOP_THRESHOLD = 20;
+// Effectively disabled. The original intent was to catch gpt-5.4-mini's
+// "read one line at a time across 50 files" pathology. In practice it's
+// firing on legitimate file inspection too (developer reading 20
+// different source files to understand the codebase). Raised to 200 so
+// it remains as a sanity ceiling for the pathological case but
+// never fires on normal work. If you actually need a line-by-line read
+// detector, do it via `limit < 10` heuristic, not raw count.
+const READ_LOOP_THRESHOLD = 200;
 
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {

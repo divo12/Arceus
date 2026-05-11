@@ -10,6 +10,46 @@ import { observability, parseRoleStrict } from "@arceus/contracts";
 
 const BEATS_BASE = "/api/internal/v1/beats";
 
+/**
+ * Built-in OpenCode tools that count as PRODUCTIVE actions for the
+ * no-productive-action watchdog (mirrors ACTION_TOOLS_RESETTING_READ_LOOP
+ * for arceus_* tools in middleware.ts).
+ *
+ * Includes ALL built-in tools the model has access to. Rationale: the
+ * read-vs-mutate distinction was too aggressive — developers and UI
+ * designers were getting reaped while doing legitimate file inspection.
+ * Reading 5 files to understand the codebase before writing code is
+ * productive work. Any tool call is evidence the model is engaged
+ * with the workspace; only TRUE silence (no tools fired at all) should
+ * count as "not productive." That's already covered by
+ * NO_TOOL_INVOKED_DEADLINE_MS.
+ *
+ * So this set is effectively "is the model emitting tool calls at all" —
+ * the same as the general activity check. Keep it as a positive list
+ * (rather than removing the productive watchdog entirely) so we can
+ * tighten specific tools back to "not productive" if we observe a real
+ * pathology.
+ */
+const BUILTIN_PRODUCTIVE_TOOLS = new Set<string>([
+  // Mutation
+  "edit",
+  "write",
+  "multiedit",
+  "apply_patch",
+  // Shell
+  "bash",
+  // Inspection (still counts — reading is part of the work)
+  "read",
+  "grep",
+  "glob",
+  "list",
+  "ls",
+  // Meta
+  "skill",
+  "tool_help",
+  "webfetch",
+]);
+
 export default async function internalMcpBeatsRoutes(app: FastifyInstance): Promise<void> {
   /**
    * GET /api/internal/v1/beats/recent
@@ -131,6 +171,18 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
             pending.lastActivityAt = Date.now();
             pending.toolCallCount += 1;
             if (tool === "read") pending.readsSinceAction += 1;
+            // Built-in mutating tools count as productive actions. Mirrors
+            // ACTION_TOOLS_RESETTING_READ_LOOP for arceus_* tools above:
+            // when the agent actually writes/edits/commits, reset both
+            // the read-loop counter AND the productive-action clock.
+            // Without this, a UI designer that does apply_patch successfully
+            // then plans the next steps gets reaped at 2-3min for
+            // "no productive action" — even though the patch was the
+            // most productive thing it could do.
+            if (BUILTIN_PRODUCTIVE_TOOLS.has(tool)) {
+              pending.readsSinceAction = 0;
+              pending.lastProductiveActionAt = Date.now();
+            }
           }
         }
 
