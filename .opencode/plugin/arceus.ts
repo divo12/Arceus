@@ -480,6 +480,30 @@ export const ArceusPlugin: Plugin = async () => {
           if (typeof a.path === "string") a.path = scopePath(a.path);
         }
 
+        // Custom workspace_* tools (live in .opencode/tool/*.ts) — they
+        // `spawn()` child processes (`npx tsc`, `npx vitest`, `git diff`
+        // …) with the caller-supplied `cwd` / `project` paths. Without
+        // rewriting these, the model's `/workspace` alias lands verbatim
+        // as a non-existent directory and the spawn fails almost instantly
+        // with cause:"tooling" (observed: workspace_run_typecheck FAIL in
+        // 19ms with args {cwd:"/workspace", project:"/workspace"}).
+        //
+        // Both `cwd` and `project` are filesystem path args; rewrite them
+        // through the same scopePath the I/O tools use so they resolve to
+        // /app/workspace/<friendly-companyId>/ and any tenant-escape
+        // attempts are rejected at the same chokepoint.
+        const WORKSPACE_PATH_ARG_TOOLS = new Set([
+          "workspace_run_typecheck",
+          "workspace_run_acceptance_suite",
+          "workspace_diff_against_criteria",
+          "workspace_collect_evidence",
+          "workspace_capture_browser_probe",
+        ]);
+        if (WORKSPACE_PATH_ARG_TOOLS.has(input.tool) && a) {
+          if (typeof a.cwd === "string") a.cwd = scopePath(a.cwd);
+          if (typeof a.project === "string") a.project = scopePath(a.project);
+        }
+
         // bash: wrap the command in a subshell that cd's into the tenant
         // root so chained commands (a && b) and pipes (a | b) all inherit
         // the tenant CWD without parsing shell syntax. Also rewrite the
