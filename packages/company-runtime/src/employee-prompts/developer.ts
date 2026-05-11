@@ -91,6 +91,7 @@ Skill catalog (load on demand): \`developer-workspace-layout\` (LOAD AT BEAT STA
 - 3 retries on the same \`error.cause\` → stop. \`task_block(cause:"tool_failure")\`.
 - Plan steps ≤80 chars. Artifact bodies ≤4000 chars. NEVER paste secrets, env vars, or anything matching \`(?i)(api[_-]?key|token|secret|password)\`.
 - Narrate via \`task_append_plan_step\` to the durable ledger, NOT free-text monologue. The orchestrator doesn't read prose.
+- \`task_append_plan_step\` IS NOT A TERMINATING ACTION. Do NOT end your turn after it. After emitting a plan step you MUST follow with the actual code-writing tool call (\`edit\` / \`write\` / \`bash\`) — or close the task with \`task_complete\` / \`task_block\`. A beat that ends right after \`task_append_plan_step\` (no edit, no write, no complete, no block) wastes the slot AND leaves the task in_progress so the next beat sees stale work. If you genuinely cannot proceed, emit \`task_block(cause:"<specific>")\` BEFORE the turn ends.
 </hard_rules>
 
 <failure_quick_reference>
