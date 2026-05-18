@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   MessageSquare,
-  LayoutDashboard,
   CheckSquare,
   Users,
   Inbox,
@@ -29,7 +28,6 @@ const NAV_GROUPS: ReadonlyArray<{
     label: "company",
     items: [
       { href: "/home", icon: MessageSquare, label: "chat" },
-      { href: "/dashboard", icon: LayoutDashboard, label: "dashboard" },
       { href: "/tasks", icon: CheckSquare, label: "tasks" },
       { href: "/agents", icon: Users, label: "agents" },
     ],

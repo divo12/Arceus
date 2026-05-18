@@ -1363,6 +1363,7 @@ export default function Page() {
     endedAt: string | null;
     summary: string | null;
   }>>([]);
+  const [artifactsList, setArtifactsList] = useState<Artifact[]>([]);
 
   async function loadState(options?: { suppressRuntimeError?: boolean }) {
     const [companyResult, runtimeResult] = await Promise.allSettled([
@@ -1397,13 +1398,14 @@ export default function Page() {
 
   async function loadExecutionTelemetry() {
     try {
-      const [activityResponse, orchestratorResponse, companyResponse, productResponse, heartbeatStatusResponse, heartbeatHistoryResponse] = await Promise.all([
+      const [activityResponse, orchestratorResponse, companyResponse, productResponse, heartbeatStatusResponse, heartbeatHistoryResponse, artifactsResponse] = await Promise.all([
         fetchWithAuth("/employee-activity", authTokenRef.current, { cache: "no-store" }),
         fetchWithAuth("/orchestrator/status", authTokenRef.current, { cache: "no-store" }),
         fetchWithAuth("/company", authTokenRef.current, { cache: "no-store" }),
         fetchWithAuth("/product/overview", authTokenRef.current, { cache: "no-store" }),
         fetchWithAuth("/heartbeat/status", authTokenRef.current, { cache: "no-store" }),
         fetchWithAuth("/heartbeat/history?limit=30", authTokenRef.current, { cache: "no-store" }),
+        fetchWithAuth("/artifacts", authTokenRef.current, { cache: "no-store" }),
       ]);
 
       if (activityResponse.ok) {
@@ -1430,6 +1432,10 @@ export default function Page() {
 
       if (heartbeatHistoryResponse.ok) {
         setHeartbeatHistory(await heartbeatHistoryResponse.json());
+      }
+
+      if (artifactsResponse.ok) {
+        setArtifactsList((await artifactsResponse.json()) as Artifact[]);
       }
     } catch {
       /* polling fallback should stay silent */
@@ -2188,7 +2194,9 @@ export default function Page() {
 
   const getAgentName = (task: Task) => {
     const agent = snapshot.agents.find((a) => a.role === task.assignedRole);
-    return agent?.name ?? task.assignedRole;
+    const name = agent?.name ?? task.assignedRole;
+    const role = task.assignedRole.replace(/_/g, " ");
+    return `${name} · ${role}`;
   };
 
   const getTaskStatusIcon = (status: Task["status"]) => {
@@ -2651,6 +2659,40 @@ export default function Page() {
                   )}
                 </section>
               ) : null}
+
+              {/* ── Artifacts ────────────────────────────── */}
+              <section className="rounded-xl border border-[var(--swiss-gray-100)] bg-[var(--swiss-gray-50)]">
+                <div className="flex items-center justify-between border-b border-[var(--swiss-gray-100)] px-5 py-3">
+                  <div className="flex items-center gap-2">
+                    <FileCode className="h-3.5 w-3.5 text-[var(--swiss-gray-400)]" />
+                    <span className="font-mono text-[0.6875rem] font-medium">artifacts</span>
+                  </div>
+                  {artifactsList.length > 0 ? (
+                    <span className="font-mono text-[0.75rem] text-[var(--swiss-gray-400)]">{artifactsList.length}</span>
+                  ) : null}
+                </div>
+                {artifactsList.length > 0 ? (
+                  <div className="divide-y divide-[var(--swiss-gray-100)]">
+                    {artifactsList.map((artifact) => (
+                      <button
+                        key={artifact.id}
+                        className="flex w-full items-center gap-3 px-5 py-2.5 text-left transition hover:bg-[var(--swiss-gray-100)]"
+                        onClick={() => openArtifact(artifact.id)}
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{artifact.title}</span>
+                        <Badge variant="outline" className="shrink-0 text-[0.5625rem]">{artifact.kind}</Badge>
+                        <span className="shrink-0 text-[0.625rem] text-[var(--swiss-gray-300)]">
+                          {formatRelativeTime(artifact.createdAt)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-5 py-4 text-[0.8125rem] text-[var(--swiss-gray-300)]">
+                    No artifacts yet
+                  </div>
+                )}
+              </section>
 
             </div>
           </div>
