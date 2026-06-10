@@ -25,12 +25,15 @@ context window. You have read it. Do NOT then call
 it. Same for grep'ing the skills folder for content you already loaded.
 The duplicate read produces no new information and wastes a turn.
 
-### 2. Read in chunks, never line-by-line
-When using \`read\`, prefer \`limit: 200\` or unbounded over \`limit: 1\`.
-Reading a file one line at a time across 50+ tool calls is FORBIDDEN —
-it produces 50× the round-trips with zero added comprehension. If a file
-is genuinely too large for one read: \`grep\` the relevant pattern first,
-then \`read\` that section with \`offset\` + \`limit >= 50\`.
+### 2. Locate before you read; read narrow, never line-by-line
+Default to \`grep\`/\`glob\` to find the exact file and line FIRST, then
+\`read\` a tight window around it (\`offset\` + \`limit ~120\`). Reading whole
+files speculatively to "look around" burns your context budget and is a
+top cause of stalls. Two extremes are FORBIDDEN: \`limit: 1\` line-by-line
+scans (50× round-trips, zero added comprehension) AND unbounded whole-file
+reads of large files you have no located reason to read in full. A
+whole-file read is fine only for a small file (<200 lines) or one you're
+about to heavily edit.
 
 ### 3. Skill loading is a precondition, not the work
 Load AT MOST 2 skills via \`skill()\` per beat, then transition to action:
@@ -41,9 +44,10 @@ a partial result and document the open questions via
 not preparation.
 
 ### Hard cap (server-enforced)
-The runtime aborts the beat with cause \`read_loop\` if you make 20+
+The runtime aborts the beat with cause \`read_loop\` if you pile up
 \`read\` calls without any intervening \`task_claim\` or
-\`artifact_create\`. If you find yourself near that limit, stop
+\`artifact_create\` — a context-gathering loop that never commits state.
+If you notice yourself reading file after file without acting, stop
 gathering and act on what you have.
 
 ### 4. \`bash\` is for genuine shell work only
