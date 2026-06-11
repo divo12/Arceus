@@ -195,6 +195,28 @@ const NO_TOOL_INVOKED_DEADLINE_MS = 45 * 1000;
  * read of a large file uses ~5 calls; 20 is the gpt-5.4-mini pathology
  * threshold where the model is iterating offsets one line at a time.
  */
+/**
+ * Reasoning-stall ceiling. If a beat HAS made tool calls but its last tool
+ * call completed more than this long ago, the model is streaming reasoning
+ * (or prose) without acting. This is the gap none of the other guards cover:
+ *
+ *   • BEAT_STALL_TIMEOUT_MS never fires — reasoning-token deltas are SSE
+ *     events and bump `lastActivityAt` (event-bridge.ts processEvent).
+ *   • NO_TOOL_INVOKED_DEADLINE_MS never fires — it only checks
+ *     `toolCallCount === 0`, i.e. before the FIRST tool call.
+ *
+ * Observed on gpt-5.2: developer beats stream reasoning for ~10 min after
+ * a tool result, then die at the hard cap with all work discarded. With
+ * this guard they die at 3 min with cause `reasoning_stall` and the role
+ * re-dispatches with fresh context ~3× sooner.
+ *
+ * 3 min is deliberately above the longest legitimate Azure round-trip we
+ * have on record for this resource (reasoning phases between tool calls
+ * run 30–90 s on healthy beats). If a legit >3-min round-trip is observed,
+ * bump to 4 min — do not disable.
+ */
+const REASONING_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+
 // Effectively disabled. The original intent was to catch gpt-5.4-mini's
 // "read one line at a time across 50 files" pathology. In practice it's
 // firing on legitimate file inspection too (developer reading 20
@@ -225,6 +247,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       startedAt: now,
       lastActivityAt: now,
       lastProductiveActionAt: now,
+      lastToolAt: now,
       toolCallCount: 0,
       readsSinceAction: 0,
     });
@@ -328,6 +351,24 @@ async function pollPendingPromptCompletions() {
         continue;
       }
 
+      // Reasoning-stall guard: the beat HAS called tools before, but the
+      // last one completed > REASONING_STALL_TIMEOUT_MS ago while the SSE
+      // stream stays "alive" with reasoning/text deltas. Without this the
+      // only thing that ends such a beat is the hard cap. Cause string is
+      // load-bearing: beat-scoring + inspector group on it.
+      if (entry.toolCallCount > 0 && Date.now() - entry.lastToolAt > REASONING_STALL_TIMEOUT_MS) {
+        emitEmployeeActivity(
+          "system",
+          "info",
+          `Reasoning stall: session ${sessionId.slice(0, 12)}… ${Math.round((Date.now() - entry.lastToolAt) / 1000)}s since last tool call — rejecting`,
+        );
+        rejectPromptCompletion(
+          sessionId,
+          new Error(`Beat session ${sessionId} hit reasoning_stall: no tool call for ${REASONING_STALL_TIMEOUT_MS}ms while streaming`),
+        );
+        continue;
+      }
+
       // Layer B′ productive-action deadline — DISABLED.
       //
       // History: this watchdog rejected beats that had emitted tools
@@ -348,6 +389,7 @@ async function pollPendingPromptCompletions() {
       // The remaining stall guards are sufficient:
       //   • BEAT_STALL_TIMEOUT_MS (2 min total SSE silence)
       //   • NO_TOOL_INVOKED_DEADLINE_MS (45s zero-tool beats)
+      //   • REASONING_STALL_TIMEOUT_MS (3 min since last tool call)
       //   • DEFAULT_PROMPT_TIMEOUT_MS / beatTimeoutMs (10 min hard cap)
       //   • READ_LOOP_THRESHOLD=200 (line-by-line read pathology)
       //

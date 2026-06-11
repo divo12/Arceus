@@ -65,6 +65,15 @@ export interface HippocampusDependencies {
 const MAX_FACTS_PER_TASK = 5;
 
 /**
+ * Minimum habit-list size before LLM-based habit matching is worth a
+ * round-trip. Below this, prepareAgentContext includes all habits as-is —
+ * with single-digit habit counts (current PROD: 4) the LLM call adds
+ * latency to EVERY beat-context build and competes for model TPM while
+ * filtering a list the agent can trivially skim itself.
+ */
+const LLM_HABIT_MATCH_THRESHOLD = 15;
+
+/**
  * Core memory service orchestrating all four tiers (static, dynamic, procedural, priming).
  *
  * Implements the HippocampusGateway interface with two main flows:
@@ -125,9 +134,14 @@ export class HippocampusService implements HippocampusGateway {
       this.primingStore.get(agentId),
     ]);
 
-    // LLM habit matching: filter all habits through LLM for relevance
+    // LLM habit matching: filter all habits through LLM for relevance.
+    // Threshold-gated: with a small habit set, an LLM round-trip per
+    // prepareAgentContext costs more (latency + TPM) than it saves —
+    // just include all habits and let the agent's own attention filter.
+    // The LLM matcher earns its call only once the habit list is big
+    // enough to meaningfully crowd the prompt.
     let habits: Habit[];
-    if (this.matchHabits && allHabits.length > 0) {
+    if (this.matchHabits && allHabits.length > LLM_HABIT_MATCH_THRESHOLD) {
       try {
         const matchedIds = await this.matchHabits(taskDescription, allHabits);
         const idSet = new Set(matchedIds);

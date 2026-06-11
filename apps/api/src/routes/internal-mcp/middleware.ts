@@ -194,6 +194,7 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
     const pending = pendingPromptCompletions.get(resolvedSessionId);
     if (pending) {
       pending.lastActivityAt = Date.now();
+      pending.lastToolAt = Date.now();
       pending.toolCallCount += 1;
       // Read-loop guard: any "action" tool firing means the agent is
       // making real progress, so reset the consecutive-read counter.

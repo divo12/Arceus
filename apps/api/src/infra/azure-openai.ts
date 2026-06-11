@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
 import zodToJsonSchema from "zod-to-json-schema";
-import { runtimeConfig, ensureDeployment } from "../config/index.js";
+import { runtimeConfig, ensureDeployment, type DeploymentKey } from "../config/index.js";
 import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { audit } from "../observability/audit-ledger.js";
 import { recordLlmCost } from "../observability/cost-recorder.js";
@@ -161,7 +161,7 @@ function auditLlmCall(
 
 /** Send a chat completion request to Azure OpenAI with resilience and audit logging. */
 async function chatCompletion(
-  deploymentKey: "ceoDeployment" | "workerDeployment",
+  deploymentKey: DeploymentKey,
   messages: ChatMessage[],
   auditCtx?: LlmAuditContext,
 ): Promise<string> {
@@ -245,7 +245,7 @@ const DEFAULT_STRUCTURED_MAX_TOKENS = 12000;
 const AZURE_OPENAI_REQUEST_TIMEOUT_MS = 90_000;
 
 export async function structuredCompletion<T>(
-  deploymentKey: "ceoDeployment" | "workerDeployment",
+  deploymentKey: DeploymentKey,
   messages: ChatMessage[],
   schema: ZodType<T>,
   schemaName: string,
@@ -369,7 +369,7 @@ function parseJsonTolerant(raw: string, schemaName: string): unknown {
 
 /** Stream a chat completion response from Azure OpenAI, returning the raw byte stream. */
 async function chatCompletionStream(
-  deploymentKey: "ceoDeployment" | "workerDeployment",
+  deploymentKey: DeploymentKey,
   messages: ChatMessage[],
   auditCtx?: LlmAuditContext,
 ): Promise<ReadableStream<Uint8Array>> {

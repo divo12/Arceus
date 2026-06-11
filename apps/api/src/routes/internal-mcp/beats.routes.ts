@@ -169,6 +169,7 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
           const pending = pendingPromptCompletions.get(body.sessionId);
           if (pending) {
             pending.lastActivityAt = Date.now();
+            pending.lastToolAt = Date.now();
             pending.toolCallCount += 1;
             if (tool === "read") pending.readsSinceAction += 1;
             // Built-in mutating tools count as productive actions. Mirrors

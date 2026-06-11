@@ -86,7 +86,7 @@ export async function memoryAgentExtractFacts(
   role: string,
 ): Promise<ExtractedFact[]> {
   const result = await structuredCompletion(
-    "workerDeployment",
+    "memoryDeployment",
     [
       { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
       { role: "user", content: buildExtractionUserPrompt(taskTitle, role, agentOutput) },
@@ -130,7 +130,7 @@ export async function memoryAgentDecideAction(
   existingMemories: { id: string; content: string; type: string; confidence: number }[],
 ): Promise<MemoryAction> {
   return structuredCompletion(
-    "workerDeployment",
+    "memoryDeployment",
     [
       { role: "system", content: ACTION_DECISION_SYSTEM_PROMPT },
       { role: "user", content: buildActionDecisionUserPrompt(newFact, existingMemories) },
@@ -178,7 +178,7 @@ export async function memoryAgentDecideActionsBatch(
 ): Promise<MemoryAction[]> {
   if (items.length === 0) return [];
   const result = await structuredCompletion(
-    "workerDeployment",
+    "memoryDeployment",
     [
       { role: "system", content: BATCH_DECISION_SYSTEM_PROMPT },
       { role: "user", content: buildBatchedActionDecisionUserPrompt(items) },
@@ -197,7 +197,7 @@ export async function llmHabitMatcher(
 ): Promise<string[]> {
   const userPrompt = buildHabitMatcherUserPrompt(taskDescription, habits as Parameters<typeof buildHabitMatcherUserPrompt>[1]);
   const result = await structuredCompletion(
-    "workerDeployment",
+    "memoryDeployment",
     [
       { role: "system", content: HABIT_MATCHER_SYSTEM_PROMPT },
       { role: "user", content: userPrompt },

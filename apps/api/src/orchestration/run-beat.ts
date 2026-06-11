@@ -36,7 +36,12 @@ import { setTaskStatus } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 
-const HARD_CAP_MS = 15 * 60 * 1000;
+// Aligned with beatTimeoutMs in config/heartbeat.json (10 min). Was 15 min,
+// which contradicted the config and the guard inventory in prompts/llm.ts —
+// a beat surviving every watchdog held its concurrency slot 5 min longer
+// than any documented ceiling. Catastrophic-floor only: the reasoning-stall
+// (3 min) and SSE-silence (2 min) guards fire long before this on stuck beats.
+const HARD_CAP_MS = 10 * 60 * 1000;
 
 interface BeatResult {
   beatId: string;

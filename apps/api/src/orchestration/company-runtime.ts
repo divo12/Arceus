@@ -109,6 +109,19 @@ export interface PendingPromptCompletion {
    */
   lastProductiveActionAt: number;
   /**
+   * Epoch ms when the agent last completed ANY tool call (arceus_* via MCP
+   * middleware, or built-in read/edit/bash/… via the plugin's watchdog-reset
+   * POST). Defaults to `startedAt`.
+   *
+   * Distinct from `lastActivityAt`: that one is bumped by every SSE event
+   * INCLUDING reasoning-token deltas, so a model that streams reasoning
+   * forever without acting never trips the stall guard (observed on
+   * gpt-5.2: ~10 min of reasoning after a tool result, killed only by the
+   * hard cap with all work discarded). `lastToolAt` only moves on actual
+   * tool calls, which is the signal the reasoning-stall guard needs.
+   */
+  lastToolAt: number;
+  /**
    * Number of consecutive `read` calls (built-in OpenCode read tool) since
    * the last "action" tool fired. Bumped by the watchdog-reset endpoint
    * when the plugin posts a tool body with `tool === "read"`. Reset to 0

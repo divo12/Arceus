@@ -30,6 +30,32 @@ const CIRCUIT_THRESHOLD = 3;
 const MANIFEST_FILENAME = "arceus-skills.json";
 const MANIFEST_REFRESH_MS = 10_000;
 
+// ── Read-guard tuning ────────────────────────────────────────────────
+//
+// gpt-5.2 over-reads: 28–38 whole-file `read` calls per beat at OpenCode's
+// default limit:2000 / 50 KB cap ≈ 300–500K tokens of file content in one
+// beat. Context balloons, reasoning turns balloon, the beat dies at the
+// hard cap. Reference points: Codex CLI truncates tool output at 256
+// lines / 10 KiB; SWE-agent's 100-line file window OUTPERFORMED whole-file
+// reads on SWE-bench. We clamp softer than both.
+//
+// READ_LIMIT_CLAMP — max lines a single read may request. Reads with no
+//   limit (whole-file) or a larger one are clamped to this; the model can
+//   continue with offset-paging when it genuinely needs more.
+// READ_LINE_BUDGET — cumulative lines of `read` output per session
+//   (= per beat; beat sessions are destroyed after each beat). Past it,
+//   further reads are denied with a steer toward grep/action. grep stays
+//   available — targeted lookups are the cheap path we want to force.
+const READ_LIMIT_CLAMP = 400;
+const READ_LINE_BUDGET = 8_000;
+
+interface ReadGuardState {
+  /** `${path}@${offset}+${limit}` keys already served this session. */
+  seen: Set<string>;
+  /** Total lines granted to `read` calls this session. */
+  linesGranted: number;
+}
+
 const loadAllowedTools = (): Set<string> => {
   const raw = process.env.ARCEUS_ALLOWED_TOOLS;
   if (!raw) return new Set();
@@ -73,6 +99,20 @@ export const ArceusPlugin: Plugin = async () => {
 
   // ── Session-context cache (Phase 6.5 package F) ────────
   const sessionCtxCache = new Map<string, BeatContext>();
+
+  // ── Read-guard state, keyed by sessionID ───────────────
+  // Evicted on session.idle (beat sessions are one-shot). The fallback
+  // size cap guards the warm-up / non-beat sessions that never idle.
+  const readGuards = new Map<string, ReadGuardState>();
+  const ensureReadGuard = (sessionId: string): ReadGuardState => {
+    let state = readGuards.get(sessionId);
+    if (!state) {
+      if (readGuards.size > 500) readGuards.clear();
+      state = { seen: new Set(), linesGranted: 0 };
+      readGuards.set(sessionId, state);
+    }
+    return state;
+  };
 
   const ensureCtx = async (sessionId: string): Promise<BeatContext | null> => {
     if (sessionCtxCache.has(sessionId)) return sessionCtxCache.get(sessionId)!;
@@ -560,6 +600,71 @@ export const ArceusPlugin: Plugin = async () => {
         }
       }
 
+      // ── Read guard: clamp + dedupe + per-beat volume budget ────────
+      //
+      // Runs AFTER the tenant path rewrite so dedupe keys use the final
+      // resolved path. Throwing here surfaces the message as the tool's
+      // error observation — the same steering channel the tenant-guard
+      // and governance denials already use.
+      {
+        const a = output.args as Record<string, unknown> | undefined;
+        const guard = ensureReadGuard(input.sessionID);
+
+        if (input.tool === "read" && a) {
+          // 1. Clamp: no-limit (whole-file) reads and oversized limits
+          //    become READ_LIMIT_CLAMP-line windows. offset still works,
+          //    so genuine long-file reads page instead of bulk-loading.
+          const requested = typeof a.limit === "number" && Number.isFinite(a.limit) ? a.limit : undefined;
+          if (requested === undefined || requested > READ_LIMIT_CLAMP) {
+            a.limit = READ_LIMIT_CLAMP;
+          }
+          const limit = a.limit as number;
+          const target =
+            typeof a.filePath === "string" ? a.filePath
+            : typeof a.path === "string" ? a.path
+            : "";
+          const offset = typeof a.offset === "number" ? a.offset : 0;
+
+          // 2. Dedupe: an identical (path, offset, limit) read this beat
+          //    is pure context bloat — the content is already in the
+          //    model's window. Entries are invalidated below when the
+          //    file is mutated, so edit-then-verify reads still work.
+          const key = `${target}@${offset}+${limit}`;
+          if (guard.seen.has(key)) {
+            throw new Error(
+              `[arceus-read-guard] Already read ${target} (offset ${offset}, limit ${limit}) this beat — that content is in your context. Act on what you have; use grep for targeted lookups or a different offset for new sections.`,
+            );
+          }
+
+          // 3. Volume budget: cumulative granted lines per beat.
+          if (guard.linesGranted + limit > READ_LINE_BUDGET) {
+            throw new Error(
+              `[arceus-read-guard] Read budget exhausted for this beat (~${guard.linesGranted} lines already read). You have enough context — make your edit or complete/block the task now. grep is still available for targeted lookups.`,
+            );
+          }
+
+          guard.seen.add(key);
+          guard.linesGranted += limit;
+        } else if (FILE_TOOLS.has(input.tool) || input.tool === "multiedit") {
+          // File mutated → its cached read keys are stale; allow re-reads
+          // of that file (post-edit verification is legitimate).
+          const target =
+            typeof a?.filePath === "string" ? a.filePath
+            : typeof a?.path === "string" ? a.path
+            : null;
+          if (target) {
+            for (const key of guard.seen) {
+              if (key.startsWith(`${target}@`)) guard.seen.delete(key);
+            }
+          }
+        } else if (input.tool === "bash") {
+          // A shell command can mutate anything — drop all dedupe keys
+          // (the volume budget intentionally survives; it bounds total
+          // context, not freshness).
+          guard.seen.clear();
+        }
+      }
+
       pendingCalls.set(input.callID, {
         tool: input.tool,
         startedAt: Date.now(),
@@ -653,6 +758,8 @@ export const ArceusPlugin: Plugin = async () => {
     // ── Spec 32 Phase 4 — additional emit hooks ────────────
 
     "session.idle": async (input: { sessionID: string }) => {
+      // Beat sessions are one-shot — drop their read-guard state.
+      readGuards.delete(input.sessionID);
       const ctx = await ensureCtx(input.sessionID);
       if (!ctx) return;
       postEvent({

@@ -1,6 +1,18 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "share": "disabled",
+  "provider": {
+    "azure": {
+      "models": {
+        "gpt-5.2": {
+          "options": {
+            "reasoningEffort": "low",
+            "textVerbosity": "low"
+          }
+        }
+      }
+    }
+  },
   "agent": {
     "ceo": {
       "description": "Board-facing CEO that refines ideas, proposes strategy, and requests approvals.",
