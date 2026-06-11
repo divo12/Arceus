@@ -321,6 +321,14 @@ async function nudgeStalledSession(sessionId: string): Promise<void> {
       ...(ctx?.role ? { agent: ctx.role } : {}),
       parts: [{ type: "text", text: STALL_NUDGE_TEXT }],
     },
+    // Bounded lifetime: this call blocks until the nudged response
+    // completes. If the session dies anyway (second stall → reap →
+    // destroyBeatSession), an unbounded fetch sits on an open socket to
+    // the local opencode server until something severs the connection —
+    // observed in PROD as a "fetch failed" zombie surfacing 26 minutes
+    // after its beat was reaped. 6 min covers any legitimate nudged
+    // response within the beat cap.
+    signal: AbortSignal.timeout(6 * 60 * 1000),
   });
 }
 
@@ -451,6 +459,10 @@ async function pollPendingPromptCompletions() {
                 agent: wrapCtx.role,
                 parts: [{ type: "text", text: WRAP_UP_TEXT }],
               },
+              // Same zombie-socket bound as the stall nudge: the beat has
+              // ≤2 min + response time left; past 5 min this call can only
+              // be outliving its reaped beat.
+              signal: AbortSignal.timeout(5 * 60 * 1000),
             });
           }, { detail: { sessionId } });
         }
