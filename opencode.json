@@ -6,7 +6,7 @@
       "models": {
         "gpt-5.2": {
           "options": {
-            "reasoningEffort": "low",
+            "reasoningEffort": "medium",
             "textVerbosity": "low",
             "parallelToolCalls": false,
             "reasoningSummary": "auto"
