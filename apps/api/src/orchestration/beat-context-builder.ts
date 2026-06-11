@@ -392,6 +392,22 @@ function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
       const reason = t.verifierState.feedback;
       lines.push(`  🔁 Previously blocked: "${reason}" — re-claim to retry.`);
     }
+    // Progress trail: plan steps written by prior beats (the agent's own
+    // task_append_plan_step calls + the beat-end outcome line stamped by
+    // run-beat). Until now this was write-only — agents appended steps no
+    // later beat ever saw, so every beat on a multi-beat task started
+    // amnesiac and re-derived context from scratch (the over-read
+    // pathology). Rendered for ANY open task with steps, not just
+    // in_progress: a reaped beat's claim is released back to `planned`,
+    // and that trail is exactly what the next claimant needs.
+    const steps = t.plannerState?.planSteps ?? [];
+    if (steps.length > 0) {
+      lines.push("  Previously on this task:");
+      for (const step of steps.slice(-5)) {
+        lines.push(`    • ${step}`);
+      }
+      lines.push("  Continue from where this trail ends — do NOT redo completed steps.");
+    }
   }
   return lines.join("\n");
 }

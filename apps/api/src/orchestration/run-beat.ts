@@ -32,7 +32,7 @@ import { updateTrustScore } from "../governance/trust.js";
 import { persistSkillUsageEvent } from "../skills/usage-persistence.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { getDb } from "@arceus/db";
-import { setTaskStatus } from "../tasks/mutations.js";
+import { setTaskStatus, appendTaskPlanStep } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 
@@ -332,6 +332,31 @@ export async function runBeat(input: {
     clearBeatSkillUsage(beatId);
     clearBeatTaskTransitions(beatId);
 
+    // F6 harvest — tasks that should receive this beat's outcome trail.
+    // Fail path: filled from the claim release below. Pass path: filled
+    // after the drains from the still-claimed set (a passing beat that
+    // didn't finish its task leaves the claim in place).
+    let harvestTaskIds: string[] = [];
+
+    // F6 harvest — last assistant note, fetched BEFORE the session is
+    // destroyed. Only on fail: passing beats persist their own state via
+    // task_complete/artifact_create; the tail matters when the beat was
+    // reaped and its narrative would otherwise vanish with the session.
+    const lastNote = verdict === "fail"
+      ? (await swallowAndReport("beat.harvest_last_note", async () => {
+          const opencode = await getOpencode();
+          const messagesResult = await opencode.client.session.messages({ path: { id: sessionId } });
+          const assistant = (messagesResult.data ?? []).filter((m) => m.info?.role === "assistant");
+          const last = assistant[assistant.length - 1];
+          return (last?.parts ?? [])
+            .flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(-180);
+        }, { companyId: input.companyId, agentRole: input.role, beatId })) ?? ""
+      : "";
+
     // Vision §11 — release any claims this beat still holds. A claimed
     // task that didn't reach completed/blocked is orphaned; without this
     // it stays in_progress with checkout_run_id pointing at a dead beat,
@@ -339,6 +364,7 @@ export async function runBeat(input: {
     if (verdict === "fail") {
       try {
         const released = await tasksRepo.releaseClaimsForBeat(getDb(), beatId);
+        harvestTaskIds = released;
         for (const tid of released) {
           // setTaskStatus is best-effort here — the canonical claim is
           // already released by the repo call above; this keeps any
@@ -381,6 +407,31 @@ export async function runBeat(input: {
     const tokensUsed = drainBeatTokenAccumulator(beatId);
     const toolCalls = drainBeatToolCallAccumulator(beatId);
     const beatEndedAt = Date.now();
+
+    // F6 harvest-on-kill — stamp a one-line outcome onto every task this
+    // beat had claimed, rendered next beat under "Previously on this
+    // task" (beat-context-builder). Pass-but-unfinished beats leave a
+    // trail too: their claims survive, so the still-claimed set is the
+    // harvest target. Without this, a reaped beat's work narrative
+    // vanishes with the session and the next claimant re-derives
+    // everything from scratch.
+    if (verdict !== "fail") {
+      harvestTaskIds = (await swallowAndReport(
+        "beat.harvest_targets",
+        () => tasksRepo.listClaimedTaskIdsForBeat(getDb(), beatId),
+        { companyId: input.companyId, agentRole: input.role, beatId },
+      )) ?? [];
+    }
+    if (harvestTaskIds.length > 0) {
+      const outcome =
+        `⏹ beat ${shortBeat(beatId)} ended ${verdict}${cause ? ` (${cause})` : ""} — ` +
+        `${toolCalls} tool calls, ${Math.round(tokensUsed / 1000)}k tokens` +
+        (lastNote ? ` — last note: "${lastNote}"` : "");
+      for (const tid of harvestTaskIds) {
+        // appendTaskPlanStep swallows + reports its own failures.
+        await appendTaskPlanStep(tid, outcome);
+      }
+    }
 
     // Spec 31 Phase 5 — close out the run + binding, EMA-update trust.
     await finishHeartbeatRun({ runDbId, beatId, verdict, cause, totalTokens: tokensUsed });

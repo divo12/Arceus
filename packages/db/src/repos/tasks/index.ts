@@ -26,7 +26,7 @@ export { toDbId, fromDbId } from "./ids.js";
 export { findTaskById, listTasksByCompany, countTasksByKindAndStatus, hasClaimableTasksForRole } from "./queries.js";
 
 export type { ClaimResult } from "./claim.js";
-export { claimTask, releaseClaim, releaseClaimsForBeat, lockForUpdate, isTaskClaimedBy } from "./claim.js";
+export { claimTask, releaseClaim, releaseClaimsForBeat, listClaimedTaskIdsForBeat, lockForUpdate, isTaskClaimedBy } from "./claim.js";
 
 export { updateTask, completeTask, blockTask, setTaskStatus } from "./transitions.js";
 

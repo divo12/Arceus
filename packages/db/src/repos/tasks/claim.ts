@@ -148,6 +148,28 @@ export async function releaseClaimsForBeat(
   });
 }
 
+/**
+ * Read-only counterpart of `releaseClaimsForBeat`: friendly ids of the
+ * in-progress tasks a beat currently holds. Used by the beat-end harvest
+ * to stamp an outcome trail onto tasks a PASSING beat worked on but did
+ * not finish (fail-path beats get their ids from the release call, which
+ * runs first and clears checkout_run_id).
+ */
+export async function listClaimedTaskIdsForBeat(
+  db: DbClient,
+  beatId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: tasks.id, body: tasks.body })
+    .from(tasks)
+    .where(and(eq(tasks.checkoutRunId, toDbId(beatId)), eq(tasks.status, "in_progress")));
+  return rows.map((r) => {
+    const body = r.body as { friendlyIds?: { id?: unknown } } | null;
+    const fid = body?.friendlyIds?.id;
+    return typeof fid === "string" ? fid : r.id;
+  });
+}
+
 // ── Concurrency Phase B — claim ownership check ─────────────────
 //
 // Returns true if the task is currently claimed by `beatId`, false if

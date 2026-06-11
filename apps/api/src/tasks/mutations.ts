@@ -277,14 +277,19 @@ export function hydrateTaskFromSpec(taskId: string, spec: {
   );
 }
 
-/** Append a plan step to the task's planner state (deduped, capped at 12). Awaitable. */
+/** Append a plan step to the task's planner state (deduped, newest 12 kept). Awaitable. */
 export async function appendTaskPlanStep(taskId: string, step: string): Promise<void> {
   await swallowAndReport("task.append_plan_step", () =>
     updateTask(taskId, (task) => ({
       ...task,
       plannerState: {
         ...task.plannerState,
-        planSteps: uniqueStrings([...task.plannerState.planSteps, step], 12),
+        // Keep the NEWEST 12, not the first 12 — `uniqueStrings(…, 12)`
+        // truncated the tail, so once a long-running task filled up,
+        // every later append (including the beat-end outcome trail) was
+        // silently dropped. planSteps is a progress log; the oldest
+        // entries are the right ones to age out.
+        planSteps: uniqueStrings([...task.plannerState.planSteps, step], Number.MAX_SAFE_INTEGER).slice(-12),
       },
     })),
     { detail: { taskId } },
