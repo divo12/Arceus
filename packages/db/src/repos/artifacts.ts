@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Artifact as ContractArtifact } from "@arceus/contracts";
 import { artifacts } from "../schema/artifacts.js";
 import type { DbClient } from "./_helpers.js";
@@ -29,6 +29,26 @@ export async function listArtifactsByTask(db: DbClient, taskId: string): Promise
     .from(artifacts)
     .where(eq(artifacts.taskId, toDbId(taskId)))
     .orderBy(desc(artifacts.createdAt));
+}
+
+/**
+ * Stamp the primary task linkage onto an artifact, first-attach-wins
+ * (only when task_id is still NULL). Backfills the column for artifacts
+ * created without a taskId then attached afterwards — task→artifact
+ * hydration reads artifacts.task_id, so a NULL here means the task
+ * never lists the artifact. Returns true if a row was updated.
+ */
+export async function setArtifactTaskIfUnset(
+  db: DbClient,
+  artifactId: string,
+  taskId: string,
+): Promise<boolean> {
+  const updated = await db
+    .update(artifacts)
+    .set({ taskId: toDbId(taskId) })
+    .where(and(eq(artifacts.id, toDbId(artifactId)), isNull(artifacts.taskId)))
+    .returning({ id: artifacts.id });
+  return updated.length === 1;
 }
 
 export async function listArtifactsBySprint(db: DbClient, sprintId: string): Promise<Artifact[]> {

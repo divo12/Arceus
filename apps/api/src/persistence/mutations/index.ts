@@ -59,15 +59,25 @@ export { updateAgentStatus } from "./agents.js";
  * shape (`{ id, agent, kind, title, content, createdAt }`) via the
  * existing `persistRuntimeArtifact` helper which already knows the
  * canonical column mapping.
+ *
+ * `companyId` MUST be passed by any caller that has a per-request
+ * company in scope. The `getActiveCompanyId()` fallback is the
+ * single-tenant boot-time seam — in multi-tenant it points at whatever
+ * company the process saw at boot, NOT the caller's tenant. Relying on
+ * it misfiled every artifact created by a newer company under the
+ * boot-time company (observed in PROD 2026-06-11: new company's spec/
+ * code artifacts stamped with the previous day's company id, UI showed
+ * "No artifacts yet").
  */
 export async function writeArtifactSync(
   artifact: import("../../orchestration/state.js").Artifact,
+  companyId?: string,
 ): Promise<import("../../orchestration/state.js").Artifact> {
   const { persistRuntimeArtifact } = await import("../artifact-persistence.js");
   const { getActiveCompanyId } = await import("../active-company.js");
-  const companyId = getActiveCompanyId();
-  if (companyId) {
-    await persistRuntimeArtifact(companyId, artifact);
+  const resolvedCompanyId = companyId ?? getActiveCompanyId();
+  if (resolvedCompanyId) {
+    await persistRuntimeArtifact(resolvedCompanyId, artifact);
   }
   return artifact;
 }

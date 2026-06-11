@@ -49,6 +49,7 @@ export async function addArtifactSync(
   title: string,
   content: string,
   companyId?: string,
+  taskId?: string,
 ): Promise<Artifact> {
   const artifact: Artifact = {
     id: `artifact_${crypto.randomUUID()}`,
@@ -57,8 +58,12 @@ export async function addArtifactSync(
     title,
     content,
     createdAt: new Date().toISOString(),
+    taskId: taskId ?? null,
   };
-  await writeArtifactSync(artifact);
+  // companyId threaded through to the durable write — the internal
+  // getActiveCompanyId() fallback is boot-time state and misfiles
+  // artifacts under the wrong tenant in multi-tenant mode.
+  await writeArtifactSync(artifact, companyId);
   swallowAndAudit("artifact.disk_write_sync", () => writeArtifactToDisk(artifact, companyId), {
     agentRole: artifact.agent,
     detail: { artifactId: artifact.id, kind: artifact.kind },
@@ -204,6 +209,17 @@ export async function attachArtifactToTask(taskId: string, artifactId: string): 
       artifactIds: task.artifactIds.includes(artifactId) ? task.artifactIds : [...task.artifactIds, artifactId],
     };
   });
+
+  // Mirror the linkage onto the artifacts row (first-attach-wins). The
+  // task-side artifactIds list above lives in the task snapshot, but
+  // task→artifact hydration (packages/db repos/tasks/hydration.ts
+  // loadRefs) reads artifacts.task_id — which stayed NULL for every
+  // artifact attached after creation, so hydrated tasks never listed
+  // their artifacts and the soft-dep "draft artifact available" rule
+  // never fired.
+  swallowAndAudit("artifact.set_task_link", () =>
+    artifactsRepo.setArtifactTaskIfUnset(getDb(), artifactId, taskId).then(() => undefined),
+  { detail: { taskId, artifactId } });
 
   const sprintId = captured.sprintId ?? resolveActiveSprintId();
   if (sprintId) {

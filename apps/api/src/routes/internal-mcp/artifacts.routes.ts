@@ -95,17 +95,18 @@ export default async function internalMcpArtifactsRoutes(app: FastifyInstance): 
     if (!body) return reply;
 
     const agent = body.agent || req.mcp?.role || "unknown";
-    // Spec 28 Phase B.1 — durable write before returning success.
-    // companyId MUST be threaded through: addArtifactSync's filesystem
-    // write (writeArtifactToDisk) silently no-ops when companyId is
-    // undefined, leaving the DB row alone but skipping the spec/ or
-    // artifact/ markdown file. The DB-side persist falls back to the
-    // active-company singleton, so the event fires with the correct
-    // companyId either way — but the disk write needs the explicit arg.
-    const artifact = await addArtifactSync(agent, body.kind, body.title, body.content, req.mcp!.companyId);
-
     // Attach to tasks — support both single taskId and array
     const taskIds = body.attachToTaskIds ?? (body.taskId ? [body.taskId] : []);
+
+    // Spec 28 Phase B.1 — durable write before returning success.
+    // companyId MUST be threaded through for BOTH writes: the filesystem
+    // write (writeArtifactToDisk) silently no-ops without it, and the
+    // DB persist previously fell back to the active-company singleton —
+    // which is boot-time state, so in multi-tenant every artifact from a
+    // newer company was misfiled under the boot-time company and the UI
+    // showed "No artifacts yet". The primary task id rides along so
+    // artifacts.task_id materializes and task→artifact hydration works.
+    const artifact = await addArtifactSync(agent, body.kind, body.title, body.content, req.mcp!.companyId, taskIds[0]);
     for (const tid of taskIds) {
       await attachArtifactToTask(tid, artifact.id);
       observability.logEvent({

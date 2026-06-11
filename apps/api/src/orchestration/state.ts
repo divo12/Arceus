@@ -32,6 +32,13 @@ export interface Artifact {
   title: string;
   content: string;
   createdAt: string;
+  /**
+   * Primary task linkage. Carried into the artifacts row (task_id column)
+   * by persistRuntimeArtifact — without it, task→artifact hydration
+   * (which reads artifacts.task_id) returns nothing and completed tasks
+   * never list their artifacts.
+   */
+  taskId?: string | null;
 }
 
 export interface MeetingAgendaInput {
