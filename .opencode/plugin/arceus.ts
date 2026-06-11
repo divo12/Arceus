@@ -49,11 +49,21 @@ const MANIFEST_REFRESH_MS = 10_000;
 const READ_LIMIT_CLAMP = 400;
 const READ_LINE_BUDGET = 8_000;
 
+// Discovery tools (glob/grep/list) get their own dedupe + call budget.
+// Observed in PROD: 36 glob + 12 grep calls in ONE developer beat —
+// many byte-identical — re-discovering files the beat context already
+// lists. The workspace manifest in the prompt is the answer to "what
+// exists"; the budget forces the model to use it.
+const DISCOVERY_TOOLS = new Set(["glob", "grep", "list", "ls"]);
+const DISCOVERY_CALL_BUDGET = 25;
+
 interface ReadGuardState {
-  /** `${path}@${offset}+${limit}` keys already served this session. */
+  /** Dedupe keys already served this session (reads + discovery calls). */
   seen: Set<string>;
   /** Total lines granted to `read` calls this session. */
   linesGranted: number;
+  /** Total glob/grep/list calls this session. */
+  discoveryCalls: number;
 }
 
 const loadAllowedTools = (): Set<string> => {
@@ -108,7 +118,7 @@ export const ArceusPlugin: Plugin = async () => {
     let state = readGuards.get(sessionId);
     if (!state) {
       if (readGuards.size > 500) readGuards.clear();
-      state = { seen: new Set(), linesGranted: 0 };
+      state = { seen: new Set(), linesGranted: 0, discoveryCalls: 0 };
       readGuards.set(sessionId, state);
     }
     return state;
@@ -645,16 +655,40 @@ export const ArceusPlugin: Plugin = async () => {
 
           guard.seen.add(key);
           guard.linesGranted += limit;
+        } else if (DISCOVERY_TOOLS.has(input.tool) && a) {
+          // Dedupe byte-identical searches + cap total discovery volume.
+          const key = [
+            input.tool,
+            typeof a.pattern === "string" ? a.pattern : "",
+            typeof a.path === "string" ? a.path : "",
+          ].join("|");
+          if (guard.seen.has(key)) {
+            throw new Error(
+              `[arceus-read-guard] You already ran this exact ${input.tool} this beat — its results are in your context. The "Workspace files" section of your briefing lists every file that exists; use those paths directly.`,
+            );
+          }
+          if (guard.discoveryCalls >= DISCOVERY_CALL_BUDGET) {
+            throw new Error(
+              `[arceus-read-guard] Discovery budget exhausted (${guard.discoveryCalls} glob/grep/list calls this beat). The "Workspace files" section of your briefing is the complete file listing — stop searching, start reading/editing those paths.`,
+            );
+          }
+          guard.seen.add(key);
+          guard.discoveryCalls += 1;
         } else if (FILE_TOOLS.has(input.tool) || input.tool === "multiedit") {
           // File mutated → its cached read keys are stale; allow re-reads
-          // of that file (post-edit verification is legitimate).
+          // of that file (post-edit verification is legitimate). Discovery
+          // keys (tool|pattern|path) are also invalidated — a re-grep
+          // after changing content, or a re-glob after creating a file,
+          // is legitimate; the dedupe targets pure re-search loops, not
+          // post-edit verification. The discoveryCalls budget still
+          // bounds total volume.
           const target =
             typeof a?.filePath === "string" ? a.filePath
             : typeof a?.path === "string" ? a.path
             : null;
           if (target) {
             for (const key of guard.seen) {
-              if (key.startsWith(`${target}@`)) guard.seen.delete(key);
+              if (key.startsWith(`${target}@`) || key.includes("|")) guard.seen.delete(key);
             }
           }
         } else if (input.tool === "bash") {

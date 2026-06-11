@@ -571,22 +571,24 @@ function renderWorkspaceContext(
   if (preview.framework) lines.push(`- **Framework:** ${preview.framework}`);
 
   if (manifest && manifest.length > 0) {
+    const shown = manifest.slice(0, 120);
+    const truncated = manifest.length > shown.length;
     lines.push(
       "",
-      `### Workspace state (beyond seed scaffold — see skill(developer-workspace-layout) for the scaffold)`,
-      `${manifest.length} file(s) the team has produced or imported into this workspace. Open these in priority over discovering with glob.`,
+      `### Workspace files (${manifest.length})`,
+      truncated
+        ? `Newest ${shown.length} files shown (older ones omitted). Prefer these paths; glob only for files older than the oldest entry below.`
+        : `This listing is COMPLETE (node_modules/.git/dist excluded). If a file is not listed here, it does not exist — do NOT glob or list directories to double-check. Go straight to read/edit with these paths.`,
       "",
     );
-    const shown = manifest.slice(0, 40);
     for (const e of shown) {
       lines.push(`- \`/workspace/${e.path}\`  (${formatSize(e.size)}, ${formatRelativeTime(e.modifiedAt)})`);
     }
-    if (manifest.length > 40) lines.push(`... and ${manifest.length - 40} more`);
   } else {
     lines.push(
       "",
-      `### Workspace state (beyond seed scaffold)`,
-      `_Workspace contains only the seed scaffold so far. See skill(developer-workspace-layout) for the scaffold map. Nothing else exists yet — your edits will be the first product code._`,
+      `### Workspace files`,
+      `_The workspace is EMPTY (no files yet). Do not glob or grep — there is nothing to find. Your edits will create the first files._`,
     );
   }
 
@@ -731,7 +733,10 @@ export async function prepareBeatRender(
   // imported into the workspace beyond the seed" — exactly what the
   // model needs to skip its glob-discovery phase.
   const productDir = getProductDir(companyId);
-  const manifest = await walkWorkspaceManifest(productDir, { maxDepth: 4, maxEntries: 40 });
+  // 120 entries, seed files included: the listing must be COMPLETE to be
+  // trusted. At 40-with-seed-filtered, the model treated the manifest as
+  // a hint and re-verified with glob storms (36 globs/beat observed).
+  const manifest = await walkWorkspaceManifest(productDir, { maxDepth: 4, maxEntries: 120 });
 
   const baseSections = [
     renderCompanyState(ctx),

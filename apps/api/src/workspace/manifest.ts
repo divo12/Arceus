@@ -16,9 +16,15 @@
  *
  * What gets FILTERED:
  *   - node_modules/, .git/, dist/, .vite/, lost+found/  (runtime noise)
- *   - The scaffold seed files (package.json, vite.config.ts, src/App.tsx, etc.)
- *     — these are already covered by skill(developer-workspace-layout).
- *     Echoing them back would defeat the point of moving them to a skill.
+ *
+ * Scaffold seed files (package.json, vite.config.ts, src/App.tsx, …) are
+ * deliberately INCLUDED. They were filtered originally ("the skill already
+ * documents them"), but gpt-5.2 does not trust pointers to skills it
+ * hasn't read — observed in PROD: developer beats fired 36 glob calls per
+ * beat re-discovering exactly the seeded files this filter hid. ~15 lines
+ * of seed paths in the prompt is far cheaper than 36 tool round-trips,
+ * and it lets the renderer truthfully claim the listing is COMPLETE,
+ * which is what actually stops the glob storm.
  */
 import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
@@ -34,25 +40,6 @@ export interface WorkspaceManifestEntry {
   /** True if the file is a directory (rare in the manifest; we mostly want files). */
   isDir: boolean;
 }
-
-/** Files in the workspace seed — filtered out of the manifest. */
-const SCAFFOLD_SEED_PATHS = new Set<string>([
-  ".gitignore",
-  ".gitkeep",
-  "README.md",
-  "index.html",
-  "package.json",
-  "postcss.config.js",
-  "tailwind.config.js",
-  "tsconfig.json",
-  "tsconfig.node.json",
-  "vite.config.ts",
-  "src/App.tsx",
-  "src/index.css",
-  "src/main.tsx",
-  "src/lib/utils.ts",
-  "src/components/.gitkeep",
-]);
 
 /** Directory entries to skip entirely (don't descend). */
 const SKIP_DIRS = new Set<string>([
@@ -73,6 +60,7 @@ const SKIP_FILE_PATTERNS = [
   /package-lock\.json$/,
   /bun\.lockb$/,
   /\.DS_Store$/,
+  /^\.gitkeep$/,
 ];
 
 interface WalkOptions {
@@ -136,16 +124,9 @@ async function walk(
     }
 
     if (st.isDirectory()) {
-      // Skip the scaffold's pre-seeded src/components and src/lib dirs IF
-      // they're empty beyond the seed (.gitkeep, utils.ts). We don't have
-      // a cheap test for that here so just descend; the seed-file filter
-      // below excludes the seeded files from the output.
       await walk(productDir, childRel, depth + 1, maxDepth, maxEntries, out);
       continue;
     }
-
-    // Skip the scaffold's seeded files
-    if (SCAFFOLD_SEED_PATHS.has(childRel)) continue;
 
     out.push({
       path: childRel,
