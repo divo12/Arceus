@@ -125,7 +125,20 @@ export async function releaseClaimsForBeat(
   db: DbClient,
   beatId: string,
 ): Promise<string[]> {
-  const dbRunId = toDbId(beatId);
+  return releaseClaimsForRunDbId(db, toDbId(beatId));
+}
+
+/**
+ * Same release as `releaseClaimsForBeat`, addressed by the run's DB uuid
+ * directly. The stranded-run sweeper works from `heartbeat_runs` rows,
+ * whose `id` is pinned to `toDbId(friendlyBeatId)` (see startHeartbeatRun
+ * in beat-lifecycle.ts) — i.e. the exact value the claim CAS wrote into
+ * `tasks.checkout_run_id` — so no friendly id is needed or available there.
+ */
+export async function releaseClaimsForRunDbId(
+  db: DbClient,
+  runDbId: string,
+): Promise<string[]> {
   // Same `planned` rationale as releaseClaim — match Zod taskStatusSchema +
   // the in-memory store mutation in run-beat.ts so DB + snapshot agree.
   const released = await db
@@ -138,7 +151,7 @@ export async function releaseClaimsForBeat(
       claimedAt: null,
       startedAt: null,
     })
-    .where(and(eq(tasks.checkoutRunId, dbRunId), eq(tasks.status, "in_progress")))
+    .where(and(eq(tasks.checkoutRunId, runDbId), eq(tasks.status, "in_progress")))
     .returning({ id: tasks.id, body: tasks.body });
   return released.map((r) => {
     // tasks.body is jsonb; narrow to the friendlyIds shape we wrote.

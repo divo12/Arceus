@@ -30,6 +30,7 @@
  */
 import { getDb } from "@arceus/db";
 import * as heartbeatRunsRepo from "@arceus/db/src/repos/heartbeat_runs.js";
+import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 
 const BOOT_STALL_THRESHOLD_MS = 0; // Boot sweep — anything still running is stranded.
@@ -58,7 +59,27 @@ async function sweepOnce(
   let marked = 0;
   for (const run of stranded) {
     const updated = await heartbeatRunsRepo.markStranded(db, run.id, reason);
-    if (updated) marked++;
+    if (!updated) continue;
+    marked++;
+    // Release any task claims the dead run still holds. Without this, a
+    // task claimed by a stranded beat stays in_progress with
+    // checkout_run_id pointing at a gone process — unclaimable until
+    // manual DB surgery — and when it's the only actionable task, the
+    // whole company deadlocks: the scheduler's pre-flight sees "no
+    // claimable work" and skips every beat (observed in PROD 2026-06-11:
+    // a deploy stranded a developer beat mid-claim and all progress
+    // stopped). heartbeat_runs.id is pinned to toDbId(friendlyBeatId),
+    // the same value the claim CAS wrote into checkout_run_id, so the
+    // release addresses by run uuid directly. The next role interval
+    // re-claims the released task — that IS the recovery wake; no
+    // explicit re-dispatch needed (paperclip's stranded-recovery
+    // pattern, minus the retry-count cap which lives on the task side).
+    const released = await tasksRepo.releaseClaimsForRunDbId(db, run.id);
+    if (released.length > 0) {
+      console.log(
+        `[stranded-sweeper] Released ${released.length} task claim(s) held by stranded run ${run.id}: ${released.join(", ")}`,
+      );
+    }
   }
   return { found: stranded.length, marked };
 }
