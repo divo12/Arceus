@@ -94,7 +94,12 @@ RUN apt-get update \
 RUN groupadd -g 1001 arceus && useradd -u 1001 -g arceus -m -s /bin/bash arceus
 
 # Pin the OpenCode CLI version the API spawns at runtime.
-ARG OPENCODE_VERSION=1.3.17
+# 1.3.17 → 1.17.3 (2026-06-11): 1.3.x had the gpt-5.x silent-stall bug
+# class — sessions emit zero SSE events after a tool-result batch
+# (opencode #17516/#24899/#26220); killed ~2/3 of developer beats via
+# the 2-min BEAT_STALL watchdog. If this bump misbehaves (plugin hook
+# drift, config schema, SDK event shapes), revert THIS line only.
+ARG OPENCODE_VERSION=1.17.3
 ARG TSX_VERSION=4.19.3
 # tsx is the runtime: cross-package imports resolve to .ts source via
 # package.json "main": "./src/index.ts" entries, so we run TypeScript
