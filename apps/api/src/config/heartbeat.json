@@ -21,8 +21,8 @@
     "skills_lead": 60000
   },
 
-  "$comment_beatTimeoutMs": "Overall wall-clock ceiling for one beat. Was 15min (900000) — too generous; orphan locks held their slot for 15 minutes. Lowered to 10min — gives productive developer beats (npm install + edits + tests) plenty of room while reclaiming orphan-locked slots 33% faster. Primary stall detection (BEAT_STALL_TIMEOUT_MS=60s, NO_TOOL_INVOKED=45s, NO_PRODUCTIVE_ACTION=2min in prompts/llm.ts) fires WELL before this ceiling on stuck beats; this is the absolute floor for catastrophic cases.",
-  "beatTimeoutMs": 600000,
+  "$comment_beatTimeoutMs": "Overall wall-clock ceiling for one beat. 15min→10min→15min: lowered when stalls were undetectable and this cap was the only defense; raised back once the stall stack landed (BEAT_STALL silence nudge ~2.5min, reasoning-stall 6min, stranded-run sweeper releasing claims). Only productive beats reach this ceiling now — post-stall-fix telemetry showed working developer beats guillotined at 10min before their serialize phase. The wrap-up nudge in prompts/llm.ts fires 2min before the cap so beats checkpoint instead of dying mid-edit.",
+  "beatTimeoutMs": 900000,
   "beatTokenBudget": 50000,
   "beatCostCeilingCents": 50,
   "idleThresholdTokens": 500,

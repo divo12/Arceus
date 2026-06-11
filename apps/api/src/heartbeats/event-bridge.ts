@@ -1,6 +1,6 @@
 // heartbeats/event-bridge.ts — SSE event bridge from OpenCode → agent state
 import type { AgentIdentity, PolicyEvalContext } from "@arceus/contracts";
-import { parseRoleStrict } from "@arceus/contracts";
+import { parseRoleStrict, observability } from "@arceus/contracts";
 import { buildTrustEvent, evaluatePolicy, BASE_POLICY_RULES, ROLE_CAPABILITIES } from "@arceus/company-runtime";
 import { nowIso } from "@arceus/task-engine";
 
@@ -56,6 +56,7 @@ import {
 } from "../orchestration/state.js";
 import { updateAgentSessionState, touchAgentSession, resolveRoleBySessionId, roleFromKey } from "../agents/sessions.js";
 import { resolvePromptCompletion, rejectPromptCompletion } from "../prompts/llm.js";
+import { getSessionContext } from "../orchestration/session-context.js";
 import { scheduleDeveloperWatchdog, clearDeveloperWatchdog, failDeveloperStall } from "../workspace/watchdog.js";
 import { stopDeveloperWorkspaceMonitor } from "../workspace/monitor.js";
 import { registerReportedPreviewUrl } from "../workspace/preview.js";
@@ -171,6 +172,11 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
+// agent.reasoning throttle — at most one inspector event per session per
+// interval. Cleared wholesale at 500 entries (sessions are short-lived).
+const REASONING_EMIT_INTERVAL_MS = 3_000;
+const lastReasoningEmitAt = new Map<string, number>();
+
 /** Dispatch a single SSE event to the appropriate agent state / governance handler. */
 async function processEvent(event: OpenCodeEvent) {
   const props = event.properties;
@@ -198,6 +204,38 @@ async function processEvent(event: OpenCodeEvent) {
   // fall through the `!role` guard below before we could touch them.
   if (pendingCompletion) {
     pendingCompletion.lastActivityAt = Date.now();
+  }
+
+  // agent.reasoning emission — moved here from the OpenCode plugin's
+  // message.part.updated hook, which silently broke on the 1.17.x payload
+  // shape change (reasoning streams via separate message.part.delta
+  // events; sessionID nested under part). The bridge already parses these
+  // events for the stall clock, so emitting here makes "what feeds the
+  // watchdog" and "what the inspector shows" the same stream by
+  // construction — they can never disagree again. Throttled per session:
+  // reasoning deltas are high-frequency and this is visibility, not
+  // telemetry-of-record.
+  if (event.type === "message.part.updated" || event.type === "message.part.delta") {
+    const part = props.part;
+    if (part?.type === "reasoning") {
+      const lastEmit = lastReasoningEmitAt.get(sessionId) ?? 0;
+      const nowMs = Date.now();
+      if (nowMs - lastEmit >= REASONING_EMIT_INTERVAL_MS) {
+        if (lastReasoningEmitAt.size > 500) lastReasoningEmitAt.clear();
+        lastReasoningEmitAt.set(sessionId, nowMs);
+        const reasoningCtx = getSessionContext(sessionId);
+        const text = part.text ?? part.delta ?? part.content ?? "";
+        if (reasoningCtx && text) {
+          observability.logEvent({
+            event: "agent.reasoning",
+            beatId: reasoningCtx.beatId,
+            role: reasoningCtx.role,
+            text: truncateTelemetry(text, 4_000),
+            ts: nowMs,
+          } as unknown as Parameters<typeof observability.logEvent>[0]);
+        }
+      }
+    }
   }
 
   // resolveRoleBySessionId now returns the compound `companyId:role` key.

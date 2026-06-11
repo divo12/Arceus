@@ -133,14 +133,21 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 // i.e. the model was thinking, not hung. Azure's own guidance for
 // reasoning models: tolerate >=300s of stream silence.
 //
-// 5min implements that guidance. True hangs now burn 5min instead of
-// 2 — acceptable: they are far rarer than legitimate >2min thinks, and
-// the 10-min hard cap + claim release + harvest keep the damage
-// bounded. If you are tempted to ratchet this back down, FIRST verify
-// reasoning deltas are actually streaming (agent.reasoning events in
-// activity_log) — silence is only a death signal when thinking is
-// visible.
-const BEAT_STALL_TIMEOUT_MS = 5 * 60 * 1000;
+// 2026-06-11 evening: 5min → 150s, justified by two verified facts.
+// (1) reasoningSummary:"auto" is live and works — 90 minutes of beats
+// with ZERO silence-stalls (previously 5-10 per 90min); summary deltas
+// stream during thinking, so healthy inter-event gaps are ≤60s and
+// 150s gives 2.5x headroom. (2) Research (plans/research-agent-stall-
+// prevention.md): Azure's load balancer silently drops TCP flows idle
+// ≥240s — no FIN/RST — so past 240s of silence the connection is
+// PROVABLY dead; waiting 300s meant idling a full minute on a corpse.
+// 150s lets the stall-nudge (abort + re-prompt, see STALL_NUDGE_LIMIT)
+// recover a dropped flow twice as fast.
+//
+// If you ratchet this further down, FIRST verify reasoning deltas are
+// streaming (agent.reasoning events / zero-stall telemetry) — silence
+// is only a death signal when thinking is visible.
+const BEAT_STALL_TIMEOUT_MS = 150 * 1000;
 
 /**
  * Productive-action deadline. If a beat has been running this long
@@ -217,13 +224,13 @@ const NO_TOOL_INVOKED_DEADLINE_MS = 45 * 1000;
  * this guard they die at 3 min with cause `reasoning_stall` and the role
  * re-dispatches with fresh context ~3× sooner.
  *
- * 2026-06-11: bumped 3min → 6min alongside BEAT_STALL (2→5min). The
+ * 2026-06-11: bumped 3min → 6min alongside the BEAT_STALL retune. The
  * 3-min value was premised on reasoning being VISIBLE (stream deltas
- * proving the model is alive while it thinks). PROD disproved that:
- * zero reasoning deltas stream for gpt-5.2 on this resource, so this
- * guard was just a second silence-killer firing 60s after BEAT_STALL.
- * 6min keeps it as the "streaming but never acting" backstop above the
- * 5-min silence window while staying under the 10-min hard cap.
+ * proving the model is alive while it thinks) — which is now true
+ * (reasoningSummary streams), so 6min is the generous "streaming but
+ * never acting" backstop: a model that thinks visibly for 6 straight
+ * minutes without ONE tool call isn't converging. Sits between the
+ * 150s silence window and the 15-min hard cap.
  */
 const REASONING_STALL_TIMEOUT_MS = 6 * 60 * 1000;
 
@@ -258,6 +265,28 @@ const STALL_NUDGE_LIMIT = 1;
 const STALL_NUDGE_TEXT =
   "[system recovery] Your previous request hung and was aborted. Your context and prior work are intact — do NOT re-read files or start over. " +
   "Continue exactly where you stopped: emit your next tool call now, or finish with task_complete / task_block (include evidence).";
+
+/**
+ * T-minus wrap-up nudge (SWE-agent's "autosubmit on budget death",
+ * paperclip's status-update discipline). When a beat approaches its hard
+ * cap, inject a user-role message telling the agent to checkpoint NOW —
+ * finish the smallest shippable piece, task_complete/task_block with
+ * evidence, and leave a plan step saying where it stopped. Converts
+ * "guillotined mid-edit at the cap" (observed: 6 developer beats killed
+ * at 10:00 before their serialize phase on 2026-06-11) into a clean,
+ * scoreable ending.
+ *
+ * Only fires for sessions whose cap is large enough to be a beat
+ * (WRAP_UP_MIN_CAP_MS filters out the 5-min chat prompts) and that have
+ * a registered session context. Sent WITHOUT aborting — OpenCode queues
+ * the message behind the in-flight step, so it lands between steps.
+ */
+const WRAP_UP_LEAD_MS = 2 * 60 * 1000;
+const WRAP_UP_MIN_CAP_MS = 8 * 60 * 1000;
+const WRAP_UP_TEXT =
+  "[system] About 2 minutes remain in this beat before the hard cap. Stop exploring NOW. " +
+  "Finish the smallest shippable piece, then call task_complete with evidence (or task_block with the reason), " +
+  "and append a plan step saying exactly where you stopped so the next beat continues cleanly.";
 
 /**
  * Sessions with a stall-nudge in flight. run-beat consults this so the
@@ -320,6 +349,8 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       toolCallCount: 0,
       readsSinceAction: 0,
       nudgeCount: 0,
+      capMs: timeoutMs,
+      wrapUpSent: false,
     });
     startPromptCompletionPoller();
   });
@@ -395,6 +426,36 @@ async function pollPendingPromptCompletions() {
     if (!statusMap) return;
 
     for (const [sessionId, entry] of pendingPromptCompletions) {
+      // T-minus wrap-up: tell the agent to checkpoint before the hard cap
+      // lands. Fires once per beat, beat-sized sessions only.
+      if (
+        !entry.wrapUpSent &&
+        entry.capMs >= WRAP_UP_MIN_CAP_MS &&
+        Date.now() - entry.startedAt > entry.capMs - WRAP_UP_LEAD_MS
+      ) {
+        entry.wrapUpSent = true;
+        const wrapCtx = getSessionContext(sessionId);
+        if (wrapCtx) {
+          emitEmployeeActivity(
+            "system",
+            "info",
+            `Wrap-up nudge: session ${sessionId.slice(0, 12)}… ~${Math.max(0, Math.round((entry.capMs - (Date.now() - entry.startedAt)) / 1000))}s to hard cap — telling agent to checkpoint`,
+          );
+          swallowAndAudit("beat.wrap_up_nudge", async () => {
+            const opencode = await getOpencode();
+            const deployment = ensureDeployment("workerDeployment");
+            await opencode.client.session.prompt({
+              path: { id: sessionId },
+              body: {
+                model: { providerID: "azure", modelID: deployment },
+                agent: wrapCtx.role,
+                parts: [{ type: "text", text: WRAP_UP_TEXT }],
+              },
+            });
+          }, { detail: { sessionId } });
+        }
+      }
+
       // Stall guard: if no SSE event has touched this session in BEAT_STALL_TIMEOUT_MS,
       // the in-flight request is hung. First response: abort + re-prompt the
       // same session (context intact) — see STALL_NUDGE_LIMIT. Only when
@@ -476,10 +537,10 @@ async function pollPendingPromptCompletions() {
       // catches the actual pathology this was meant to catch.
       //
       // The remaining stall guards are sufficient:
-      //   • BEAT_STALL_TIMEOUT_MS (2 min total SSE silence)
+      //   • BEAT_STALL_TIMEOUT_MS (150s total SSE silence → stall-nudge)
       //   • NO_TOOL_INVOKED_DEADLINE_MS (45s zero-tool beats)
-      //   • REASONING_STALL_TIMEOUT_MS (3 min since last tool call)
-      //   • DEFAULT_PROMPT_TIMEOUT_MS / beatTimeoutMs (10 min hard cap)
+      //   • REASONING_STALL_TIMEOUT_MS (6 min since last tool call)
+      //   • DEFAULT_PROMPT_TIMEOUT_MS / beatTimeoutMs (15 min hard cap)
       //   • READ_LOOP_THRESHOLD=200 (line-by-line read pathology)
       //
       // Keep lastProductiveActionAt populated (it's still useful for

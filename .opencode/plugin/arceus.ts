@@ -845,23 +845,13 @@ export const ArceusPlugin: Plugin = async () => {
       });
     },
 
-    "message.part.updated": async (input: { sessionID: string }, output: unknown) => {
-      const fromOutput = (output as { part?: { type?: string; text?: string } } | undefined)?.part;
-      const fromInput = (input as unknown as { part?: { type?: string; text?: string } }).part;
-      const part = fromOutput ?? fromInput;
-      if (part?.type !== "reasoning") return;
-      const text = part.text ?? "";
-      if (!text) return;
-      const ctx = await ensureCtx(input.sessionID);
-      if (!ctx) return;
-      postEvent({
-        event: "agent.reasoning",
-        beatId: ctx.beatId,
-        role: ctx.role,
-        text: truncate(text),
-        ts: Date.now(),
-      });
-    },
+    // NOTE: the "message.part.updated" reasoning hook that used to live
+    // here was removed — it silently broke on OpenCode 1.17.x's payload
+    // shape change (reasoning streams via message.part.delta; sessionID
+    // nested under part). agent.reasoning is now emitted by the API's
+    // event-bridge (apps/api/src/heartbeats/event-bridge.ts), which
+    // parses the same SSE stream the stall clock uses — no plugin-side
+    // version coupling.
   };
 };
 

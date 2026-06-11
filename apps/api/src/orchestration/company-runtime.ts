@@ -145,6 +145,14 @@ export interface PendingPromptCompletion {
    * the request hangs, not the model.
    */
   nudgeCount: number;
+  /**
+   * The hard-cap (ms) this completion was registered with — beats pass
+   * HARD_CAP_MS, chat prompts the 5-min default. Lets the poller compute
+   * the T-minus wrap-up moment without knowing who registered.
+   */
+  capMs: number;
+  /** True once the T-minus wrap-up message has been sent (once per beat). */
+  wrapUpSent: boolean;
 }
 
 type ReactiveEmitter = (

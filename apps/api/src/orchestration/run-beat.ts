@@ -36,12 +36,18 @@ import { setTaskStatus, appendTaskPlanStep } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 
-// Aligned with beatTimeoutMs in config/heartbeat.json (10 min). Was 15 min,
-// which contradicted the config and the guard inventory in prompts/llm.ts —
-// a beat surviving every watchdog held its concurrency slot 5 min longer
-// than any documented ceiling. Catastrophic-floor only: the reasoning-stall
-// (3 min) and SSE-silence (2 min) guards fire long before this on stuck beats.
-const HARD_CAP_MS = 10 * 60 * 1000;
+// Aligned with beatTimeoutMs in config/heartbeat.json (15 min).
+//
+// History: 15 → 10 (2026-06-11 morning) when stalls were undetectable and
+// the cap was the only defense; 10 → 15 (same day, evening) once the
+// stall stack landed. With the silence watchdog + stall-nudge reaping
+// hung requests in ~2.5-5 min, ONLY productive beats ever reach this
+// ceiling — and post-stall-fix telemetry showed 6 developer beats killed
+// at 10:00 mid-work ("Beat timed out before serialize phase") while
+// 4 passed. The cap should serve working beats, not kill them. The
+// wrap-up nudge (prompts/llm.ts) fires 2 min before this cap so beats
+// finish clean instead of getting guillotined.
+const HARD_CAP_MS = 15 * 60 * 1000;
 
 interface BeatResult {
   beatId: string;

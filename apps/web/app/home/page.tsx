@@ -423,7 +423,17 @@ async function fetchJson<T>(url: string, token?: string | null) {
 
 function describeApiError(error: unknown) {
   if (error instanceof Error) {
-    if (error.message === "Failed to fetch") {
+    // Browser fetch() network failures carry browser-specific messages:
+    // Chrome "Failed to fetch", Safari/WebKit "Load failed", Firefox
+    // "NetworkError when attempting to fetch resource.". All mean the
+    // API was unreachable (typically a deploy reboot) — normalize them
+    // instead of leaking Safari's cryptic "Load failed" into the banner.
+    const networkFailureMessages = [
+      "Failed to fetch",
+      "Load failed",
+      "NetworkError when attempting to fetch resource.",
+    ];
+    if (networkFailureMessages.includes(error.message)) {
       return "Runtime status is temporarily unavailable.";
     }
 
