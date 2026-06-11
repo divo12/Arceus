@@ -31,6 +31,11 @@ interface OpenCodeEventProperties {
   info?: { sessionID?: string };
   part?: OpenCodePart;
   error?: { message?: string; data?: { message?: string } };
+  // message.part.delta shape (1.17.x): no part object — just a pointer
+  // to the part being streamed plus the incremental text.
+  partID?: string;
+  field?: string;
+  delta?: string;
 }
 
 interface OpenCodeEvent {
@@ -177,6 +182,14 @@ function scheduleReconnect(): void {
 const REASONING_EMIT_INTERVAL_MS = 3_000;
 const lastReasoningEmitAt = new Map<string, number>();
 
+// partID → part type, learned from message.part.updated events. Needed
+// because message.part.delta events (1.17.x) carry NO part object — just
+// {partID, field, delta} — so without this map the live reasoning deltas
+// are unclassifiable and the inspector would only show reasoning at part
+// completion instead of while the model thinks. Cleared wholesale at
+// 2000 entries (parts are tiny, short-lived ids).
+const partTypeById = new Map<string, string>();
+
 /** Dispatch a single SSE event to the appropriate agent state / governance handler. */
 async function processEvent(event: OpenCodeEvent) {
   const props = event.properties;
@@ -216,15 +229,28 @@ async function processEvent(event: OpenCodeEvent) {
   // reasoning deltas are high-frequency and this is visibility, not
   // telemetry-of-record.
   if (event.type === "message.part.updated" || event.type === "message.part.delta") {
+    // Learn part types from `updated` events (which carry the full part)
+    // so the part-less `delta` events can be classified by partID.
     const part = props.part;
-    if (part?.type === "reasoning") {
+    if (part?.type && (part as { id?: string }).id) {
+      if (partTypeById.size > 2_000) partTypeById.clear();
+      partTypeById.set((part as { id?: string }).id!, part.type);
+    }
+
+    const isReasoning =
+      part?.type === "reasoning" ||
+      (event.type === "message.part.delta" &&
+        props.partID !== undefined &&
+        partTypeById.get(props.partID) === "reasoning");
+
+    if (isReasoning) {
       const lastEmit = lastReasoningEmitAt.get(sessionId) ?? 0;
       const nowMs = Date.now();
       if (nowMs - lastEmit >= REASONING_EMIT_INTERVAL_MS) {
         if (lastReasoningEmitAt.size > 500) lastReasoningEmitAt.clear();
         lastReasoningEmitAt.set(sessionId, nowMs);
         const reasoningCtx = getSessionContext(sessionId);
-        const text = part.text ?? part.delta ?? part.content ?? "";
+        const text = part?.text ?? part?.delta ?? part?.content ?? props.delta ?? "";
         if (reasoningCtx && text) {
           observability.logEvent({
             event: "agent.reasoning",
