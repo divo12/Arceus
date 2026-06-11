@@ -120,20 +120,26 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
  *           beat_7_1778460613003 (last tool 00:50:44 → stall fired
  *           01:00:44, 10 min of dead air) down to ~3 min.
  */
-// 1min was too aggressive — observed in Naman's beat_10 where
-// workspace_start_preview legitimately ran 62s and the watchdog killed
-// the beat 2s before the tool returned. Tools that can run >60s include
-// workspace_start_preview (Vite cold boot), bash("npm install"),
-// workspace_run_typecheck on a large project, and bash test suites.
+// 2026-06-11: 2min was KILLING HEALTHY BEATS. The ratchet-down to 2min
+// assumed "healthy beats stream reasoning + tool calls continuously" —
+// disproven in PROD: gpt-5.2 on this resource streams ZERO reasoning
+// deltas (0 agent.reasoning events across an entire day; summaries are
+// not requested, so the SSE stream is dark for the whole think phase),
+// and its reasoning windows between tool batches routinely exceed 2min
+// on developer-sized contexts. Every post-guard developer beat died at
+// exactly ~120s after its last tool call (beats 14-16, 18, 19 of
+// 2026-06-11) while Azure quota sat at 15M TPM with 99.9% headroom —
+// i.e. the model was thinking, not hung. Azure's own guidance for
+// reasoning models: tolerate >=300s of stream silence.
 //
-// 2min is the sweet spot: still 33% faster than the original 3min and
-// catches genuinely stuck beats; while leaving headroom for one
-// legit slow tool call mid-beat. The other fail-fast detectors
-// (NO_TOOL_INVOKED=45s for zero-tool beats, NO_PRODUCTIVE_ACTION=2min
-// for meta-loops) cover the model-stall pattern WITHOUT false-firing
-// on slow tools, since those detectors check tool counts not raw SSE
-// silence.
-const BEAT_STALL_TIMEOUT_MS = 2 * 60 * 1000;
+// 5min implements that guidance. True hangs now burn 5min instead of
+// 2 — acceptable: they are far rarer than legitimate >2min thinks, and
+// the 10-min hard cap + claim release + harvest keep the damage
+// bounded. If you are tempted to ratchet this back down, FIRST verify
+// reasoning deltas are actually streaming (agent.reasoning events in
+// activity_log) — silence is only a death signal when thinking is
+// visible.
+const BEAT_STALL_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Productive-action deadline. If a beat has been running this long
@@ -210,12 +216,15 @@ const NO_TOOL_INVOKED_DEADLINE_MS = 45 * 1000;
  * this guard they die at 3 min with cause `reasoning_stall` and the role
  * re-dispatches with fresh context ~3× sooner.
  *
- * 3 min is deliberately above the longest legitimate Azure round-trip we
- * have on record for this resource (reasoning phases between tool calls
- * run 30–90 s on healthy beats). If a legit >3-min round-trip is observed,
- * bump to 4 min — do not disable.
+ * 2026-06-11: bumped 3min → 6min alongside BEAT_STALL (2→5min). The
+ * 3-min value was premised on reasoning being VISIBLE (stream deltas
+ * proving the model is alive while it thinks). PROD disproved that:
+ * zero reasoning deltas stream for gpt-5.2 on this resource, so this
+ * guard was just a second silence-killer firing 60s after BEAT_STALL.
+ * 6min keeps it as the "streaming but never acting" backstop above the
+ * 5-min silence window while staying under the 10-min hard cap.
  */
-const REASONING_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+const REASONING_STALL_TIMEOUT_MS = 6 * 60 * 1000;
 
 // Effectively disabled. The original intent was to catch gpt-5.4-mini's
 // "read one line at a time across 50 files" pathology. In practice it's
