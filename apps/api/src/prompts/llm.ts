@@ -20,6 +20,7 @@ import { withRetry, isRetryableError } from "../infra/resilience.js";
 import { truncateTelemetry } from "../infra/utils.js";
 import { agentSessions, pendingPromptCompletions, agentSessionKey, type AgentSessionState } from "../orchestration/state.js";
 import { getSessionContext } from "../orchestration/session-context.js";
+import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 import { updateAgentSessionState } from "../agents/sessions.js";
 import { formatHippocampusContext } from "../memory/operations.js";
 import { hippocampus } from "../memory/extractors.js";
@@ -235,6 +236,65 @@ const REASONING_STALL_TIMEOUT_MS = 6 * 60 * 1000;
 // detector, do it via `limit < 10` heuristic, not raw count.
 const READ_LOOP_THRESHOLD = 200;
 
+/**
+ * Stall-nudge recovery. When the SSE-silence guard trips, the first
+ * response is NOT to reap the beat — it's to abort the hung in-flight
+ * request and re-prompt the same session. The session keeps its full
+ * message history, so recovery costs seconds instead of the ~6 min of
+ * beat death + re-dispatch + cold-start context rebuild.
+ *
+ * Why this is the right shape for the hang class: a beat that produces
+ * ZERO events for 5+ minutes while the deployment demonstrably streams
+ * (direct Azure probe: 87 reasoning-summary deltas) is a hung HTTP
+ * request, not a thinking model. Waiting longer cannot fix it; only a
+ * fresh request can.
+ *
+ * One nudge per beat: the windows already consume the budget (stall at
+ * 5 min + nudged window ≈ the 10-min hard cap). A session that hangs
+ * twice in one beat gets reaped by the existing stall reject.
+ */
+const STALL_NUDGE_LIMIT = 1;
+
+const STALL_NUDGE_TEXT =
+  "[system recovery] Your previous request hung and was aborted. Your context and prior work are intact — do NOT re-read files or start over. " +
+  "Continue exactly where you stopped: emit your next tool call now, or finish with task_complete / task_block (include evidence).";
+
+/**
+ * Sessions with a stall-nudge in flight. run-beat consults this so the
+ * original prompt call's rejection (caused by our own abort) doesn't
+ * fail the beat out from under the nudged attempt. Cleared when the
+ * pending completion resolves or rejects.
+ */
+const activeNudges = new Set<string>();
+
+/** True if a stall-nudge recovery currently owns this session. */
+export function isNudgeActive(sessionId: string): boolean {
+  return activeNudges.has(sessionId);
+}
+
+/** Abort the hung request and re-prompt the session to continue. */
+async function nudgeStalledSession(sessionId: string): Promise<void> {
+  const opencode = await getOpencode();
+  // Abort first — a prompt queued behind a dead request never runs.
+  // Best-effort: if the request already died server-side, abort 404s
+  // and the re-prompt below still proceeds.
+  await swallowAndReport(
+    "beat.stall_nudge_abort",
+    () => opencode.client.session.abort({ path: { id: sessionId } }),
+    { detail: { sessionId } },
+  );
+  const ctx = getSessionContext(sessionId);
+  const deployment = ensureDeployment("workerDeployment");
+  await opencode.client.session.prompt({
+    path: { id: sessionId },
+    body: {
+      model: { providerID: "azure", modelID: deployment },
+      ...(ctx?.role ? { agent: ctx.role } : {}),
+      parts: [{ type: "text", text: STALL_NUDGE_TEXT }],
+    },
+  });
+}
+
 /** Register a pending prompt completion with a timeout. Resolves when the session goes idle. */
 export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<void> {
   const existing = pendingPromptCompletions.get(sessionId);
@@ -259,6 +319,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       lastToolAt: now,
       toolCallCount: 0,
       readsSinceAction: 0,
+      nudgeCount: 0,
     });
     startPromptCompletionPoller();
   });
@@ -266,6 +327,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
 
 /** Resolve a pending prompt completion for a session. */
 export function resolvePromptCompletion(sessionId: string) {
+  activeNudges.delete(sessionId);
   const entry = pendingPromptCompletions.get(sessionId);
   if (entry) {
     clearTimeout(entry.timer);
@@ -276,6 +338,7 @@ export function resolvePromptCompletion(sessionId: string) {
 
 /** Reject a pending prompt completion for a session with an error. */
 export function rejectPromptCompletion(sessionId: string, error: Error) {
+  activeNudges.delete(sessionId);
   const entry = pendingPromptCompletions.get(sessionId);
   if (entry) {
     clearTimeout(entry.timer);
@@ -333,11 +396,28 @@ async function pollPendingPromptCompletions() {
 
     for (const [sessionId, entry] of pendingPromptCompletions) {
       // Stall guard: if no SSE event has touched this session in BEAT_STALL_TIMEOUT_MS,
-      // the agent is silently hung. Reject early so the beat fails fast instead of
-      // burning the full 15-min hard cap.
+      // the in-flight request is hung. First response: abort + re-prompt the
+      // same session (context intact) — see STALL_NUDGE_LIMIT. Only when
+      // nudges are exhausted does the beat get reaped.
       if (Date.now() - entry.lastActivityAt > BEAT_STALL_TIMEOUT_MS) {
-        emitEmployeeActivity("system", "info", `Stall detected: session ${sessionId.slice(0, 12)}… silent for ${BEAT_STALL_TIMEOUT_MS / 1000}s — rejecting`);
-        rejectPromptCompletion(sessionId, new Error(`Beat session ${sessionId} stalled: no SSE activity for ${BEAT_STALL_TIMEOUT_MS}ms`));
+        if (entry.nudgeCount < STALL_NUDGE_LIMIT) {
+          entry.nudgeCount += 1;
+          // Fresh windows for the recovered attempt: the silence guard
+          // restarts, and lastToolAt moves so REASONING_STALL doesn't
+          // reap the nudged attempt for its predecessor's dead air.
+          entry.lastActivityAt = Date.now();
+          entry.lastToolAt = Date.now();
+          activeNudges.add(sessionId);
+          emitEmployeeActivity(
+            "system",
+            "info",
+            `Stall nudge: session ${sessionId.slice(0, 12)}… silent past ${BEAT_STALL_TIMEOUT_MS / 1000}s — aborting hung request and re-prompting (${entry.nudgeCount}/${STALL_NUDGE_LIMIT})`,
+          );
+          swallowAndAudit("beat.stall_nudge", () => nudgeStalledSession(sessionId), { detail: { sessionId } });
+          continue;
+        }
+        emitEmployeeActivity("system", "info", `Stall detected: session ${sessionId.slice(0, 12)}… silent for ${BEAT_STALL_TIMEOUT_MS / 1000}s after ${entry.nudgeCount} nudge(s) — rejecting`);
+        rejectPromptCompletion(sessionId, new Error(`Beat session ${sessionId} stalled: no SSE activity for ${BEAT_STALL_TIMEOUT_MS}ms (nudges exhausted: ${entry.nudgeCount})`));
         continue;
       }
 

@@ -135,6 +135,16 @@ export interface PendingPromptCompletion {
    * progress (observed in beat_4_1778410838848).
    */
   readsSinceAction: number;
+  /**
+   * Number of stall-nudge recoveries attempted for this beat. When the
+   * SSE-silence guard trips, the poller first aborts the hung request
+   * and re-prompts the same session (context intact) instead of reaping
+   * the beat; only when nudges are exhausted does the stall reject.
+   * Evidence for the hang class: beat 4 of 2026-06-11 (post-wipe) sat
+   * at zero events for 5min+ while a direct Azure probe streamed fine —
+   * the request hangs, not the model.
+   */
+  nudgeCount: number;
 }
 
 type ReactiveEmitter = (

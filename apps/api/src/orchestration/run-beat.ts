@@ -20,7 +20,7 @@ import { cleanupBeatScratch } from "../infra/beat-paths.js";
 import { forgetBeatActivity } from "../heartbeats/watchdog.js";
 import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
 import { getBeatSkillUsage, clearBeatSkillUsage } from "../routes/internal-telemetry.routes.js";
-import { registerPromptCompletion } from "../prompts/llm.js";
+import { registerPromptCompletion, rejectPromptCompletion, isNudgeActive } from "../prompts/llm.js";
 import {
   startBeatTokenAccumulator,
   drainBeatTokenAccumulator,
@@ -198,10 +198,15 @@ export async function runBeat(input: {
       toolFilter[`arceus_${name}`] = true;
     }
 
-    // Race the SDK call AND the completion poll against the hard cap.
-    // Sequential await would hang for the full undici body timeout (30m)
-    // if opencode never returns, swallowing the 15m cap entirely.
-    const promptPromise = opencode.client.session.prompt({
+    // Fire-and-forget the SDK call (mirrors runPromptText): completion is
+    // detected via SSE session.idle + the polling fallback, both feeding
+    // completionPromise. The prompt call's own rejection still fails the
+    // beat fast — UNLESS a stall-nudge owns the session, in which case the
+    // rejection is our own abort and the nudged attempt continues on the
+    // same completionPromise. Sequential await of the prompt call would
+    // also hang for the full undici body timeout (30m) if opencode never
+    // returns, swallowing the hard cap entirely.
+    opencode.client.session.prompt({
       path: { id: sessionId },
       // The OpenCode SDK's body type doesn't expose `agent` in the public
       // typings yet; the runtime accepts it. Coerce through the SDK's
@@ -213,10 +218,16 @@ export async function runBeat(input: {
         tools: toolFilter,
         parts: [{ type: "text", text: stateText }],
       },
+    }).catch((err: unknown) => {
+      if (isNudgeActive(sessionId)) return;
+      rejectPromptCompletion(
+        sessionId,
+        err instanceof Error ? err : new Error(String(err)),
+      );
     });
 
     await Promise.race([
-      Promise.all([promptPromise, completionPromise]),
+      completionPromise,
       new Promise<never>((_, reject) =>
         setTimeout(
           () => { reject(new Error(`Beat ${beatId} timed out after ${HARD_CAP_MS}ms (hard cap)`)); },
