@@ -34,7 +34,9 @@ import { heartbeatConfig } from "../config/heartbeat.js";
 import { warmUpOpencode } from "../infra/opencode.js";
 import { createHeartbeatRuntime } from "../heartbeats/runtime.js";
 import { createMeetingRuntime } from "../meetings/runtime.js";
-import { setMeetingScheduler, setHeartbeatEngineRef } from "../orchestration/state.js";
+import { setMeetingScheduler, setHeartbeatEngineRef, eventBridgeOnce } from "../orchestration/state.js";
+import { startEventBridge } from "../heartbeats/event-bridge.js";
+import { swallowAndAudit } from "../observability/swallow.js";
 import { startStrandedRunSweeper, sweepStrandedRunsOnBoot } from "../orchestration/stranded-run-sweeper.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";
@@ -112,6 +114,18 @@ export async function startServer(app: FastifyInstance): Promise<void> {
 
   // Pre-warm OpenCode after server is listening
   void warmUpOpencode();
+
+  // Start the SSE event bridge UNCONDITIONALLY at boot. It was previously
+  // started only from checklist-executor.ts — a path heartbeat beats don't
+  // traverse — so in PROD the bridge never ran at all (verified 2026-06-11
+  // via Railway logs: zero "[sse]" lines during active beats). Without it:
+  // no reasoning/text SSE events feed the stall clock (only tool-call HTTP
+  // POSTs bump lastActivityAt), every think/write phase longer than the
+  // stall window dies as a false "silent stall", session.idle resolution
+  // degrades to the status poller, and agent.reasoning never emits. The
+  // bridge IS the stall-detection substrate — it must outlive any
+  // particular executor path.
+  swallowAndAudit("event_bridge.boot", () => eventBridgeOnce.run(() => startEventBridge()));
 }
 
 async function autoResumeIfActiveSprint(
