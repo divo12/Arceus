@@ -829,7 +829,21 @@ export class HeartbeatEngine {
       checkResults: checklist.results,
     };
 
-    if (!checklist.hasActionNeeded && !checklist.hasBlocked) {
+    // A re-claimable blocked task the role OWNS must reach the act phase
+    // even when the checklist reports all-OK. checkSprintHealth suppresses
+    // a blocked task once a "Fix blocker" follow-up exists — but if that
+    // follow-up is ITSELF blocked (and the recursion cap stops it
+    // spawning another), the checklist goes quiet while real work sits
+    // stuck. The act phase routes an owned blocked task to the LLM path
+    // (hasClaimableTask), where the model re-claims and retries directly
+    // per shared-rules. Without this gate the beat idle-exits here and
+    // the task is never retried (observed live: a blocked QA task spun
+    // 0-tool wake beats every interval after its root cause was fixed).
+    const ownsRetriableBlocked = ctx.tasks.some(
+      (t) => t.status === "blocked" && t.assignedRole === ctx.role,
+    );
+
+    if (!checklist.hasActionNeeded && !checklist.hasBlocked && !ownsRetriableBlocked) {
       const summary = `Idle beat for ${request.role} — all checks OK`;
       deps.audit.auditAgent(request.companyId, request.role, "beat_idle", summary, { beatId });
       deps.emitBeatEvent?.({ type: "beat_idle", beatId, agentId: request.agentId, role: request.role, data: { outcome: "HEARTBEAT_OK" } });
