@@ -842,8 +842,14 @@ export const ArceusPlugin: Plugin = async () => {
     // ── Spec 32 Phase 4 — additional emit hooks ────────────
 
     "session.idle": async (input: { sessionID: string }) => {
-      // Beat sessions are one-shot — drop their read-guard state.
+      // Beat ended — drop per-beat state. The read guard resets so the
+      // next beat gets a fresh budget, and the session-context cache is
+      // invalidated because sessions now SURVIVE across beats (F7 session
+      // resume): the same sessionID maps to a NEW beatId next beat, and a
+      // stale cached context would post watchdog resets + telemetry to
+      // the dead beat forever.
       readGuards.delete(input.sessionID);
+      sessionCtxCache.delete(input.sessionID);
       const ctx = await ensureCtx(input.sessionID);
       if (!ctx) return;
       postEvent({

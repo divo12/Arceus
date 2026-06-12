@@ -16,6 +16,7 @@ import { getOpencode, resetOpencodeConnection } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
 import { buildBeatContext, prepareBeatRender } from "./beat-context-builder.js";
 import { registerSessionContext, unregisterSessionContext } from "./session-context.js";
+import { takeResumableSession, storeResumableSession, isSessionAlive, SESSION_RESUME_LIMIT } from "./session-resume.js";
 import { cleanupBeatScratch } from "../infra/beat-paths.js";
 import { forgetBeatActivity } from "../heartbeats/watchdog.js";
 import { scoreBeatVerdict, clearBeatTaskTransitions } from "./beat-scoring.js";
@@ -92,9 +93,53 @@ export async function runBeat(input: {
   startBeatTokenAccumulator(beatId);
   startBeatToolCallAccumulator(beatId);
 
-  // Step 3: create session
-  const session = await createBeatSession(input.role, beatId);
-  const sessionId = session.id;
+  // Step 3: acquire session — F7 resume-or-create.
+  //
+  // If the role's previous beat parked a session with an UNFINISHED task
+  // (released after a reap, or passed-but-incomplete), and that task is
+  // still open, and OpenCode still holds the session, this beat continues
+  // the SAME conversation: files already read stay read, design decisions
+  // stay in working memory, and the cold-start re-derivation cost (the
+  // original over-read pathology) disappears. Falls back to a fresh
+  // session on any doubt — dead session, finished task, resume cap hit.
+  const acquired = await (async (): Promise<{
+    sessionId: string;
+    resumedFrom: { taskId: string; resumeCount: number } | null;
+  }> => {
+    const resumeCandidate = takeResumableSession(input.companyId, input.role);
+    if (resumeCandidate) {
+      const task = await swallowAndReport(
+        "session_resume.task_check",
+        () => tasksRepo.findByIdHydrated(getDb(), resumeCandidate.taskId),
+        { companyId: input.companyId, agentRole: input.role, beatId },
+      );
+      const taskStillOpen = task != null && (task.status === "planned" || task.status === "in_progress");
+      if (taskStillOpen && resumeCandidate.resumeCount < SESSION_RESUME_LIMIT && (await isSessionAlive(resumeCandidate.sessionId))) {
+        const resumeCount = resumeCandidate.resumeCount + 1;
+        emitEmployeeActivity(
+          input.role,
+          "info",
+          `${shortBeat(beatId)}: resuming previous session (${resumeCandidate.sessionId.slice(0, 12)}…, resume ${resumeCount}/${SESSION_RESUME_LIMIT}) — task ${resumeCandidate.taskId} still open`,
+          { beatId, detail: { sessionId: resumeCandidate.sessionId, taskId: resumeCandidate.taskId } },
+        );
+        return {
+          sessionId: resumeCandidate.sessionId,
+          resumedFrom: { taskId: resumeCandidate.taskId, resumeCount },
+        };
+      }
+      // Stale entry — finished task, dead session, or resume cap hit.
+      // Retire the old session quietly and start fresh.
+      swallowAndAudit("session_resume.discard", () => destroyBeatSession(resumeCandidate.sessionId), {
+        companyId: input.companyId,
+        agentRole: input.role,
+        beatId,
+      });
+    }
+    const session = await createBeatSession(input.role, beatId);
+    return { sessionId: session.id, resumedFrom: null };
+  })();
+  const sessionId = acquired.sessionId;
+  const resumedFrom = acquired.resumedFrom;
 
   // Step 2+4: build context, register
   const ctx = await buildBeatContext(input.role, input.companyId, beatId, sessionId);
@@ -188,6 +233,14 @@ export async function runBeat(input: {
     // Step 6: wake the agent (blocks, with hard cap). State text was
     // built from the beat-render batch fetch above; no second pass.
     const stateText = beatRender.stateText;
+    // F7 — on a resumed session the prior conversation is already in the
+    // model's context; the banner stops it from re-deriving what it
+    // already knows. Fresh sessions get the plain state text.
+    const promptText = resumedFrom
+      ? `[resume] This conversation continues YOUR OWN previous beat on task ${resumedFrom.taskId}. ` +
+        `Everything above is your prior context — files you already read are still read, your design decisions stand. ` +
+        `Do NOT re-read files or re-plan; pick up exactly where your trail ends. Current state follows.\n\n${stateText}`
+      : stateText;
     const soul = ROLE_SOULS[input.role].systemPrompt;
     const deployment = ensureDeployment("workerDeployment");
 
@@ -222,7 +275,7 @@ export async function runBeat(input: {
         agent: input.role,
         system: soul,
         tools: toolFilter,
-        parts: [{ type: "text", text: stateText }],
+        parts: [{ type: "text", text: promptText }],
       },
     }).catch((err: unknown) => {
       if (isNudgeActive(sessionId)) return;
@@ -417,7 +470,9 @@ export async function runBeat(input: {
     }
 
     unregisterSessionContext(sessionId);
-    await destroyBeatSession(sessionId);
+    // F7 — session destruction is deferred to the park-or-retire decision
+    // below, after harvestTaskIds is finalized (it names the unfinished
+    // task that justifies keeping the session alive).
     await cleanupBeatScratch(beatId);
     forgetBeatActivity(beatId);
 
@@ -448,6 +503,31 @@ export async function runBeat(input: {
         // appendTaskPlanStep swallows + reports its own failures.
         await appendTaskPlanStep(tid, outcome);
       }
+    }
+
+    // F7 — park or retire the session. A beat that leaves its task
+    // unfinished (harvestTaskIds[0]: released on fail, still-claimed on
+    // pass) parks its session so the role's next beat resumes the same
+    // conversation instead of cold-starting. Finished/idle beats and
+    // sessions at the resume cap retire normally; a dead/respawned
+    // OpenCode makes the parked entry fail its liveness probe next beat,
+    // so parking is always safe.
+    const resumeTaskId = harvestTaskIds[0] ?? null;
+    const priorResumes = resumedFrom?.resumeCount ?? 0;
+    if (resumeTaskId && priorResumes < SESSION_RESUME_LIMIT) {
+      storeResumableSession(input.companyId, input.role, {
+        sessionId,
+        taskId: resumeTaskId,
+        resumeCount: priorResumes,
+      });
+      emitEmployeeActivity(
+        input.role,
+        "info",
+        `${shortBeat(beatId)}: session parked for resume on ${resumeTaskId} (resumes so far: ${priorResumes}/${SESSION_RESUME_LIMIT})`,
+        { beatId, detail: { sessionId, taskId: resumeTaskId } },
+      );
+    } else {
+      await destroyBeatSession(sessionId);
     }
 
     // Spec 31 Phase 5 — close out the run + binding, EMA-update trust.
