@@ -51,12 +51,16 @@ export async function hasClaimableTasksForRole(
       and(
         eq(tasks.companyId, toDbId(companyId)),
         eq(tasks.assignedRole, role),
-        isNull(tasks.checkoutRunId),
         or(
-          eq(tasks.status, "planned" as TaskStatus),
           and(
-            eq(tasks.status, "created" as TaskStatus),
-            sql`cardinality(${tasks.dependsOnTaskIds}) = 0`,
+            isNull(tasks.checkoutRunId),
+            or(
+              eq(tasks.status, "planned" as TaskStatus),
+              and(
+                eq(tasks.status, "created" as TaskStatus),
+                sql`cardinality(${tasks.dependsOnTaskIds}) = 0`,
+              ),
+            ),
           ),
           // blocked/failed tasks owned by this role must WAKE the role:
           // the blocked-task repair path (checkSprintHealth → spawn
@@ -68,6 +72,13 @@ export async function hasClaimableTasksForRole(
           // role was ever woken again). The follow-up spawn is
           // idempotent, so steady-state cost is one checklist-only
           // beat per role interval while a blocker exists.
+          //
+          // Deliberately NOT gated on checkout_run_id being null:
+          // task_block retains the blocking beat's claim (verified in
+          // PROD — the blocked QA task kept checkout_run_id and the
+          // first version of this branch never fired). Re-claim of a
+          // blocked task is allowed by task_claim, so a held claim
+          // must not suppress the wake.
           inArray(tasks.status, ["blocked", "failed"] as TaskStatus[]),
         ),
       ),
