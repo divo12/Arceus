@@ -296,14 +296,25 @@ const STALL_NUDGE_TEXT =
  *
  * Only fires for sessions whose cap is large enough to be a beat
  * (WRAP_UP_MIN_CAP_MS filters out the 5-min chat prompts) and that have
- * a registered session context. Sent WITHOUT aborting — OpenCode queues
- * the message behind the in-flight step, so it lands between steps.
+ * a registered session context.
+ *
+ * MUST abort-then-reprompt (same mechanics as the stall nudge). The
+ * first version sent the message WITHOUT aborting on the theory that it
+ * would "land between steps" — it never landed at all: OpenCode queues
+ * prompts behind the in-flight agentic turn, and a beat's turn doesn't
+ * end until the beat ends. Observed in PROD (beat_5_1781242085115): a
+ * model healthily chaining its 22nd small patch at minute 14, reasoning
+ * about "planning application development" at minute 15, guillotined by
+ * the raw cap with the undelivered wrap-up still sitting in the queue.
+ * The abort costs at most one in-flight ≤120-line patch (cheap by
+ * design); the re-prompt arrives with context intact and ~2 minutes to
+ * checkpoint — converting cap-deaths into scoreable completions.
  */
 const WRAP_UP_LEAD_MS = 2 * 60 * 1000;
 const WRAP_UP_MIN_CAP_MS = 8 * 60 * 1000;
 const WRAP_UP_TEXT =
-  "[system] About 2 minutes remain in this beat before the hard cap. Stop exploring NOW. " +
-  "Finish the smallest shippable piece, then call task_complete with evidence (or task_block with the reason), " +
+  "[system] About 2 minutes remain in this beat before the hard cap. Your in-progress step was paused to deliver this — your context and all landed work are intact. " +
+  "Do NOT start anything new and do NOT re-read files. Finish or commit the smallest shippable piece, then call task_complete with evidence (or task_block with the reason), " +
   "and append a plan step saying exactly where you stopped so the next beat continues cleanly.";
 
 /**
@@ -319,8 +330,14 @@ export function isNudgeActive(sessionId: string): boolean {
   return activeNudges.has(sessionId);
 }
 
-/** Abort the hung request and re-prompt the session to continue. */
-async function nudgeStalledSession(sessionId: string): Promise<void> {
+/**
+ * Abort the session's in-flight turn and re-prompt it with `text`.
+ * Shared by the stall nudge (recover a hung request) and the wrap-up
+ * nudge (deliver the T-minus checkpoint order) — both REQUIRE the abort,
+ * because a prompt sent to a busy session queues behind the in-flight
+ * agentic turn and is never delivered before the beat ends.
+ */
+async function nudgeStalledSession(sessionId: string, text: string = STALL_NUDGE_TEXT): Promise<void> {
   const opencode = await getOpencode();
   // Abort first — a prompt queued behind a dead request never runs.
   // HTTP-level failures (404 for an already-dead request, etc.) come back
@@ -359,7 +376,7 @@ async function nudgeStalledSession(sessionId: string): Promise<void> {
     body: {
       model: { providerID: "azure", modelID: deployment },
       ...(ctx?.role ? { agent: ctx.role } : {}),
-      parts: [{ type: "text", text: STALL_NUDGE_TEXT }],
+      parts: [{ type: "text", text }],
     },
     // Bounded lifetime: this call blocks until the nudged response
     // completes. If the session dies anyway (second stall → reap →
@@ -493,22 +510,16 @@ async function pollPendingPromptCompletions() {
             "info",
             `Wrap-up nudge: session ${sessionId.slice(0, 12)}… ~${Math.max(0, Math.round((entry.capMs - (Date.now() - entry.startedAt)) / 1000))}s to hard cap — telling agent to checkpoint`,
           );
-          swallowAndAudit("beat.wrap_up_nudge", async () => {
-            const opencode = await getOpencode();
-            const deployment = ensureDeployment("workerDeployment");
-            await opencode.client.session.prompt({
-              path: { id: sessionId },
-              body: {
-                model: { providerID: "azure", modelID: deployment },
-                agent: wrapCtx.role,
-                parts: [{ type: "text", text: WRAP_UP_TEXT }],
-              },
-              // Same zombie-socket bound as the stall nudge: the beat has
-              // ≤2 min + response time left; past 5 min this call can only
-              // be outliving its reaped beat.
-              signal: AbortSignal.timeout(5 * 60 * 1000),
-            });
-          }, { detail: { sessionId } });
+          // Same abort-then-reprompt path as the stall nudge — a plain
+          // prompt queues behind the in-flight turn and never arrives.
+          // Mark activeNudges so run-beat tolerates the abort-induced
+          // rejection of the original prompt call.
+          activeNudges.add(sessionId);
+          swallowAndAudit(
+            "beat.wrap_up_nudge",
+            () => nudgeStalledSession(sessionId, WRAP_UP_TEXT),
+            { detail: { sessionId } },
+          );
         }
       }
 
