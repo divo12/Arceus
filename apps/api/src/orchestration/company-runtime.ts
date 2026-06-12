@@ -153,6 +153,19 @@ export interface PendingPromptCompletion {
   capMs: number;
   /** True once the T-minus wrap-up message has been sent (once per beat). */
   wrapUpSent: boolean;
+  /**
+   * Epoch ms when the model STARTED emitting a tool call (OpenCode creates
+   * the tool part in state "pending" at generation start), or null when no
+   * tool call is being generated. Argument generation for a large
+   * write/apply_patch produces ZERO stream deltas (verified empirically
+   * 2026-06-12: 18s of total event silence for a 400-line write between
+   * the pending part and execution), so without this flag the silence
+   * guards abort beats mid-patch — observed in PROD as "Reapplying patch
+   * updates" loops where the nudge killed the same big patch twice.
+   * Cleared when the part reaches running/completed (execution keepalive
+   * takes over from there).
+   */
+  toolStreamingAt: number | null;
 }
 
 type ReactiveEmitter = (

@@ -217,6 +217,23 @@ async function processEvent(event: OpenCodeEvent) {
   // fall through the `!role` guard below before we could touch them.
   if (pendingCompletion) {
     pendingCompletion.lastActivityAt = Date.now();
+
+    // Tool-call generation tracking. OpenCode creates the tool part in
+    // state "pending" the instant the model STARTS emitting the call —
+    // before any argument bytes land — and argument generation produces
+    // ZERO further events (verified empirically 2026-06-12). The silence
+    // guards consult this flag to stand down while a large write/patch
+    // is being generated; running/completed/error hands liveness over to
+    // the plugin's execution keepalive.
+    const toolPart = props.part;
+    if (toolPart?.type === "tool") {
+      const toolStatus = (toolPart as { state?: { status?: string } }).state?.status;
+      if (toolStatus === "pending") {
+        pendingCompletion.toolStreamingAt = Date.now();
+      } else if (toolStatus) {
+        pendingCompletion.toolStreamingAt = null;
+      }
+    }
   }
 
   // agent.reasoning emission — moved here from the OpenCode plugin's

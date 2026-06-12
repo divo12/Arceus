@@ -234,6 +234,24 @@ const NO_TOOL_INVOKED_DEADLINE_MS = 45 * 1000;
  */
 const REASONING_STALL_TIMEOUT_MS = 6 * 60 * 1000;
 
+/**
+ * Grace ceiling for in-flight tool-call generation. While OpenCode reports
+ * a tool part in state "pending" (the model is emitting arguments — e.g. a
+ * multi-hundred-line apply_patch), the stream is event-silent BY DESIGN
+ * (verified empirically: zero deltas during argument generation) even
+ * though tokens are actively flowing from Azure. The silence guards must
+ * stand down during that window or they abort working beats mid-patch.
+ * The ceiling bounds the suppression: a "pending" part that never reaches
+ * running/completed within this window means the generation genuinely
+ * died, and the normal stall path resumes.
+ */
+const TOOL_ARG_STREAM_GRACE_MS = 6 * 60 * 1000;
+
+/** True while the model is mid-tool-call emission (see TOOL_ARG_STREAM_GRACE_MS). */
+function isToolArgStreaming(entry: { toolStreamingAt: number | null }): boolean {
+  return entry.toolStreamingAt !== null && Date.now() - entry.toolStreamingAt < TOOL_ARG_STREAM_GRACE_MS;
+}
+
 // Effectively disabled. The original intent was to catch gpt-5.4-mini's
 // "read one line at a time across 50 files" pathology. In practice it's
 // firing on legitimate file inspection too (developer reading 20
@@ -359,6 +377,7 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
       nudgeCount: 0,
       capMs: timeoutMs,
       wrapUpSent: false,
+      toolStreamingAt: null,
     });
     startPromptCompletionPoller();
   });
@@ -473,6 +492,10 @@ async function pollPendingPromptCompletions() {
       // same session (context intact) — see STALL_NUDGE_LIMIT. Only when
       // nudges are exhausted does the beat get reaped.
       if (Date.now() - entry.lastActivityAt > BEAT_STALL_TIMEOUT_MS) {
+        // Model is mid-tool-call emission (pending tool part) — the
+        // stream is silent by design while arguments generate; do not
+        // nudge or reap. See TOOL_ARG_STREAM_GRACE_MS.
+        if (isToolArgStreaming(entry)) continue;
         if (entry.nudgeCount < STALL_NUDGE_LIMIT) {
           entry.nudgeCount += 1;
           // Fresh windows for the recovered attempt: the silence guard
@@ -518,7 +541,7 @@ async function pollPendingPromptCompletions() {
       // stream stays "alive" with reasoning/text deltas. Without this the
       // only thing that ends such a beat is the hard cap. Cause string is
       // load-bearing: beat-scoring + inspector group on it.
-      if (entry.toolCallCount > 0 && Date.now() - entry.lastToolAt > REASONING_STALL_TIMEOUT_MS) {
+      if (entry.toolCallCount > 0 && Date.now() - entry.lastToolAt > REASONING_STALL_TIMEOUT_MS && !isToolArgStreaming(entry)) {
         emitEmployeeActivity(
           "system",
           "info",
