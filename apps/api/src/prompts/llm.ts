@@ -446,13 +446,16 @@ function startPromptCompletionPoller() {
 async function pollPendingPromptCompletions() {
   if (pendingPromptCompletions.size === 0) return;
 
-  try {
-    const opencode = await getOpencode();
-    const statusResult = await opencode.client.session.status({});
-    const statusMap = statusResult.data as Record<string, { type: string }> | undefined;
-    if (!statusMap) return;
-
-    for (const [sessionId, entry] of pendingPromptCompletions) {
+  // ── Phase 1: time-based guards — UNCONDITIONAL, no HTTP upstream ──
+  //
+  // These previously ran downstream of `session.status()`. When OpenCode
+  // wedged (the very failure these guards exist to catch), that unbounded
+  // HTTP call hung or errored and EVERY guard was silently skipped —
+  // observed in PROD as beat_1_1781237063151 going 8.5 minutes dark with
+  // no stall, no nudge, no reasoning_stall, until run-beat's raw 15-min
+  // timer finally fired. The watchdogs must never depend on the health of
+  // the process they police.
+  for (const [sessionId, entry] of pendingPromptCompletions) {
       // T-minus wrap-up: tell the agent to checkpoint before the hard cap
       // lands. Fires once per beat, beat-sized sessions only.
       if (
@@ -605,13 +608,33 @@ async function pollPendingPromptCompletions() {
         continue;
       }
 
+  }
+
+  // ── Phase 2: status-based idle resolution — best-effort, BOUNDED ──
+  //
+  // Separated from the guards above so a wedged OpenCode can only cost us
+  // the idle-resolution convenience (SSE session.idle remains the primary
+  // resolution path), never the watchdogs. Both HTTP calls carry abort
+  // bounds for the same reason.
+  try {
+    const opencode = await getOpencode();
+    const statusResult = await opencode.client.session.status({
+      signal: AbortSignal.timeout(10_000),
+    });
+    const statusMap = statusResult.data as Record<string, { type: string }> | undefined;
+    if (!statusMap) return;
+
+    for (const [sessionId] of pendingPromptCompletions) {
       const sessionStatus = statusMap[sessionId];
       if (sessionStatus?.type === "idle") {
         emitEmployeeActivity("system", "info", `Polling fallback: session ${sessionId.slice(0, 12)}… is idle — resolving completion`);
         resolvePromptCompletion(sessionId);
       } else if (!sessionStatus) {
         try {
-          const messagesResult = await opencode.client.session.messages({ path: { id: sessionId } });
+          const messagesResult = await opencode.client.session.messages({
+            path: { id: sessionId },
+            signal: AbortSignal.timeout(10_000),
+          });
           const messages = messagesResult.data;
           const hasAssistant = messages?.some((m) => m.info?.role === "assistant");
           if (hasAssistant) {
