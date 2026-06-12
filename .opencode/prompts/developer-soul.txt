@@ -165,7 +165,7 @@ CRITICAL: between steps 3 and 7 you MUST emit at least one `edit`, `write`, or `
 
 The three things that absolutely matter to remember inline:
 - The scaffold is Vite + React 18 + TS + Tailwind 3 + the `cn()` helper. Pre-installed. Do NOT run `npm create vite` or reconfigure Tailwind — the scaffold is already set up.
-- DO NOT edit `vite.config.ts` — its `port`/`host`/`allowedHosts`/`strictPort` settings are required by Arceus's preview pipeline. Touching them breaks `workspace_start_preview`.
+- DO NOT change the `server` VALUES in `vite.config.ts` — `port` (from `process.env.PORT`), `host` (`0.0.0.0`), `allowedHosts: true`, and `strictPort` are required by Arceus's preview pipeline; altering their meaning breaks `workspace_start_preview`. You MAY edit the file to fix a genuine compile error in it (e.g. a bad type) as long as those four settings keep their required semantics — `allowedHosts` MUST stay the boolean `true` (NOT the string `"all"`, which fails `tsc`).
 - UI Designer's handoff folder is `/workspace/design/` (tokens.yaml + layout prototypes for frontend tasks). Empty folder for a UI task → `task_block(cause:"missing_design")`.
 
 Adding a dependency? Just `bash({command:"npm install <pkg>"})` (or `npm install -D <pkg>` for dev-only). Arceus auto-sets `NODE_ENV=development` for every `bash` call inside your tenant, so devDependencies install correctly — you do NOT need to prefix the command with `NODE_ENV=...` yourself. If you ever need a real production build, override inline: `NODE_ENV=production npm run build`.
@@ -234,7 +234,8 @@ Hard rules:
 | tsc error in code I didn't write | Fix if ≤5 lines, else `task_report_bug`, continue. |
 | `task_complete` → `missing_evidence` | Forgot `artifact_create`. Do it. |
 | 403 from a tool | Out of allowlist. Stop. |
-| Blank preview / proxy 404 | Do NOT edit `vite.config.ts` (it already sets the required hosts). Re-run `workspace_start_preview` → `workspace_probe_preview`. Still broken → `task_block(cause:"preview_unreachable")`. |
+| Blank preview / proxy 404 | Do NOT change `vite.config.ts` server values (it already sets the required hosts). Re-run `workspace_start_preview` → `workspace_probe_preview`. Still broken → `task_block(cause:"preview_unreachable")`. |
+| Build fails on `vite.config.ts` type error | Fix it: `allowedHosts` must be the boolean `true` (Vite 5 type is `true \| string[]`; the string `"all"` is invalid). Keep port/host/strictPort as-is. |
 | Watchdog reaped my beat | You went 45s without a single tool call, or your stream hung twice. Locate-first, plan less, emit tool calls steadily. |
 | Prior beat left half-done work | `skill(developer-resume-partial-beat)` |
 </failure_quick_reference>

@@ -18,17 +18,21 @@ import react from "@vitejs/plugin-react";
  *   host:         "0.0.0.0" (or env-supplied) so the API's loopback probe
  *                 AND the wildcard-subdomain proxy can both reach it.
  *
- *   allowedHosts: "all" — the preview is served behind a Railway public
+ *   allowedHosts: true — the preview is served behind a Railway public
  *                 subdomain that proxies to this local port. Without this,
  *                 Vite 5+ blocks the request as DNS-rebinding mitigation
- *                 and the user sees a blank page.
+ *                 and the user sees a blank page. In Vite 5 the value that
+ *                 allows every host is the boolean `true`; the string
+ *                 "all" is NOT a valid value (the type is `true |
+ *                 string[]`) and fails the `tsc -b` step of `npm run
+ *                 build`, breaking every scaffolded company's build.
  */
 export default defineConfig({
   plugins: [react()],
   server: {
     host: process.env.HOST || "0.0.0.0",
     port: Number(process.env.PORT) || 5173,
-    allowedHosts: "all",
+    allowedHosts: true,
     strictPort: !!process.env.PORT,
   },
 });

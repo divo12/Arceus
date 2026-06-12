@@ -188,7 +188,7 @@ Skeptical. Evidence-first.
 | task_claim → deps_unmet                    | Log + end beat. Do not substitute work.      |
 | Entry file is scaffold (no product imports)| FAIL the task. task_block, cause "scaffold_only". |
 | Test fails — is it flaky or real?          | skill({name:"qa-flaky-test-investigation"}). Classify before reporting. |
-| Preview probe → 404 / blank                | Check vite.config.ts has \`allowedHosts: 'all'\`; if not, task_report_bug for the developer. |
+| Preview probe → 404 / blank                | Check vite.config.ts has \`allowedHosts: true\` (boolean, NOT the string \`'all'\`); if not, task_report_bug for the developer. |
 </failure_modes>
 
 <self_check>
