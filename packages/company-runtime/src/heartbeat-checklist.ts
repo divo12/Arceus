@@ -60,27 +60,32 @@ function checkBudgetHealth(ctx: AgentBeatContext): CheckResult {
  * agent gets woken (no more CEO/PM looping with no-handler messages).
  *
  * Idempotency: if a follow-up task titled `Fix blocker for <id>` already
- * exists in a non-terminal state, the original blocker is considered
- * "in progress" and we return ok — preventing per-beat re-fires.
+ * exists in a handling state, the original blocker is considered
+ * dealt with and we return ok — preventing per-beat re-fires.
  */
 function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
   if (!ctx.currentSprint) {
     return { status: "ok", detail: "No active sprint" };
   }
-  const isOpen = (s: string) => !["completed", "cancelled", "failed"].includes(s);
+  // A follow-up counts as handling its blocker unless it cancelled or
+  // failed. Completed follow-ups suppress too: completion either
+  // reopened the original (no longer blocked) or formally abandoned it
+  // with a written rationale — re-spawning would churn duplicates now
+  // that blocked tasks wake their owner role every interval.
+  const isHandling = (s: string) => !["cancelled", "failed"].includes(s);
   const myBlockers = ctx.tasks.filter(
     (t) => (t.status === "blocked" || t.status === "failed") && t.assignedRole === ctx.role,
   );
   if (myBlockers.length === 0) {
     return { status: "ok", detail: "No blocked tasks owned by me" };
   }
-  // Skip blockers that already have an open follow-up
+  // Skip blockers that already have a handling follow-up
   const pending = myBlockers.filter((t) => {
     const followupTitle = `Fix blocker for ${t.id}`;
-    const hasOpenFollowup = ctx.tasks.some(
-      (f) => f.title === followupTitle && isOpen(f.status),
+    const hasHandlingFollowup = ctx.tasks.some(
+      (f) => f.title === followupTitle && isHandling(f.status),
     );
-    return !hasOpenFollowup;
+    return !hasHandlingFollowup;
   });
   if (pending.length === 0) {
     return { status: "ok", detail: `${myBlockers.length} blocker(s) already being worked on` };

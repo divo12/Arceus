@@ -169,15 +169,17 @@ async function handleTaskResolveBlocker(
     };
   }
   // Defensive dedupe: if a "Fix blocker for <id>" task already exists in
-  // a non-terminal state, do nothing. checkSprintHealth already filters
-  // these out, but a concurrent beat could race.
+  // a handling state (anything but cancelled/failed — completed counts:
+  // it either reopened the original or formally abandoned it), do
+  // nothing. checkSprintHealth already filters these out, but a
+  // concurrent beat could race.
   const followupTitle = `Fix blocker for ${blocked.id}`;
-  const isOpen = (s: string) => !["completed", "cancelled", "failed"].includes(s);
-  const existing = ctx.tasks.find((t) => t.title === followupTitle && isOpen(t.status));
+  const isHandling = (s: string) => !["cancelled", "failed"].includes(s);
+  const existing = ctx.tasks.find((t) => t.title === followupTitle && isHandling(t.status));
   if (existing) {
     finish("completed", `Fix-blocker task already exists (${existing.id})`, 0);
     return {
-      summary: `Fix-blocker follow-up ${existing.id} already open for ${blocked.id}`,
+      summary: `Fix-blocker follow-up ${existing.id} already handling ${blocked.id}`,
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
     };
   }

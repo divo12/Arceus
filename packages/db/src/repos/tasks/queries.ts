@@ -58,6 +58,17 @@ export async function hasClaimableTasksForRole(
             eq(tasks.status, "created" as TaskStatus),
             sql`cardinality(${tasks.dependsOnTaskIds}) = 0`,
           ),
+          // blocked/failed tasks owned by this role must WAKE the role:
+          // the blocked-task repair path (checkSprintHealth → spawn
+          // "Fix blocker" follow-up) lives in the beat's checklist
+          // phase, which only runs if the beat fires at all. Without
+          // this branch a company whose remaining tasks are blocked +
+          // dependent-on-blocked deadlocks permanently (observed live:
+          // tester blocked the QA task, CTO gate depended on it, no
+          // role was ever woken again). The follow-up spawn is
+          // idempotent, so steady-state cost is one checklist-only
+          // beat per role interval while a blocker exists.
+          inArray(tasks.status, ["blocked", "failed"] as TaskStatus[]),
         ),
       ),
     )
