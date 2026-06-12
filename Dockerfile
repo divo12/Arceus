@@ -106,6 +106,23 @@ ARG TSX_VERSION=4.19.3
 # directly rather than try to compose pre-compiled dist/ folders.
 RUN npm install -g opencode-ai@${OPENCODE_VERSION} tsx@${TSX_VERSION}
 
+# Playwright chromium for the tester's browser-probe verification
+# (workspace_capture_browser_probe). Without it, chromium fails to launch
+# with "missing libglib-2.0.so.0" and EVERY viewable task's QA blocks
+# (observed live 2026-06-12: the tester correctly blocked rather than
+# fake-passing). `install-deps` needs root (apt), so this must run before
+# the `USER arceus` switch below. Install the browser into a shared,
+# world-readable path — the default ~/.cache/ms-playwright would land in
+# root's home at build time and be invisible to the non-root `arceus`
+# runtime user. PLAYWRIGHT_BROWSERS_PATH is an ENV (not a build ARG) so it
+# persists to runtime and Playwright (running as arceus) resolves the same
+# location.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx -y playwright install-deps chromium \
+    && npx -y playwright install chromium \
+    && chmod -R a+rX /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy hoisted node_modules + workspace tree + compiled API.
 COPY --from=build --chown=arceus:arceus /app/node_modules ./node_modules
 COPY --from=build --chown=arceus:arceus /app/package.json ./
