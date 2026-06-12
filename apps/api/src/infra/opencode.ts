@@ -158,23 +158,38 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   };
   mergedConfig.plugin = ["./.opencode/plugin/arceus.ts"];
 
-  // Bypass the `external_directory` permission prompt. OpenCode defaults
-  // it to "ask": any tool touching a path outside the project root pauses
-  // for interactive approval. There is NO interactive responder in this
-  // headless server (the plugin's permission.asked hook only logs), so an
-  // ask hangs the tool in `running` until HARD_CAP — the true cause of
-  // the 15-min "apply_patch hang" (the model emits the "/workspace/..."
-  // soul alias inside patchText; pre-fix it reached OpenCode unrewritten
-  // and resolved outside the project root → external_directory ask →
-  // hang; opencode.log: `asking … permission=external_directory`). The
-  // arceus plugin already enforces tenant isolation by rewriting every
-  // path to the in-tenant root and THROWING on real cross-tenant /
-  // outside-tree escapes before the tool runs, so OpenCode's prompt is
-  // redundant here — "allow" removes the headless deadlock without
-  // weakening isolation. Defense in depth alongside the plugin's
-  // apply_patch patchText path-rewrite.
+  // Permission floor: NEVER let OpenCode block a beat on an interactive
+  // permission prompt. Every permission key defaults to "ask"; an "ask"
+  // pauses the tool for human approval, but this is a HEADLESS server
+  // with no responder (the plugin's permission.asked hook only logs), so
+  // any triggered "ask" hangs the tool in `running` until HARD_CAP. This
+  // is a GENERAL stall class, not apply_patch-specific:
+  //   - external_directory → fired on the "/workspace/..." soul alias a
+  //     tool path resolved outside the project root (the 15-min
+  //     "apply_patch hang"; opencode.log: `asking … external_directory`).
+  //   - doom_loop → OpenCode's "you appear stuck in a loop, continue?"
+  //     prompt, which fires when the model repeats similar actions
+  //     (re-reading files, retrying a patch) — so a read/edit can
+  //     "stall" with no error at all. Our own watchdog handles real
+  //     stalls; we never want OpenCode's interactive loop guard blocking.
+  //   - edit/bash/webfetch → controlled per-agent below; this only sets
+  //     the GLOBAL floor so an agent with no explicit setting defaults to
+  //     allow, not ask. Explicit per-agent denies (e.g. CEO edit:deny)
+  //     still win on merge, so isolation/scope is unchanged.
+  // The arceus plugin already enforces tenant isolation (path rewrite +
+  // hard throw on real escapes before the tool runs), so OpenCode's
+  // prompts are redundant here — "allow" removes the deadlock class
+  // without weakening any guarantee.
+  // Spread base config FIRST, then force these to allow — the headless
+  // deadlock must not be re-introducible by a stray base-config "ask".
+  // Per-agent permission lives on mergedConfig.agent[role].permission and
+  // still overrides this global floor on merge inside OpenCode.
   mergedConfig.permission = {
     ...((mergedConfig.permission) ?? {}),
+    edit: "allow",
+    bash: "allow",
+    webfetch: "allow",
+    doom_loop: "allow",
     external_directory: "allow",
   };
 
