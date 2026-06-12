@@ -873,10 +873,20 @@ export class HeartbeatEngine {
     // The legacy `executeChecklistAction` path is preserved for non-task
     // work (e.g. CEO sprint creation) when the agent has no claimable
     // tasks AND the checklist surfaced a primary action.
+    // `blocked` is intentionally included: the scheduler pre-flight
+    // (hasClaimableTasksForRole) wakes a role that owns a blocked task,
+    // and task_block now releases the claim, so the model CAN re-claim
+    // and retry it (shared-rules "Re-claiming your own blocked tasks").
+    // If this check omitted `blocked` the woken beat would fall through
+    // to the checklist route and no-op forever (observed live: a blocked
+    // QA task spun 0-tool wake beats every interval, never retried).
+    // Scope to the role's OWN blockers; an unassigned blocked task isn't
+    // this role's to retry.
     const hasClaimableTask = ctx.tasks.some(
       (t) =>
-        (t.status === "in_progress" || t.status === "planned" || t.status === "created") &&
-        (t.assignedRole === ctx.role || !t.assignedRole)
+        ((t.status === "in_progress" || t.status === "planned" || t.status === "created") &&
+          (t.assignedRole === ctx.role || !t.assignedRole)) ||
+        (t.status === "blocked" && t.assignedRole === ctx.role)
     );
 
     if (!hasClaimableTask && deps.executeChecklistAction && checklist.primaryAction) {

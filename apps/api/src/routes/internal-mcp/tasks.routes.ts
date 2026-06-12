@@ -20,6 +20,7 @@ import { readTaskHybrid, persistTask, CLAIM_FAILURES } from "./task-persistence.
 import { getLocalPreviewState } from "../../workspace/preview.js";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
+import { swallowAndReport } from "../../observability/swallow.js";
 
 const TASK_BASE = "/api/internal/v1/tasks";
 
@@ -362,6 +363,17 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     // for a post-write persistTask barrier. See persistTask race notes
     // in /completion above.
     await setTaskStatus(taskId, "blocked", body.reason);
+    // Release the claim so the task is genuinely re-claimable. `blocked`
+    // is a claimable status, but the claim CAS also requires
+    // checkout_run_id IS NULL — and the contract Task carries no claim
+    // columns, so the setTaskStatus upsert above PRESERVES the old
+    // checkout_run_id. Without this clear, the blocking beat's claim
+    // outlives the beat and no role (not even the assignee) can retry
+    // the task, deadlocking the sprint. Best-effort: the block already
+    // succeeded; a failed clear just leaves the task harder to retry.
+    await swallowAndReport("task.block.clear_claim", () =>
+      tasksRepo.clearClaimKeepStatus(getDb(), taskId),
+    { companyId: req.mcp?.companyId, beatId: req.mcp?.beatId, detail: { taskId } });
     return cacheAndSend(req, reply, 200, success(`Task ${taskId} blocked.`, { taskId, status: "blocked", reason: body.reason }));
   });
 

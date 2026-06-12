@@ -89,6 +89,37 @@ export async function claimTask(
   return { ok: false, cause: "not_claimable" };
 }
 
+/**
+ * Release the claim columns WITHOUT changing status — used when a task
+ * is blocked. `blocked` is a claimable status (claim.ts claimableStatuses)
+ * so the assigned role can self-retry, but the CAS also requires
+ * `checkout_run_id IS NULL`. task_block previously left checkout_run_id
+ * pointing at the (now-ended) blocking beat, so the CAS never matched and
+ * the `blocked` re-claim path was dead code — a blocked task could never
+ * be retried by anyone, deadlocking any sprint whose remaining work hung
+ * off it (observed live: a blocked QA task spun no-op wake beats forever).
+ * Clearing the claim here makes the blocked task genuinely re-claimable.
+ *
+ * Unconditional on run owner (unlike releaseClaim): the blocking beat has
+ * already ended, and the row-locked block transaction is the single
+ * writer, so there is no concurrent claim to protect.
+ */
+export async function clearClaimKeepStatus(
+  db: DbClient,
+  taskId: string,
+): Promise<boolean> {
+  const result = await db
+    .update(tasks)
+    .set({
+      checkoutRunId: null,
+      executionRunId: null,
+      executionLockedAt: null,
+    })
+    .where(eq(tasks.id, toDbId(taskId)))
+    .returning({ id: tasks.id });
+  return result.length === 1;
+}
+
 /** Release a claim without completing — moves back to `planned` so another beat can pick it up. */
 export async function releaseClaim(
   db: DbClient,
