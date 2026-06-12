@@ -35,7 +35,7 @@ export default async function orchestratorRoutes(app: FastifyInstance, opts: Orc
     return {
       executionStatus: isCompanyHeartbeatPaused(companyId) ? "paused" : getExecutionStatus(),
       agentSessions: (await import("../orchestration/state.js")).getAgentSessions(),
-      localPreview: getLocalPreviewState(),
+      localPreview: getLocalPreviewState(companyId),
       sprint: currentSprint,
     };
   });

@@ -470,7 +470,15 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       return reply.code(status).send();
     }
 
-    const previewState = getLocalPreviewState();
+    // Scope to THIS beat's tenant. Without the companyId arg,
+    // getLocalPreviewState falls back to the GLOBAL active company
+    // (resolveCompanyId → getActiveCompanyId), which is the wrong/idle
+    // slot under multi-tenancy or a stale active-company pointer — so a
+    // tenant whose preview IS live reads a not-ready slot, set_preview_url
+    // 409s, the URL never registers, and the tester loops forever on
+    // preview_missing (observed live 2026-06-12, FocusPom). The beat's
+    // own company is authoritative.
+    const previewState = getLocalPreviewState(req.mcp?.companyId);
     const canonicalUrl = previewState.validationUrl ?? previewState.entryUrl ?? previewState.url;
     if (!canonicalUrl || (previewState.status !== "ready" && previewState.status !== "starting")) {
       return sendConflict(

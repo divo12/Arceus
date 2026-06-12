@@ -75,6 +75,10 @@ export async function runVerificationGate(
   productDir: string,
   phase: "pre_review" | "final",
   config: VerificationGateConfig = DEFAULT_GATE_CONFIG,
+  // Scope the preview-health read to this sprint's company; without it
+  // getLocalPreviewState falls back to the global active company (wrong
+  // slot under multi-tenancy). Optional so existing tests still pass.
+  companyId?: string | null,
 ): Promise<VerificationGateResult> {
   const result: VerificationGateResult = {
     passed: true,
@@ -127,7 +131,7 @@ export async function runVerificationGate(
   }
 
   // ── Preview health gate (both phases) ─────────────────────
-  const previewState = getLocalPreviewState();
+  const previewState = getLocalPreviewState(companyId);
   if (previewState.status === "ready" || previewState.url) {
     const probe = await probePreviewHealth(8000);
     result.previewResult = probe;

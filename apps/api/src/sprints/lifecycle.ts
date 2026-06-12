@@ -114,7 +114,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
     }
   }
 
-  const gateResult = await runVerificationGate(productDirForGate, "pre_review");
+  const gateResult = await runVerificationGate(productDirForGate, "pre_review", undefined, companyIdForGate);
 
   emitGraphDecision(currentSprintId, null, "gate_verdict",
     `Pre-review gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,

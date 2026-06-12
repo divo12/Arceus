@@ -556,7 +556,7 @@ function renderWorkspaceContext(
   companyId: string,
   manifest?: WorkspaceManifestEntry[],
 ): string {
-  const preview = getLocalPreviewState();
+  const preview = getLocalPreviewState(companyId);
   const lines = [
     "## Workspace",
     `- **Product directory:** ${getProductDir(companyId)} (referenced as \`/workspace\` in tools — plugin handles tenant routing)`,

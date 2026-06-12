@@ -171,7 +171,9 @@ export async function executeSprintReviewVerification(
   ).join("\n");
 
   const previewProbe = await probePreviewHealth(8000);
-  const previewUrl = getLocalPreviewState().validationUrl ?? getLocalPreviewState().entryUrl ?? getLocalPreviewState().url;
+  // Scope to this sprint's company — see tasks.routes.ts preview-url note.
+  const reviewPreviewState = getLocalPreviewState(snapshot.company.id);
+  const previewUrl = reviewPreviewState.validationUrl ?? reviewPreviewState.entryUrl ?? reviewPreviewState.url;
 
   if (!previewProbe.reachable) {
     emitEmployeeActivity("tester", "error", `Beat ${beatId}: preview unreachable (${previewProbe.error ?? "unknown"}) — auto-failing sprint verification`, { beatId });
@@ -595,7 +597,7 @@ export async function executeSprintFinalGate(
   }
 
   const productDirForGate = workspaceManager.getLocalPath(snapshot.company.id);
-  const gateResult = await runVerificationGate(productDirForGate, "final");
+  const gateResult = await runVerificationGate(productDirForGate, "final", undefined, snapshot.company.id);
 
   if (sprintId) {
     emitGraphDecision(sprintId, null, "gate_verdict",
