@@ -1,5 +1,3 @@
-import progressTool from "../tool/task_update_progress.ts";
-import planStepTool from "../tool/task_append_plan_step.ts";
 import diffTool, { diff as diffFn } from "../tool/workspace_diff_against_criteria.ts";
 import collectTool from "../tool/workspace_collect_evidence.ts";
 import { parseTscOutput } from "../tool/workspace_run_typecheck.ts";
@@ -19,6 +17,13 @@ const mockEnv = () => {
   process.env.COMPANY_ID = "c1";
   process.env.ROLE = "developer";
   process.env.TASK_ID = "tsk_smoke";
+};
+
+const clearBeatEnv = () => {
+  delete process.env.BEAT_ID;
+  delete process.env.COMPANY_ID;
+  delete process.env.ROLE;
+  delete process.env.TASK_ID;
 };
 
 interface FetchCall {
@@ -46,7 +51,7 @@ const installFetchStub = (status: number, body: unknown): FetchCall[] => {
 const ctx = {
   sessionID: "s1",
   messageID: "m1",
-  agent: "developer",
+  agent: "tester",
   directory: "/tmp",
   worktree: "/tmp",
   abort: new AbortController().signal,
@@ -57,71 +62,103 @@ const ctx = {
 const main = async () => {
   mockEnv();
 
-  // 1) task_update_progress — success path
+  // 1) Env-pinned context — headers come from env (test/local harness path)
   {
-    const calls = installFetchStub(200, { status: "success", summary: "ok" });
-    const out = await progressTool.execute({ percent: 42, note: "halfway" }, ctx);
+    const calls = installFetchStub(200, {
+      status: "success",
+      summary: "ok",
+      data: { task: { id: "tsk_smoke", definitionOfDone: ["renders banner"] } },
+    });
+    const out = await diffTool.execute({ observed: "Page renders banner ok." }, ctx);
     const parsed = JSON.parse(out);
-    record(parsed.status === "success", "progress success envelope", parsed.summary);
-    record(calls[0]?.method === "PATCH", "progress uses PATCH");
-    record(calls[0]?.url.endsWith("/api/internal/v1/tasks/tsk_smoke/progress"), "progress path correct");
-    record(calls[0]?.headers["x-beat-id"] === "b1", "beat header set");
-    record(calls[0]?.headers["x-role"] === "developer", "role header set");
+    record(parsed.status === "success", "diff falls back to fetched DoD", parsed.summary);
+    record(calls[0]?.url.endsWith("/api/internal/v1/tasks/tsk_smoke"), "diff GETs task by env TASK_ID");
+    record(calls[0]?.headers["x-beat-id"] === "b1", "beat header set from env");
+    record(calls[0]?.headers["x-session-id"] === "s1", "session header set from tool context");
   }
 
-  // 2) task_append_command — moved to MCP (Spec 28 Phase D); role-custom test removed.
-
-  // 3) task_append_plan_step — body passthrough
+  // 2) Long-lived-server context — NO per-beat env (the PROD path).
+  //    Regression test for "BEAT_ID is required": tools must resolve
+  //    identity from the tool context + taskId arg, not throw.
   {
-    const calls = installFetchStub(200, { status: "success", summary: "ok" });
-    await planStepTool.execute({ step: "Write failing test" }, ctx);
-    const body = calls[0]?.body as { step?: string };
-    record(body?.step === "Write failing test", "plan_step body passthrough");
+    clearBeatEnv();
+    const calls = installFetchStub(200, {
+      status: "success",
+      summary: "ok",
+      data: { task: { id: "tsk_arg", definitionOfDone: ["renders banner"] } },
+    });
+    const out = await diffTool.execute({ observed: "Page renders banner ok.", taskId: "tsk_arg" }, ctx);
+    const parsed = JSON.parse(out);
+    record(parsed.status === "success", "diff works without per-beat env", parsed.summary ?? parsed.error?.details);
+    record(calls[0]?.url.endsWith("/api/internal/v1/tasks/tsk_arg"), "diff GETs task by taskId arg");
+    record(!("x-beat-id" in (calls[0]?.headers ?? {})), "no empty x-beat-id header");
+    record(calls[0]?.headers["x-session-id"] === "s1", "session header present without env");
+    record(calls[0]?.headers["x-role"] === "tester", "role falls back to tool context agent");
+    mockEnv();
+  }
+
+  // 3) Validation failure when neither criteria nor any taskId is available
+  {
+    clearBeatEnv();
+    installFetchStub(200, { status: "success" });
+    const out = await diffTool.execute({ observed: "anything" }, ctx);
+    const parsed = JSON.parse(out);
+    record(
+      parsed.status === "error" && parsed.error?.cause === "validation",
+      "diff without criteria or taskId is a structured validation error",
+      parsed.error?.cause,
+    );
+    mockEnv();
   }
 
   // 4) Envelope failure on HTTP 500
   {
     installFetchStub(500, { status: "error" });
-    const out = await progressTool.execute({ percent: 10 }, ctx);
+    const out = await diffTool.execute({ observed: "x" }, ctx);
     const parsed = JSON.parse(out);
-    record(parsed.status === "error" && parsed.error?.cause === "upstream", "progress maps 500 to upstream error", parsed.error?.cause);
+    record(parsed.status === "error" && parsed.error?.cause === "upstream", "diff maps 500 to upstream error", parsed.error?.cause);
   }
 
-  // 5) Envelope failure when env missing
+  // 5) collect_evidence requires a task id (env or arg)
   {
-    const saved = process.env.TASK_ID;
-    delete process.env.TASK_ID;
+    clearBeatEnv();
     const out = await collectTool.execute({ bundleDir: "/nonexistent" }, ctx);
     const parsed = JSON.parse(out);
-    record(parsed.status === "error", "missing TASK_ID surfaces structured error", parsed.error?.cause);
-    if (saved) process.env.TASK_ID = saved;
+    record(
+      parsed.status === "error" && parsed.error?.cause === "validation",
+      "missing taskId surfaces structured error",
+      parsed.error?.cause,
+    );
+    mockEnv();
   }
 
   // 6) Plugin governance — allowlist denies
   {
     process.env.ARCEUS_ALLOWED_TOOLS = "task_update_progress";
     const hooks = await ArceusPlugin({} as never);
+    // The allowlist gates arceus_* tools only; builtins (bash, read…)
+    // are governed by their own guards, not the allowlist.
     let threw = false;
     try {
       await hooks["tool.execute.before"]!(
-        { tool: "bash", sessionID: "s", callID: "c" },
+        { tool: "arceus_task_create", sessionID: "s", callID: "c" },
         { args: {} },
       );
     } catch {
       threw = true;
     }
-    record(threw, "governance blocks tool not on allowlist");
+    record(threw, "governance blocks arceus tool not on allowlist");
 
     let ok = true;
     try {
       await hooks["tool.execute.before"]!(
-        { tool: "task_update_progress", sessionID: "s", callID: "c" },
+        { tool: "arceus_task_update_progress", sessionID: "s", callID: "c" },
         { args: {} },
       );
     } catch {
       ok = false;
     }
-    record(ok, "governance allows tool on allowlist");
+    record(ok, "governance allows arceus tool on allowlist");
     delete process.env.ARCEUS_ALLOWED_TOOLS;
   }
 
@@ -150,20 +187,7 @@ const main = async () => {
     record(failing.unexpected.length > 0, "diff flags unexpected error tokens", failing.unexpected.join(","));
   }
 
-  // 9) Phase H — workspace_diff_against_criteria fetches DoD when criteria omitted
-  {
-    const calls = installFetchStub(200, {
-      status: "success",
-      summary: "ok",
-      data: { task: { id: "tsk_smoke", definitionOfDone: ["renders banner"] } },
-    });
-    const out = await diffTool.execute({ observed: "Page renders banner ok." }, ctx);
-    const parsed = JSON.parse(out);
-    record(parsed.status === "success", "diff falls back to fetched DoD", parsed.summary);
-    record(calls[0]?.url.endsWith("/api/internal/v1/tasks/tsk_smoke"), "diff GETs task by id");
-  }
-
-  // 10) Plugin circuit breaker — 3 strikes trips
+  // 9) Plugin circuit breaker — 3 strikes trips
   {
     const hooks = await ArceusPlugin({} as never);
     const errorOutput = JSON.stringify({ status: "error", error: { cause: "upstream" } });

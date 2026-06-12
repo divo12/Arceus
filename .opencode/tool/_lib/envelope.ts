@@ -54,10 +54,19 @@ export const stringify = <T>(result: ToolResult<T>): string => JSON.stringify(re
 export interface ArceusContext {
   arceusApiBase: string;
   arceusToken: string;
+  /** "" when unknown — the API resolves identity via x-session-id. */
   beatId: string;
   companyId: string;
   role: string;
+  /** "" when unknown — tools that need a task take taskId as an arg. */
   taskId: string;
+  sessionId: string;
+}
+
+/** The slice of OpenCode's ToolContext that identity resolution needs. */
+export interface ToolSessionContext {
+  sessionID?: string;
+  agent?: string;
 }
 
 const requireEnv = (name: string): string => {
@@ -68,14 +77,29 @@ const requireEnv = (name: string): string => {
   return value;
 };
 
-export const loadContext = (): ArceusContext => ({
+const optionalEnv = (name: string): string => process.env[name]?.trim() ?? "";
+
+/**
+ * BEAT_ID / COMPANY_ID / ROLE / TASK_ID were per-process env in the old
+ * spawn-per-beat architecture. The OpenCode server is now long-lived and
+ * serves many beats, so they are optional here: identity is resolved
+ * per-request by the API's session-context middleware from x-session-id
+ * (pass the tool's execute() context in). Env still wins when set so
+ * tests and local harnesses can pin identity.
+ */
+export const loadContext = (toolCtx?: ToolSessionContext): ArceusContext => ({
   arceusApiBase: requireEnv("ARCEUS_API"),
   arceusToken: requireEnv("ARCEUS_TOKEN"),
-  beatId: requireEnv("BEAT_ID"),
-  companyId: requireEnv("COMPANY_ID"),
-  role: requireEnv("ROLE"),
-  taskId: requireEnv("TASK_ID"),
+  beatId: optionalEnv("BEAT_ID"),
+  companyId: optionalEnv("COMPANY_ID"),
+  role: optionalEnv("ROLE") || (toolCtx?.agent ?? ""),
+  taskId: optionalEnv("TASK_ID"),
+  sessionId: toolCtx?.sessionID ?? "",
 });
+
+/** Stable prefix for idempotency keys when beatId is unknown. */
+export const idempotencyScope = (ctx: ArceusContext): string =>
+  ctx.beatId || ctx.sessionId || "shared";
 
 export interface ArceusRequestInit {
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -95,13 +119,17 @@ export const arceusRequest = async <T>(
   ctx: ArceusContext,
   init: ArceusRequestInit,
 ): Promise<{ status: number; data: T }> => {
+  // Identity headers are best-effort hints; x-session-id is authoritative
+  // (the middleware resolves session-context from it and rejects on
+  // mismatch). Empty values are omitted rather than sent as "".
   const headers: Record<string, string> = {
     "content-type": "application/json",
     authorization: `Bearer ${ctx.arceusToken}`,
-    "x-beat-id": ctx.beatId,
-    "x-company-id": ctx.companyId,
-    "x-role": ctx.role,
   };
+  if (ctx.beatId) headers["x-beat-id"] = ctx.beatId;
+  if (ctx.companyId) headers["x-company-id"] = ctx.companyId;
+  if (ctx.role) headers["x-role"] = ctx.role;
+  if (ctx.sessionId) headers["x-session-id"] = ctx.sessionId;
   if (init.idempotencyKey && init.idempotencyKey.length > 0) {
     headers["idempotency-key"] = init.idempotencyKey;
   }

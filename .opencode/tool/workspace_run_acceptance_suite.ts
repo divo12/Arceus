@@ -38,21 +38,31 @@ export default tool({
     suiteCommand: z.string().optional(),
     cwd: z.string().optional(),
     timeoutMs: z.number().int().positive().max(600_000).optional(),
+    taskId: z.string().optional(),
   },
-  execute: async ({ suiteCommand, cwd, timeoutMs }) =>
+  execute: async ({ suiteCommand, cwd, timeoutMs, taskId }, toolCtx) =>
     run(async () => {
-      const ctx = loadContext();
+      const ctx = loadContext(toolCtx);
+      const resolvedTaskId = taskId ?? ctx.taskId;
       const workdir = cwd ?? process.env.TASK_WORKSPACE ?? process.cwd();
 
       let command = suiteCommand;
       if (!command) {
+        if (!resolvedTaskId) {
+          return failure(
+            "No suiteCommand and no taskId to look one up from. Pass suiteCommand (e.g. \"npm test\") or taskId.",
+            "validation",
+            "never",
+            "payload_fixed",
+          );
+        }
         const res = await arceusRequest<ToolResult<{ task: TaskShape }>>(ctx, {
           method: "GET",
-          path: `/api/internal/v1/tasks/${ctx.taskId}`,
+          path: `/api/internal/v1/tasks/${resolvedTaskId}`,
         });
         if (res.status >= 400) {
           return failure(
-            `Could not load task ${ctx.taskId} (HTTP ${res.status}).`,
+            `Could not load task ${resolvedTaskId} (HTTP ${res.status}).`,
             "upstream",
             "safe",
             "task_exists",
@@ -66,7 +76,7 @@ export default tool({
         const passed = !result.timedOut && result.exitCode === 0;
         const tail = (result.stdout + result.stderr).split("\n").slice(-30).join("\n");
         return success(`Acceptance suite ${passed ? "passed" : "failed"}.`, {
-          taskId: ctx.taskId,
+          taskId: resolvedTaskId || undefined,
           command,
           passed,
           exitCode: result.exitCode,

@@ -6,6 +6,7 @@ import {
   arceusRequest,
   deriveIdempotencyKey,
   failure,
+  idempotencyScope,
   loadContext,
   run,
   success,
@@ -57,10 +58,20 @@ export default tool({
     bundleDir: z.string(),
     title: z.string().optional(),
     maxBytes: z.number().int().positive().max(180_000).optional(),
+    taskId: z.string().optional(),
   },
-  execute: async ({ bundleDir, title, maxBytes }) =>
+  execute: async ({ bundleDir, title, maxBytes, taskId }, toolCtx) =>
     run(async () => {
-      const ctx = loadContext();
+      const ctx = loadContext(toolCtx);
+      const resolvedTaskId = taskId ?? ctx.taskId;
+      if (!resolvedTaskId) {
+        return failure(
+          "No taskId to attach evidence to. Pass taskId.",
+          "validation",
+          "never",
+          "payload_fixed",
+        );
+      }
       let content: string;
       try {
         content = await collectFiles(bundleDir, maxBytes ?? 150_000);
@@ -76,16 +87,16 @@ export default tool({
       const body = {
         agent: ctx.role,
         kind: "output" as const,
-        title: title ?? `Evidence bundle for ${ctx.taskId} (${basename(bundleDir)})`,
+        title: title ?? `Evidence bundle for ${resolvedTaskId} (${basename(bundleDir)})`,
         content,
-        attachToTaskIds: [ctx.taskId],
+        attachToTaskIds: [resolvedTaskId],
       };
 
       const res = await arceusRequest<ToolResult<{ artifactId: string }>>(ctx, {
         method: "POST",
         path: "/api/internal/v1/artifacts",
         body,
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, `workspace_collect_evidence:${ctx.taskId}`, { bundleDir }),
+        idempotencyKey: deriveIdempotencyKey(idempotencyScope(ctx), `workspace_collect_evidence:${resolvedTaskId}`, { bundleDir }),
       });
 
       if (res.status >= 400) {
@@ -99,8 +110,8 @@ export default tool({
       }
 
       const artifactId = res.data?.data?.artifactId ?? null;
-      return success(`Evidence bundled for ${ctx.taskId}.`, {
-        taskId: ctx.taskId,
+      return success(`Evidence bundled for ${resolvedTaskId}.`, {
+        taskId: resolvedTaskId,
         artifactId,
         bundleDir,
       });

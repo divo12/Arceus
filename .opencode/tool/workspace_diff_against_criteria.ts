@@ -55,20 +55,30 @@ export default tool({
   args: {
     observed: z.string().min(1).max(50_000),
     criteria: z.array(z.string()).optional(),
+    taskId: z.string().optional(),
   },
-  execute: async ({ observed, criteria }) =>
+  execute: async ({ observed, criteria, taskId }, toolCtx) =>
     run(async () => {
-      const ctx = loadContext();
+      const ctx = loadContext(toolCtx);
+      const resolvedTaskId = taskId ?? ctx.taskId;
 
       let crits = criteria;
       if (!crits || crits.length === 0) {
+        if (!resolvedTaskId) {
+          return failure(
+            "No criteria and no taskId to fetch a definition-of-done from. Pass criteria[] or taskId.",
+            "validation",
+            "never",
+            "payload_fixed",
+          );
+        }
         const res = await arceusRequest<ToolResult<{ task: TaskShape }>>(ctx, {
           method: "GET",
-          path: `/api/internal/v1/tasks/${ctx.taskId}`,
+          path: `/api/internal/v1/tasks/${resolvedTaskId}`,
         });
         if (res.status >= 400) {
           return failure(
-            `Could not load task ${ctx.taskId} (HTTP ${res.status}).`,
+            `Could not load task ${resolvedTaskId} (HTTP ${res.status}).`,
             "upstream",
             "safe",
             "task_exists",
@@ -79,7 +89,7 @@ export default tool({
 
       if (crits.length === 0) {
         return failure(
-          `Task ${ctx.taskId} has no definition-of-done to diff against.`,
+          `Task ${resolvedTaskId} has no definition-of-done to diff against.`,
           "validation",
           "never",
           "criteria_present",
@@ -93,7 +103,7 @@ export default tool({
           ? `Observed behavior matches all ${crits.length} criteria.`
           : `Diff found ${result.gaps.length} gap(s) and ${result.unexpected.length} unexpected signal(s).`,
         {
-          taskId: ctx.taskId,
+          taskId: resolvedTaskId || undefined,
           criteriaCount: crits.length,
           ...result,
           verdict,
