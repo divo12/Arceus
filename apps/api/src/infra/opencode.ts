@@ -184,6 +184,38 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
     "utf8"
   );
 
+  // Seed root ignore files so OpenCode's ripgrep-based file scanning,
+  // indexing, and change-watching skip dependency/build trees. RCA
+  // (2026-06-12): OpenCode runs as ONE shared server rooted at this
+  // dir, the parent of every tenant subdir. With tenants accumulating
+  // (17 live, 38,689 files — 97% of them node_modules across 11 trees),
+  // per-edit project-wide work grew until an apply_patch to a 1-line CSS
+  // file hung in `running` for the full 15-min HARD_CAP.
+  //
+  // CRITICAL: ripgrep honors `.gitignore` ONLY inside a git repository,
+  // and this tree has NO `.git` at any ancestor — so `.gitignore` alone
+  // is a no-op here. `.ignore` is honored UNCONDITIONALLY. Verified live:
+  // the bundled rg dropped from 38,689 files to 458 (84x) once `.ignore`
+  // was present; `.gitignore` had no effect. We write both — `.ignore`
+  // does the work today, `.gitignore` future-proofs if a repo ever wraps
+  // this dir. node_modules is never read or edited by the model, so
+  // excluding it is purely beneficial. Written every boot to survive
+  // image rebuilds.
+  const ignoreBody = [
+    "# Seeded by Arceus (infra/opencode.ts) — keep OpenCode's file",
+    "# scanning off dependency/build trees in the shared workspace root.",
+    "node_modules/",
+    "dist/",
+    "build/",
+    ".next/",
+    ".turbo/",
+    "coverage/",
+    "*.log",
+    "",
+  ].join("\n");
+  writeFileSync(resolve(wsDir, ".ignore"), ignoreBody, "utf8");
+  writeFileSync(resolve(wsDir, ".gitignore"), ignoreBody, "utf8");
+
   // Write per-role prompt .txt files from the TS source-of-truth
   // (packages/company-runtime/src/employee-prompts/<role>.ts → DEVELOPER_PROMPT
   // etc, exposed via getRoleSoul()). These files are referenced from each
