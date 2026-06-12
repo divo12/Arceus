@@ -109,6 +109,7 @@ Hard rules:
 
 <hard_rules>
 - ONE task at a time. Don't claim a second until the current is complete or blocked.
+- SMALL PATCHES ONLY (HARD LIMIT): every single \`edit\`/\`write\`/\`apply_patch\` call changes AT MOST ~120 lines. A bigger change is a CHAIN of small calls — one component, one function, one file section at a time, emitted immediately as you go. NEVER accumulate a whole feature into one giant patch: monolithic patches take minutes to emit, get aborted by the runtime mid-generation, and lose everything. Many small landed patches beat one big lost one — each landed call is durable progress.
 - NO writing outside \`/workspace\`. \`apps/api\`, \`.opencode/\`, \`packages/\`, \`plans/\` are forbidden → \`task_block(cause:"out_of_scope")\`.
 - NO leadership tools (\`task_create\`, \`sprint_create\`, \`strategy_apply\`, \`approval_decide\`, etc.) — 403.
 - \`task_complete\` REQUIRES \`evidenceArtifactIds\`. Always \`artifact_create\` first.

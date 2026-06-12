@@ -323,13 +323,35 @@ export function isNudgeActive(sessionId: string): boolean {
 async function nudgeStalledSession(sessionId: string): Promise<void> {
   const opencode = await getOpencode();
   // Abort first — a prompt queued behind a dead request never runs.
-  // Best-effort: if the request already died server-side, abort 404s
-  // and the re-prompt below still proceeds.
-  await swallowAndReport(
+  // HTTP-level failures (404 for an already-dead request, etc.) come back
+  // as a normal response and we proceed to the re-prompt. Only a
+  // TRANSPORT failure throws here — and against the local OpenCode that
+  // means exactly one thing: the process is wedged (observed live:
+  // loadavg 33, session.status timing out, the Bun event loop CPU-spun
+  // on giant tool-arg accumulation). A healthy abort is instant, hence
+  // the tight bound.
+  const abortResult = await swallowAndReport(
     "beat.stall_nudge_abort",
-    () => opencode.client.session.abort({ path: { id: sessionId } }),
+    () => opencode.client.session.abort({
+      path: { id: sessionId },
+      signal: AbortSignal.timeout(15_000),
+    }),
     { detail: { sessionId } },
   );
+  if (abortResult === undefined) {
+    // Wedge breaker: re-prompting a wedged process is pointless (the
+    // prompt would hang too, and the beat would ride its hard cap down).
+    // Kill and respawn OpenCode instead — this beat gets reaped by the
+    // next stall window, but the system recovers in ~seconds instead of
+    // holding the company slot for the rest of the 15-min cap.
+    emitEmployeeActivity(
+      "system",
+      "info",
+      `Stall nudge: OpenCode unresponsive while aborting ${sessionId.slice(0, 12)}… — respawning OpenCode (wedge breaker)`,
+    );
+    swallowAndAudit("beat.stall_nudge_reset", () => resetOpencodeConnection(), { detail: { sessionId } });
+    return;
+  }
   const ctx = getSessionContext(sessionId);
   const deployment = ensureDeployment("workerDeployment");
   await opencode.client.session.prompt({
