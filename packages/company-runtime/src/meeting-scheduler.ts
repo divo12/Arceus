@@ -75,6 +75,7 @@ export class MeetingScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private ticking = false;
+  private lastTickErrorMsg: string | null = null;
 
   constructor(config: MeetingSchedulerConfig, deps: MeetingSchedulerDeps) {
     this.config = config;
@@ -111,6 +112,7 @@ export class MeetingScheduler {
     this.ticking = true;
     try {
       const snap = await this.deps.getSnapshot();
+      this.lastTickErrorMsg = null; // healthy tick — re-arm error logging
       // Spec 31 Phase 7.C.1 — empty company id signals "no company yet."
       if (!snap.company.id) return;
 
@@ -210,7 +212,16 @@ export class MeetingScheduler {
         );
       }
     } catch (err) {
-      console.error("[MEETING-SCHEDULER] Tick error:", err instanceof Error ? err.message : err);
+      // Dedupe consecutive identical errors. The active-company pointer can
+      // go stale (e.g. the company was deleted out from under the global
+      // scheduler), making getSnapshot throw "company … not found" on
+      // EVERY 30s tick — a flood that buries real signal in the logs.
+      // Log a transition once; stay quiet while the same error repeats.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg !== this.lastTickErrorMsg) {
+        console.error("[MEETING-SCHEDULER] Tick error:", msg);
+        this.lastTickErrorMsg = msg;
+      }
     } finally {
       this.ticking = false;
     }

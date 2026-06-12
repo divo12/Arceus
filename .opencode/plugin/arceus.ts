@@ -119,6 +119,20 @@ export const ArceusPlugin: Plugin = async () => {
   // If the OpenCode process genuinely dies mid-tool, the pings stop and
   // the stall fires correctly — the ping IS proof of life.
   const KEEPALIVE_INTERVAL_MS = 30_000;
+  // Per-call keepalive ceiling for FAST tools. apply_patch/edit/write/read/
+  // grep/glob are file or in-memory ops that finish in well under a second;
+  // a fast tool still "in flight" after this long is HUNG (observed live:
+  // an apply_patch to a 1-line CSS file stuck in `running` for the full
+  // 15-min HARD_CAP, the keepalive masking it the whole time). Past the
+  // cap we stop pinging for that call so the API watchdog's BEAT_STALL
+  // (150s of frozen lastActivityAt) fires and the nudge aborts+reprompts
+  // — recovery at ~cap+150s instead of HARD_CAP. Genuinely long tools
+  // (bash builds/installs/tests, the acceptance suite) are NOT capped:
+  // they keep unbounded keepalive so a legit 5-min build is never reaped.
+  const FAST_TOOL_KEEPALIVE_CAP_MS = 120_000;
+  const FAST_KEEPALIVE_TOOLS = new Set([
+    "apply_patch", "edit", "write", "read", "grep", "glob", "list", "ls",
+  ]);
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   const ensureKeepalive = (): void => {
     if (keepaliveTimer) return;
@@ -130,6 +144,15 @@ export const ArceusPlugin: Plugin = async () => {
       }
       const pinged = new Set<string>();
       for (const call of pendingCalls.values()) {
+        // A hung fast tool stops being protected past its cap — let the
+        // watchdog reap it. Other in-flight calls for the same beat still
+        // ping, so a beat with genuine concurrent activity stays alive.
+        if (
+          FAST_KEEPALIVE_TOOLS.has(call.tool) &&
+          Date.now() - call.startedAt > FAST_TOOL_KEEPALIVE_CAP_MS
+        ) {
+          continue;
+        }
         // Sync cache lookup only — the before-hook already warmed
         // sessionCtxCache via ensureCtx before registering the call.
         const ctx = sessionCtxCache.get(call.sessionID);
