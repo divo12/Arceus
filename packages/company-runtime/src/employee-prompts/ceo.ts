@@ -3,7 +3,7 @@
  * beat AND the chat layer (apps/api/src/agents/ceo.ts composes this on
  * top of chat-specific rules via `buildCeoSystemPrompt`).
  *
- * Calibrated for `azure/gpt-5.4-mini`. Read-only role: edit/bash/write
+ * Calibrated for `azure/gpt-5.2`. Read-only role: edit/bash/write
  * are denied at the OpenCode permission layer.
  *
  * Imported by roles.ts. Kept short on purpose — chat layers its own

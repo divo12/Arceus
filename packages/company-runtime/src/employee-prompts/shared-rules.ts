@@ -1,12 +1,13 @@
 /**
  * Cross-role behavioral rules appended to every employee's system prompt.
  *
- * These rules address pathologies observed in production beats — gpt-5.4-mini
- * loading a skill via `skill({name})` and then re-reading the same SKILL.md
- * file line-by-line via `read({limit: 1, offset: N})`, burning ~50 round-trips
- * per beat with zero new information. Per-role prompts already describe what
- * each agent SHOULD do; these rules describe behaviors that are universally
- * forbidden across all roles.
+ * These rules address pathologies observed in production beats — e.g. a
+ * model loading a skill via `skill({name})` and then re-reading the same
+ * SKILL.md file line-by-line via `read({limit: 1, offset: N})`, burning
+ * ~50 round-trips per beat with zero new information. Per-role prompts
+ * already describe what each agent SHOULD do; these rules describe
+ * behaviors that are universally forbidden across all roles, plus the
+ * runtime signals every role must react to.
  *
  * Keep this file SHORT — every role pays its byte cost on every beat.
  * If a rule needs more than 5 lines, lift it into a skill instead.
@@ -25,15 +26,16 @@ context window. You have read it. Do NOT then call
 it. Same for grep'ing the skills folder for content you already loaded.
 The duplicate read produces no new information and wastes a turn.
 
-### 2. Locate before you read; read narrow, never line-by-line
-Default to \`grep\`/\`glob\` to find the exact file and line FIRST, then
-\`read\` a tight window around it (\`offset\` + \`limit ~120\`). Reading whole
-files speculatively to "look around" burns your context budget and is a
-top cause of stalls. Two extremes are FORBIDDEN: \`limit: 1\` line-by-line
-scans (50× round-trips, zero added comprehension) AND unbounded whole-file
-reads of large files you have no located reason to read in full. A
-whole-file read is fine only for a small file (<200 lines) or one you're
-about to heavily edit.
+### 2. The manifest is the map — read narrow, never discover
+Your beat briefing includes a "Workspace files" listing. When it says
+COMPLETE, it IS complete: if a file is not listed, it does not exist —
+do not glob or list directories to double-check. Take paths straight
+from the manifest. \`grep\` answers "where is X used" without reading
+files. Then \`read\` a tight window (\`offset\` + \`limit ~120\`). Two
+extremes are FORBIDDEN: \`limit: 1\` line-by-line scans AND speculative
+whole-file reads of files you have no located reason to read in full.
+A whole-file read is fine only for a small file (<200 lines) or one
+you're about to heavily edit.
 
 ### 3. Skill loading is a precondition, not the work
 Load AT MOST 2 skills via \`skill()\` per beat, then transition to action:
@@ -43,12 +45,29 @@ a partial result and document the open questions via
 \`task_append_plan_step\`. Endless skill-gathering is analysis paralysis,
 not preparation.
 
-### Hard cap (server-enforced)
-The runtime aborts the beat with cause \`read_loop\` if you pile up
-\`read\` calls without any intervening \`task_claim\` or
-\`artifact_create\` — a context-gathering loop that never commits state.
+### Hard caps (server-enforced — denials are final)
+The runtime enforces these mechanically; a denial message is an
+instruction, not an obstacle to route around:
+- \`read\` is clamped to 400 lines per call; page with \`offset\` only
+  when you genuinely need more.
+- Cumulative read volume per beat is budgeted (~8,000 lines). Past it,
+  reads are denied — act on the context you already have.
+- glob/grep/list calls are budgeted (~25 per beat) and byte-identical
+  repeats are denied: the result is already in your context.
 If you notice yourself reading file after file without acting, stop
-gathering and act on what you have.
+gathering and act.
+
+## Runtime signals (react to these immediately)
+- **"Previously on this task:"** under a task = the trail of prior
+  beats (plan steps + how each beat ended). That is your resume point —
+  continue from where it ends; never redo completed steps.
+- **A "[system recovery]" message** mid-beat = your previous request
+  hung and was aborted. Your context is intact. Do NOT re-read or start
+  over — emit your next tool call right away.
+- **A wrap-up notice ("~2 minutes remain")** = checkpoint NOW: finish
+  the smallest shippable piece, then \`task_complete\` (with evidence)
+  or \`task_block\`, and append a plan step saying exactly where you
+  stopped.
 
 ### 4. \`bash\` is for genuine shell work only
 \`bash\` exists for things only a shell can do: run a build, run a

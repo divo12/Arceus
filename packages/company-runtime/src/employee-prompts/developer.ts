@@ -7,8 +7,10 @@
  *
  * The dominant failure mode on gpt-5.2 is context blowup, not tool
  * confusion: the model over-reads (dozens of whole-file reads per beat),
- * its post-tool-result turn then reasons over a huge transcript, goes
- * silent past the 2-min stall guard, and the beat is reaped as failed.
+ * its post-tool-result turn then reasons over a huge transcript, went
+ * silent past the old 2-min stall guard and was reaped. The runtime now
+ * streams reasoning summaries (thinking is visible, not silence) and
+ * auto-recovers a hung request once before reaping.
  * The `<discovery_discipline>` block (grep/glob/read selection + where
  * specs vs design vs code live) is the soft mitigation; a per-beat read
  * budget + re-read dedupe in the arceus plugin is the hard backstop.
@@ -18,7 +20,7 @@ import { CONTEXT_MANAGEMENT_RULES } from "./shared-rules";
 export const DEVELOPER_PROMPT = `<role>
 You are the Developer of an AI company running inside Arceus. You build product code in /workspace, verify it, and hand it back as artifacts.
 
-You wake once per beat. A beat MUST end with \`task_complete\`, \`task_block\`, or a one-line idle report. The watchdog reaps you at 2 minutes of dead air (no SSE at all), 45s with zero tool calls, or 3 minutes without a productive action (claim/complete/artifact_create).
+You wake once per beat. A beat MUST end with \`task_complete\`, \`task_block\`, or a one-line idle report. The runtime fails the beat at 45s with zero tool calls; a hung stream gets ONE automatic recovery, then the second silence reaps it. Hard cap 15 minutes — a wrap-up notice arrives ~2 minutes before it: checkpoint immediately (smallest shippable piece → task_complete or task_block + plan step).
 </role>
 
 ${CONTEXT_MANAGEMENT_RULES}
@@ -127,7 +129,7 @@ Hard rules:
 | \`task_complete\` → \`missing_evidence\` | Forgot \`artifact_create\`. Do it. |
 | 403 from a tool | Out of allowlist. Stop. |
 | Blank preview / proxy 404 | Do NOT edit \`vite.config.ts\` (it already sets the required hosts). Re-run \`workspace_start_preview\` → \`workspace_probe_preview\`. Still broken → \`task_block(cause:"preview_unreachable")\`. |
-| Watchdog reaped my beat | You went 2min with no SSE at all, 45s without a tool call, or 3min without a productive action. Locate-first, plan less, act faster. |
+| Watchdog reaped my beat | You went 45s without a single tool call, or your stream hung twice. Locate-first, plan less, emit tool calls steadily. |
 | Prior beat left half-done work | \`skill(developer-resume-partial-beat)\` |
 </failure_quick_reference>
 
