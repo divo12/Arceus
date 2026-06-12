@@ -325,6 +325,15 @@ const WRAP_UP_TEXT =
  */
 const activeNudges = new Set<string>();
 
+/**
+ * Sessions whose NEXT session.idle is the aborted turn's idle, not a real
+ * completion — consumed (once) by resolvePromptCompletion so the beat
+ * waits for the recovery/checkpoint response instead of ending the
+ * moment the nudge aborts the old turn. Kept separate from activeNudges
+ * because run-beat's rejection tolerance must survive the skipped idle.
+ */
+const nudgeIdleSkips = new Set<string>();
+
 /** True if a stall-nudge recovery currently owns this session. */
 export function isNudgeActive(sessionId: string): boolean {
   return activeNudges.has(sessionId);
@@ -424,6 +433,20 @@ export function registerPromptCompletion(sessionId: string, timeoutMs = DEFAULT_
 
 /** Resolve a pending prompt completion for a session. */
 export function resolvePromptCompletion(sessionId: string) {
+  // A nudge (stall recovery or wrap-up) ABORTS the in-flight turn, and
+  // OpenCode fires session.idle for the aborted turn before the recovery
+  // prompt's turn begins. Resolving on that idle ends the beat before
+  // the recovery/checkpoint response runs — observed live: a beat scored
+  // 18s after its wrap-up fired while the checkpoint patch was still
+  // streaming; the response then ran ORPHANED into the next beat's
+  // resumed session, and the nudge's blocking fetch died as a 6-min
+  // TimeoutError zombie. Consume the flag and skip exactly ONE
+  // resolution: the recovery turn's own idle (or the poller's next
+  // cycle, if the recovery prompt never went out) resolves the beat.
+  if (nudgeIdleSkips.has(sessionId)) {
+    nudgeIdleSkips.delete(sessionId);
+    return;
+  }
   activeNudges.delete(sessionId);
   const entry = pendingPromptCompletions.get(sessionId);
   if (entry) {
@@ -436,6 +459,7 @@ export function resolvePromptCompletion(sessionId: string) {
 /** Reject a pending prompt completion for a session with an error. */
 export function rejectPromptCompletion(sessionId: string, error: Error) {
   activeNudges.delete(sessionId);
+  nudgeIdleSkips.delete(sessionId);
   const entry = pendingPromptCompletions.get(sessionId);
   if (entry) {
     clearTimeout(entry.timer);
@@ -513,8 +537,11 @@ async function pollPendingPromptCompletions() {
           // Same abort-then-reprompt path as the stall nudge — a plain
           // prompt queues behind the in-flight turn and never arrives.
           // Mark activeNudges so run-beat tolerates the abort-induced
-          // rejection of the original prompt call.
+          // rejection of the original prompt call, and nudgeIdleSkips so
+          // the aborted turn's idle doesn't end the beat before the
+          // checkpoint response runs.
           activeNudges.add(sessionId);
+          nudgeIdleSkips.add(sessionId);
           swallowAndAudit(
             "beat.wrap_up_nudge",
             () => nudgeStalledSession(sessionId, WRAP_UP_TEXT),
@@ -540,6 +567,7 @@ async function pollPendingPromptCompletions() {
           entry.lastActivityAt = Date.now();
           entry.lastToolAt = Date.now();
           activeNudges.add(sessionId);
+          nudgeIdleSkips.add(sessionId);
           emitEmployeeActivity(
             "system",
             "info",
