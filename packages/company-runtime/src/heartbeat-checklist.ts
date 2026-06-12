@@ -572,18 +572,24 @@ function checkSkillGaps(ctx: AgentBeatContext): CheckResult {
 type CheckFn = (ctx: AgentBeatContext) => CheckResult;
 
 const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
-  // CEO is woken only on real strategic triggers: pending approvals,
-  // roadmap (no/done sprint), or active meetings. Sprint health and
-  // budget alerts are handled by the role that owns the work — not CEO.
-  ceo: [checkMeetingContribution, checkPendingApprovals, checkRoadmap],
-  cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  // checkSprintHealth is role-targeted (a role repairs only its OWN
+  // blocked/failed tasks), so EVERY role that can own tasks must run
+  // it — a role missing it can never spawn the "Fix blocker" follow-up
+  // for its own blockers, and a company whose remaining work hangs off
+  // that blocker deadlocks. Observed live: tester blocked the QA task
+  // and its checklist (which lacked the check) idled forever.
+  //
+  // CEO is otherwise woken only on real strategic triggers: pending
+  // approvals, roadmap (no/done sprint), or active meetings.
+  ceo: [checkMeetingContribution, checkPendingApprovals, checkSprintHealth, checkRoadmap],
+  cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkSprintHealth, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
   // Tester only fires at sprint-end now. Per-task verifying is handled by
   // the developer's self-test (bash + task_complete with evidence). The
   // legacy checkTestQueue would have routed verifying-status tasks here;
   // that path is intentionally retired.
-  tester: [checkMeetingContribution, checkReviewPhaseActive, checkBugFixesReady, checkAssignedTasks],
+  tester: [checkMeetingContribution, checkReviewPhaseActive, checkSprintHealth, checkBugFixesReady, checkAssignedTasks],
   ui_designer: [checkMeetingContribution, checkSprintHealth, checkDesignQueue, checkAssignedTasks],
   marketing: [checkMeetingContribution, checkSprintHealth, checkContentQueue, checkAssignedTasks],
   skills_lead: [
@@ -592,6 +598,7 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
     checkSkillHealth,
     checkSkillGaps,
     checkUnusedSkills,
+    checkSprintHealth,
     // Reactive task-based checks after
     checkSkillQueue,
     checkAssignedTasks,
