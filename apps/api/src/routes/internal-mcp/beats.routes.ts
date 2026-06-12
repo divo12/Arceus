@@ -126,6 +126,8 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
       role?: string;
       sessionId?: string;
       args?: unknown;
+      /** In-flight tool keepalive ping (no tool completed — proof of life only). */
+      keepalive?: boolean;
     };
   }>(
     `${BEATS_BASE}/:beatId/watchdog-reset`,
@@ -145,6 +147,28 @@ export default async function internalMcpBeatsRoutes(app: FastifyInstance): Prom
         typeof body.tool === "string" && body.tool.length > 0 ? body.tool : undefined,
         typeof body.role === "string" && body.role.length > 0 ? body.role : undefined,
       );
+
+      // In-flight tool keepalive: the plugin pings every 30s while a
+      // tool call is EXECUTING (between its before/after hooks). Proof
+      // of life only — bump the silence + last-tool clocks so a long
+      // bash/test/build isn't reaped mid-execution, but do NOT count a
+      // tool call or emit events (nothing completed yet). Root-caused
+      // from task_35de1587's trail: "bash tool aborted twice" — npm run
+      // build outlived the 150s silence window because the previous
+      // bodyless keepalive never reached pending.lastActivityAt, and
+      // the stall nudge's session.abort killed the running build, so
+      // the developer could never produce completion evidence.
+      if (body.keepalive === true && typeof body.sessionId === "string" && body.sessionId.length > 0) {
+        const pending = pendingPromptCompletions.get(body.sessionId);
+        if (pending) {
+          pending.lastActivityAt = Date.now();
+          // A tool is in flight — the model is WAITING on execution, not
+          // "streaming without acting"; the reasoning-stall guard must
+          // not fire mid-build either.
+          pending.lastToolAt = Date.now();
+        }
+        return reply.code(200).send(success("Keepalive.", { ts }));
+      }
 
       if (typeof body.tool === "string" && body.tool.length > 0) {
         const tool = body.tool;

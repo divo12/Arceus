@@ -239,7 +239,10 @@ export async function runBeat(input: {
     const promptText = resumedFrom
       ? `[resume] This conversation continues YOUR OWN previous beat on task ${resumedFrom.taskId}. ` +
         `Everything above is your prior context — files you already read are still read, your design decisions stand. ` +
-        `Do NOT re-read files or re-plan; pick up exactly where your trail ends. Current state follows.\n\n${stateText}`
+        `CRITICAL FIRST STEP: your previous beat's claim was RELEASED when it ended — you do NOT currently own the task, ` +
+        `even though you remember claiming it. Call task_claim({taskId: "${resumedFrom.taskId}"}) FIRST; without it, ` +
+        `task_complete will be rejected with snapshot_stale. After claiming, do NOT re-read files or re-plan — ` +
+        `pick up exactly where your trail ends. Current state follows.\n\n${stateText}`
       : stateText;
     const soul = ROLE_SOULS[input.role].systemPrompt;
     const deployment = ensureDeployment("workerDeployment");

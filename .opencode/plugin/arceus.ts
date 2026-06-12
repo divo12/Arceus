@@ -135,7 +135,25 @@ export const ArceusPlugin: Plugin = async () => {
         const ctx = sessionCtxCache.get(call.sessionID);
         if (ctx?.beatId && !pinged.has(ctx.beatId)) {
           pinged.add(ctx.beatId);
-          postWatchdogReset(ctx.beatId);
+          // MUST carry a keepalive body with the sessionId: the bodyless
+          // variant only feeds the live-status map — it never reaches the
+          // stall clock (pending.lastActivityAt), so long bash/test/build
+          // executions were reaped mid-run by the stall nudge ("bash tool
+          // aborted twice" in task_35de1587's trail).
+          const api = process.env.ARCEUS_API;
+          const token = process.env.ARCEUS_TOKEN;
+          if (api && token) {
+            void fetch(`${api}/api/internal/v1/beats/${ctx.beatId}/watchdog-reset`, {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${token}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ keepalive: true, sessionId: call.sessionID }),
+            }).catch(() => {
+              // Fire-and-forget — keepalive failure must not affect the beat.
+            });
+          }
         }
       }
     }, KEEPALIVE_INTERVAL_MS);
