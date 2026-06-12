@@ -21,6 +21,7 @@ import type {
   BeatStatus,
   BeatTrigger,
   BeatEventTrigger,
+  ChecklistDispatch,
 } from "@arceus/contracts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { runChecklist, type ChecklistResult } from "./heartbeat-checklist";
@@ -144,7 +145,7 @@ export interface BeatDependencies {
   }>;
 
   /** Execute a checklist-driven action when no task is available (e.g. CEO proposes sprint). */
-  executeChecklistAction?: (ctx: AgentBeatContext, action: { detail: string; suggestedAction: string }, beatId: string) => Promise<{
+  executeChecklistAction?: (ctx: AgentBeatContext, action: { detail: string; suggestedAction: string; dispatch?: ChecklistDispatch }, beatId: string) => Promise<{
     summary: string; tokensUsed: number; actionsCount: number; toolCalls: number;
   }>;
 
@@ -888,7 +889,15 @@ export class HeartbeatEngine {
 
       const actionResult = await deps.executeChecklistAction(
         ctx,
-        { detail: checklist.primaryAction.detail ?? "", suggestedAction: checklist.primaryAction.suggestedAction ?? "" },
+        {
+          detail: checklist.primaryAction.detail ?? "",
+          suggestedAction: checklist.primaryAction.suggestedAction ?? "",
+          // Typed dispatch must survive this boundary: the executor's
+          // DISPATCH_HANDLERS routes on it, and dropping it here turned
+          // every dispatched action into "(no handler)" (observed live:
+          // task_resolve_blocker never spawned its fix-blocker task).
+          dispatch: checklist.primaryAction.dispatch,
+        },
         beatId
       );
       execTokens = actionResult.tokensUsed;
