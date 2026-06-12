@@ -104,8 +104,42 @@ export const ArceusPlugin: Plugin = async () => {
   // postSkillUsage's slug lookup both lose the args silently.
   const pendingCalls = new Map<
     string,
-    { tool: string; startedAt: number; args: unknown }
+    { tool: string; startedAt: number; args: unknown; sessionID: string }
   >();
+
+  // ── In-flight tool keepalive ───────────────────────────
+  //
+  // Built-in tool telemetry posts only AFTER execution (the after-hook),
+  // so a long-running tool — bash npm install, a test suite, a Vite cold
+  // boot — looks like total silence to the API's stall watchdog. At the
+  // 150s silence threshold the stall-nudge would abort a WORKING beat
+  // mid-tool (the repo's history already records a beat killed "2s before
+  // workspace_start_preview returned"). While ANY call is in flight, ping
+  // the watchdog every 30s so legitimate long executions stay alive.
+  // If the OpenCode process genuinely dies mid-tool, the pings stop and
+  // the stall fires correctly — the ping IS proof of life.
+  const KEEPALIVE_INTERVAL_MS = 30_000;
+  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  const ensureKeepalive = (): void => {
+    if (keepaliveTimer) return;
+    keepaliveTimer = setInterval(() => {
+      if (pendingCalls.size === 0) {
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+        return;
+      }
+      const pinged = new Set<string>();
+      for (const call of pendingCalls.values()) {
+        // Sync cache lookup only — the before-hook already warmed
+        // sessionCtxCache via ensureCtx before registering the call.
+        const ctx = sessionCtxCache.get(call.sessionID);
+        if (ctx?.beatId && !pinged.has(ctx.beatId)) {
+          pinged.add(ctx.beatId);
+          postWatchdogReset(ctx.beatId);
+        }
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+  };
 
   // ── Session-context cache (Phase 6.5 package F) ────────
   const sessionCtxCache = new Map<string, BeatContext>();
@@ -716,7 +750,13 @@ export const ArceusPlugin: Plugin = async () => {
         // `output` in the after hook, so we must capture them here for
         // the post-execute back-channel + postSkillUsage slug lookup.
         args: output.args,
+        sessionID: input.sessionID,
       });
+      // Keep the stall watchdog fed while this call executes — built-in
+      // tool telemetry only posts after completion, and long tools
+      // (npm install, test suites, preview boots) must not read as
+      // silence. See ensureKeepalive above.
+      ensureKeepalive();
       emitAudit({
         phase: "before",
         tool: input.tool,
