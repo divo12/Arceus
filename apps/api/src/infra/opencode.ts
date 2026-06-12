@@ -248,8 +248,24 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
     "*.log",
     "",
   ].join("\n");
-  writeFileSync(resolve(wsDir, ".ignore"), ignoreBody, "utf8");
-  writeFileSync(resolve(wsDir, ".gitignore"), ignoreBody, "utf8");
+  // BEST-EFFORT: seeding these ignore files is a perf optimization, NOT a
+  // correctness requirement, so a write failure must NEVER abort OpenCode
+  // startup. A pre-existing file owned by another user (e.g. one created
+  // out-of-band by a root shell) makes writeFileSync throw EACCES; left
+  // unguarded that aborted syncOpencodeConfigToWorkspace and the whole
+  // server failed to boot (observed live 2026-06-12). Swallow + log; if
+  // the file already exists with good content the optimization still
+  // holds, and if not we simply run without the ignore (slower, not
+  // broken).
+  for (const name of [".ignore", ".gitignore"]) {
+    try {
+      writeFileSync(resolve(wsDir, name), ignoreBody, "utf8");
+    } catch (err) {
+      console.warn(
+        `[OpenCode] could not seed ${name} (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   // Write per-role prompt .txt files from the TS source-of-truth
   // (packages/company-runtime/src/employee-prompts/<role>.ts → DEVELOPER_PROMPT
