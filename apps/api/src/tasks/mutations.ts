@@ -589,7 +589,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
     // swallowAndAudit so a snapshot-read or DB hiccup surfaces to operators
     // instead of silently leaving the sprint stuck again.
     swallowAndAudit("sprint.check_completion_on_task_terminal", () =>
-      checkSprintCompletion(),
+      checkSprintCompletion(companyId),
       { companyId, detail: { taskId, status } },
     );
   }

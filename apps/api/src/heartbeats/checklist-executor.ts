@@ -263,7 +263,7 @@ async function handleCtoEscalationForceComplete(
     beatId, detail: { reason: action.detail },
   });
 
-  await finalizeSprintCompletion(sprintId);
+  await finalizeSprintCompletion(sprintId, companyId);
 
   finish("completed", `CTO force-completed Sprint ${sprint.number} (escalation timeout)`, 1);
   return {

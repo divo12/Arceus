@@ -616,7 +616,7 @@ export async function executeSprintFinalGate(
       reviewState: s.reviewState ? { ...s.reviewState, gateResults: updatedGateResults, phase: "complete" as const, completedAt: nowIso() } : s.reviewState,
     }));
 
-    await finalizeSprintCompletion(sprintId);
+    await finalizeSprintCompletion(sprintId, snapshot.company.id);
 
     return {
       summary: `Sprint ${sprint.number} final gate PASSED — sprint completed`,
@@ -802,7 +802,7 @@ export async function executeCtoBeatEscalationReview(
           completedAt: new Date().toISOString(),
         } : s.reviewState,
       }));
-      await finalizeSprintCompletion(sprintId);
+      await finalizeSprintCompletion(sprintId, snapshot.company.id);
       emitEmployeeActivity("cto", "transition", `Beat ${beatId}: CTO shipped Sprint ${sprint.number} with known defects`, { beatId });
     } else if (decision === "abort") {
       await updateSprint(sprintId, (s) => ({

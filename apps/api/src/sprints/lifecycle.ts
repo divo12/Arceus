@@ -41,10 +41,19 @@ import { approvePendingBoardApprovals } from "../memory/handoffs.js";
  * concurrent caller gets `null` and the outer function maps that to
  * `false` (same observable behaviour as the old early-return).
  */
-export async function checkSprintCompletion(): Promise<boolean> {
+export async function checkSprintCompletion(companyIdArg?: string): Promise<boolean> {
   const result = await sprintCompletionGate.runExclusive(async () => {
     // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
-    const companyId = requireActiveCompanyId();
+    // Scope to the company whose task just went terminal, NOT the global
+    // active-company pointer. The pointer is a single in-memory value;
+    // under multi-tenancy (or a stale pointer left by a deleted company)
+    // it can name the WRONG company, and buildSnapshotView then throws
+    // "company not found" → the error is swallowed → the sprint never
+    // finalizes and the next sprint never proposes. Observed live
+    // 2026-06-12: CaseBrief finished all tasks but the pointer named a
+    // deleted company, so sprint 1 hung in `active`. Callers that have
+    // the company (the task-terminal trigger) pass it explicitly.
+    const companyId = companyIdArg ?? requireActiveCompanyId();
     const snapshot = await buildSnapshotView(companyId);
   const currentSprintId = snapshot.company.currentSprintId;
   if (!currentSprintId) return false;
@@ -173,7 +182,7 @@ export async function checkSprintCompletion(): Promise<boolean> {
       // the reviewState write lands first. finalizeSprintCompletion is
       // idempotent (early-returns on sprint.status === "completed") and
       // does its own sprint update + chat-message emission.
-      await finalizeSprintCompletion(currentSprintId);
+      await finalizeSprintCompletion(currentSprintId, companyId);
     }
 
     return true;
@@ -191,9 +200,13 @@ export async function checkSprintCompletion(): Promise<boolean> {
  */
 export async function finalizeSprintCompletion(
   sprintId: string,
+  companyIdArg?: string,
 ): Promise<void> {
-  // Spec 31 Phase 7.B.4 — read via canonical-backed view.
-  const companyId = requireActiveCompanyId();
+  // Spec 31 Phase 7.B.4 — read via canonical-backed view. Scope to the
+  // passed company, NOT the global active-company pointer (see
+  // checkSprintCompletion note — a stale/wrong pointer makes
+  // buildSnapshotView throw and the sprint never closes).
+  const companyId = companyIdArg ?? requireActiveCompanyId();
   const snapshot = await buildSnapshotView(companyId);
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
@@ -411,7 +424,7 @@ export async function approveBoardReview() {
   });
 
   setActiveExecution(null);
-  await checkSprintCompletion();
+  await checkSprintCompletion(companyId);
 
   return {
     executionStatus: getExecutionStatus(),

@@ -295,7 +295,7 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       }
 
       // Persist sprint completion to DB + run side effects (snapshot tag, graph emit, etc.)
-      await finalizeSprintCompletion(sprintId);
+      await finalizeSprintCompletion(sprintId, req.mcp.companyId);
 
       // Re-read to get the persisted state
       const updated = await buildSnapshotView(req.mcp.companyId);
