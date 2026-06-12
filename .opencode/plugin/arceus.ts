@@ -480,6 +480,16 @@ export const ArceusPlugin: Plugin = async () => {
             `[arceus-path-guard] Blocked bash — command references parent directory ("../"): ${truncate(cmd, 80)}`
           );
         }
+        // Block ad-hoc dev servers: they never exit, so the bash call
+        // hangs until the beat's hard cap reaps it (observed live: a
+        // tester ran `npm run dev &` and the beat burned 13 minutes).
+        // Preview serving is the platform's job — workspace_start_preview
+        // runs the server supervised and proxy-reachable.
+        if (/\b(?:npm\s+run\s+dev|npm\s+start|vite\s+dev|vite\s+preview|next\s+dev|bun\s+(?:run\s+)?dev)\b/.test(cmd)) {
+          throw new Error(
+            `[arceus-dev-server-guard] Blocked bash — ad-hoc dev servers never exit and hang the beat. Use workspace_start_preview (then workspace_probe_preview) instead: ${truncate(cmd, 80)}`
+          );
+        }
       }
 
       // ── Multi-tenant path rewrite (built-in tools) ─────────────────
@@ -625,14 +635,23 @@ export const ArceusPlugin: Plugin = async () => {
           let cmd = a.command;
 
           // 1. Rewrite the "/workspace[/...]" alias to the real tenant
-          //    root anywhere it appears in the command. This is the same
-          //    mapping scopePath does, applied as a literal string
-          //    substitution so it survives quoting / piping / heredocs.
-          //    Word-boundary the match so "/workspace-template" or
-          //    "/workspaceaccountant" isn't rewritten by accident.
-          cmd = cmd.replace(/\/workspace(\/[^\s'"`;|&)]*)?/g, (full, suffix) => {
-            return suffix ? `${tenantRoot}${suffix}` : tenantRoot;
-          });
+          //    root where it appears as a PATH START in the command. This
+          //    is the same mapping scopePath does, applied as a literal
+          //    string substitution so it survives quoting / piping /
+          //    heredocs. Word-boundary the match so "/workspace-template"
+          //    or "/workspaceaccountant" isn't rewritten by accident.
+          //    The leading delimiter capture anchors the match to a path
+          //    BEGINNING: without it, the "/workspace/…" substring inside
+          //    an already-resolved absolute path like
+          //    "/app/workspace/company_X/src" also matched, and the
+          //    rewrite corrupted it into "/app/app/workspace/company_X/
+          //    company_X/src" (observed live — a tester's cd into its own
+          //    tenant root was mangled into a nonexistent dir).
+          cmd = cmd.replace(
+            /(^|[\s'"`;|&()=])\/workspace(?![\w-])(\/[^\s'"`;|&)]*)?/g,
+            (_full, pre: string, suffix: string | undefined) =>
+              `${pre}${suffix ? `${tenantRoot}${suffix}` : tenantRoot}`,
+          );
 
           // 2. After rewriting, look for any REMAINING absolute path
            //    that points into the shared workspace tree but outside
@@ -668,7 +687,15 @@ export const ArceusPlugin: Plugin = async () => {
           //    override on a per-command basis (`NODE_ENV=production
           //    npm run build`) — inline assignment beats the exported
           //    default for that single command.
-          a.command = `( cd ${shellQuoteSingle(tenantRoot)} && export NODE_ENV=development && ${cmd} )`;
+          //
+          //    Idempotent: a model sometimes echoes the wrapped form of a
+          //    previous command back verbatim; wrapping it again nests
+          //    subshells and (pre-anchor-fix) re-rewrote its paths.
+          const wrapPrefix = `( cd ${shellQuoteSingle(tenantRoot)} && export NODE_ENV=development && `;
+          if (!cmd.startsWith(wrapPrefix)) {
+            cmd = `${wrapPrefix}${cmd} )`;
+          }
+          a.command = cmd;
         }
       }
 

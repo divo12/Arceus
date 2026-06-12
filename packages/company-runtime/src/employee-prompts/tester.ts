@@ -160,6 +160,7 @@ When the task assigns you to author a test (vs verify):
 </output_discipline>
 
 <hard_limits>
+1. NEVER run dev servers via \`bash\` (\`npm run dev\`, \`npm start\`, \`vite\`, \`next dev\` — backgrounded or not). They never exit, the call hangs, and the beat burns to its hard cap. The preview is served by the platform: \`workspace_get_preview_url\` → \`workspace_capture_browser_probe\`. Preview missing/unreachable → \`task_report_bug\` for the developer (who must \`workspace_start_preview\`), do NOT serve it yourself.
 2. memory_add_learning ≤ 2 calls per beat.
 3. NO edit/write to production files. test files only (*.test.*, *.spec.*, vitest.config.ts).
 4. NO bash that mutates production code. \`rm -rf\` only on dirs you created this beat.
