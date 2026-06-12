@@ -518,16 +518,26 @@ export const ArceusPlugin: Plugin = async () => {
           if (typeof a.path === "string") a.path = scopePath(a.path);
         }
 
-        // Search tools — `pattern` (the glob/grep pattern, may contain
-        // wildcards) AND `path` (the base directory for the search). Both
-        // need scoping. Pattern is the bug we just observed: model emits
-        // "/workspace/design/**/*" intending the workspace alias; without
-        // rewriting, glob matches against literal /workspace which doesn't
-        // exist on the container.
-        const SEARCH_TOOLS = new Set(["grep", "glob", "list", "ls"]);
-        if (SEARCH_TOOLS.has(input.tool) && a) {
+        // Search tools — `path` (the base directory) always needs tenant
+        // scoping. `pattern` means two DIFFERENT things by tool:
+        //   - glob/list/ls: pattern is a PATH-LIKE file glob
+        //     ("/workspace/design/**/*") — must be scoped, else it matches
+        //     against literal /workspace which doesn't exist here.
+        //   - grep: pattern is a REGEX. Scoping it corrupted every
+        //     relative-looking pattern into an absolute path
+        //     ("RollupPage" → "/app/workspace/<tenant>/RollupPage", zero
+        //     matches) — observed live in beat_5_1781235679578's reasoning
+        //     stream: the model spent ~10 thinking rounds trying to "fix"
+        //     its regex and evade the dedupe guard, because the harness
+        //     was silently mangling the pattern. grep's `include` is a
+        //     relative filename glob ("*.tsx") and is likewise untouched.
+        const PATH_PATTERN_SEARCH_TOOLS = new Set(["glob", "list", "ls"]);
+        if (PATH_PATTERN_SEARCH_TOOLS.has(input.tool) && a) {
           if (typeof a.pattern === "string") a.pattern = scopePath(a.pattern);
           if (typeof a.path === "string") a.path = scopePath(a.path);
+        }
+        if (input.tool === "grep" && a && typeof a.path === "string") {
+          a.path = scopePath(a.path);
         }
 
         // Custom workspace_* tools (live in .opencode/tool/*.ts) — they
@@ -664,7 +674,7 @@ export const ArceusPlugin: Plugin = async () => {
           ].join("|");
           if (guard.seen.has(key)) {
             throw new Error(
-              `[arceus-read-guard] You already ran this exact ${input.tool} this beat — its results are in your context. The "Workspace files" section of your briefing lists every file that exists; use those paths directly.`,
+              `[arceus-read-guard] You already ran this exact ${input.tool} this beat — its results are in your context. The "Workspace files" section of your briefing lists every file that exists; use those paths directly. If the earlier call FAILED, change the arguments meaningfully (different pattern or directory) — do NOT resend the same call with cosmetic tweaks.`,
             );
           }
           if (guard.discoveryCalls >= DISCOVERY_CALL_BUDGET) {
