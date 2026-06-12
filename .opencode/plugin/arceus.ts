@@ -625,6 +625,32 @@ export const ArceusPlugin: Plugin = async () => {
           a.path = scopePath(a.path);
         }
 
+        // apply_patch: file paths live INSIDE patchText on the directive
+        // lines ("*** Add/Update/Delete File: <path>", "*** Move to:
+        // <path>") — NOT in a filePath arg — so the scoping above misses
+        // them. The model emits the "/workspace/..." soul alias, OpenCode
+        // resolves it against its project root (the shared workspace
+        // parent), finds "/workspace" OUTSIDE that root, and triggers the
+        // `external_directory` permission → "ask". Nothing answers the
+        // ask in this headless server, so apply_patch hangs in `running`
+        // until HARD_CAP. RCA 2026-06-12, confirmed in opencode.log:
+        // `asking … permission=external_directory patterns=[/workspace/src/*]`.
+        // THIS — not file-scan size — was the real apply_patch hang.
+        // Rewrite ONLY the directive-line paths (never the patch body, so
+        // legitimate "/workspace/..." string literals in code are
+        // untouched) so the patch targets the real in-tenant path and the
+        // external_directory ask never fires.
+        if (
+          (input.tool === "apply_patch" || input.tool === "patch") &&
+          a &&
+          typeof a.patchText === "string"
+        ) {
+          a.patchText = a.patchText.replace(
+            /^(\*\*\* (?:Add File|Update File|Delete File|Move to): )(.+)$/gm,
+            (_full: string, prefix: string, p: string) => `${prefix}${scopePath(p.trim())}`,
+          );
+        }
+
         // Custom workspace_* tools (live in .opencode/tool/*.ts) — they
         // `spawn()` child processes (`npx tsc`, `npx vitest`, `git diff`
         // …) with the caller-supplied `cwd` / `project` paths. Without

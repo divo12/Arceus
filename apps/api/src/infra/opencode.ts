@@ -158,6 +158,26 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   };
   mergedConfig.plugin = ["./.opencode/plugin/arceus.ts"];
 
+  // Bypass the `external_directory` permission prompt. OpenCode defaults
+  // it to "ask": any tool touching a path outside the project root pauses
+  // for interactive approval. There is NO interactive responder in this
+  // headless server (the plugin's permission.asked hook only logs), so an
+  // ask hangs the tool in `running` until HARD_CAP — the true cause of
+  // the 15-min "apply_patch hang" (the model emits the "/workspace/..."
+  // soul alias inside patchText; pre-fix it reached OpenCode unrewritten
+  // and resolved outside the project root → external_directory ask →
+  // hang; opencode.log: `asking … permission=external_directory`). The
+  // arceus plugin already enforces tenant isolation by rewriting every
+  // path to the in-tenant root and THROWING on real cross-tenant /
+  // outside-tree escapes before the tool runs, so OpenCode's prompt is
+  // redundant here — "allow" removes the headless deadlock without
+  // weakening isolation. Defense in depth alongside the plugin's
+  // apply_patch patchText path-rewrite.
+  mergedConfig.permission = {
+    ...((mergedConfig.permission) ?? {}),
+    external_directory: "allow",
+  };
+
   // Per-agent MCP tool scoping (OpenCode docs pattern):
   // Globally deny arceus MCP tools, then re-enable per agent based on ROLE_CONFIGS.
   // OpenCode names MCP tools as "<server>_<toolname>", so arceus tools become "arceus_*".
