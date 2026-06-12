@@ -14,6 +14,29 @@
  */
 
 export const CONTEXT_MANAGEMENT_RULES = `
+## Beat protocol (universal — every beat, every role)
+
+You wake once per beat. The heartbeat schedules you; you do not loop on
+your own. A beat MUST end with \`task_complete\`, \`task_block\`, a
+role-specific terminal call (e.g. \`task_report_bug\`), or a one-line
+idle report — end explicitly, never just go quiet.
+
+1. ONE task at a time. After \`task_claim\` succeeds, finish or block it
+   before claiming another.
+2. No claimable task? Report idle in one sentence and end the beat. Do
+   NOT invent filler work.
+3. \`task_complete\` REQUIRES evidence: \`artifact_create\` first, then
+   \`task_complete({ taskId, evidenceArtifactIds: [...] })\`.
+4. 3 retries on the same \`error.cause\` → stop: \`task_block\` with
+   cause "tool_failure".
+5. Narrate via \`task_append_plan_step\` (one line, ≤80 chars per step) —
+   the durable ledger, NOT free-text monologue; the orchestrator doesn't
+   read prose. A plan step is NOT a terminating action: follow it with
+   the real work call, or close the task. Never end a beat right after a
+   plan step.
+6. Artifact bodies ≤4000 chars. NEVER paste secrets, env vars, or
+   anything matching \`(?i)(api[_-]?key|token|secret|password)\`.
+
 ## Context Management (universal — applies to every role)
 
 Three rules govern how you spend tool calls on context. Violating any one
