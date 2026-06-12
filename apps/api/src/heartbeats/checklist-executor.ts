@@ -168,6 +168,15 @@ async function handleTaskResolveBlocker(
       tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
     };
   }
+  // Recursion cap (mirrors checkSprintHealth): never spawn a follow-up
+  // for a task that is itself a fix-blocker follow-up.
+  if (blocked.title.startsWith("Fix blocker for ")) {
+    finish("completed", `Blocker ${blocked.id} is itself a fix-blocker — not chaining another`, 0);
+    return {
+      summary: `Fix-blocker ${blocked.id} is blocked; leaving for re-claim/triage instead of chaining follow-ups`,
+      tokensUsed: drainBeatTokenAccumulator(beatId), actionsCount: 0, toolCalls: 0,
+    };
+  }
   // Defensive dedupe: if a "Fix blocker for <id>" task already exists in
   // a handling state (anything but cancelled/failed — completed counts:
   // it either reopened the original or formally abandoned it), do

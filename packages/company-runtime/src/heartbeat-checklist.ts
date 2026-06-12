@@ -73,8 +73,16 @@ function checkSprintHealth(ctx: AgentBeatContext): CheckResult {
   // with a written rationale — re-spawning would churn duplicates now
   // that blocked tasks wake their owner role every interval.
   const isHandling = (s: string) => !["cancelled", "failed"].includes(s);
+  // One level of follow-up only: a blocked "Fix blocker for X" task must
+  // NOT spawn "Fix blocker for (Fix blocker for X)" — observed live, the
+  // chain recurses unboundedly while the underlying cause persists. A
+  // blocked fix-blocker stays re-claimable by the role (wake-on-blocked
+  // keeps the role beating); recovery is re-claim or human/CTO triage.
   const myBlockers = ctx.tasks.filter(
-    (t) => (t.status === "blocked" || t.status === "failed") && t.assignedRole === ctx.role,
+    (t) =>
+      (t.status === "blocked" || t.status === "failed") &&
+      t.assignedRole === ctx.role &&
+      !t.title.startsWith("Fix blocker for "),
   );
   if (myBlockers.length === 0) {
     return { status: "ok", detail: "No blocked tasks owned by me" };
