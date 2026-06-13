@@ -25,6 +25,15 @@ export const runtimeConfig = {
     readOptionalEnv("ARCEUS_AZURE_OPENAI_MEMORY_DEPLOYMENT") ||
     readOptionalEnv("ARCEUS_AZURE_OPENAI_WORKER_DEPLOYMENT") ||
     readOptionalEnv("ARCEUS_AZURE_OPENAI_DEPLOYMENT"),
+  // Deployments whose model only supports the DEFAULT temperature (1) and
+  // returns HTTP 400 (`unsupported_value`) for any other value — e.g.
+  // gpt-5-nano (verified live 2026-06-13). Comma-separated deployment names,
+  // matched case-insensitively. Consumed by `deploymentSupportsTemperature`
+  // in azure-openai.ts, which also strips a built-in default set ("nano",
+  // o-series) so PROD is safe even when this is unset. Sending an
+  // unsupported temperature produces deterministic 400s that trip the shared
+  // azure-openai circuit breaker and take down every direct LLM caller.
+  temperatureLockedDeployments: readOptionalEnv("ARCEUS_AZURE_TEMPERATURE_LOCKED_DEPLOYMENTS"),
   opencodeHost: readOptionalEnv("ARCEUS_OPENCODE_HOST", "127.0.0.1"),
   opencodePort: readNumberEnv("ARCEUS_OPENCODE_PORT", 4096),
 };

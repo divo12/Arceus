@@ -5,6 +5,7 @@ import { resilientCall, breakers, isRetryableError } from "./resilience.js";
 import { audit } from "../observability/audit-ledger.js";
 import { recordLlmCost } from "../observability/cost-recorder.js";
 import { swallowAndAudit } from "../observability/swallow.js";
+import { deploymentSupportsTemperature as supportsTemperature } from "./temperature-support.js";
 
 interface ChatMessage { role: "system" | "user" | "assistant"; content: string }
 
@@ -30,6 +31,15 @@ interface LlmAuditContext {
 function deploymentUrl(deployment: string) {
   const base = runtimeConfig.azureEndpoint.replace(/\/+$/, "");
   return `${base}/openai/deployments/${deployment}/chat/completions?api-version=${runtimeConfig.azureApiVersion}`;
+}
+
+/**
+ * Does this deployment's model accept a custom `temperature`? Thin wrapper
+ * over the pure helper, supplying the locked-deployment CSV from config.
+ * See `temperature-support.ts` for the why (HTTP 400 → shared breaker trip).
+ */
+function deploymentSupportsTemperature(deployment: string): boolean {
+  return supportsTemperature(deployment, runtimeConfig.temperatureLockedDeployments);
 }
 
 interface AzureOpenAIUsage { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
@@ -177,7 +187,12 @@ async function chatCompletion(
           "Content-Type": "application/json",
           "api-key": runtimeConfig.azureApiKey
         },
-        body: JSON.stringify({ messages, temperature: 0.7 }),
+        body: JSON.stringify({
+          messages,
+          // Omit temperature for deployments that only accept the default —
+          // sending it 400s and trips the shared breaker (see deploymentSupportsTemperature).
+          ...(deploymentSupportsTemperature(deployment) ? { temperature: 0.7 } : {}),
+        }),
         signal: AbortSignal.timeout(AZURE_OPENAI_REQUEST_TIMEOUT_MS),
       });
 
@@ -274,7 +289,10 @@ export async function structuredCompletion<T>(
         },
         body: JSON.stringify({
           messages,
-          temperature: options?.temperature ?? 0.7,
+          // Omit temperature for deployments that only accept the default
+          // (e.g. gpt-5-nano) — sending it 400s and trips the shared
+          // azure-openai breaker. See deploymentSupportsTemperature.
+          ...(deploymentSupportsTemperature(deployment) ? { temperature: options?.temperature ?? 0.7 } : {}),
           max_completion_tokens: maxTokens,
           response_format: {
             type: "json_schema",
@@ -391,7 +409,9 @@ async function chatCompletionStream(
         // many tokens the call consumed.
         body: JSON.stringify({
           messages,
-          temperature: 0.7,
+          // Omit temperature for deployments that only accept the default —
+          // sending it 400s and trips the shared breaker (see deploymentSupportsTemperature).
+          ...(deploymentSupportsTemperature(deployment) ? { temperature: 0.7 } : {}),
           stream: true,
           stream_options: { include_usage: true },
         })

@@ -1,7 +1,26 @@
 # Spec 18: Automated Code Review (Quality Gate)
 
-> **Status:** DRAFT v1
-> **Last updated:** 2026-04-15
+> **Status:** IMPLEMENTED (gate-free adaptation) — 2026-06-13
+> **Last updated:** 2026-06-13
+>
+> **Implementation note (2026-06-13):** Shipped as a *non-blocking adversarial
+> verifier* rather than a blocking gate, to match the gate-free sprint flow
+> (commits ad65e5e/25fcb32 removed review gates + added autonomous sprint
+> chaining). After a developer beat passes, `reviewBeatAndAutoFix`
+> (`apps/api/src/orchestration/code-review.ts`, wired in `run-beat.ts`) fires
+> fire-and-forget: commits the workspace, diffs exactly what THIS beat wrote
+> (`beforeSha` captured at beat start via `git-ops.diffFullContent`/
+> `diffNameOnly`), reviews the diff with the cheap worker LLM tier, and on
+> critical/high findings auto-spawns a `bug_fix` task the heartbeat picks up.
+> It runs *in parallel* with subsequent beats and NEVER blocks/fails a beat
+> (fail-open). The auto-fix itself is a later *serialized* beat — NOT a
+> concurrent in-place fixer (that would corrupt the live agent's writes,
+> violating single-threaded-writes). The "Phase 1 code visibility" and
+> "Phase 3 enforcement/skill-mutation" sections below remain unimplemented;
+> only the review + auto-fix loop shipped.
+
+> **Original status:** DRAFT v1
+> **Originally updated:** 2026-04-15
 > **Deferred from:** Spec 14 Phase 4 — standalone because it requires solving the code visibility problem first
 > **Depends on:** Spec 14 Phases 1-3 (skill registry, mutation, ATA pipeline), Spec 02 (agent execution via OpenCode)
 > **Required by:** nothing (standalone quality gate)
