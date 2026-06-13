@@ -890,6 +890,42 @@ async function startLocalPreviewUnlocked(slot: PreviewSlot, productDir: string, 
     }
   }
 
+  // Pre-build Vite's dependency-optimize cache BEFORE serving. Vite normally
+  // optimizes deps lazily on the first request, but under container load that
+  // startup optimize can be interrupted/killed — leaving `node_modules/.vite`
+  // absent. Then EVERY `/node_modules/.vite/deps/*` request returns Vite's
+  // instant 504 ("deps not optimized") and the product renders a BLANK page
+  // (observed live 2026-06-13). Running `vite optimize` to completion here
+  // guarantees the cache exists, so dep requests serve 200 immediately. Only
+  // when the cache is missing (cheap no-op otherwise); best-effort — the dev
+  // server still lazily optimizes if this fails.
+  if (
+    launch.runtime === "node" &&
+    launch.framework === "Vite" &&
+    !existsSync(join(launch.cwd, "node_modules", ".vite", "deps"))
+  ) {
+    const nodeMajor = Number(process.versions.node.split(".")[0]);
+    // node:sqlite needs --experimental-sqlite on Node <24 (the scaffold's
+    // server entry imports it, and vite loads the config/entry graph).
+    const optimizeEnv = buildProductEnv(
+      nodeMajor < 24
+        ? { NODE_ENV: "development", NODE_OPTIONS: "--experimental-sqlite" }
+        : { NODE_ENV: "development" },
+    );
+    try {
+      execSync("npx vite optimize", {
+        cwd: launch.cwd,
+        stdio: "pipe",
+        timeout: previewConfig.installTimeoutMs,
+        env: optimizeEnv,
+      });
+    } catch (err) {
+      console.warn(
+        `[preview] vite optimize pre-build failed for ${slot.companyId} (non-fatal, dev server will lazy-optimize): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   slot.state.status = "starting";
   slot.state.command = `${launch.command} ${launch.args.join(" ")} [cwd=${launch.targetPath}]`;
   slot.state.targetPath = launch.targetPath;

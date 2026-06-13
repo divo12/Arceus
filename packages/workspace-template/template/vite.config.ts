@@ -53,4 +53,9 @@ export default defineConfig({
     allowedHosts: true,
     strictPort: !!process.env.PORT,
   },
+  // Eagerly pre-bundle the core deps so Vite's optimizer is deterministic at
+  // startup (it won't blank the page waiting to lazily discover them).
+  optimizeDeps: {
+    include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "clsx", "tailwind-merge"],
+  },
 });
