@@ -110,6 +110,48 @@ export async function checkSprintCompletion(companyIdArg?: string): Promise<bool
 }
 
 /**
+ * Does the CEO have sprint-progression work even though it owns no
+ * claimable task? True when the active sprint needs finalization (all
+ * implementation tasks terminal) or is already `completed`/`reviewing`
+ * (next sprint must be planned).
+ *
+ * Why this exists (bug found live 2026-06-13): the scheduler's
+ * `roleHasClaimableWork` pre-flight only looks at tasks the role owns.
+ * Once a sprint's work is done the CEO owns nothing claimable, so the
+ * scheduler never wakes it — a fully-completed sprint sits in `executing`
+ * forever and the next sprint is never proposed (no role is ever woken
+ * again). Wiring this into `roleHasClaimableWork` for the CEO makes the
+ * engine fire a CEO beat, which then finalizes deterministically (see
+ * run-beat's CEO-start `checkSprintCompletion`) and plans the next sprint.
+ *
+ * Mirrors `checkSprintCompletion`'s gating so the two never disagree.
+ * Read-only + best-effort: any failure resolves to `false` (no spurious
+ * wake) rather than throwing into the scheduler tick.
+ */
+export async function sprintNeedsCeoAttention(companyId: string): Promise<boolean> {
+  try {
+    const snapshot = await buildSnapshotView(companyId);
+    const currentSprintId = snapshot.company.currentSprintId;
+    if (!currentSprintId) return false;
+
+    const currentSprint = snapshot.sprints.find((s) => s.id === currentSprintId);
+    if (!currentSprint) return false;
+
+    // Already finalized/in-review → CEO must plan the next sprint.
+    if (currentSprint.status === "completed" || currentSprint.status === "reviewing") return true;
+
+    // Executing but all implementation work is terminal → needs finalize.
+    const sprintTasks = snapshot.tasks.filter(
+      (t) => t.sprintId === currentSprintId && t.kind !== "follow_up" && t.kind !== "bug_fix",
+    );
+    if (sprintTasks.length === 0) return false;
+    return sprintTasks.every((t) => ["completed", "cancelled", "failed"].includes(t.status));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Complete the sprint after the reviewing phase is done (Spec 21).
  * Called when the final gate passes or CTO decides to skip.
  * Sets execution status to "done" so the heartbeat checklist picks up

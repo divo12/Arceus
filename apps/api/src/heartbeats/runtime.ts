@@ -25,6 +25,7 @@ import {
 } from "../persistence/control-plane/index.js";
 import { flush } from "../persistence/mutations/index.js";
 import { executeChecklistAction } from "./checklist-executor.js";
+import { sprintNeedsCeoAttention } from "../sprints/lifecycle.js";
 
 export interface HeartbeatRuntime {
   engine: HeartbeatEngine;
@@ -123,8 +124,17 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
       }
       return roster;
     },
-    roleHasClaimableWork: (companyId, role) =>
-      hasClaimableTasksForRole(getDb(), companyId, role),
+    roleHasClaimableWork: async (companyId, role) => {
+      if (await hasClaimableTasksForRole(getDb(), companyId, role)) return true;
+      // Sprint progression — the CEO owns no claimable task once a
+      // sprint's work is done, so the task-only check above returns false
+      // and the scheduler would never wake it to finalize the sprint +
+      // plan the next one (fully-completed sprint goes idle forever;
+      // observed live 2026-06-13). Wake the CEO when the active sprint
+      // needs finalization or the next-sprint plan.
+      if (role === "ceo") return sprintNeedsCeoAttention(companyId);
+      return false;
+    },
     emitBeatEvent: (event) => { emitBeatEvent(event); },
   };
 

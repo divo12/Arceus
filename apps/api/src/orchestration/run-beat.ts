@@ -39,6 +39,7 @@ import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 import { getHeadSha } from "../workspace/git-ops.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { reviewBeatAndAutoFix } from "./code-review.js";
+import { checkSprintCompletion } from "../sprints/lifecycle.js";
 
 // Aligned with beatTimeoutMs in config/heartbeat.json (15 min).
 //
@@ -107,6 +108,25 @@ export async function runBeat(input: {
       () => getHeadSha(workspaceManager.getLocalPath(input.companyId)),
       { companyId: input.companyId, agentRole: input.role, beatId },
     )) ?? null;
+  }
+
+  // Sprint progression (gate-free self-heal) — finalize a fully-completed
+  // sprint DETERMINISTICALLY at the start of a CEO beat, rather than
+  // relying on the CEO agent remembering to call sprint_finalize (and on
+  // the per-task `setTaskStatus` trigger not racing its own commit on the
+  // last task). Pairs with `roleHasClaimableWork` (runtime.ts) which now
+  // wakes the CEO when the sprint is all-terminal — without that wake no
+  // beat would ever run to reach here. Idempotent (sprintCompletionGate) +
+  // best-effort; never blocks the beat. On finalize, checkSprintCompletion
+  // emits the reactive "sprint_completed" CEO wake, so this same beat's
+  // agent (its context is built below) sees a completed sprint and plans
+  // the next one. Bug found live 2026-06-13 — see project_sprint_chaining_stuck.
+  if (input.role === "ceo") {
+    await swallowAndReport(
+      "sprint.finalize_on_ceo_beat",
+      () => checkSprintCompletion(input.companyId),
+      { companyId: input.companyId, agentRole: "ceo", beatId },
+    );
   }
 
   // Step 3: acquire session — F7 resume-or-create.
