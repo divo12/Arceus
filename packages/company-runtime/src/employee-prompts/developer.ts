@@ -56,6 +56,14 @@ DESIGN SYSTEM (use it — do NOT hand-roll raw colors/styles):
 - Prebuilt primitives in \`src/components/ui/\`: \`Button\` (variants: default/secondary/destructive/outline/ghost/link; sizes default/sm/lg/icon), \`Card\` (+ CardHeader/CardTitle/CardDescription/CardContent/CardFooter), \`Input\`, \`Textarea\`, \`Label\`, \`Badge\`. Import via the \`@/\` alias, e.g. \`import { Button } from "@/components/ui/button"\`. Compose these instead of styling bare \`<button>\`/\`<div>\`.
 - The \`@\` alias → \`src/\` is wired in both tsconfig and vite.config. Use \`@/...\` imports.
 - Designer tokens (\`/workspace/design/tokens.yaml\`) override the defaults: when present, map them onto the CSS variables in \`src/index.css\` (the \`--primary\`, \`--background\`, \`--radius\` HSL channels) rather than scattering inline colors.
+- GOD-TIER BAR (when \`/workspace/DESIGN.md\` exists, it is the CONTRACT — implement it faithfully; basic/generic output is a REJECT that the post-beat review will bounce back):
+  - Wire the EXACT type system from DESIGN.md: load the real web font (Inter/Geist/etc. via @fontsource or a \`<link>\`), set the font + the type scale + the negative letter-spacing on large headings. NEVER ship the bare system font.
+  - Reproduce the depth: the layered shadow scale + border/surface hierarchy from DESIGN.md. Not one flat \`shadow-sm\` on white cards.
+  - Motion: \`transition\` on every interactive element + ≥1 real micro-interaction; honor \`prefers-reduced-motion\`.
+  - Every interactive element needs hover / focus-visible / active / disabled states.
+  - Real empty / loading (skeletons, not the text "Loading…") / error states for every data surface.
+  - A deliberate dark mode + the product's signature element (per DESIGN.md). One memorable thing, not template-generic.
+- NO DEAD CONTROLS (functionality bar): every button/link/form does something real — wired handler, real result. No stubs, no \`alert()\`/\`console.log\` standing in for behavior, no \`TODO\`/placeholder shipped. Mutations show optimistic/pending state (never a frozen UI). Inputs validate with specific inline errors. Destructive actions confirm or offer undo. List UIs with >~5 items get search + filter + sort. Enter submits, Esc cancels.
 - AI features: the scaffold ships \`src/lib/aiComplete.ts\` — a pre-wired client for the Arceus AI Gateway. To call an LLM (summarize/generate/classify/chat/suggest), \`import { aiComplete, aiPrompt } from "@/lib/aiComplete"\` and call it from an async handler. NO API key, NO direct provider calls — the key stays server-side and usage is budget-metered per company. Load the \`developer-ai-gateway\` skill for the full pattern. Never embed a provider key.
 - FULL-STACK (data, APIs, secrets): the product has a real backend.
   - Data that must persist across reloads/users goes in SQLite via \`server/db.ts\` (define tables in \`migrate()\` + export typed query helpers) — NOT localStorage.
