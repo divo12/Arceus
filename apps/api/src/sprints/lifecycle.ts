@@ -131,11 +131,21 @@ export async function checkSprintCompletion(companyIdArg?: string): Promise<bool
 export async function sprintNeedsCeoAttention(companyId: string): Promise<boolean> {
   try {
     const snapshot = await buildSnapshotView(companyId);
+
+    // No active sprint at all → the CEO must plan the FIRST sprint. This is
+    // reached only once agents exist (post quick-execute / strategy apply —
+    // a bare registered company has no agents, so the scheduler's roster has
+    // no CEO to fire). Without this, a freshly bootstrapped company sits with
+    // an org chart but no sprint forever: the CEO owns no claimable task, so
+    // the task-only `roleHasClaimableWork` check never wakes it to call
+    // sprint_create (observed live 2026-06-13 — required a manual CEO trigger
+    // to start). The moment the CEO plans sprint 1, currentSprintId is set and
+    // this returns based on sprint state, so there's no wake loop.
     const currentSprintId = snapshot.company.currentSprintId;
-    if (!currentSprintId) return false;
+    if (!currentSprintId) return true;
 
     const currentSprint = snapshot.sprints.find((s) => s.id === currentSprintId);
-    if (!currentSprint) return false;
+    if (!currentSprint) return true;
 
     // Already finalized/in-review → CEO must plan the next sprint.
     if (currentSprint.status === "completed" || currentSprint.status === "reviewing") return true;
