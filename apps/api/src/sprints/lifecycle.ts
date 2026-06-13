@@ -1,18 +1,15 @@
 import type { AgentIdentity, Sprint, SprintReviewState, Task } from "@arceus/contracts";
-import { getAgentByRole, createWorkflowTask, nowIso } from "@arceus/task-engine";
-import { appendChatMessage, updateSprint, updateTask, upsertTask } from "../persistence/mutations/index.js";
+import { getAgentByRole, nowIso } from "@arceus/task-engine";
+import { appendChatMessage, updateSprint, updateTask } from "../persistence/mutations/index.js";
 import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import {
   emitGraphDecision,
   emitGraphSprintCompleted,
-  emitGraphNodeAdded,
 } from "../observability/graph-emitter/index.js";
 import { getLocalPreviewState, startLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
-import { createReviewState, buildGateFailureBugFields } from "./review-helpers.js";
-import { runVerificationGate } from "./verification-gate.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { swallowAndAudit } from "../observability/swallow.js";
@@ -78,112 +75,32 @@ export async function checkSprintCompletion(companyIdArg?: string): Promise<bool
     return false;
   }
 
-  emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → REVIEWING (all implementation tasks terminal)`, {
+  // Gates removed (user directive 2026-06-12): NO reviewing phase, NO
+  // pre-review build gate, NO tester/CTO verification gate, NO rework
+  // loop between sprint completion and the next sprint. The moment every
+  // implementation task is terminal, finalize the sprint directly. The
+  // CEO then plans the next sprint based on THIS sprint's outcome
+  // (delivered/failed/cancelled counts + the artifacts produced).
+  emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} → COMPLETED (all tasks terminal — review gates removed)`, {
     detail: { sprintNumber: currentSprint.number, sprintId: currentSprintId },
   });
 
   emitGraphDecision(currentSprintId, null, "task_completion",
-    `Sprint ${currentSprint.number} → REVIEWING`,
-    `All ${sprintTasks.length} implementation tasks reached terminal status`,
+    `Sprint ${currentSprint.number} → COMPLETED`,
+    `All ${sprintTasks.length} implementation tasks terminal — finalizing without review gates`,
     "system", 1.0);
 
-  const reviewState = createReviewState(3);
+  // finalizeSprintCompletion marks the sprint completed, auto-starts the
+  // preview so the user can see the result, runs cross-sprint pattern
+  // transfer, posts the "CEO will plan the next sprint" message, and sets
+  // execution status to "done".
+  await finalizeSprintCompletion(currentSprintId, companyId);
 
-  await updateSprint(currentSprintId, (sprint) => ({
-    ...sprint,
-    status: "reviewing",
-    reviewState,
-  }));
-
-  const companyIdForGate = snapshot.company.id;
-  const productDirForGate = workspaceManager.getLocalPath(companyIdForGate);
-
-  // Ensure a preview is running before the gate probes it. The workspace
-  // monitor that used to auto-start previews after each developer beat is
-  // not wired in this code path, so the gate would otherwise always see
-  // "Preview not started" and the tester would force-fail every sprint.
-  const previewBeforeGate = getLocalPreviewState(companyIdForGate);
-  if (previewBeforeGate.status !== "ready" && previewBeforeGate.status !== "starting") {
-    try {
-      const started = await startLocalPreview(productDirForGate, null, companyIdForGate);
-      if (started.status === "ready") {
-        const url = started.url ?? started.entryUrl ?? started.validationUrl;
-        emitEmployeeActivity("system", "preview", `Preview auto-started before review gate → ${url ?? "(no url)"}`, {
-          detail: { sprintId: currentSprintId, status: started.status, url },
-        });
-      } else {
-        emitEmployeeActivity("system", "preview", `Preview auto-start before review gate did not become reachable: ${started.lastError ?? started.status}`, {
-          detail: { sprintId: currentSprintId, status: started.status, lastError: started.lastError },
-        });
-      }
-    } catch (err) {
-      emitEmployeeActivity("system", "error", `Preview auto-start before review gate threw: ${err instanceof Error ? err.message : String(err)}`, {
-        detail: { sprintId: currentSprintId },
-      });
-    }
-  }
-
-  const gateResult = await runVerificationGate(productDirForGate, "pre_review", undefined, companyIdForGate);
-
-  emitGraphDecision(currentSprintId, null, "gate_verdict",
-    `Pre-review gate: ${gateResult.passed ? "PASSED" : "FAILED"}`,
-    gateResult.passed ? "Build check passed" : `Build check failed: ${gateResult.buildResult?.stderr?.slice(0, 200) ?? "unknown error"}`,
-    "system", gateResult.passed ? 1.0 : 0);
-
-  reviewState.gateResults.push(gateResult);
-
-  if (!gateResult.passed) {
-    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate FAILED — creating build fix task`, {
-      detail: { gateResult },
-    });
-
-    const bugFields = buildGateFailureBugFields(gateResult, currentSprintId);
-    if (bugFields) {
-      const bugTask = createWorkflowTask(
-        snapshot, bugFields.kind, bugFields.assignedRole,
-        bugFields.title, bugFields.description, bugFields.problemStatement,
-        bugFields.deliverable, bugFields.definitionOfDone, bugFields.priority, "planned",
-        bugFields.sprintId,
-      );
-      await upsertTask(bugTask);
-      reviewState.bugTaskIds.push(bugTask.id);
-      reviewState.phase = "rework";
-
-      emitGraphNodeAdded(currentSprintId, bugTask);
-      emitReactive(snapshot.company.id, bugFields.assignedRole, "bug_reported");
-    }
-  } else {
-    // Pre-review build gate passed. The sprint plan already includes
-    // tester + CTO review tasks (those completed alongside other tasks
-    // before this gate ran), so re-running an LLM-driven verification
-    // here is redundant. Trust the build gate as the automated safety
-    // net and finalize the sprint directly.
-    //
-    // Trade-off (see commit message): we lose the inline preview probe,
-    // entry-point import check, and rework-loop. Build failures still
-    // route through the FAIL branch above and create a bug task. Taken
-    // because in practice agents include verification work as real
-    // sprint tasks, and the redundant LLM round-trip was eating 2-3
-    // minutes per sprint with no signal the build gate didn't already
-    // cover.
-    emitEmployeeActivity("system", "transition", `Sprint ${currentSprint.number} pre-review gate PASSED — finalizing sprint directly (Option A: skip tester_verification + final_gate)`, {
-      detail: { gateResult },
-    });
-    reviewState.phase = "complete";
-  }
-
-  await updateSprint(currentSprintId, (sprint) => ({
-    ...sprint,
-    reviewState,
-  }));
-
-    if (gateResult.passed) {
-      // Run finalizeSprintCompletion outside the updateSprint above so
-      // the reviewState write lands first. finalizeSprintCompletion is
-      // idempotent (early-returns on sprint.status === "completed") and
-      // does its own sprint update + chat-message emission.
-      await finalizeSprintCompletion(currentSprintId, companyId);
-    }
+  // Wake the CEO to plan the next sprint. Reactive — bypasses the
+  // pre-flight "no claimable task" scheduler skip that otherwise keeps
+  // the CEO idle (it owns no task to claim once the sprint is done), so
+  // the company would sit at sprint N with sprint N+1 never proposed.
+  emitReactive(companyId, "ceo", "sprint_completed");
 
     return true;
   });
