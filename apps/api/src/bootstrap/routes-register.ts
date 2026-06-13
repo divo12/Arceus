@@ -9,6 +9,7 @@ import { isDebugPath, requireAdminAuth, shouldDisableDebugRoutes } from "../auth
 import { userJwtPlugin } from "../auth/user-jwt-middleware.js";
 import {
   agentsRoutes,
+  aiRoutes,
   artifactsRoutes,
   auditRoutes,
   authRoutes,
@@ -112,6 +113,7 @@ export async function registerRoutes(app: FastifyInstance, runtime: RouteRuntime
   await app.register(workspaceRoutes);
   await app.register(previewRoutes);
   await app.register(artifactsRoutes);
+  await app.register(aiRoutes);
 
   // Audit C4 (F-428): debugRoutes is a pure debug plugin — entirely
   // dev-only. Other plugins (hippocampus, governance, skills) contain a

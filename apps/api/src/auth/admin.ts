@@ -103,6 +103,12 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const PUBLIC_MUTATION_ALLOWLIST = new Set<string>([
   "/api/auth/register",
   "/api/auth/login",
+  // AI gateway: company products (frontend-only SPAs at <slug>.arceus.sh)
+  // call this WITHOUT a JWT or admin token. The handler resolves the
+  // company from the request server-side and enforces a per-company budget
+  // cap + rate limit, so the worst case is a company spending its OWN
+  // capped budget — the Azure key never leaves the server.
+  "/api/ai/complete",
 ]);
 
 /**

@@ -30,7 +30,7 @@ import { getPreviewTargetForSlug } from "../workspace/preview.js";
 
 const RESERVED_SUBDOMAINS = new Set(["app", "api", "www", "admin"]);
 
-function previewSubdomainOf(host: string): string | null {
+export function previewSubdomainOf(host: string): string | null {
   const apex = previewConfig.publicDomain.toLowerCase();
   const lower = host.toLowerCase().split(":")[0] ?? "";
   const suffix = `.${apex}`;
@@ -169,6 +169,14 @@ export function registerPreviewProxy(app: FastifyInstance): void {
     if (typeof host !== "string") return;
     const slug = previewSubdomainOf(host);
     if (slug === null) return;
+
+    // AI gateway — `<slug>.arceus.sh/api/ai/*` is NOT part of the product's
+    // own SPA; let it fall through to the Fastify route (ai.routes.ts),
+    // which resolves the company from this same subdomain server-side and
+    // runs the metered LLM call. Everything else for this host proxies to
+    // the tenant preview server below.
+    const path = (req.raw.url ?? "/").split("?")[0] ?? "/";
+    if (path.startsWith("/api/ai/")) return;
 
     // Per-tenant routing: each company's preview lives on its own
     // port (allocated by workspace/preview.ts). Resolve the upstream

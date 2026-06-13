@@ -343,6 +343,69 @@ export async function structuredCompletion<T>(
 }
 
 /**
+ * Public plain-text chat completion for the AI gateway.
+ *
+ * Mirrors the private `chatCompletion` but RETURNS token usage so the
+ * gateway can meter per-company spend. Goes through the same circuit
+ * breaker + retry + audit path; temperature is omitted for locked
+ * deployments (see deploymentSupportsTemperature) and the output is
+ * capped via `max_completion_tokens` to bound per-call cost.
+ */
+export interface GatewayCompletionResult {
+  text: string;
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export async function gatewayChatCompletion(
+  deploymentKey: DeploymentKey,
+  messages: ChatMessage[],
+  options: { maxTokens: number; temperature?: number },
+  auditCtx?: LlmAuditContext,
+): Promise<GatewayCompletionResult> {
+  const deployment = ensureDeployment(deploymentKey);
+  const url = deploymentUrl(deployment);
+
+  return resilientCall(
+    async () => {
+      const start = performance.now();
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": runtimeConfig.azureApiKey,
+        },
+        body: JSON.stringify({
+          messages,
+          ...(deploymentSupportsTemperature(deployment) ? { temperature: options.temperature ?? 0.7 } : {}),
+          max_completion_tokens: options.maxTokens,
+        }),
+        signal: AbortSignal.timeout(AZURE_OPENAI_REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Azure OpenAI ${deployment} error ${response.status}: ${body}`);
+      }
+
+      const json = (await response.json()) as {
+        choices: { message: { content: string } }[];
+        usage?: AzureOpenAIUsage;
+      };
+      const latencyMs = Math.round(performance.now() - start);
+      auditLlmCall(deployment, json.usage, latencyMs, auditCtx);
+
+      return {
+        text: json.choices[0]?.message?.content ?? "",
+        promptTokens: json.usage?.prompt_tokens ?? 0,
+        completionTokens: json.usage?.completion_tokens ?? 0,
+      };
+    },
+    { breaker: breakers.azureOpenAI, shouldRetry: isRetryableError },
+  );
+}
+
+/**
  * Tolerant JSON parser for LLM structured output. Some Azure deployments
  * (notably gpt-5.x and reasoning models) ignore `strict: true` and append
  * commentary like `}\n\nThis strategy will...` after the closing brace,

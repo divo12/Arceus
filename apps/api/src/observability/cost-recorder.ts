@@ -82,7 +82,7 @@ const PRICING_USD_PER_1M_TOKENS: readonly (readonly [string, { input: number; ou
 
 const DEFAULT_PRICING = { input: 1.00, output: 3.00 };
 
-function computeCostCents(model: string, inputTokens: number, outputTokens: number): number {
+export function computeCostCents(model: string, inputTokens: number, outputTokens: number): number {
   const lower = model.toLowerCase();
   const matched = PRICING_USD_PER_1M_TOKENS.find(([key]) => lower.includes(key));
   const pricing = matched?.[1] ?? DEFAULT_PRICING;
