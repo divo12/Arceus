@@ -126,6 +126,44 @@ export async function commitAllChanges(workspacePath: string, message: string) {
   return withKeyedLock(workspacePath, () => commitAllChangesUnlocked(workspacePath, message));
 }
 
+/**
+ * Full unified diff between two refs (Spec 18 — code-review visibility).
+ * Excludes lockfiles/build/deps noise so the reviewer sees only authored
+ * source. `allowError` so a missing ref returns "" instead of throwing
+ * (fail-open: code review must never break the beat).
+ */
+export async function diffFullContent(workspacePath: string, fromRef: string, toRef: string) {
+  return withKeyedLock(workspacePath, () =>
+    runGit(
+      [
+        "diff", "--no-color", `${fromRef}..${toRef}`,
+        "--", ".",
+        ":(exclude)package-lock.json", ":(exclude)pnpm-lock.yaml", ":(exclude)yarn.lock",
+        ":(exclude)dist/**", ":(exclude)node_modules/**", ":(exclude)*.log",
+      ],
+      workspacePath,
+      true,
+    ),
+  );
+}
+
+/** Names of files changed between two refs (same exclusions as diffFullContent). */
+export async function diffNameOnly(workspacePath: string, fromRef: string, toRef: string) {
+  const out = await withKeyedLock(workspacePath, () =>
+    runGit(
+      [
+        "diff", "--no-color", "--name-only", `${fromRef}..${toRef}`,
+        "--", ".",
+        ":(exclude)package-lock.json", ":(exclude)pnpm-lock.yaml", ":(exclude)yarn.lock",
+        ":(exclude)dist/**", ":(exclude)node_modules/**", ":(exclude)*.log",
+      ],
+      workspacePath,
+      true,
+    ),
+  );
+  return out ? out.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+}
+
 /** Create a git bundle containing the full repository history. */
 export async function createBundleFromWorkspace(workspacePath: string, bundlePath: string) {
   return withKeyedLock(workspacePath, async () => {
