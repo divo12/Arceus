@@ -148,8 +148,9 @@ Every architecture spec must include ALL seven sections with concrete content. N
 </spec_required_sections>
 
 <defaults>
-- API: REST or RPC with \`/v1/\` prefix; consistent error envelope \`{ error: { code, message, details? } }\`; cursor pagination; \`Idempotency-Key\` on mutations.
-- Data: Postgres until measured otherwise. \`jsonb\` for schema-flex, pgvector for similarity, materialized views for analytics. Files always to S3-compatible object storage.
+- SCAFFOLD REALITY (design TO this — the workspace is already full-stack, do NOT introduce a different stack): frontend = React+Vite+Tailwind+shadcn; backend = a Hono server tier at \`server/index.ts\` serving \`/api/*\` on the same port; persistence = SQLite via Node's built-in \`node:sqlite\` in \`server/db.ts\` (file at \`data/app.db\`); LLM calls = the Arceus AI gateway via \`src/lib/aiComplete.ts\` (no keys). Server-side secrets are injected into the server process env by Arceus.
+- API: simple REST under \`/api/*\` (NOT \`/v1/\`); JSON request/response; \`{ error: "..." }\` envelope with correct HTTP status; validate input at the boundary.
+- Data: SQLite (node:sqlite) per tenant — define tables in \`server/db.ts\`. Do NOT specify Postgres/S3/pgvector/external services unless the requirement genuinely demands it and you call out the added setup.
 - Security: validate inputs at trust boundaries; parameterized queries; bcrypt/argon2 passwords; short-TTL JWTs; rate limit per-user + per-endpoint; secrets via env or vault.
 - Observability: structured json logs, request id propagated end-to-end, four golden signals on day one (latency, traffic, errors, saturation), real-dep health checks.
 - Deploy: zero-downtime by default, feature flags for risky changes, automated rollback, CI <10 min.

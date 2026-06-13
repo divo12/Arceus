@@ -13,6 +13,8 @@ The plugin path-rewrite handles tenant scoping transparently: anything you refer
 
 ## Directory tree (frozen scaffold)
 
+This is a **full-stack** scaffold: a React/Vite frontend (`src/`) AND a Hono server tier (`server/`) with SQLite persistence — one `npm run dev` runs both on one port (`/api/*` → Hono, everything else → the React app).
+
 ```
 /workspace/
 ├── .gitignore
@@ -24,9 +26,13 @@ The plugin path-rewrite handles tenant scoping transparently: anything you refer
 ├── tsconfig.json
 ├── tsconfig.node.json
 ├── vite.config.ts
-└── src/
-    ├── App.tsx
-    ├── index.css            # design-system tokens (light + dark) — see below
+├── server/                 # BACKEND (Node, server-only) — see developer-fullstack-data skill
+│   ├── index.ts            # Hono app: /api/* routes
+│   └── db.ts               # SQLite (node:sqlite) — data model + typed query helpers
+├── data/                   # SQLite file (app.db) lives here at runtime — gitignored
+└── src/                    # FRONTEND (browser)
+    ├── App.tsx             # starter demo: notes (full-stack) + AI summary — replace it
+    ├── index.css           # design-system tokens (light + dark) — see below
     ├── main.tsx
     ├── components/
     │   └── ui/              # prebuilt shadcn-style primitives (use these)
@@ -37,8 +43,12 @@ The plugin path-rewrite handles tenant scoping transparently: anything you refer
     │       ├── label.tsx
     │       └── badge.tsx
     └── lib/
-        └── utils.ts        # cn() helper
+        ├── utils.ts        # cn() helper
+        ├── api.ts          # typed client for the product's own /api/* server
+        └── aiComplete.ts   # Arceus AI gateway client (aiComplete/aiPrompt) — no key needed
 ```
+
+Persistence + APIs + secrets → the `server/` tier (load `developer-fullstack-data`). LLM calls → `src/lib/aiComplete.ts` (load `developer-ai-gateway`).
 
 There is also `/workspace/design/` (UI Designer's handoff folder, populated AT RUNTIME by the ui_designer agent — read it for tokens + layout prototypes when working on frontend) and `/workspace/specs/`, `/workspace/artifacts/`, `/workspace/docs/` (populated when other roles create artifacts that materialize to disk).
 
@@ -53,17 +63,19 @@ There is also `/workspace/design/` (UI Designer's handoff folder, populated AT R
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "NODE_OPTIONS=--experimental-sqlite vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "NODE_OPTIONS=--experimental-sqlite vite preview"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "hono": "^4.6.14",
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.5.4"
   },
   "devDependencies": {
+    "@hono/vite-dev-server": "^0.18.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -77,15 +89,22 @@ There is also `/workspace/design/` (UI Designer's handoff folder, populated AT R
 }
 ```
 
+The `NODE_OPTIONS=--experimental-sqlite` prefix enables Node's built-in `node:sqlite` (used by `server/db.ts`). Keep it on `dev`/`preview`.
+
 ### vite.config.ts
 
 ```ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import devServer from "@hono/vite-dev-server";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // Mounts the Hono server (server/index.ts) for /api/*; everything else → Vite.
+    devServer({ entry: "server/index.ts", exclude: [/^(?!\/api(\/|$)).*/] }),
+  ],
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },

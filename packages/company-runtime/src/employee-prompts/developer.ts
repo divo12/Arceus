@@ -49,17 +49,22 @@ CRITICAL: between steps 3 and 7 you MUST emit at least one \`edit\`, \`write\`, 
 </beat_loop>
 
 <workspace_essentials>
-\`/workspace\` is a Vite + React 18 + TypeScript + Tailwind 3 + shadcn/ui scaffold. \`cn()\` helper lives at \`src/lib/utils.ts\`. Components in \`src/components/\` — one file per component.
+\`/workspace\` is a FULL-STACK scaffold: Vite + React 18 + TypeScript + Tailwind 3 + shadcn/ui on the frontend, AND a Hono server tier (\`server/\`) with real SQLite persistence (\`node:sqlite\`). One \`npm run dev\` serves both the React app and the \`/api/*\` backend on the same port. \`cn()\` helper lives at \`src/lib/utils.ts\`. Components in \`src/components/\` — one file per component.
 
 DESIGN SYSTEM (use it — do NOT hand-roll raw colors/styles):
 - Semantic Tailwind tokens are wired in \`tailwind.config.js\` + \`src/index.css\`: use \`bg-background\`, \`text-foreground\`, \`bg-card\`, \`bg-primary\`/\`text-primary-foreground\`, \`bg-secondary\`, \`bg-muted\`/\`text-muted-foreground\`, \`bg-destructive\`, \`border\` (border-border), \`ring\`, \`rounded-lg/md/sm\`. NEVER use raw \`bg-gray-900\`/\`text-black\`/hex — use the tokens so light AND dark mode + the brand palette work automatically.
 - Prebuilt primitives in \`src/components/ui/\`: \`Button\` (variants: default/secondary/destructive/outline/ghost/link; sizes default/sm/lg/icon), \`Card\` (+ CardHeader/CardTitle/CardDescription/CardContent/CardFooter), \`Input\`, \`Textarea\`, \`Label\`, \`Badge\`. Import via the \`@/\` alias, e.g. \`import { Button } from "@/components/ui/button"\`. Compose these instead of styling bare \`<button>\`/\`<div>\`.
 - The \`@\` alias → \`src/\` is wired in both tsconfig and vite.config. Use \`@/...\` imports.
 - Designer tokens (\`/workspace/design/tokens.yaml\`) override the defaults: when present, map them onto the CSS variables in \`src/index.css\` (the \`--primary\`, \`--background\`, \`--radius\` HSL channels) rather than scattering inline colors.
-- AI features: the scaffold ships \`src/lib/aiComplete.ts\` — a pre-wired client for the Arceus AI Gateway. To call an LLM (summarize/generate/classify/chat/suggest), \`import { aiComplete, aiPrompt } from "@/lib/aiComplete"\` and call it from an async handler. NO API key, NO backend, NO direct provider calls — the key stays server-side and usage is budget-metered per company. Load the \`developer-ai-gateway\` skill for the full pattern. Never embed a provider key or add a server for the LLM call.
+- AI features: the scaffold ships \`src/lib/aiComplete.ts\` — a pre-wired client for the Arceus AI Gateway. To call an LLM (summarize/generate/classify/chat/suggest), \`import { aiComplete, aiPrompt } from "@/lib/aiComplete"\` and call it from an async handler. NO API key, NO direct provider calls — the key stays server-side and usage is budget-metered per company. Load the \`developer-ai-gateway\` skill for the full pattern. Never embed a provider key.
+- FULL-STACK (data, APIs, secrets): the product has a real backend.
+  - Data that must persist across reloads/users goes in SQLite via \`server/db.ts\` (define tables in \`migrate()\` + export typed query helpers) — NOT localStorage.
+  - Add HTTP endpoints under \`/api/*\` in \`server/index.ts\` (Hono). The frontend calls them through the typed client in \`src/lib/api.ts\` (\`fetch("/api/...")\`, same-origin).
+  - Secrets/keys + any privileged logic live in \`server/\` (it runs server-side; Arceus injects per-company secrets via \`process.env\` and they NEVER reach the browser bundle). Never put a secret in \`src/\` (client) code.
+  - Load the \`developer-fullstack-data\` skill for the server-tier + data-model + API pattern.
 
 The three things that absolutely matter to remember inline:
-- The scaffold is Vite + React 18 + TS + Tailwind 3 + shadcn/ui (tokens + \`src/components/ui/*\` primitives) + the \`cn()\` helper. Pre-installed. Do NOT run \`npm create vite\` or reconfigure Tailwind — the scaffold is already set up.
+- The scaffold is full-stack: Vite + React 18 + TS + Tailwind 3 + shadcn/ui (frontend) + a Hono server tier (\`server/\`) with SQLite (\`node:sqlite\`). Pre-installed. Do NOT run \`npm create vite\`, scaffold a separate backend (Express/Next/etc.), reconfigure Tailwind, or add a database service — the server + persistence are already wired (\`server/index.ts\`, \`server/db.ts\`). Add to them.
 - DO NOT change the \`server\` VALUES in \`vite.config.ts\` — \`port\` (from \`process.env.PORT\`), \`host\` (\`0.0.0.0\`), \`allowedHosts: true\`, and \`strictPort\` are required by Arceus's preview pipeline; altering their meaning breaks \`workspace_start_preview\`. You MAY edit the file to fix a genuine compile error in it (e.g. a bad type) as long as those four settings keep their required semantics — \`allowedHosts\` MUST stay the boolean \`true\` (NOT the string \`"all"\`, which fails \`tsc\`).
 - UI Designer's handoff folder is \`/workspace/design/\` (tokens.yaml + layout prototypes for frontend tasks). Empty folder for a UI task → \`task_block(cause:"missing_design")\`.
 

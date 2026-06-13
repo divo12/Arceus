@@ -810,6 +810,33 @@ export async function startLocalPreview(productDir: string, preferredTargetPath?
   return withKeyedLock(previewLockKey(id), () => startLocalPreviewUnlocked(slot, productDir, preferredTargetPath));
 }
 
+/**
+ * Env keys that must NEVER reach a product's server tier. The full-stack
+ * scaffold runs agent-authored server code (server/*.ts) in this process'
+ * child, with access to `process.env`. Arceus's OWN secrets (Azure key, DB
+ * URL, admin token, etc.) live there — passing them through would let any
+ * product read them directly, defeating the AI-gateway guarantee that "the
+ * key never leaves the server". We default-keep the toolchain vars npm/vite
+ * need (PATH, HOME, NODE_*, npm_*, …) and strip anything that looks secret.
+ */
+const SENSITIVE_ENV_KEY = /(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|DATABASE_URL|POSTGRES|PGPASS|AZURE|OPENAI|ANTHROPIC|SUPABASE|RAILWAY)/i;
+
+/**
+ * Build the environment for a product's install / dev-server process:
+ * process.env minus Arceus secrets, plus the explicit `extra` vars. This is
+ * also the seam for per-company server-side secret injection — add allowed,
+ * company-scoped vars to `extra`.
+ */
+function buildProductEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
+  const safe: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (SENSITIVE_ENV_KEY.test(key)) continue;
+    safe[key] = value;
+  }
+  return { ...safe, ...extra };
+}
+
 async function startLocalPreviewUnlocked(slot: PreviewSlot, productDir: string, preferredTargetPath?: string | null) {
   await stopLocalPreviewUnlocked(slot);
 
@@ -854,7 +881,7 @@ async function startLocalPreviewUnlocked(slot: PreviewSlot, productDir: string, 
         cwd: launch.cwd,
         stdio: "pipe",
         timeout: previewConfig.installTimeoutMs,
-        env: { ...process.env, NODE_ENV: "development" },
+        env: buildProductEnv({ NODE_ENV: "development" }),
       });
     } catch (err) {
       slot.state.status = "error";
@@ -915,12 +942,14 @@ async function startLocalPreviewUnlocked(slot: PreviewSlot, productDir: string, 
   slot.process = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     shell: true,
-    env: {
-      ...process.env,
+    // Scoped env: Arceus secrets stripped (the product's server tier can read
+    // process.env), plus the company id so server code can scope its data.
+    env: buildProductEnv({
       PORT: String(slot.state.port),
       HOST: previewConfig.host,
       BROWSER: "none",
-    },
+      ARCEUS_COMPANY_ID: slot.companyId,
+    }),
   });
 
   slot.process.on("exit", (code) => {

@@ -4,17 +4,19 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "NODE_OPTIONS=--experimental-sqlite vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "NODE_OPTIONS=--experimental-sqlite vite preview"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "hono": "^4.6.14",
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.5.4"
   },
   "devDependencies": {
+    "@hono/vite-dev-server": "^0.18.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

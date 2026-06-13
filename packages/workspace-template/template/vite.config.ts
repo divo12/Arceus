@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import devServer from "@hono/vite-dev-server";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -29,7 +30,14 @@ import { fileURLToPath } from "node:url";
  *                 build`, breaking every scaffolded company's build.
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // Full-stack: mount the Hono server (server/index.ts) for `/api/*` on the
+    // SAME dev-server port. The `exclude` regex sends everything that is NOT
+    // `/api` back to Vite (the React SPA + HMR + assets), so one `npm run dev`
+    // process serves both the frontend and the backend.
+    devServer({ entry: "server/index.ts", exclude: [/^(?!\/api(\/|$)).*/] }),
+  ],
   // `@` → ./src so shadcn-style imports (`@/lib/utils`, `@/components/ui/*`)
   // resolve at build/runtime. tsconfig declares the same alias for the
   // type-checker; Vite needs its own copy or `npm run build` fails to
