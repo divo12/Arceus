@@ -67,7 +67,7 @@ export async function runFlowTestAndReport(args: {
         "Content-Type": "application/json",
         ...(FLOW_TESTER_TOKEN ? { Authorization: `Bearer ${FLOW_TESTER_TOKEN}` } : {}),
       },
-      body: JSON.stringify({ url: previewUrl, goal, max_steps: 28 }),
+      body: JSON.stringify({ url: previewUrl, goal, max_steps: 12 }),
       signal: AbortSignal.timeout(FLOW_TEST_TIMEOUT_MS),
     });
     if (!res.ok) {

@@ -55,8 +55,9 @@ def _run_async(coro: Any) -> Any:
     """Run async coroutine in the shared browser event loop (sync bridge)."""
     loop = _get_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    # A full agent flow-test needs more than 120s. Configurable; default 600s.
-    return future.result(timeout=float(os.getenv("BROWSER_OP_TIMEOUT_S", "600")))
+    # Hard per-run cap. 120s keeps each flow-test cheap/fast; step count is
+    # tuned to conclude within it. Configurable via BROWSER_OP_TIMEOUT_S.
+    return future.result(timeout=float(os.getenv("BROWSER_OP_TIMEOUT_S", "120")))
 
 
 def _progress(msg: str) -> None:

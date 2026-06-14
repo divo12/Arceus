@@ -89,6 +89,8 @@ DEFAULT_GOAL = (
     "Separately judge the VISUAL quality: god-tier (intentional typography, spacing, "
     "depth, motion, polish — like Linear/Vercel/Stripe) vs basic/generic (flat default "
     "shadcn, system font, no depth). "
+    "Work EFFICIENTLY — you have a tight ~120s budget. Don't over-explore; do a "
+    "few real interactions, then CONCLUDE within ~10 actions. "
     "When done, finish your final answer in EXACTLY this shape:\n"
     "VERDICT: PASS or FAIL\n"
     "WORKS: <one line: does the core flow work end to end?>\n"
@@ -100,7 +102,7 @@ DEFAULT_GOAL = (
 class FlowTestRequest(BaseModel):
     url: str
     goal: Optional[str] = None
-    max_steps: int = 25
+    max_steps: int = 12  # tuned to conclude within the 120s budget
 
 
 @app.get("/health")
@@ -130,7 +132,7 @@ def flow_test(req: FlowTestRequest, authorization: Optional[str] = Header(defaul
         result = run_agent_task(
             session,
             task,
-            max_steps=max(5, min(req.max_steps, 40)),
+            max_steps=max(5, min(req.max_steps, 14)),
             create_session_if_missing=True,
             url_for_open=req.url,
             llm=build_llm(),
