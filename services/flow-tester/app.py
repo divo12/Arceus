@@ -116,7 +116,15 @@ def flow_test(req: FlowTestRequest, authorization: Optional[str] = Header(defaul
             raise HTTPException(status_code=401, detail="unauthorized")
 
     session = f"flowtest_{uuid.uuid4().hex[:8]}"
-    task = f"{req.goal}\n\n{DEFAULT_GOAL}" if req.goal else DEFAULT_GOAL
+    # Pin the agent to the target URL explicitly — url_for_open alone doesn't
+    # reliably navigate the agent, and without it in the task the agent wanders
+    # (e.g. onto localhost). The product lives ONLY at this URL.
+    nav = (
+        f"FIRST navigate to this EXACT url and do ALL of your testing on it (never "
+        f"go to localhost or any other host): {req.url}\n\n"
+    )
+    body = f"{req.goal}\n\n{DEFAULT_GOAL}" if req.goal else DEFAULT_GOAL
+    task = nav + body
 
     try:
         result = run_agent_task(
