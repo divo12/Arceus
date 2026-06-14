@@ -4,7 +4,6 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { applyStrategyTx } from "../sprints/strategy.js";
@@ -29,10 +28,10 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
   app.post("/api/company/strategy", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const { sendBoardMessageToCeo } = await import("../agents/chat.js");
-      // Multi-tenant: prefer the caller's JWT-derived companyId. The
-      // legacy active-company singleton is retained as a fallback for
-      // the non-auth bootstrap path that early versions exercised.
-      const companyId = request.companyId ?? getActiveCompanyId();
+      // Native multi-tenant: resolve the tenant from the caller's JWT only.
+      // No global current-company fallback — an unauthenticated caller gets the
+      // generic refine prompt below rather than some other tenant's company.
+      const companyId = request.companyId;
       audit({ companyId: companyId ?? "", category: "board", eventType: "strategy_requested", summary: "Board requested CEO strategy generation" });
       const company = companyId ? await companiesRepo.findByIdHydrated(getDb(), companyId) : null;
       return await sendBoardMessageToCeo(company?.goal || "Refine the current idea into a demoable first release.");
@@ -41,7 +40,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(500);
       return sanitizeError(error, "Strategy generation failed.", {
         route: "POST /api/strategy",
-        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });
@@ -50,9 +49,9 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
     try {
       const body = strategyOutputSchema.parse(request.body);
       // Spec 31 Phase 7.C.c-bis — applyStrategyTx is atomic; it either
-      // commits the entire org chart or rolls back. Surface a 409 if no
-      // company has been bootstrapped yet so the board can retry.
-      const companyId = request.companyId ?? getActiveCompanyId();
+      // commits the entire org chart or rolls back. Surface a 409 if the
+      // caller has no company in session so the board can retry.
+      const companyId = request.companyId;
       if (!companyId) {
         reply.code(409);
         return { error: "No active company to apply strategy to." };
@@ -64,7 +63,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(400);
       return sanitizeError(error, "Strategy payload rejected.", {
         route: "POST /api/strategy/approve",
-        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });
@@ -72,7 +71,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
   app.post("/api/strategy/execute", { preHandler: [requireUserAuth] }, async (request, reply) => {
     try {
       const body = strategyOutputSchema.parse(request.body);
-      const companyId = request.companyId ?? getActiveCompanyId();
+      const companyId = request.companyId;
       if (!companyId) {
         reply.code(409);
         return { error: "No active company to apply strategy to." };
@@ -89,7 +88,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(400);
       return sanitizeError(error, "Strategy payload rejected.", {
         route: "POST /api/strategy/execute",
-        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });
@@ -110,20 +109,21 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       // each stage rebuilds from canonical so the CEO LLM sees the
       // up-to-date view.
       //
-      // Multi-tenant: when the caller has an authenticated companyId,
-      // start from that company instead of asking the singleton. The
-      // bootstrap branch only fires for the legacy unauthenticated
-      // bootstrap flow.
+      // Native multi-tenant: when the caller is authenticated, start from
+      // their JWT company. Otherwise bootstrap a NEW company and carry its id
+      // forward directly (snapshot.company.id) — never read it back from a
+      // global pointer, which is what coupled this flow to the wrong tenant.
       let snapshot;
-      const authedCompanyId = request.companyId ?? getActiveCompanyId();
-      if (!authedCompanyId) {
+      let companyId: string;
+      if (!request.companyId) {
         emitActivity("system", "transition", "Bootstrapping company...");
         snapshot = (await bootstrapIdeaWithWorkspace(idea)).snapshot;
+        companyId = snapshot.company.id;
         emitActivity("system", "transition", `Company bootstrapped: ${snapshot.company.name}`);
       } else {
-        snapshot = await buildSnapshotView(authedCompanyId);
+        companyId = request.companyId;
+        snapshot = await buildSnapshotView(companyId);
       }
-      const companyId = request.companyId ?? requireActiveCompanyId();
 
       emitActivity("ceo", "transition", "CEO generating strategy...");
       const strategy = await generateStrategy(snapshot);
@@ -145,7 +145,7 @@ export default async function strategyRoutes(app: FastifyInstance, opts: Strateg
       reply.code(400);
       return sanitizeError(error, "Quick execute failed.", {
         route: "POST /api/quick-execute",
-        companyId: request.companyId ?? getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });

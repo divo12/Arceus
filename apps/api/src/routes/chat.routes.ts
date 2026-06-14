@@ -5,8 +5,8 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
 import { requireUserAuth } from "../auth/user-jwt-middleware.js";
+import { requireUserAndCompany, companyIdOf } from "../auth/company-context.js";
 import { audit } from "../observability/audit-ledger.js";
 import { sendBoardMessageToCeo, streamBoardMessageToCeo } from "../agents/chat.js";
 import { sanitizeError } from "../observability/sanitize.js";
@@ -35,14 +35,14 @@ export default async function chatRoutes(app: FastifyInstance) {
   app.post("/api/chat/ceo", async (request, reply) => {
     try {
       const body = chatSchema.parse(request.body);
-      audit({ companyId: getActiveCompanyId() ?? "", category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
+      audit({ companyId: request.companyId ?? "", category: "board", eventType: "board_message_sent", summary: `Board → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}` });
       return await sendBoardMessageToCeo(body.message);
     } catch (error) {
       request.log?.error?.(error);
       reply.code(500);
       return sanitizeError(error, "CEO chat failed.", {
         route: "POST /api/chat/ceo",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });
@@ -63,7 +63,7 @@ export default async function chatRoutes(app: FastifyInstance) {
         reply.code(500);
         return sanitizeError(error, "CEO stream failed.", {
           route: "GET /api/chat/ceo/stream",
-          companyId: getActiveCompanyId() ?? undefined,
+          companyId: request.companyId ?? undefined,
         });
       }
       // SSE headers already flushed — frontend EventSource is open. We must
@@ -85,7 +85,7 @@ export default async function chatRoutes(app: FastifyInstance) {
     try {
       const body = messagesPostSchema.parse(request.body);
       audit({
-        companyId: request.companyId ?? getActiveCompanyId() ?? "",
+        companyId: request.companyId ?? "",
         category: "board",
         eventType: "board_message_sent",
         summary: `Board (${body.mode}) → CEO: ${body.message.slice(0, 100)}${body.message.length > 100 ? "…" : ""}`,
@@ -98,7 +98,7 @@ export default async function chatRoutes(app: FastifyInstance) {
         reply.code(500);
         return sanitizeError(error, "Chat send failed.", {
           route: "POST /api/chat/messages",
-          companyId: getActiveCompanyId() ?? undefined,
+          companyId: request.companyId ?? undefined,
         });
       }
       try { reply.raw.end(); } catch { /* already ended */ }
@@ -112,7 +112,7 @@ export default async function chatRoutes(app: FastifyInstance) {
       const query = z.object({
         limit: z.coerce.number().int().positive().max(500).default(100),
       }).parse(request.query);
-      const companyId = request.companyId ?? getActiveCompanyId();
+      const companyId = request.companyId;
       if (!companyId) {
         return { messages: [] };
       }
@@ -124,7 +124,7 @@ export default async function chatRoutes(app: FastifyInstance) {
       reply.code(500);
       return sanitizeError(error, "Chat history failed.", {
         route: "GET /api/chat/history",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });
@@ -134,11 +134,11 @@ export default async function chatRoutes(app: FastifyInstance) {
    * Injects a synthetic user message ("[user picked: X]") into the
    * transcript so the next CEO turn naturally sees the resolution.
    */
-  app.post("/api/chat/cards/:id/decide", { preHandler: [requireUserAuth] }, async (request, reply) => {
+  app.post("/api/chat/cards/:id/decide", { preHandler: [requireUserAndCompany] }, async (request, reply) => {
     try {
       const params = z.object({ id: z.string().min(1) }).parse(request.params);
       const body = decideSchema.parse(request.body);
-      const companyId = request.companyId ?? requireActiveCompanyId();
+      const companyId = companyIdOf(request);
 
       const updated = await boardMessagesRepo.markCardDecided(
         getDb(),
@@ -185,7 +185,7 @@ export default async function chatRoutes(app: FastifyInstance) {
       reply.code(500);
       return sanitizeError(error, "Card decide failed.", {
         route: "POST /api/chat/cards/:id/decide",
-        companyId: getActiveCompanyId() ?? undefined,
+        companyId: request.companyId ?? undefined,
       });
     }
   });
@@ -196,7 +196,10 @@ export default async function chatRoutes(app: FastifyInstance) {
    * history from `/api/chat/history` on connect.
    */
   app.get("/api/chat/stream", async (request, reply) => {
-    const companyId = getActiveCompanyId();
+    // Native multi-tenant: filter the SSE feed by the authenticated viewer's
+    // own company (from the JWT in cookie/?token=), not a process-global
+    // pointer — the old global read leaked one tenant's chat to all viewers.
+    const companyId = request.companyId;
     reply.raw.setHeader("Content-Type", "text/event-stream");
     reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
     reply.raw.setHeader("Connection", "keep-alive");
