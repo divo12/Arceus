@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { AgentIdentity, CompanySnapshot, Task } from "@arceus/contracts";
 import { getAgentByRole, uniqueStrings, MAX_INCOMING_ARTIFACT_IDS } from "@arceus/task-engine";
 import { updateTask, writeArtifactSync } from "../persistence/mutations/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { audit } from "../observability/audit-ledger.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
@@ -48,7 +47,7 @@ export async function addArtifactSync(
   kind: Artifact["kind"],
   title: string,
   content: string,
-  companyId?: string,
+  companyId: string,
   taskId?: string,
 ): Promise<Artifact> {
   const artifact: Artifact = {
@@ -60,9 +59,9 @@ export async function addArtifactSync(
     createdAt: new Date().toISOString(),
     taskId: taskId ?? null,
   };
-  // companyId threaded through to the durable write — the internal
-  // getActiveCompanyId() fallback is boot-time state and misfiles
-  // artifacts under the wrong tenant in multi-tenant mode.
+  // companyId is threaded explicitly to the durable write so the artifact is
+  // always filed under the caller's own tenant (native multi-tenant — no global
+  // current-company fallback).
   await writeArtifactSync(artifact, companyId);
   swallowAndAudit("artifact.disk_write_sync", () => writeArtifactToDisk(artifact, companyId), {
     agentRole: artifact.agent,
@@ -373,7 +372,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
 
   // Audit task transitions
   audit({
-    companyId: prev?.companyId ?? getActiveCompanyId() ?? "",
+    companyId: prev?.companyId ?? "",
     category: "task_lifecycle",
     severity: status === "failed" ? "warn" : "info",
     eventType: `task_${status}`,
@@ -385,7 +384,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
 
   // Phase 7: Trigger escalation meeting when a task becomes blocked
   if (status === "blocked" && prevStatus !== "blocked") {
-    const blockedCompanyId = prev?.companyId ?? getActiveCompanyId();
+    const blockedCompanyId = prev?.companyId;
     if (blockedCompanyId) {
       triggerEscalationMeeting(blockedCompanyId, taskId, feedback ?? `Task "${prev?.title ?? taskId}" is blocked`);
     }
@@ -394,7 +393,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
   // Auto-promote downstream tasks when a task completes.
   // Spec 31 Phase 7.C.c — read from canonical instead of in-memory snapshot.
   if (status === "completed") {
-    const companyId = prev?.companyId ?? getActiveCompanyId();
+    const companyId = prev?.companyId;
     if (!companyId) return; // No company → no downstream graph to promote.
     const snapshot = await buildSnapshotView(companyId);
     const completedTask = snapshot.tasks.find((t) => t.id === taskId);
@@ -455,7 +454,7 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
   // Spec 31 Phase 7.C.c — canonical-backed snapshot for the terminal-status
   // side effects. Same companyId resolution as the completion branch above.
   if (["completed", "failed", "cancelled"].includes(status)) {
-    const companyId = prev?.companyId ?? getActiveCompanyId();
+    const companyId = prev?.companyId;
     if (!companyId) return;
     const snapshot = await buildSnapshotView(companyId);
     const task = snapshot.tasks.find((t) => t.id === taskId);
