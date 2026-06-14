@@ -19,7 +19,6 @@ import type {
   CompanySnapshot,
   SnapshotVersion,
 } from "@arceus/contracts";
-import { getActiveCompanyId } from "../active-company.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../../observability/activity.js";
 import { ROLE_CAPABILITIES } from "@arceus/company-runtime";
@@ -54,8 +53,7 @@ export function noteOneMutation(): void {
  * canonical via `buildSnapshotView`; returns the empty-snapshot shape
  * (with companyId stamped in) when no company is bootstrapped.
  */
-export async function cpLoadSnapshot(): Promise<CompanySnapshot & { _version: number }> {
-  const companyId = getActiveCompanyId();
+export async function cpLoadSnapshot(companyId: string | null): Promise<CompanySnapshot & { _version: number }> {
   if (!companyId) {
     const { createEmptyCompanySnapshot } = await import("@arceus/company-runtime");
     return { ...createEmptyCompanySnapshot(), _version: snapshotVersion };
@@ -65,9 +63,9 @@ export async function cpLoadSnapshot(): Promise<CompanySnapshot & { _version: nu
 }
 
 /** Get the current version info. */
-export async function cpGetVersion(): Promise<SnapshotVersion> {
+export async function cpGetVersion(companyId: string | null): Promise<SnapshotVersion> {
   return {
-    companyId: getActiveCompanyId(),
+    companyId,
     version: snapshotVersion,
     updatedAt: new Date().toISOString(),
     mutationCount,
@@ -101,8 +99,7 @@ export interface ControlPlaneStatus {
  * Phase 7.C.d-cp — sync-friendly because no DB read is needed; the
  * canonical-direct architecture has no in-memory cache to report on.
  */
-export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
-  const companyId = getActiveCompanyId();
+export function cpGetStatus(executionStatus: string, companyId: string | null): ControlPlaneStatus {
   const isPending = companyId === null;
 
   return {
@@ -137,8 +134,7 @@ export function cpGetStatus(executionStatus: string): ControlPlaneStatus {
  * Snapshot summary for the dashboard (lightweight, no full data).
  * Spec 31 Phase 7.C.d-cp — async; reads via `buildSnapshotView`.
  */
-export async function cpGetSnapshotSummary() {
-  const companyId = getActiveCompanyId();
+export async function cpGetSnapshotSummary(companyId: string | null) {
   if (!companyId) {
     return {
       version: snapshotVersion,
@@ -263,17 +259,13 @@ export async function cpLoadAgentContext(
   trigger: BeatRecord["trigger"],
   config: { beatTokenBudget: number; beatCostCeilingCents: number },
 ): Promise<AgentBeatContext | null> {
-  // Multi-tenant: companyId comes from the BeatRequest (sourced from the
-  // roster entry) and identifies WHICH tenant this beat is firing for. The
-  // active-company singleton is fallback ONLY — used for the small set of
-  // legacy paths that still call this without a beat-shaped companyId.
-  // Without the explicit param, the scheduler could pick agent X from
-  // tenant B while getActiveCompanyId() returns tenant A's id, and the
-  // tenant-A snapshot has no agent X → SKIPPED "Agent X not found in
-  // snapshot" for every cross-tenant beat.
-  const effectiveCompanyId = companyId || getActiveCompanyId();
-  if (!effectiveCompanyId) return null;
-  const snap = await buildSnapshotView(effectiveCompanyId);
+  // Native multi-tenant: companyId comes from the BeatRequest (sourced from the
+  // roster entry) and identifies WHICH tenant this beat is firing for. No global
+  // singleton fallback — that previously let the scheduler pick agent X from
+  // tenant B while the global pointer named tenant A, whose snapshot has no
+  // agent X → SKIPPED "Agent X not found" for every cross-tenant beat.
+  if (!companyId) return null;
+  const snap = await buildSnapshotView(companyId);
   const agent = snap.agents.find((a) => a.id === agentId);
   if (!agent) return null;
 

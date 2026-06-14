@@ -9,16 +9,16 @@ import { cpGetStatus, cpGetVersion, cpGetSnapshotSummary, cpApplyMutations } fro
 import { sanitizeError } from "../observability/sanitize.js";
 
 export default async function controlPlaneRoutes(app: FastifyInstance) {
-  app.get("/api/control-plane/status", async () => {
-    return cpGetStatus(getExecutionStatus());
+  app.get("/api/control-plane/status", async (request) => {
+    return cpGetStatus(getExecutionStatus(), request.companyId);
   });
 
-  app.get("/api/control-plane/version", async () => {
-    return cpGetVersion();
+  app.get("/api/control-plane/version", async (request) => {
+    return cpGetVersion(request.companyId);
   });
 
-  app.get("/api/control-plane/snapshot-summary", async () => {
-    return cpGetSnapshotSummary();
+  app.get("/api/control-plane/snapshot-summary", async (request) => {
+    return cpGetSnapshotSummary(request.companyId);
   });
 
   app.post("/api/control-plane/mutations", async (request, reply) => {
