@@ -40,6 +40,8 @@ import { swallowAndAudit } from "../observability/swallow.js";
 import { startStrandedRunSweeper, sweepStrandedRunsOnBoot } from "../orchestration/stranded-run-sweeper.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { companyHasResumableWork } from "../sprints/resume-policy.js";
+import { workspaceManager } from "../workspace/manager.js";
+import { startLocalPreview } from "../workspace/preview.js";
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { cpHydrateTrustScores } from "../persistence/control-plane/index.js";
@@ -142,6 +144,7 @@ async function autoResumeIfActiveSprint(
   }
 
   let resumeCount = 0;
+  const resumableCompanyIds: string[] = [];
   for (const company of companies) {
     const companyId = companiesRepo.fromDbId(company.id, company.friendlyId);
     let snap;
@@ -164,10 +167,26 @@ async function autoResumeIfActiveSprint(
         (currentSprint ? `Sprint ${currentSprint.number} is ${currentSprint.status}` : "no active sprint (CEO must plan)"),
       );
       resumeCount++;
+      resumableCompanyIds.push(companyId);
     }
   }
 
   if (resumeCount === 0) return;
+
+  // Deploy-resilience: the per-company preview (Vite) processes are children of
+  // this API process, so a redeploy kills them — and nothing restarted them,
+  // leaving `<slug>.arceus.sh` returning 404/ECONNREFUSED and blocking the
+  // tester ("preview URL is null") until the next developer beat. Restart each
+  // resuming company's preview now. Fire-and-forget so boot isn't delayed by the
+  // ~30s install/spawn per company; best-effort (a failure just defers to the
+  // next beat that calls startLocalPreview).
+  for (const companyId of resumableCompanyIds) {
+    swallowAndAudit("preview.resume_on_boot", async () => {
+      const productDir = workspaceManager.getLocalPath(companyId);
+      await startLocalPreview(productDir, null, companyId);
+      console.log(`[STARTUP] Preview restart kicked off for company ${companyId}`);
+    }, { companyId });
+  }
 
   // Audit C7 (F-212/F-233): clear stranded `running` rows from the
   // previous deploy/crash BEFORE the engine starts.

@@ -255,19 +255,20 @@ export async function finalizeSprintCompletion(
     detail: { sprintNumber: sprint.number, sprintId, completedCount, failedCount, cancelledCount, totalTasks: sprintTasks.length },
   });
 
-  // Audit C8 (F-347): tag the snapshot BEFORE flipping sprint status.
-  // Previously we flipped to "completed" then awaited tagSprint, and if
-  // the tag throw landed in the inner catch the sprint row stayed
-  // `completed` while the canonical snapshot row was missing — operators
-  // had no way to retry without a manual DB edit. Now tag-first means a
-  // git/Supabase failure leaves the sprint in `reviewing` and an
-  // operator (or the next finalize call) can retry cleanly.
+  // Snapshot tagging is BEST-EFFORT and must NOT block sprint completion.
+  // History (Audit C8 / F-347): finalize used to `return` here on a tag
+  // failure to leave the sprint "recoverable in reviewing". But review gates
+  // were removed, so a held finalize has no recovery path — it strands the
+  // sprint in `executing` forever and the CEO loops calling sprint_finalize
+  // (which reports success) while sprint_create rejects with "still executing"
+  // (observed live 2026-06-14 on a flaky-Supabase tag upload). The snapshot
+  // bundle is a re-creatable artifact; a frozen company is not. So: tag, audit
+  // any failure, and ALWAYS proceed to flip the sprint to completed.
   const tagResult = await tagCurrentSprintSnapshot(companyId);
   if (!tagResult.ok) {
-    emitEmployeeActivity("system", "error", `Sprint ${sprint.number} completion HELD — snapshot tag failed: ${tagResult.error}`, {
+    emitEmployeeActivity("system", "error", `Sprint ${sprint.number} snapshot tag failed (continuing — bundle is re-creatable, completion is not blocked): ${tagResult.error}`, {
       detail: { sprintId, sprintNumber: sprint.number, error: tagResult.error },
     });
-    return;
   }
 
   await updateSprint(sprintId, (s) => ({
