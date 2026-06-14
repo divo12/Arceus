@@ -100,6 +100,24 @@ requireActiveCompanyId()` fallbacks. New primitives: `auth/company-context.ts`
   auto-fix task. Tighten the goal to "test the 2 KEY flows, then conclude" so it
   finishes + returns VERDICT within budget.
 
+## E2E validation — LIVE on prod (2026-06-14, deploy 728eb02)
+Pushed all 13 commits → Railway redeployed → verified end-to-end against api.arceus.sh:
+- **Phase 3 (deploy-resilience):** the redeploy restarted the process mid-flight; boot
+  logs show `Auto-resuming heartbeat for company_3d52… — Sprint 3 is executing` +
+  `[stranded-sweeper] Started`. FocusList resumed and was **actively beating**
+  (`beat_1… started for tester`) seconds after boot. Zero stranded beats/sprints.
+  (Bonus: the supabase circuit breaker, open at 62 failures pre-deploy, recovered on restart.)
+- **Phase 2 (native multi-tenant), proven with two concurrent tenants:**
+  - New tenant's JWT → `/api/control-plane/snapshot-summary` returns ITS OWN company
+    (`company_8f22…`), not FocusList.
+  - Same endpoint **unauthenticated → `companyId: null`** (previously would have leaked the
+    global/most-recent company — the cross-tenant bug). Global fallback confirmed gone.
+  - Both `company_3d52…` (FocusList) and `company_8f22…` (new) fire beats concurrently,
+    each stamped with its own companyId. No collision.
+- **Full flow:** register → quick-execute → CEO strategy applied → 7 agents provisioned →
+  CEO woken to plan sprint 1 → **Sprint 1 `executing` with 6 tasks** (confirmed via
+  snapshot-summary), all while FocusList ran its own Sprint 3 — true concurrent multi-tenancy.
+
 ## Reliability invariant (the target)
 Every operation resolves its companyId from its own request/beat context. No code path
 ever reads a process-global "current company." A deleted company's residue can never be
