@@ -51,13 +51,42 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     return _loop
 
 
-def _run_async(coro: Any) -> Any:
-    """Run async coroutine in the shared browser event loop (sync bridge)."""
+def _run_async(coro: Any, *, timeout: float | None = None) -> Any:
+    """Run async coroutine in the shared browser event loop (sync bridge).
+
+    `timeout` overrides the default per-op cap. Individual browser ops (open,
+    click, eval) are fast and use BROWSER_OP_TIMEOUT_S (default 120s). The full
+    agent run is much longer and passes its own AGENT_RUN_TIMEOUT_S — see
+    run_agent_task. CRITICAL: the agent timeout MUST exceed the agent's realistic
+    max_steps runtime, or future.result() abandons the still-running coroutine
+    mid-verdict and the caller's `finally: close_session` tears down the browser
+    under it (CDP "not initialized"), discarding a verdict the agent had already
+    reached. Keep AGENT_RUN_TIMEOUT_S below the Arceus-side FLOW_TEST_TIMEOUT_MS.
+    """
     loop = _get_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    # Hard per-run cap. 120s keeps each flow-test cheap/fast; step count is
-    # tuned to conclude within it. Configurable via BROWSER_OP_TIMEOUT_S.
-    return future.result(timeout=float(os.getenv("BROWSER_OP_TIMEOUT_S", "120")))
+    t = timeout if timeout is not None else float(os.getenv("BROWSER_OP_TIMEOUT_S", "120"))
+    return future.result(timeout=t)
+
+
+def _pick_verdict_message(final_result: Any, candidate_texts: list[str]) -> str:
+    """Resiliently choose the agent's verdict text.
+
+    Primary: the agent's clean `final_result` (set when the `done` action
+    succeeds). Fallback: the most-recent candidate that looks like a verdict
+    ("VERDICT" marker), then any last non-empty candidate. This guarantees a
+    verdict survives even when the terminal `done` action fails (e.g. a transient
+    CDP drop) but the agent had already produced the assessment.
+    """
+    if final_result and str(final_result).strip():
+        return str(final_result)
+    for text in reversed(candidate_texts):
+        if text and "VERDICT" in text.upper():
+            return text
+    for text in reversed(candidate_texts):
+        if text and text.strip():
+            return text
+    return ""
 
 
 def _progress(msg: str) -> None:
@@ -1001,6 +1030,14 @@ def run_agent_task(
                 ]
             if len(trace_item) > 1:
                 action_trace.append(trace_item)
+        # Resilient verdict: prefer the clean final_result, else recover the
+        # verdict text the agent produced from extracted content / action trace
+        # (survives a terminal done-action CDP drop).
+        candidate_texts = list(extracted) + [
+            t.get("extracted_preview", "") for t in action_trace
+        ]
+        verdict_message = _pick_verdict_message(final_result, candidate_texts)
+
         data: dict[str, Any] = {
             "history_summary": f"{len(getattr(history, 'history', []) or [])} steps",
             "final_result": final_result,
@@ -1033,14 +1070,20 @@ def run_agent_task(
                 pass
 
         return {
-            "ok": is_successful is not False
-            and "error" not in str(final_result or "").lower(),
-            "message": str(final_result) if final_result else "",
+            # `ok` means "the agent ran and produced a verdict" — NOT pass/fail
+            # (that lives in the verdict text, which Arceus parses). A recovered
+            # verdict after a done-action drop is still a successful run.
+            "ok": bool(verdict_message.strip()),
+            "message": verdict_message,
             "data": data,
         }
 
+    # The agent run gets its OWN, longer timeout (must exceed its max_steps
+    # runtime so it returns a verdict instead of being abandoned mid-flight).
+    # Kept below the Arceus-side FLOW_TEST_TIMEOUT_MS (240s).
+    agent_timeout = float(os.getenv("AGENT_RUN_TIMEOUT_S", "200"))
     try:
-        return _run_async(_do())
+        return _run_async(_do(), timeout=agent_timeout)
     except Exception as e:
         logger.exception("run_agent_task failed: %s", e)
         return {"ok": False, "message": str(e), "data": {"error": str(e)}}
