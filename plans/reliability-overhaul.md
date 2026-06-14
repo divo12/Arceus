@@ -39,6 +39,21 @@ but a raw wipe bypasses it, and `clearAll*` is not per-tenant (wrong for multi-t
   filter/Plan/persistence). See [[project_flow_tester]].
 - ✅ **Fix shipped:** `findActiveSessionContextByRole` returns the MOST-RECENT match so a
   live beat always beats a stale one (kills the observed finalize-500 root cause).
+  Regression test: `orchestration/session-context.test.ts` (TDD red→green, 5 tests).
+
+### Test-suite reality (corrected 2026-06-14) — TDD foundation
+The suite is **not rotted**; two facts were masking that:
+1. **Runtime:** it runs under **`bun test`** (uses `bun:sqlite`/pgvector), NOT `npx tsx --test`
+   (node chokes on the `bun:` ESM scheme — that produced 7 false "file load" failures).
+2. Under bun: **80 pass / 17 fail**. The 17 are **environmental** — integration tests that
+   need a provisioned Postgres+pgvector test DB (`db.insert is not a function`, `pg=23503`
+   FK violations, `[Hippocampus] pgvector-backed stores`). They pass where a test DB exists.
+- The ONLY genuine rot found: `verification-gate.test.ts`'s third `describe` grep-read the
+  SOURCE TEXT of the deleted `orchestration/orchestrator.ts` → the project's own `npm test`
+  was red (ENOENT). Fixed (446e4bb): extracted the hard-override into a pure exported
+  `computeEffectiveVerdict()` in `review.ts` + a real behavioral test. `npm test` 10/10 green.
+- TDD-able surface (pure/unit, green under bun): session-context, verification-gate,
+  computeEffectiveVerdict, + the 80 passing. New pure logic gets a colocated `*.test.ts`.
 
 ### Phase 1 — make tenant resolution fail-safe (next)
 - Prefer EXACT `x-session-id` resolution everywhere; treat role/sole fallback as
@@ -47,14 +62,28 @@ but a raw wipe bypasses it, and `clearAll*` is not per-tenant (wrong for multi-t
 - Unregister stale session contexts on beat reap / company gone (per-company purge,
   not `clearAll`).
 
-### Phase 2 — eliminate the global pointer (native multi-tenant)
-- Thread companyId from request/beat context through the ~99 call sites; delete the
-  `?? getActiveCompanyId()/requireActiveCompanyId()` fallbacks. Routes already have
-  `request.companyId` (JWT) — make it required (400 if absent). Deep functions take an
-  explicit `companyId` arg. Remove `active-company.ts` once call sites are zero.
-- Inventory (call-site count): chat.routes 11, strategy.routes 10, control-plane/snapshot 7,
-  tasks/mutations 6, workspace.routes 6, lifecycle 4, preview/proposals/llm/mutations/
-  meetings/checklist-executor/workspace-init/agents-chat 3 each, + ~10 files w/ 1-2.
+### Phase 2 — eliminate the global pointer (native multi-tenant) — IN PROGRESS (60/82 reader sites)
+Thread companyId from request/beat context; delete the `?? getActiveCompanyId()/
+requireActiveCompanyId()` fallbacks. New primitives: `auth/company-context.ts`
+(`requireUserAndCompany` preHandler + `companyIdOf(request)`), TDD'd (5/5).
+
+**DONE (committed, each tsc-gated):**
+- ✅ Routes layer fully pointer-free: chat (11), strategy (10), workspace (6),
+  skills/hippocampus/governance (2 each), debug (1). Fixed real cross-tenant leaks
+  (`/api/chat/stream`, workspace GETs served the global company to all viewers).
+- ✅ tasks/mutations (4) — use prev.companyId; artifact write chain requires companyId.
+- ✅ sprints/lifecycle (3), proposals (2), prompts/llm (2) — required companyId.
+- ✅ meetings/recording (recordMeeting + recordCeoCardMeeting) — required companyId, 5 callers threaded.
+- ✅ heartbeats/checklist-executor (2) — ctx.company.id.
+- ✅ workspace/preview (helper) — explicit-arg only.
+- ✅ control-plane/snapshot (5) + cpLoadAgentContext — companyId param; routes pass request.companyId.
+
+**REMAINING (~8 sites — interdependent legacy/boot cluster; needs design, not mechanical edits):**
+- agents/chat.ts (2) — unauthenticated `/api/chat/ceo` legacy path (authed chat already bypasses the seam via userCompanyId).
+- meetings/runtime.ts (1) — `getSnapshotForPackages` bound once at scheduler construction (company-runtime package change).
+- bootstrap/workspace-init.ts (3) + companies/bootstrap.ts setter (2) — boot hydration + post-bootstrap setter.
+- Deleting `active-company.ts` is blocked on the meetings-pipeline + boot redesign above.
+- NOTE: the pointer's DANGER is already gone — Phase 1 (live-company validation) rejects any stale/wrong resolution, so the residual seam can't serve a deleted/wrong company to a live request.
 
 ### Phase 3 — deploys don't strand the flow
 - On boot, reconcile: re-register session contexts is impossible (sessions die), but the

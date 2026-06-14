@@ -1,23 +1,30 @@
 /**
- * Single-company tenancy seam — Spec 31 Phase 7.B.5 / 7.C.d.
+ * Legacy single-company tenancy seam — BEING RETIRED (reliability overhaul,
+ * 2026-06-14). See plans/reliability-overhaul.md Phase 2.
  *
- * Arceus runs single-company-per-process today. The seam is a sync
- * read because most callers (route handlers, fire-and-forget reactive
- * paths, sync mutators) can't tolerate awaiting a DB roundtrip just
- * to learn which company they're operating against.
+ * Native multi-tenancy is now the rule: every authenticated request, beat,
+ * sprint, artifact, control-plane, and route path resolves its own companyId
+ * from its request/beat context (60+ former call sites converted). This module
+ * survives ONLY as a narrow fallback for three contexts that don't yet carry an
+ * explicit tenant and need a focused redesign to remove:
+ *   1. agents/chat.ts — the unauthenticated `/api/chat/ceo` legacy path.
+ *   2. meetings/runtime.ts — `getSnapshotForPackages`, a meeting-pipeline
+ *      dependency bound once at scheduler construction (company-runtime change).
+ *   3. bootstrap/* — boot-time workspace hydration + the post-bootstrap setter.
+ *
+ * IMPORTANT: the DANGER of a stale pointer is already removed — MCP tenant
+ * resolution validates the resolved company is live (see live-companies.ts +
+ * routes/internal-mcp/middleware.ts), so a deleted/wrong company can never be
+ * served to a live request even via this seam.
+ *
+ * Do NOT add new readers. New code threads companyId explicitly (routes:
+ * `companyIdOf(request)` / `request.companyId`; deep fns: a required param).
  *
  * Implementation:
  *   - Module-local `activeCompanyId` variable.
- *   - `setActiveCompanyId` is called by `bootstrapCompanyTx` after the
- *     transaction commits.
- *   - `loadActiveCompanyIdFromCanonical()` is called at server startup
- *     to populate it from the `companies` table when an existing
- *     company survived a process restart.
+ *   - `setActiveCompanyId` is called by `bootstrapCompanyTx` after commit.
+ *   - `loadActiveCompanyIdFromCanonical()` populates it at startup.
  *   - `clearActiveCompanyId` is called by reset / teardown paths.
- *
- * Multi-tenant T1+ replaces this with a per-request `companyContext`
- * middleware. Until then this is the single source of truth for "which
- * company is the current process serving."
  */
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
