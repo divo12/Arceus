@@ -19,12 +19,57 @@ import os
 import uuid
 from typing import Any, Optional
 
+import logging
+
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from browseruse_session import run_agent_task, screenshot, close_session
 
+logger = logging.getLogger("flow-tester")
 app = FastAPI(title="Arceus Flow-Tester")
+
+
+def _env(*names: str) -> str:
+    """First non-empty value among env var names (supports ARCEUS_* and AZURE_* prefixes)."""
+    for n in names:
+        v = os.getenv(n, "").strip()
+        if v:
+            return v
+    return ""
+
+
+def build_llm():
+    """Build the vision LLM for the browser agent.
+
+    Prefer an EXPLICIT Azure config (reuse Arceus's Azure creds + a vision
+    deployment) so we don't depend on browser-use's preset deployment names.
+    Returns None to fall back to browseruse_session's env resolver.
+    """
+    endpoint = _env("AZURE_OPENAI_ENDPOINT", "ARCEUS_AZURE_OPENAI_ENDPOINT")
+    key = _env("AZURE_OPENAI_API_KEY", "ARCEUS_AZURE_OPENAI_API_KEY")
+    version = _env("AZURE_OPENAI_API_VERSION", "ARCEUS_AZURE_OPENAI_API_VERSION") or "2025-04-01-preview"
+    # The deployment NAME of a VISION-capable model (e.g. gpt-5.2 / gpt-5.2-mini / gpt-4o).
+    deployment = _env(
+        "FLOW_TESTER_AZURE_DEPLOYMENT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "ARCEUS_AZURE_OPENAI_DEPLOYMENT",
+        "ARCEUS_AZURE_OPENAI_BROWSER_DEPLOYMENT",
+    )
+    if endpoint and key and deployment:
+        try:
+            from browser_use import ChatAzureOpenAI  # type: ignore
+            llm = ChatAzureOpenAI(
+                model=deployment,
+                api_key=key,
+                azure_endpoint=endpoint,
+                api_version=version,
+            )
+            logger.info("flow-tester LLM: Azure deployment '%s'", deployment)
+            return llm
+        except Exception as e:  # noqa: BLE001 - surface clearly, fall back
+            logger.warning("Azure LLM build failed (%s); falling back to env resolver", e)
+    return None
 
 # Shared-secret auth — set FLOW_TESTER_TOKEN in the service env; the Arceus API
 # sends it as `Authorization: Bearer <token>`. Reachable on Railway's private
@@ -80,6 +125,7 @@ def flow_test(req: FlowTestRequest, authorization: Optional[str] = Header(defaul
             max_steps=max(5, min(req.max_steps, 40)),
             create_session_if_missing=True,
             url_for_open=req.url,
+            llm=build_llm(),
         )
 
         # Best-effort final screenshot as visual evidence (the session stays
