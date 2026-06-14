@@ -1,3 +1,7 @@
 browser-use==0.11.13
+# browser-use drives Chromium over CDP (cdp-use) and does NOT pull playwright,
+# but it locates the Chromium binary from Playwright's install cache — so we
+# install playwright explicitly to get + manage that binary.
+playwright>=1.48,<2
 fastapi>=0.110,<1
 uvicorn[standard]>=0.27,<1
