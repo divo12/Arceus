@@ -140,6 +140,22 @@ Redeploy of the active-company-deleted build, verified end-to-end:
   executing, 7 tasks); unauthenticated → `companyId: null` (no global pointer to leak).
 - Both companies remained healthy (all circuit breakers closed).
 
+## Browser flow-tester — investigation + 3 bugs fixed (2026-06-14, live-verified)
+Driving the browser agent against the live product surfaced — and we fixed — three real bugs:
+1. **Verdict lost** (896cb5f): the whole agent.run was capped at the 120s per-op timeout, but a
+   real CRUD flow needs ~150-180s → `concurrent.futures.TimeoutError` (empty str → verdict:"")
+   + `close_session` tore down the browser under the abandoned coroutine (CDP error). Fix:
+   AGENT_RUN_TIMEOUT_S=200, max_steps 12→8, `_pick_verdict_message` recovery. TDD 6/6. VERIFIED:
+   flow-test now returns `ok:true` + a full VERDICT/WORKS/ISSUES/DESIGN.
+2. **sprint_finalize froze companies** (2cd1aa6): a flaky-Supabase snapshot tag blocked completion
+   (early return) → sprint stuck `executing`, CEO looped. Fix: tag best-effort, always complete.
+   VERIFIED: e2e Sprint 1 executing→completed after deploy.
+3. **Previews died on redeploy** (2cd1aa6): per-company Vite procs are API children, not restarted
+   on boot → `<slug>.arceus.sh` 404, tester blocked. Fix: restart previews on boot. VERIFIED:
+   both previews HTTP 200 post-redeploy.
+Net: the browser agent reliably drives the live product end-to-end and returns a verdict — and it
+proved its worth by catching real production reliability bugs.
+
 ## Reliability invariant (the target)
 Every operation resolves its companyId from its own request/beat context. No code path
 ever reads a process-global "current company." A deleted company's residue can never be
