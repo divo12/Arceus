@@ -128,6 +128,18 @@ Pushed all 13 commits → Railway redeployed → verified end-to-end against api
   CEO woken to plan sprint 1 → **Sprint 1 `executing` with 6 tasks** (confirmed via
   snapshot-summary), all while FocusList ran its own Sprint 3 — true concurrent multi-tenancy.
 
+## Final validation — pointer-free build live on prod (deploy f8f8045, 2026-06-14)
+Redeploy of the active-company-deleted build, verified end-to-end:
+- **Multi-tenant deploy-resilience:** boot logs show `Skill registry hydrated for 2 companies` +
+  `Auto-resuming heartbeat for company_3d52… — Sprint 3 executing` AND
+  `…company_8f22… — Sprint 1 executing` → `Auto-resumed heartbeat for 2 companies`. Both tenants
+  resumed cleanly across the redeploy.
+- **Stranded-beat reclaim live:** `Boot sweep marked 1 run(s) stranded` + `Released 1 task claim(s)
+  held by stranded run …` — the beat in-flight at restart was reclaimed, no deadlock.
+- **Isolation on the pointer-free build:** new tenant's JWT → its own `company_8f22` (sprint
+  executing, 7 tasks); unauthenticated → `companyId: null` (no global pointer to leak).
+- Both companies remained healthy (all circuit breakers closed).
+
 ## Reliability invariant (the target)
 Every operation resolves its companyId from its own request/beat context. No code path
 ever reads a process-global "current company." A deleted company's residue can never be
