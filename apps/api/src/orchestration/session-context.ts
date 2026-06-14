@@ -41,12 +41,21 @@ export function clearAllSessionContexts(): void {
  * Find the most recently registered session context for a given role.
  * Used as a fallback when MCP requests arrive without X-Beat-Id / X-Company-Id headers
  * (the MCP server is a shared long-running process that can't set per-beat headers).
+ *
+ * RELIABILITY (2026-06-14): returns the LAST (most-recently-registered) match,
+ * not the first. Map preserves insertion order, so the current beat's context —
+ * registered at this beat's start — wins over any STALE context that lingered
+ * from a crashed/restarted/deleted-company beat. Returning the first match let a
+ * stale HangoutHQ ceo context poison a fresh FocusList ceo beat's companyId →
+ * `buildSnapshotView: company ... not found` → sprint_finalize 500 (observed
+ * live). A live beat must always beat a stale one.
  */
 export function findActiveSessionContextByRole(role: string): BeatContext | undefined {
+  let latest: BeatContext | undefined;
   for (const ctx of sessionContextMap.values()) {
-    if (ctx.role === role) return ctx;
+    if (ctx.role === role) latest = ctx;
   }
-  return undefined;
+  return latest;
 }
 
 /**
