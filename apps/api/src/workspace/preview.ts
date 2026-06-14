@@ -4,7 +4,6 @@ import { basename, extname, join, normalize, relative } from "node:path";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { previewConfig } from "../config/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getDb } from "@arceus/db";
 import { findCompanyById } from "@arceus/db/src/repos/companies.js";
 import { withKeyedLock } from "./async-queue.js";
@@ -20,11 +19,9 @@ import { withKeyedLock } from "./async-queue.js";
  * routes `<slug>.<publicDomain>` to the right slot via the slug→port
  * registry populated when each preview starts.
  *
- * Public API takes an optional `companyId`. When omitted, it falls
- * back to `getActiveCompanyId()` for backward compatibility with
- * call sites that haven't been migrated. The fallback keeps single-
- * tenant flows working unchanged; multi-tenant flows must thread
- * `companyId` explicitly.
+ * Public API takes an optional `companyId`. Native multi-tenant: there is no
+ * global active-company fallback — when omitted, the operation no-ops / returns
+ * idle state. Every flow threads `companyId` explicitly from its own context.
  *
  * Locking is also per-company. Mutating operations on a slot
  * (`start`, `stop`, `registerReportedUrl`) serialise behind
@@ -37,12 +34,12 @@ import { withKeyedLock } from "./async-queue.js";
 const previewLockKey = (companyId: string): string => `local-preview:${companyId}`;
 
 /**
- * Resolve the companyId from an explicit argument or the legacy
- * single-active-company singleton. Returns null only when neither
- * is set, in which case callers may return idle state / no-op.
+ * Resolve the companyId from the explicit caller argument. Native multi-tenant:
+ * there is no global active-company fallback — when no companyId is supplied the
+ * caller treats null as idle/no-op (every call site already guards for it).
  */
 function resolveCompanyId(explicit: string | null | undefined): string | null {
-  return explicit ?? getActiveCompanyId() ?? null;
+  return explicit ?? null;
 }
 
 /**
