@@ -1,0 +1,13 @@
+# Flow-tester service config. With Root Directory = services/flow-tester,
+# Railway reads THIS file instead of the repo-root railway.toml — so the
+# repo-root `preDeployCommand` (npm db:migrate, meant for the Node API) does
+# NOT run here. This Python service needs no pre-deploy step.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 600
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
