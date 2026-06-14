@@ -39,6 +39,7 @@ import { startEventBridge } from "../heartbeats/event-bridge.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import { startStrandedRunSweeper, sweepStrandedRunsOnBoot } from "../orchestration/stranded-run-sweeper.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
+import { companyHasResumableWork } from "../sprints/resume-policy.js";
 import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { cpHydrateTrustScores } from "../persistence/control-plane/index.js";
@@ -151,11 +152,17 @@ async function autoResumeIfActiveSprint(
       continue;
     }
     console.log(`[STARTUP] Company state: id=${snap.company.id}, agents=${snap.agents.length}`);
-    const activeSprint = snap.sprints.find(
-      (s) => s.id === snap.company.currentSprintId && (s.status === "executing" || s.status === "reviewing"),
-    );
-    if (activeSprint && snap.agents.length > 0) {
-      console.log(`[STARTUP] Auto-resuming heartbeat for company ${companyId} — Sprint ${activeSprint.number} is ${activeSprint.status}`);
+    // Resume the engine for ANY company with in-flight work, not just
+    // executing/reviewing sprints. A deploy landing mid-`planning` or
+    // `between_sprints` (chaining) previously left the engine stopped and the
+    // flow frozen. companyHasResumableWork mirrors the runtime's own "has work"
+    // notion (sprintNeedsCeoAttention) and is biased toward resuming.
+    if (companyHasResumableWork(snap)) {
+      const currentSprint = snap.sprints.find((s) => s.id === snap.company.currentSprintId);
+      console.log(
+        `[STARTUP] Auto-resuming heartbeat for company ${companyId} — ` +
+        (currentSprint ? `Sprint ${currentSprint.number} is ${currentSprint.status}` : "no active sprint (CEO must plan)"),
+      );
       resumeCount++;
     }
   }
