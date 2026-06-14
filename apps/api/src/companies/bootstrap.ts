@@ -26,6 +26,7 @@ import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as ideasRepo from "@arceus/db/src/repos/ideas.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
 import { getActiveCompanyId, setActiveCompanyId } from "../persistence/active-company.js";
+import { markCompanyLive } from "../orchestration/live-companies.js";
 import { seedExistingSkills } from "@arceus/company-runtime";
 import { materializeStaticSkillsForCompany } from "../opencode/materialize-static-skills.js";
 
@@ -165,6 +166,11 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
   if (!getActiveCompanyId()) {
     setActiveCompanyId(companyId);
   }
+
+  // Fail-safe tenant resolution (Phase 1): mark the new company live
+  // immediately so MCP requests on its very first beat aren't rejected in the
+  // window before the next heartbeat tick refreshes the registry from the DB.
+  markCompanyLive(companyId);
 
   // Seed the in-memory skill registry from the filesystem corpus. The
   // write-through callbacks (wired in evolution.ts) mirror each seeded skill

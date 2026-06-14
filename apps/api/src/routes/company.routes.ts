@@ -10,6 +10,7 @@ import { resetCompanyTx } from "../companies/reset.js";
 import { bootstrapCompanyWithWorkspace } from "../orchestration/bootstrap.js";
 import { resetOrchestratorState } from "../orchestration/state.js";
 import { clearAllSessionContexts } from "../orchestration/session-context.js";
+import { forgetCompany } from "../orchestration/live-companies.js";
 import { audit } from "../observability/audit-ledger.js";
 import { sanitizeError } from "../observability/sanitize.js";
 import { resetEmployeeActivityLog } from "../observability/activity.js";
@@ -112,6 +113,10 @@ export default async function companyRoutes(app: FastifyInstance, opts: CompanyR
 
       resetEmployeeActivityLog();
       clearAllSessionContexts();
+      // Drop from the live-company registry immediately so any lingering MCP
+      // request can't resolve to this now-deleted company (the next heartbeat
+      // tick would catch it too, but this closes the window instantly).
+      if (companyId) forgetCompany(companyId);
       if (request.userId) resetCeoChatSession(request.userId);
       return resetCompany();
     } catch (error) {

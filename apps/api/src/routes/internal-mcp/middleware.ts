@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { failure, causeToStatus, type ErrorCause } from "./envelope.js";
 import { resolveBearerToken } from "../../auth/bearer.js";
 import { hashBody, lookupIdempotency, rememberIdempotency, releaseIdempotency, IDEMPOTENCY_FAILURES } from "./idempotency.js";
-import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize } from "../../orchestration/session-context.js";
+import { getSessionContext, findActiveSessionContextByRole, findSoleActiveSessionContext, sessionContextSize, unregisterSessionContext } from "../../orchestration/session-context.js";
+import { isCompanyKnownLive } from "../../orchestration/live-companies.js";
 import { pendingPromptCompletions } from "../../orchestration/state.js";
 import { observability, parseRoleStrict, type RoleType } from "@arceus/contracts";
 import { routeToTool } from "./route-to-tool.js";
@@ -156,6 +157,26 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
       `Missing agent identity. Supply X-Session-Id or X-Beat-Id/X-Company-Id/X-Agent-Role headers. Active sessions: ${sessionContextSize()}`,
       "never",
       "headers_fixed"
+    );
+    return reply;
+  }
+
+  // Fail-safe tenant resolution (Phase 1): never resolve a request to a company
+  // that no longer exists. A session context can linger after a raw DB wipe that
+  // bypassed DELETE /api/company (so clearAllSessionContexts never ran); without
+  // this guard the resolved companyId poisons downstream buildSnapshotView →
+  // 500. The live-company registry is refreshed every heartbeat tick and on
+  // bootstrap; it fails OPEN before first populated (boot), so this never
+  // rejects a legitimate company. On a dead hit we also purge the stale context
+  // so the next request can't re-resolve to it.
+  if (!isCompanyKnownLive(companyId)) {
+    if (ctx?.sessionId) unregisterSessionContext(ctx.sessionId);
+    respondError(
+      reply,
+      "not_found",
+      `Resolved company "${companyId}" no longer exists (stale session context purged). Re-resolve identity for a live company.`,
+      "never",
+      "company_live"
     );
     return reply;
   }

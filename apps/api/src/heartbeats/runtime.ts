@@ -17,6 +17,7 @@ import { heartbeatConfig } from "../config/heartbeat.js";
 import { audit } from "../observability/audit-ledger.js";
 import { setReactiveEventEmitter } from "../orchestration/state.js";
 import { runBeat } from "../orchestration/run-beat.js";
+import { markCompaniesLive } from "../orchestration/live-companies.js";
 import {
   cpApplyMutations,
   cpCommitBeatRecord,
@@ -103,9 +104,14 @@ export function createHeartbeatRuntime(): HeartbeatRuntime {
       // loop to walk past its agents to the next tenant's.
       const db = getDb();
       const companies = await companiesRepo.listCompanies(db);
-      const nonPaused = companies
-        .map(c => companiesRepo.fromDbId(c.id, c.friendlyId))
-        .filter(id => !pausedCompanies.has(id));
+      const allCompanyIds = companies.map(c => companiesRepo.fromDbId(c.id, c.friendlyId));
+      // Fail-safe tenant resolution (Phase 1): refresh the live-company set from
+      // the authoritative DB list every tick so MCP resolution can reject a
+      // request that resolves (via a stale session context) to a deleted company
+      // instead of 500ing in buildSnapshotView. Includes paused companies — they
+      // still exist.
+      markCompaniesLive(allCompanyIds);
+      const nonPaused = allCompanyIds.filter(id => !pausedCompanies.has(id));
       const results = await Promise.all(
         nonPaused.map(companyId =>
           agentsRepo.listAgentsByCompany(db, companyId).then(agents => ({ companyId, agents })),
