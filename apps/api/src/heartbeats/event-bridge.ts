@@ -538,6 +538,7 @@ async function processEvent(event: OpenCodeEvent) {
       await setTaskStatus(activeExecution.buildTaskId, "failed", props.error?.message ?? `${role} session error`);
       const typedRole = parseRoleStrict(role);
       await recordMeeting({
+        companyId: activeExecution.companyId,
         type: "escalation",
         facilitatorRole: typedRole,
         participantRoles: [typedRole, "cto", "ceo"],

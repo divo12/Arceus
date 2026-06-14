@@ -77,6 +77,7 @@ export async function failDeveloperStall(sessionId: string, devKey: string) {
   await setTaskStatus(activeExecution.buildTaskId, "failed", diagnosticMessage);
 
   await recordMeeting({
+    companyId: activeExecution.companyId,
     type: "escalation",
     facilitatorRole: "developer",
     participantRoles: ["developer", "cto", "ceo"],

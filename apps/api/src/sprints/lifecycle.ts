@@ -377,6 +377,7 @@ export async function approveBoardReview() {
   }));
 
   await recordMeeting({
+    companyId,
     type: "eval_triggered",
     facilitatorRole: "ceo",
     participantRoles: ["ceo", "cto"],

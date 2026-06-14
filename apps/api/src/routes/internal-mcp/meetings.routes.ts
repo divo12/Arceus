@@ -148,6 +148,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
     if (!body) return reply;
 
     const recorded: Meeting = await recordMeeting({
+      companyId: req.mcp!.companyId,
       type: body.type,
       facilitatorRole: parseRoleStrict(body.facilitatorRole),
       participantRoles: body.participantRoles.map((r) => parseRoleStrict(r)),
@@ -244,6 +245,7 @@ export default async function internalMcpMeetingsRoutes(app: FastifyInstance): P
 
       // Record the meeting shell with status "open"
       const recordedDecision: Meeting = await recordMeeting({
+        companyId: mcp.companyId,
         type: "escalation",
         facilitatorRole: parseRoleStrict(mcp.role),
         participantRoles: body.participantRoles.map((r) => parseRoleStrict(r)),

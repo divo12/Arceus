@@ -2,7 +2,6 @@ import type { AgentIdentity, Meeting, Task } from "@arceus/contracts";
 import type { CeoCard } from "../agents/ceo.js";
 import { getAgentByRole, uniqueStrings, createWorkflowTask } from "@arceus/task-engine";
 import { upsertMeeting, upsertTask } from "../persistence/mutations/index.js";
-import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
@@ -20,6 +19,7 @@ import { deriveMeetingMemoryModifications, applyMeetingEffects } from "./effects
  * go through canonical repos. CompanyId resolves via the seam helper.
  */
 export async function recordMeeting(params: {
+  companyId: string;
   type: Meeting["type"];
   facilitatorRole: AgentIdentity["role"];
   participantRoles: AgentIdentity["role"][];
@@ -30,7 +30,9 @@ export async function recordMeeting(params: {
   taskModifications?: TaskModificationInput[];
   memoryModifications?: MemoryModificationInput[];
 }): Promise<Meeting> {
-  const companyId = requireActiveCompanyId();
+  // companyId is REQUIRED (native multi-tenant) — provided by every caller from
+  // its own beat/execution context; no global active-company fallback.
+  const companyId = params.companyId;
   const db = getDb();
 
   const distinctRoles = Array.from(new Set([params.facilitatorRole, ...params.participantRoles]));
@@ -203,10 +205,10 @@ async function resolveTaskFromHint(companyId: string, targetTaskHint: string | n
 }
 
 /** Record a meeting derived from a CEO card, creating tasks and routing board directives. */
-export async function recordCeoCardMeeting(card: CeoCard, boardMessage: string, ceoText: string): Promise<Meeting | null> {
+export async function recordCeoCardMeeting(companyId: string, card: CeoCard, boardMessage: string, ceoText: string): Promise<Meeting | null> {
   if (!card.meeting.create) return null;
-  // Spec 31 Phase 7.C.c — read from canonical via the seam helper.
-  const companyId = requireActiveCompanyId();
+  // companyId is REQUIRED (native multi-tenant) — passed by the caller; no
+  // global active-company fallback.
   const snapshot = await buildSnapshotView(companyId);
   if (snapshot.company.status !== "active" || snapshot.agents.length === 0) return null;
 
@@ -268,6 +270,7 @@ export async function recordCeoCardMeeting(card: CeoCard, boardMessage: string, 
   const agendaType = meetingType === "escalation" ? "blocker" : card.card_type === "clarifying_question" ? "question" : "proposal";
 
   const meeting = await recordMeeting({
+    companyId,
     type: meetingType,
     facilitatorRole: "ceo",
     participantRoles: Array.from(participantRoles),
