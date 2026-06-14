@@ -62,7 +62,17 @@ The suite is **not rotted**; two facts were masking that:
 - Unregister stale session contexts on beat reap / company gone (per-company purge,
   not `clearAll`).
 
-### Phase 2 — eliminate the global pointer (native multi-tenant) — IN PROGRESS (60/82 reader sites)
+### Phase 2 — eliminate the global pointer (native multi-tenant) — ✅ COMPLETE (82/82; active-company.ts DELETED)
+Final cluster done (855d44a + f8f8045): boot workspace/skill seeding, the meetings-pipeline
+snapshot dependency, and the unauthenticated `/api/chat/ceo` path now resolve the tenant from
+canonical via `companies/resolve-company.ts` `getMostRecentCompanyId()` (fresh DB read, never a
+stale singleton); `companies/bootstrap.ts` no longer seeds a pointer. `persistence/active-company.ts`
+is deleted — zero `getActiveCompanyId`/`requireActiveCompanyId` references remain. TDD
+`resolve-company.test.ts` 4/4. The reliability invariant below now holds in code.
+
+(historical detail of the 9 conversion clusters retained below)
+
+### Phase 2 — conversion log (60/82 reader sites at first milestone)
 Thread companyId from request/beat context; delete the `?? getActiveCompanyId()/
 requireActiveCompanyId()` fallbacks. New primitives: `auth/company-context.ts`
 (`requireUserAndCompany` preHandler + `companyIdOf(request)`), TDD'd (5/5).
