@@ -21,7 +21,6 @@ import {
 } from "../observability/graph-emitter/index.js";
 import { startBeatTokenAccumulator, drainBeatTokenAccumulator } from "../infra/azure-openai.js";
 import { updateMeeting, updateSprint } from "../persistence/mutations/index.js";
-import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { flush } from "../persistence/mutations/index.js";
 import { ensureAgentSession } from "../prompts/llm.js";
@@ -193,7 +192,7 @@ async function handleTaskResolveBlocker(
     };
   }
 
-  const companyId = requireActiveCompanyId();
+  const companyId = ctx.company.id;
   const snapshot = await buildSnapshotView(companyId);
   const blockerReason = blocked.verifierState?.feedback?.slice(0, 400)
     ?? blocked.executorState?.results?.slice(-1)[0]?.slice(0, 400)
@@ -239,14 +238,14 @@ async function handleCtoEscalationReview(
 
 /** CTO escalation timeout safety valve. */
 async function handleCtoEscalationForceComplete(
-  _ctx: AgentBeatContext,
+  ctx: AgentBeatContext,
   action: ChecklistAction,
   beatId: string,
   finish: FinishFn,
 ): Promise<HandlerResult> {
   startBeatTokenAccumulator(beatId);
-  // Spec 31 Phase 7.B.4 — read via canonical-backed view.
-  const companyId = requireActiveCompanyId();
+  // Native multi-tenant: tenant comes from the beat context, not a global seam.
+  const companyId = ctx.company.id;
   const snapshot = await buildSnapshotView(companyId);
   const sprintId = snapshot.company.currentSprintId;
   if (!sprintId) {
