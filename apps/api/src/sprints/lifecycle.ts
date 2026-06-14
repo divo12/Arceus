@@ -11,6 +11,7 @@ import {
 import { getLocalPreviewState, startLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { emitReactive } from "../orchestration/reactive.js";
+import { runFlowTestAndReport } from "../orchestration/flow-test.js";
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import {
@@ -187,11 +188,14 @@ export async function finalizeSprintCompletion(
   const companyIdForPreview = snapshot.company.id;
   const productDirForPreview = workspaceManager.getLocalPath(companyIdForPreview);
   const currentPreview = getLocalPreviewState(companyIdForPreview);
+  // Captured for the post-finalize browser flow-test (services/flow-tester).
+  let previewUrlForTest: string | null = null;
   if (currentPreview.status !== "ready" && currentPreview.status !== "starting") {
     try {
       const started = await startLocalPreview(productDirForPreview, null, companyIdForPreview);
       const url = started.url ?? started.entryUrl ?? started.validationUrl;
       if (started.status === "ready" && url) {
+        previewUrlForTest = url;
         emitEmployeeActivity("system", "preview", `Preview auto-started for sprint ${sprint.number} finalization → ${url}`, {
           detail: { sprintId, status: started.status, url },
         });
@@ -220,6 +224,7 @@ export async function finalizeSprintCompletion(
     // Preview already running — surface the URL if we haven't already
     const existingUrl = currentPreview.url ?? currentPreview.entryUrl ?? currentPreview.validationUrl;
     if (existingUrl) {
+      previewUrlForTest = existingUrl;
       await appendChatMessage({
         id: `chat_${crypto.randomUUID()}`,
         companyId: snapshot.company.id,
@@ -232,6 +237,19 @@ export async function finalizeSprintCompletion(
         createdAt: nowIso(),
       });
     }
+  }
+
+  // Real browser flow-test of the just-finalized product (services/flow-tester).
+  // Fire-and-forget: an LLM agent drives the live preview, judges whether the
+  // core flow works + whether the UI is god-tier, and spawns a fix task on
+  // failure. Dormant unless FLOW_TESTER_URL is configured; never blocks finalize.
+  if (previewUrlForTest) {
+    void runFlowTestAndReport({
+      companyId,
+      sprintId,
+      sprintNumber: sprint.number,
+      previewUrl: previewUrlForTest,
+    });
   }
 
   const sprintTasks = snapshot.tasks.filter(
