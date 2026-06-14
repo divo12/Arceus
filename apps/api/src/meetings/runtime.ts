@@ -22,7 +22,7 @@ import { buildContributionPrompt } from "./contribution-prompt.js";
 import { executeMeetingDecisions, postDailySyncSummary } from "./resolution.js";
 import { ensureAgentSession, runPromptText } from "../prompts/llm.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
+import { getMostRecentCompanyId } from "../companies/resolve-company.js";
 import {
   appendChatMessage,
   commitScheduledMeeting,
@@ -64,14 +64,16 @@ export interface MeetingRuntime {
 }
 
 /**
- * Spec 31 Phase 7.C.b — package deps consume async getSnapshot. The wiring
- * binds it to `buildSnapshotView` keyed off the active companyId from the
- * seam helper. No active company → throw is the expected behavior because
- * the meeting pipeline cannot operate before bootstrap.
+ * Spec 31 Phase 7.C.b — package deps consume async getSnapshot. Native
+ * multi-tenant: resolves the most-recent company from canonical (no global
+ * pointer). No company → throw, since the meeting pipeline can't operate before
+ * bootstrap. NOTE: the meeting pipeline is single-tenant-shaped here; meetings
+ * are gated off in prod (ARCEUS_MEETINGS_ENABLED). A future redesign threads a
+ * per-meeting companyId through the company-runtime deps to make this per-tenant.
  */
 async function getSnapshotForPackages() {
-  const id = getActiveCompanyId();
-  if (!id) throw new Error("No active company; pipeline cannot read snapshot.");
+  const id = await getMostRecentCompanyId();
+  if (!id) throw new Error("No company; meeting pipeline cannot read snapshot.");
   return buildSnapshotView(id);
 }
 

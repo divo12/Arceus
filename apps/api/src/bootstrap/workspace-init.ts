@@ -18,7 +18,7 @@ import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import { seedExistingSkills } from "@arceus/company-runtime";
 import { hydrate } from "../persistence/mutations/index.js";
 import { cpSetBuildCheckDir } from "../persistence/control-plane/index.js";
-import { getActiveCompanyId, loadActiveCompanyIdFromCanonical } from "../persistence/active-company.js";
+import { getMostRecentCompanyId } from "../companies/resolve-company.js";
 import { hydrateSkillRegistryFromDb } from "../skills/db-writethrough.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { materializeStaticSkillsForCompany } from "../opencode/materialize-static-skills.js";
@@ -28,24 +28,20 @@ export async function initWorkspaceAndPersistence(): Promise<void> {
   console.log(`[STARTUP] Company state persistence mode: ${persistenceMode}`);
   await hydrate();
 
-  // Spec 31 Phase 7.C.d — populate the active-company seam from canonical so
-  // sync callers (route handlers, fire-and-forget reactive paths) can resolve
-  // companyId immediately on first request after a restart.
-  await loadActiveCompanyIdFromCanonical();
-
-  // Set build-check dir to the per-company workspace now that the active
-  // company is known. Falls back to the shared workspace root on first boot
-  // (no company yet).
-  const activeCompanyId = getActiveCompanyId();
-  const productDir = activeCompanyId
-    ? workspaceManager.getLocalPath(activeCompanyId)
+  // Native multi-tenant: no global active-company pointer. Seed the boot
+  // build-check dir from the most-recent company (a best-effort default for the
+  // shared workspace; per-beat paths resolve their own tenant). Falls back to
+  // the shared workspace root on first boot (no company yet).
+  const bootCompanyId = await getMostRecentCompanyId();
+  const productDir = bootCompanyId
+    ? workspaceManager.getLocalPath(bootCompanyId)
     : workspaceManager.getLegacyProductDir();
   cpSetBuildCheckDir(productDir);
 
-  await hydrateSkillRegistries();
+  await hydrateSkillRegistries(bootCompanyId);
 }
 
-async function hydrateSkillRegistries(): Promise<void> {
+async function hydrateSkillRegistries(bootCompanyId: string | null): Promise<void> {
   try {
     const companies = await companiesRepo.listCompanies(getDb());
     for (const company of companies) {
@@ -57,15 +53,12 @@ async function hydrateSkillRegistries(): Promise<void> {
       console.log(`[STARTUP] Skill registry hydrated for ${companies.length} compan${companies.length === 1 ? "y" : "ies"}.`);
     }
 
-    // V1 simplification: materialize the active company's skill set once
-    // to the shared workspace dir instead of re-running materialization
-    // per beat. The runtime is single-active-company, so the dir reflects
-    // the company beats currently target. New-company creation also
-    // triggers a materialize via companies/bootstrap.ts.
-    const activeCompanyId = getActiveCompanyId();
-    if (activeCompanyId) {
+    // Materialize the boot company's skill set once to the shared workspace
+    // dir (best-effort). New-company creation also triggers a materialize via
+    // companies/bootstrap.ts; per-beat paths materialize their own tenant.
+    if (bootCompanyId) {
       try {
-        await materializeStaticSkillsForCompany(activeCompanyId);
+        await materializeStaticSkillsForCompany(bootCompanyId);
       } catch (err) {
         console.warn(`[STARTUP] Static skill materialization failed: ${err instanceof Error ? err.message : String(err)}`);
       }

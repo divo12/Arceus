@@ -1,7 +1,7 @@
 import type { FastifyReply } from "fastify";
 import { buildCeoSystemPrompt, buildCeoContextMessage, generateStrategy, type CeoCard } from "./ceo.js";
 import { appendChatMessage } from "../persistence/mutations/index.js";
-import { getActiveCompanyId, requireActiveCompanyId } from "../persistence/active-company.js";
+import { getMostRecentCompanyId } from "../companies/resolve-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { ensureDeployment } from "../config/index.js";
 import { getCeoChatSession, openOpencodeEventStream, postOpencodeJson } from "../infra/opencode.js";
@@ -119,17 +119,20 @@ function appendConversationMessage(ctx: TurnContext, role: ChatMessage["role"], 
  * calling buildSnapshotView purely to extract these two scalars.
  */
 async function resolveTurnContext(boardMessage: string): Promise<{ ctx: TurnContext; bootstrapSnapshot: CompanySnapshot | null }> {
-  if (!getActiveCompanyId()) {
+  // Native multi-tenant: resolve the company from canonical (most-recent), not a
+  // global pointer. This is the unauthenticated legacy path; authenticated chat
+  // passes userCompanyId and never reaches here.
+  const existing = await getMostRecentCompanyId();
+  if (!existing) {
     const bootstrapSnapshot = (await bootstrapIdeaWithWorkspace(boardMessage)).snapshot;
     return {
       ctx: { companyId: bootstrapSnapshot.company.id, sprintId: bootstrapSnapshot.company.currentSprintId },
       bootstrapSnapshot,
     };
   }
-  const companyId = requireActiveCompanyId();
-  const row = await findCompanyById(getDb(), companyId);
+  const row = await findCompanyById(getDb(), existing);
   return {
-    ctx: { companyId, sprintId: row?.currentSprintId ?? null },
+    ctx: { companyId: existing, sprintId: row?.currentSprintId ?? null },
     bootstrapSnapshot: null,
   };
 }

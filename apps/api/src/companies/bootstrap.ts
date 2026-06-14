@@ -25,7 +25,6 @@ import { getDb } from "@arceus/db";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as ideasRepo from "@arceus/db/src/repos/ideas.js";
 import * as strategyBriefsRepo from "@arceus/db/src/repos/strategy_briefs.js";
-import { getActiveCompanyId, setActiveCompanyId } from "../persistence/active-company.js";
 import { markCompanyLive } from "../orchestration/live-companies.js";
 import { seedExistingSkills } from "@arceus/company-runtime";
 import { materializeStaticSkillsForCompany } from "../opencode/materialize-static-skills.js";
@@ -149,23 +148,10 @@ export async function bootstrapCompanyTx(input: BootstrapInput): Promise<Bootstr
     await strategyBriefsRepo.upsertStrategy(tx, strategy);
   });
 
-  // The transaction committed — wire the active-company seam so the
-  // small set of legacy sync callers (deep persistence/orchestration
-  // paths that don't have `req.companyId` in scope) can resolve a
-  // sensible default without a DB roundtrip.
-  //
-  // Multi-tenant safety: only seed the singleton on the FIRST
-  // bootstrap in this process. Subsequent users registering their
-  // own companies must not overwrite the singleton — that previously
-  // (via the cancelStaleBeats cascade) killed the first user's
-  // in-flight beats mid-flight, and (via the singleton flip) made
-  // every legacy reader resolve to the wrong tenant. Per-user routes
-  // already use req.companyId from the JWT, so this default only
-  // affects the residual unmigrated readers, and "first company in
-  // process" is the right default for those.
-  if (!getActiveCompanyId()) {
-    setActiveCompanyId(companyId);
-  }
+  // The transaction committed. Native multi-tenant: there is no global
+  // active-company pointer to seed — every caller resolves its own companyId
+  // from request/beat context (the few boot/legacy paths read the most-recent
+  // company from canonical via getMostRecentCompanyId).
 
   // Fail-safe tenant resolution (Phase 1): mark the new company live
   // immediately so MCP requests on its very first beat aren't rejected in the
