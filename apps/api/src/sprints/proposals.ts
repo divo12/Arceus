@@ -8,7 +8,6 @@ import {
   upsertSprint,
   updateCompanySprint,
 } from "../persistence/mutations/index.js";
-import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { emitGraphSprintStarted } from "../observability/graph-emitter/index.js";
@@ -94,11 +93,11 @@ function topoSortTasksByDependency(tasks: Task[]): Task[] {
  * `companyId` must be the per-user/per-session company, not the global
  * active company. The MCP route passes `req.mcp.companyId` here.
  */
-export async function createSprintWithTasks(input: SprintCreateInput, companyId?: string) {
-  // Prefer the caller-supplied companyId (per-user MCP session) over the
-  // global active company. Without this, all users share the single
-  // active-company singleton and cross-user sprint guards fire falsely.
-  const resolvedCompanyId = companyId ?? requireActiveCompanyId();
+export async function createSprintWithTasks(input: SprintCreateInput, companyId: string) {
+  // companyId is REQUIRED (native multi-tenant) — the caller's per-user MCP
+  // session companyId, never a global singleton. Sharing one active-company
+  // singleton across users made cross-user sprint guards fire falsely.
+  const resolvedCompanyId = companyId;
   const snapshot = await buildSnapshotView(resolvedCompanyId);
 
   // Guard: can't start a new sprint while one is active
@@ -235,10 +234,9 @@ export async function createSprintWithTasks(input: SprintCreateInput, companyId?
  * Sprint execution entry — ensures workspace is ready and sets status.
  */
 async function beginSprintExecution(
-  onStartEventBridge?: () => Promise<void>,
-  companyIdOverride?: string,
+  onStartEventBridge: (() => Promise<void>) | undefined,
+  companyId: string,
 ): Promise<void> {
-  const companyId = companyIdOverride ?? requireActiveCompanyId();
 
   setExecutionStatus("executing");
 

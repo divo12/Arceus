@@ -10,7 +10,6 @@ import { getAgentByRole, nowIso } from "@arceus/task-engine";
 import { getRoleSoul } from "@arceus/company-runtime";
 import { getOpencode, resetOpencodeConnection, createBeatSession, destroyBeatSession } from "../infra/opencode.js";
 import { ensureDeployment } from "../config/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
@@ -739,7 +738,7 @@ export async function runPromptText(
     // Spec 31 Phase 7.B.1 / 7.C.c — read agent from canonical via repo.
     // Prefer explicitly passed companyId; fall back to the global seam for
     // backward compatibility with internal paths that don't yet thread it.
-    const resolvedCompanyId = companyId ?? getActiveCompanyId();
+    const resolvedCompanyId = companyId;
     const agent = resolvedCompanyId
       ? await agentsRepo.findAgentByRole(getDb(), resolvedCompanyId, role)
       : null;
@@ -851,7 +850,7 @@ export async function runPromptText(
         agentSessions.delete(sessionKey);
         emitEmployeeActivity(role, "info", `OpenCode connection lost — reconnecting (attempt ${attempt})…`);
         // Spec 31 Phase 7.C.c — canonical-backed view for the retry path.
-        const retryCompanyId = companyId ?? getActiveCompanyId();
+        const retryCompanyId = companyId;
         if (!retryCompanyId) return;
         const snap = await buildSnapshotView(retryCompanyId);
         const freshSession = await ensureAgentSession(snap, role, retryCompanyId);
