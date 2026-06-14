@@ -1,7 +1,6 @@
 import type { AgentIdentity, Sprint, SprintReviewState, Task } from "@arceus/contracts";
 import { getAgentByRole, nowIso } from "@arceus/task-engine";
 import { appendChatMessage, updateSprint, updateTask } from "../persistence/mutations/index.js";
-import { requireActiveCompanyId } from "../persistence/active-company.js";
 import { buildSnapshotView } from "../orchestration/snapshot-view.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import {
@@ -39,19 +38,14 @@ import { approvePendingBoardApprovals } from "../memory/handoffs.js";
  * concurrent caller gets `null` and the outer function maps that to
  * `false` (same observable behaviour as the old early-return).
  */
-export async function checkSprintCompletion(companyIdArg?: string): Promise<boolean> {
+export async function checkSprintCompletion(companyId: string): Promise<boolean> {
   const result = await sprintCompletionGate.runExclusive(async () => {
-    // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view.
-    // Scope to the company whose task just went terminal, NOT the global
-    // active-company pointer. The pointer is a single in-memory value;
-    // under multi-tenancy (or a stale pointer left by a deleted company)
-    // it can name the WRONG company, and buildSnapshotView then throws
-    // "company not found" → the error is swallowed → the sprint never
-    // finalizes and the next sprint never proposes. Observed live
-    // 2026-06-12: CaseBrief finished all tasks but the pointer named a
-    // deleted company, so sprint 1 hung in `active`. Callers that have
-    // the company (the task-terminal trigger) pass it explicitly.
-    const companyId = companyIdArg ?? requireActiveCompanyId();
+    // Spec 31 Phase 7.B.4 — read snapshot via canonical-backed view, scoped to
+    // the company whose task just went terminal. companyId is REQUIRED (native
+    // multi-tenant): the old global active-company fallback could name the WRONG
+    // company under multi-tenancy or a stale pointer, and buildSnapshotView then
+    // threw "company not found" → swallowed → the sprint never finalized and the
+    // next sprint never proposed (observed live 2026-06-12: CaseBrief hung).
     const snapshot = await buildSnapshotView(companyId);
   const currentSprintId = snapshot.company.currentSprintId;
   if (!currentSprintId) return false;
@@ -170,13 +164,11 @@ export async function sprintNeedsCeoAttention(companyId: string): Promise<boolea
  */
 export async function finalizeSprintCompletion(
   sprintId: string,
-  companyIdArg?: string,
+  companyId: string,
 ): Promise<void> {
-  // Spec 31 Phase 7.B.4 — read via canonical-backed view. Scope to the
-  // passed company, NOT the global active-company pointer (see
-  // checkSprintCompletion note — a stale/wrong pointer makes
-  // buildSnapshotView throw and the sprint never closes).
-  const companyId = companyIdArg ?? requireActiveCompanyId();
+  // Spec 31 Phase 7.B.4 — read via canonical-backed view, scoped to the passed
+  // company. companyId is REQUIRED (native multi-tenant): a stale/wrong global
+  // pointer made buildSnapshotView throw and the sprint never closed.
   const snapshot = await buildSnapshotView(companyId);
   const sprint = snapshot.sprints.find((s) => s.id === sprintId);
   if (!sprint) return;
@@ -270,7 +262,7 @@ export async function finalizeSprintCompletion(
   // had no way to retry without a manual DB edit. Now tag-first means a
   // git/Supabase failure leaves the sprint in `reviewing` and an
   // operator (or the next finalize call) can retry cleanly.
-  const tagResult = await tagCurrentSprintSnapshot();
+  const tagResult = await tagCurrentSprintSnapshot(companyId);
   if (!tagResult.ok) {
     emitEmployeeActivity("system", "error", `Sprint ${sprint.number} completion HELD — snapshot tag failed: ${tagResult.error}`, {
       detail: { sprintId, sprintNumber: sprint.number, error: tagResult.error },
@@ -325,8 +317,7 @@ type TagSprintResult = { ok: true } | { ok: false; error: string };
  * flipping sprint status — a tag failure leaves the sprint recoverable
  * in `reviewing` instead of stranded in `completed` with no bundle.
  */
-async function tagCurrentSprintSnapshot(): Promise<TagSprintResult> {
-  const companyId = requireActiveCompanyId();
+async function tagCurrentSprintSnapshot(companyId: string): Promise<TagSprintResult> {
   const snapshot = await buildSnapshotView(companyId);
   const activeExecution = getActiveExecution();
 
