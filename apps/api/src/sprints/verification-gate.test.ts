@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { runVerificationGate, DEFAULT_GATE_CONFIG } from "./verification-gate.js";
+import { computeEffectiveVerdict } from "./review.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — temp product directory with a trivial package.json
@@ -127,86 +128,42 @@ describe("preview health probe contract", () => {
   });
 });
 
-describe("unparseable QA output → fail (behavioral contract)", () => {
-  // This is a documentation/contract test that verifies the behavioral change.
-  // The actual orchestrator function is too deeply coupled to test in isolation,
-  // so we verify the parseQAReport helper and the expected behavior.
-
-  it("parseQAReport returns null for garbage input", async () => {
-    // We need to find and import parseQAReport — it's in orchestrator.ts
-    // Since it may not be exported, we test the contract indirectly:
-    // The fix ensures that when parseQAReport returns null, the system
-    // treats it as FAIL (not PASS as before).
-    //
-    // We can verify this by searching the code for the pattern:
-    const { readFileSync } = await import("node:fs");
-    const orchSource = readFileSync(
-      new URL("./orchestrator.ts", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"),
-      "utf-8",
-    );
-
-    // Verify the fix is in place: "treating as FAIL" not "treating as pass"
-    assert.ok(
-      orchSource.includes("treating as FAIL"),
-      "Unparseable QA output should be treated as FAIL",
-    );
-    assert.ok(
-      !orchSource.includes("treating as pass"),
-      "Should NOT have 'treating as pass' anymore",
-    );
-
-    // Verify the fix sets testerVerdict to "fail" and phase to "rework"
-    assert.ok(
-      orchSource.includes('testerVerdict: "fail"'),
-      "Should set testerVerdict to fail for unparseable output",
+describe("computeEffectiveVerdict — preview/entry-point hard override", () => {
+  it("forces FAIL when the preview is unreachable, even if the tester said pass", () => {
+    assert.equal(
+      computeEffectiveVerdict({ previewReachable: false, entryPointConnected: true, qaVerdict: "pass" }),
+      "fail",
+      "a green QA report over a dead preview must not pass",
     );
   });
 
-  it("CTO review prompt includes automated preview health check", async () => {
-    const { readFileSync } = await import("node:fs");
-    const orchSource = readFileSync(
-      new URL("./orchestrator.ts", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"),
-      "utf-8",
-    );
-
-    assert.ok(
-      orchSource.includes("# Automated Preview Health Check"),
-      "CTO review prompt should include automated preview health check section",
-    );
-    assert.ok(
-      orchSource.includes("CRITICAL: The preview is NOT reachable"),
-      "CTO prompt should include critical warning when preview unreachable",
+  it("forces FAIL when the entry point does not import the product, even if tester said pass", () => {
+    assert.equal(
+      computeEffectiveVerdict({ previewReachable: true, entryPointConnected: false, qaVerdict: "pass" }),
+      "fail",
+      "a disconnected entry point must not pass",
     );
   });
 
-  it("tester sprint verification prompt includes preview health data", async () => {
-    const { readFileSync } = await import("node:fs");
-    const orchSource = readFileSync(
-      new URL("./orchestrator.ts", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"),
-      "utf-8",
-    );
-
-    assert.ok(
-      orchSource.includes("## Preview Health Check (automated)"),
-      "Tester verification prompt should include preview health check section",
-    );
-    assert.ok(
-      orchSource.includes("IMPORTANT: If the preview is UNREACHABLE, the sprint MUST fail"),
-      "Tester prompt should enforce preview health requirement",
+  it("honors the tester's PASS when both structural checks pass", () => {
+    assert.equal(
+      computeEffectiveVerdict({ previewReachable: true, entryPointConnected: true, qaVerdict: "pass" }),
+      "pass",
     );
   });
 
-  it("tester verdict is overridden to fail when preview is unreachable", async () => {
-    const { readFileSync } = await import("node:fs");
-    const orchSource = readFileSync(
-      new URL("./orchestrator.ts", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"),
-      "utf-8",
+  it("honors the tester's FAIL when both structural checks pass", () => {
+    assert.equal(
+      computeEffectiveVerdict({ previewReachable: true, entryPointConnected: true, qaVerdict: "fail" }),
+      "fail",
     );
+  });
 
-    // The hard override: effectiveVerdict forces fail when preview unreachable
-    assert.ok(
-      orchSource.includes("!previewProbe.reachable ? \"fail\""),
-      "Should hard-override verdict to fail when preview unreachable",
+  it("returns null (not-yet-decided) when checks pass but no parseable QA report exists", () => {
+    assert.equal(
+      computeEffectiveVerdict({ previewReachable: true, entryPointConnected: true, qaVerdict: null }),
+      null,
+      "unparseable QA output is not a silent pass — caller handles null as undecided/rework",
     );
   });
 });

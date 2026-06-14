@@ -48,6 +48,28 @@ interface QAFinding {
   fixSuggestion: string;
 }
 
+export type TesterVerdict = "pass" | "fail";
+
+/**
+ * The hard-override contract for sprint verification: a sprint can only pass if
+ * the preview is reachable AND its entry point imports the product modules. If
+ * either fails, the verdict is forced to "fail" regardless of what the tester
+ * LLM concluded — a green QA report over a dead preview is meaningless. When
+ * both structural checks pass, the tester's own verdict stands (or null when no
+ * parseable QA report was produced, which the caller treats as not-yet-decided).
+ *
+ * Pure + exported so the override is unit-testable (see verification-gate.test.ts).
+ */
+export function computeEffectiveVerdict(args: {
+  previewReachable: boolean;
+  entryPointConnected: boolean;
+  qaVerdict: TesterVerdict | null;
+}): TesterVerdict | null {
+  if (!args.previewReachable) return "fail";
+  if (!args.entryPointConnected) return "fail";
+  return args.qaVerdict;
+}
+
 interface QAReport {
   verdict: "pass" | "fail";
   tasks: {
@@ -317,10 +339,11 @@ export async function executeSprintReviewVerification(
     }
 
     // Hard override: if preview unreachable OR entry-point disconnected, force fail.
-    const effectiveVerdict = !previewProbe.reachable ? "fail"
-      : !sprintEntryCheck.pass ? "fail"
-      : qaReport ? qaReport.verdict
-      : null;
+    const effectiveVerdict = computeEffectiveVerdict({
+      previewReachable: previewProbe.reachable,
+      entryPointConnected: sprintEntryCheck.pass,
+      qaVerdict: qaReport?.verdict ?? null,
+    });
     const entryPointIsSoleFailCause =
       !sprintEntryCheck.pass && previewProbe.reachable && qaReport?.verdict !== "fail";
 
