@@ -5,13 +5,12 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getExecutionStatus } from "../orchestration/state.js";
 import { graphStore } from "../observability/graph-store.js";
 
 export default async function debugRoutes(app: FastifyInstance) {
-  app.get("/api/execution-flow", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/execution-flow", async (request) => {
+    const companyId = request.companyId;
     const tasks = companyId ? await tasksRepo.listByCompanyHydrated(getDb(), companyId) : [];
     return {
       tasks: tasks.map((t) => ({

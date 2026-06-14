@@ -4,12 +4,11 @@
  */
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 /** Prefer JWT-derived companyId; fall back to singleton for legacy paths. */
 function resolveCompanyId(request: FastifyRequest): string | null {
-  return request.companyId ?? getActiveCompanyId();
+  return request.companyId;
 }
 import { cpGetAllTrustScores, cpLoadTrustScore, cpUpdateTrustScore, cpGetPolicyViolations, cpHydrateTrustScores } from "../persistence/control-plane/index.js";
 import { BASE_POLICY_RULES, buildTrustEvent, getTrustTier } from "@arceus/company-runtime";

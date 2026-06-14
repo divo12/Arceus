@@ -4,7 +4,6 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { getLocalPreviewState, stopLocalPreview } from "../workspace/preview.js";
 import { workspaceManager } from "../workspace/manager.js";
 import { getDatabaseHealth } from "@arceus/db";
@@ -26,7 +25,7 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/workspace", async (request) => {
-    const companyId = request.companyId ?? getActiveCompanyId();
+    const companyId = request.companyId;
     if (!companyId) {
       return {
         workspace: null,
@@ -42,14 +41,14 @@ export default async function workspaceRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/workspace/snapshots", async () => {
-    const companyId = getActiveCompanyId();
+  app.get("/api/workspace/snapshots", async (request) => {
+    const companyId = request.companyId;
     if (!companyId) return [];
     return workspaceManager.listSprintSnapshots(companyId);
   });
 
   app.get("/api/workspace/diff", async (request, reply) => {
-    const companyId = getActiveCompanyId();
+    const companyId = request.companyId;
     if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
@@ -66,7 +65,7 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/workspace/sync", async (request, reply) => {
-    const companyId = getActiveCompanyId();
+    const companyId = request.companyId;
     if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };
@@ -98,7 +97,7 @@ export default async function workspaceRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/workspace/export", async (request, reply) => {
-    const companyId = getActiveCompanyId();
+    const companyId = request.companyId;
     if (!companyId) {
       reply.code(400);
       return { error: "No company bootstrapped yet." };

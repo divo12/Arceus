@@ -4,7 +4,6 @@
  */
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 
 /**
@@ -16,7 +15,7 @@ import { requireUserAuth } from "../auth/user-jwt-middleware.js";
  * fallback is dead code on the hot path.
  */
 function resolveCompanyId(request: FastifyRequest): string {
-  return request.companyId ?? getActiveCompanyId() ?? "";
+  return request.companyId ?? "";
 }
 import {
   getAllSkills, getSkillHealth, getSkillHistory as registryGetSkillHistory,

@@ -7,14 +7,13 @@ import { z } from "zod";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
-import { getActiveCompanyId } from "../persistence/active-company.js";
 import { requireUserAuth } from "../auth/user-jwt-middleware.js";
 import { listPersistedArtifacts } from "../persistence/artifact-persistence.js";
 import { hippocampus } from "../memory/index.js";
 
 /** Prefer JWT-derived companyId; fall back to singleton for legacy paths. */
 function resolveCompanyId(request: FastifyRequest): string | null {
-  return request.companyId ?? getActiveCompanyId();
+  return request.companyId;
 }
 
 export default async function hippocampusRoutes(app: FastifyInstance) {
