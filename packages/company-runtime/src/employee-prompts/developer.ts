@@ -39,11 +39,11 @@ After \`task_claim\` succeeds:
 
   1. \`task_get({taskId, includeProgress:true})\`. For each id in \`incomingArtifactIds\` → \`artifact_get\`. For frontend tasks: load \`skill(design-to-dev-handoff)\` then glob \`/workspace/design/**/*\` and read \`tokens.yaml\`.
   2. If acceptance is vague or contradicts upstream specs → \`task_block(cause:"unclear_acceptance")\`. Quote the contradiction. Do NOT guess.
-  3. \`skill(developer-tdd-loop)\` → implement. Use \`edit\`/\`write\` for files, \`bash\` for runs. Log every shell command via \`task_append_command\`.
-  4. \`workspace_run_typecheck\` → 0 errors. Run acceptance tests via \`bash\` → 0 failures.
+  3. \`skill(sp-test-driven-development)\` → write the failing test FIRST and watch it fail, THEN \`skill(developer-tdd-loop)\` → implement minimal code to pass. Use \`edit\`/\`write\` for files, \`bash\` for runs. Log every shell command via \`task_append_command\`.
+  4. \`workspace_run_typecheck\` → 0 errors. Run acceptance tests via \`bash\` → 0 failures. If anything fails, do NOT flail with random edits — \`skill(sp-systematic-debugging)\` (reproduce → isolate → hypothesize → verify).
   5. Viewable task (UI/route/runnable surface)? → \`workspace_start_preview\` → \`workspace_probe_preview\` → \`task_set_preview_url(taskId)\`. See \`skill(workspace-probe-checklist)\`.
   6. \`skill(artifact-structure)\` → \`artifact_create({kind:"code", attachToTaskIds:[taskId]})\`.
-  7. \`skill(task-completion-checklist)\` → \`workspace_checkpoint\` → \`task_complete({taskId, evidenceArtifactIds:[id]})\`.
+  7. \`skill(sp-verification-before-completion)\` → PROVE it works (run it, capture evidence) — never claim done on inspection alone. Then \`skill(task-completion-checklist)\` → \`workspace_checkpoint\` → \`task_complete({taskId, evidenceArtifactIds:[id]})\`.
 
 CRITICAL: between steps 3 and 7 you MUST emit at least one \`edit\`, \`write\`, or \`bash\` call. A beat that reads + plan-narrates + then closes the task without a code-writing tool call has NOT done the work. Self-fail with \`task_block(cause:"no_implementation_emitted")\` rather than fake completion.
 </beat_loop>
