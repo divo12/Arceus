@@ -66,6 +66,48 @@ export function applyBoosts(
 }
 
 // ---------------------------------------------------------------------------
+// Content dedup — collapse duplicate memories before ranking
+// ---------------------------------------------------------------------------
+
+/** Normalize content for duplicate detection: lowercase, strip punctuation, collapse whitespace. */
+function normalizeContentKey(content: string): string {
+  return (content ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Score used to pick the survivor among duplicates — decayed relevance for dynamic, else similarity. */
+function candidateStrength(c: RawCandidate): number {
+  return c.tier === "dynamic" && c.decayedScore != null ? c.decayedScore : c.similarity;
+}
+
+/**
+ * Collapse candidates whose content is identical modulo case/punctuation,
+ * keeping the strongest-scoring copy. Write-side dedup only runs per extraction
+ * batch, so the same fact can still arrive via different sources/stores; this is
+ * the read-side backstop so recall never spends prompt budget on repeats. Blank
+ * content is left untouched (no key → not a duplicate of anything).
+ */
+export function dedupeCandidatesByContent<T extends RawCandidate>(candidates: readonly T[]): T[] {
+  const byKey = new Map<string, T>();
+  const passthrough: T[] = [];
+  for (const c of candidates) {
+    const key = normalizeContentKey(c.content);
+    if (!key) {
+      passthrough.push(c);
+      continue;
+    }
+    const existing = byKey.get(key);
+    if (!existing || candidateStrength(c) > candidateStrength(existing)) {
+      byKey.set(key, c);
+    }
+  }
+  return [...byKey.values(), ...passthrough];
+}
+
+// ---------------------------------------------------------------------------
 // Expiry — drop temporal memories past their lifetime
 // ---------------------------------------------------------------------------
 
@@ -243,8 +285,14 @@ export function rankAndSelect(
   const live = candidates.filter((c) => isMemoryLive(c, now));
   if (live.length === 0) return [];
 
+  // Step 0.5: Collapse duplicate content so a fact arriving via multiple
+  // sources/stores doesn't occupy multiple recall slots (read-side backstop to
+  // the per-batch write dedup; also covers the no-embedding fallback where MMR
+  // can't diversify).
+  const unique = dedupeCandidatesByContent(live);
+
   // Step 1: Apply tier and scope boosts
-  let boosted = applyBoosts(live, agentContainer, opts);
+  let boosted = applyBoosts(unique, agentContainer, opts);
 
   // Step 2: Fuse the keyword-overlap signal into the semantic ranking (no-op
   // unless a query is supplied and at least one candidate matches its terms).
