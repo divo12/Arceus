@@ -61,6 +61,7 @@ function setupRepoMocks(opts: {
   listArtifactsSpy?: ReturnType<typeof mock>;
   listSummariesSpy?: ReturnType<typeof mock>;
   listUnitsSpy?: ReturnType<typeof mock>;
+  listBoardMessagesSpy?: ReturnType<typeof mock>;
 }) {
   const findCompany = opts.findCompanySpy ?? mock(async () => makeCompany());
   const listAgents = opts.listAgentsSpy ?? mock(async () => [
@@ -91,6 +92,10 @@ function setupRepoMocks(opts: {
   }));
   mock.module("@arceus/db/src/repos/memory_units.js", () => ({
     listMemoryUnitsByAgent: listUnits,
+  }));
+  mock.module("@arceus/db/src/repos/board_messages.js", () => ({
+    listBoardMessages: opts.listBoardMessagesSpy ?? mock(async () => []),
+    rowToChatMessage: (row: unknown) => row,
   }));
   mock.module("../workspace/preview.js", () => ({ getLocalPreviewState: () => ({ status: "idle" }) }));
   mock.module("../prompts/artifacts.js", () => ({ resolveIncomingArtifacts: () => [] }));

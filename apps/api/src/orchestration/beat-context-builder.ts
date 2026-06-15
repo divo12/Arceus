@@ -31,6 +31,8 @@ import { parseRoleStrict } from "@arceus/contracts";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
+import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
+import { buildBoardDirectivesBlock } from "../agents/board-directives.js";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as memoryUnitsRepo from "@arceus/db/src/repos/memory_units.js";
@@ -123,11 +125,22 @@ interface BeatMemoryUnitSlice {
   createdAt: string;
 }
 
+/** Compact board-message slice — what the directives renderer needs. */
+interface BeatBoardMessageSlice {
+  id: string;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
 interface BeatRenderContext {
   company: Company | null;
   agents: readonly BeatAgentSlice[];
   sprints: Sprint[];
   tasks: Task[];
+  /** Recent board/CEO chat — the directives renderer distills standing board
+   * instructions from the `board`-role messages here. */
+  boardMessages: readonly BeatBoardMessageSlice[];
   /** Recent first; bounded by `RECENT_ARTIFACT_LIMIT`. */
   artifacts: Artifact[];
   /** All summaries for the company; renderers filter by agentId. */
@@ -143,6 +156,8 @@ interface BeatRenderContext {
 
 const RECENT_ARTIFACT_LIMIT = 50;
 const MAX_AGENT_MEMORY_UNITS = 100;
+/** Recent chat rows scanned for standing board directives (board-role only). */
+const RECENT_BOARD_MESSAGE_LIMIT = 60;
 
 /**
  * Single batch fetch per beat. Parallelises every entity load via
@@ -158,14 +173,19 @@ export async function loadBeatRenderContext(
   role: Role,
 ): Promise<BeatRenderContext> {
   const db = getDb();
-  const [company, agentRows, sprintRows, tasks, artifactRows, summaries] = await Promise.all([
+  const [company, agentRows, sprintRows, tasks, artifactRows, summaries, boardRows] = await Promise.all([
     companiesRepo.findByIdHydrated(db, companyId),
     agentsRepo.listAgentsByCompany(db, companyId),
     sprintsRepo.listSprintsByCompany(db, companyId),
     tasksRepo.listByCompanyHydrated(db, companyId),
     artifactsRepo.listArtifactsByCompany(db, companyId, RECENT_ARTIFACT_LIMIT),
     memorySummariesRepo.listByCompany(db, companyId),
+    boardMessagesRepo.listBoardMessages(db, companyId, RECENT_BOARD_MESSAGE_LIMIT),
   ]);
+  const boardMessages: BeatBoardMessageSlice[] = boardRows.map((row) => {
+    const m = boardMessagesRepo.rowToChatMessage(row);
+    return { id: m.id, role: m.role, content: m.content, createdAt: m.createdAt };
+  });
 
   const agents: BeatAgentSlice[] = agentRows.map((row) => ({
     id: row.id,
@@ -193,7 +213,7 @@ export async function loadBeatRenderContext(
       }))
     : null;
 
-  return { company, agents, sprints, tasks, artifacts, memorySummaries, roleMemoryUnits, roleAgent };
+  return { company, agents, sprints, tasks, artifacts, memorySummaries, roleMemoryUnits, roleAgent, boardMessages };
 }
 
 // ── Incoming handoffs drainer (spec 27 §6) ───────────────
@@ -270,7 +290,7 @@ export async function buildBeatContext(
 
 // ── State renderer (pure functions over BeatRenderContext) ────
 
-function renderCompanyState(ctx: BeatRenderContext): string {
+export function renderCompanyState(ctx: BeatRenderContext): string {
   if (!ctx.company) return "## Company State\n\n_Company not yet bootstrapped._";
   const c = ctx.company;
   const sprint = ctx.sprints.find((s) => s.id === c.currentSprintId);
@@ -288,6 +308,11 @@ function renderCompanyState(ctx: BeatRenderContext): string {
   if (sprint) {
     lines.push(`- **Sprint ${sprint.number}:** ${sprint.goal} [${sprint.status}]`);
   }
+  // Component 3: fan the board's standing directives (+ any conflicts) out to
+  // EVERY role's beat — they are implementation constraints (e.g. "always use a
+  // dark theme", "checkout must work on mobile"), not just CEO planning context.
+  const directives = buildBoardDirectivesBlock(ctx.boardMessages ?? []);
+  if (directives) lines.push("", directives);
   return lines.join("\n");
 }
 
