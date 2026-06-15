@@ -17,6 +17,7 @@
 import { createWorkflowTask } from "@arceus/task-engine";
 import type { CompanySnapshot, Task } from "@arceus/contracts";
 import { buildSnapshotView } from "./snapshot-view.js";
+import { buildDirectiveChecklistForQA } from "../agents/board-directives.js";
 import { upsertTask, appendChatMessage } from "../persistence/mutations/index.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { swallowAndAudit } from "../observability/swallow.js";
@@ -121,7 +122,11 @@ export async function runFlowTestAndReport(args: {
   await swallowAndAudit("flow_test.sprint", async () => {
     const snapshot = await buildSnapshotView(companyId);
     const intent = snapshot.company.goal || snapshot.company.name;
-    const goal = `The product under test is: "${snapshot.company.name}". Its intent: ${intent}. Exercise the core user flows of THIS product specifically.`;
+    const baseGoal = `The product under test is: "${snapshot.company.name}". Its intent: ${intent}. Exercise the core user flows of THIS product specifically.`;
+    // Component 4: make QA directive-aware — the browser agent must verify the
+    // live product honors the board's standing directives and flag violations.
+    const directiveChecklist = buildDirectiveChecklistForQA(snapshot.chatMessages);
+    const goal = directiveChecklist ? `${baseGoal}\n\n${directiveChecklist}` : baseGoal;
 
     // Frontend signal: the CEO is examining the live website to plan next sprint.
     emitEmployeeActivity("ceo", "context", `Examining the live product to plan the next sprint — reviewing ${previewUrl} in a real browser`, {

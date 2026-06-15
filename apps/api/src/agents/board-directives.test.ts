@@ -17,6 +17,7 @@ import {
   dedupeDirectivesToLatest,
   renderBoardDirectivesBlock,
   findDirectiveConflicts,
+  buildDirectiveChecklistForQA,
   type BoardDirective,
 } from "./board-directives.js";
 
@@ -177,6 +178,21 @@ test("renderBoardDirectivesBlock surfaces a CONFLICT warning when directives con
   // Specific to the new pairing logic (the generic block already says "conflict"):
   assert.match(block, /CONFLICTING|⚠/);
   assert.match(block, / vs /, "must pair the two conflicting directives");
+});
+
+// ── Component 4: directive-aware flow-test (QA verifies the product honors them) ──
+
+test("buildDirectiveChecklistForQA turns board directives into a verification checklist", () => {
+  const checklist = buildDirectiveChecklistForQA([
+    msg({ id: "m1", content: "Always use a dark theme. Never add a signup wall." }),
+  ]);
+  assert.match(checklist, /verify|honor/i);
+  assert.match(checklist, /dark theme/i);
+  assert.match(checklist, /signup wall/i);
+});
+
+test("buildDirectiveChecklistForQA is empty when the board gave no directives", () => {
+  assert.equal(buildDirectiveChecklistForQA([msg({ id: "m1", content: "looks good" })]), "");
 });
 
 test("buildCeoOperatingPrompt surfaces a directive conflict from the board chat", () => {

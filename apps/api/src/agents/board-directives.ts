@@ -199,3 +199,19 @@ export function renderBoardDirectivesBlock(directives: readonly BoardDirective[]
 export function buildBoardDirectivesBlock(messages: readonly BoardMessageLike[]): string {
   return renderBoardDirectivesBlock(extractBoardDirectives(messages));
 }
+
+/**
+ * Component 4: turn the board's standing directives into a QA checklist for the
+ * browser flow-tester, so it actively verifies the LIVE product honors each one
+ * ("is it really a dark theme? is there a signup wall?") and reports violations.
+ * Empty when the board gave no directives.
+ */
+export function buildDirectiveChecklistForQA(messages: readonly BoardMessageLike[]): string {
+  const directives = dedupeDirectivesToLatest(extractBoardDirectives(messages));
+  if (directives.length === 0) return "";
+  const lines = directives.map((d) => `- [${KIND_LABEL[d.kind]}] ${d.statement}`);
+  return [
+    "The company's BOARD requires the following. VERIFY the live product honors EACH one and call out any violation explicitly in ISSUES:",
+    ...lines,
+  ].join("\n");
+}
