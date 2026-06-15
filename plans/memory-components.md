@@ -42,7 +42,9 @@ next. Ranked by value ÷ effort; only the ideas Arceus doesn't already have.
 
 4. **Directive-aware flow-test** ✅ DONE (6a828b1) — the browser flow-tester receives a checklist of the board's standing directives and verifies the live product honors each (violations → ISSUES → CEO next-sprint suggestion via the existing routing). buildDirectiveChecklistForQA pure+tested; wired into flow-test.ts goal. Closes directives → built → VERIFIED.
 
-5. **Memory-write discipline** — the "would another agent need this?" test +
+5. **Durable board directives** ✅ DONE (2c118e1) — listBoardRoleMessages (role='board' only, cap 300) feeds directive extraction in loadBeatRenderContext, so an early directive never ages out behind agent/CEO chatter. TDD: beat-context test proves an OLD directive still surfaces.
+
+6. **Memory-write discipline** — the "would another agent need this?" test +
    UPDATE-vs-APPEND + compress-when-full, applied to role-memory / handoff writes.
 
 5. **Recurring health probe** — extend the flow-tester (currently sprint-finalize only)
