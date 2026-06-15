@@ -62,3 +62,9 @@ next. Ranked by value ÷ effort; only the ideas Arceus doesn't already have.
 - Already in Arceus: autonomous loop (heartbeat), browser automation + vision
   (flow-tester), tool gating/trust bands, per-company secret injection, circuit
   breakers, multi-tenancy, deploy-resilience, skills.md (registry + materialized).
+
+## Post-roadmap refinements (same loop)
+- **Value-conflict detection** ✅ (5d3c428) — findDirectiveConflicts now catches dark-vs-light-theme style opposing VALUES, not just opposing polarity.
+- **Role-memory write gate** ✅ (920982b) — isSubstantiveMemoryContent extends Component 6 to applyMemoryModification (meetings/effects.ts).
+- **Recurring health probe** ✅ (f9d36ef) — opt-in (HEALTH_PROBE_ENABLED) between-sprints product probe → CEO suggestions; pure selectCompaniesDueForProbe policy + scheduler. Off by default.
+- _Remaining:_ LLM directive extractor for fuzzy phrasings (LLM-dependent — not cleanly TDD-able, so deferred).
