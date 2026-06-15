@@ -20,6 +20,7 @@ import {
   extractUuid,
 } from "./canonical-codec.js";
 import { logEmbedFailure, upsertEmbedding } from "./embedding.js";
+import { resolveMemoryWrite } from "../../engines/memory-write.js";
 
 export abstract class BasePgVectorMemoryStore<T extends "static" | "dynamic"> {
   protected abstract readonly type: T;
@@ -43,6 +44,17 @@ export abstract class BasePgVectorMemoryStore<T extends "static" | "dynamic"> {
 
   async add(unit: MemoryUnit): Promise<void> {
     const db = getDb();
+
+    // UPDATE-not-APPEND: if this agent already holds the same fact (content
+    // modulo case/punctuation), refresh it instead of inserting a duplicate row
+    // — keeps the store from bloating with re-stated facts at the source.
+    const existing = await this.list(unit.agentId);
+    const decision = resolveMemoryWrite(unit, existing);
+    if (decision.action === "update") {
+      await this.update(decision.targetId, unit.content, decision.mergedConfidence);
+      return;
+    }
+
     const values = buildCanonicalInsertValues(unit, this.type);
     const [row] = await db.insert(memoryUnits).values(values).returning({ id: memoryUnits.id });
     if (!row) return;

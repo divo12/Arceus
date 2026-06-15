@@ -1,4 +1,5 @@
 import { cosineSimilarity } from "../backends/embedding.js";
+import { normalizeContentKey } from "./content-key.js";
 import { reciprocalRankFusion, keywordOverlapScore } from "./hybrid-rank.js";
 import type { MemoryUnit } from "@arceus/contracts";
 import type { RetrievalOptions, ScoredMemory } from "../types.js";
@@ -68,15 +69,6 @@ export function applyBoosts(
 // ---------------------------------------------------------------------------
 // Content dedup — collapse duplicate memories before ranking
 // ---------------------------------------------------------------------------
-
-/** Normalize content for duplicate detection: lowercase, strip punctuation, collapse whitespace. */
-function normalizeContentKey(content: string): string {
-  return (content ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 /** Score used to pick the survivor among duplicates — decayed relevance for dynamic, else similarity. */
 function candidateStrength(c: RawCandidate): number {
