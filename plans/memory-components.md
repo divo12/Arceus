@@ -17,9 +17,14 @@ next. Ranked by value ÷ effort; only the ideas Arceus doesn't already have.
      persistence beyond the bounded chat window (dedicated board-role query);
      active contradiction detection (#2).
 
-2. **Contradiction detection** — when a new board request conflicts with a standing
-   directive, the CEO says "last sprint you said X — still want that?" instead of
-   silently overriding. Builds on #1's directive list. (LLM check on the rare path.)
+2. **Contradiction detection** ✅ DONE (07f8f49)
+   - `findDirectiveConflicts` (board-directives.ts) flags opposing-polarity directives
+     on the same topic (token-overlap + avoid-vs-positive); `renderBoardDirectivesBlock`
+     appends a "⚠ CONFLICTING board directives — resolve with the board BEFORE planning"
+     pairing. Flows into the CEO prompt via the existing injection (no new wiring).
+   - TDD: 15/15 (polarity/agreement/unrelated/two-avoids + a wiring test proving
+     buildCeoOperatingPrompt surfaces the conflict). Pure heuristic; fuzzy value
+     conflicts (dark-vs-light theme) deferred to a future LLM layer.
 
 3. **Per-role context assembly** — Hippocampus recall already does embed → vector →
    MMR. Add agent-aware *formatting* so each role gets context filtered for its needs
