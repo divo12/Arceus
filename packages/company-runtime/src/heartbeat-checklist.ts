@@ -496,25 +496,26 @@ function checkSkillQueue(ctx: AgentBeatContext): CheckResult {
 // ── Spec 18: Meeting contribution check ────────────────────
 
 /**
- * Check if this agent needs to contribute to a meeting currently in "collecting" status.
- * Returns action_needed with the meeting ID so the beat executor can produce a contribution.
+ * Meeting-contribution beat check — RETIRED (Spec 24 Phase 4a).
+ *
+ * Contributions are now collected DIRECTLY by the MeetingPipeline (it prompts
+ * each participant's session itself), and the beat dispatch handler
+ * `handleMeetingContribution` is a pure no-op. So surfacing `action_needed`
+ * here only ever burns a beat doing nothing — and because this check is FIRST
+ * in every role's checklist and `primaryAction` takes the first action_needed,
+ * a meeting stuck in "collecting" (e.g. meetings disabled → the pipeline never
+ * advances it) livelocks the agent: every beat is consumed by the no-op and
+ * higher-priority work (sprint_create, task execution) never runs. Observed
+ * live 2026-06-15: a CEO looped 5+ beats while Sprint 2 sat completed and the
+ * next sprint was never planned.
+ *
+ * Always returns `ok`. Kept (rather than removed from the checklists) so the
+ * one-line change is obviously reversible if the beat-driven path is ever
+ * revived; the dead `meeting_contribution` dispatch handler stays as a
+ * defensive no-op for any in-flight dispatch.
  */
-function checkMeetingContribution(ctx: AgentBeatContext): CheckResult {
-  const collectingMeeting = ctx.recentMeetings.find(
-    (m) => m.status === "collecting" && m.participantAgentIds.includes(ctx.agentId),
-  );
-  if (!collectingMeeting) return { status: "ok", detail: "No meeting awaiting contribution" };
-
-  // Check if we already contributed
-  const alreadyContributed = collectingMeeting.contributions.some((c) => c.agentId === ctx.agentId);
-  if (alreadyContributed) return { status: "ok", detail: "Already contributed to meeting" };
-
-  return {
-    status: "action_needed",
-    detail: `Meeting "${collectingMeeting.title}" awaiting your contribution`,
-    suggestedAction: `Contribute to meeting: ${collectingMeeting.title}`,
-    dispatch: { kind: "meeting_contribution", meetingId: collectingMeeting.id },
-  };
+function checkMeetingContribution(_ctx: AgentBeatContext): CheckResult {
+  return { status: "ok", detail: "Meeting contributions are collected by the pipeline, not by beats" };
 }
 
 // ── Spec 14 Phase 6: Skills Lead proactive checks ─────────

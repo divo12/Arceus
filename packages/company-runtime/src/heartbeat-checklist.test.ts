@@ -82,6 +82,45 @@ function makeCtx(overrides: Partial<AgentBeatContext> = {}): AgentBeatContext {
   } as AgentBeatContext;
 }
 
+// ── Tests: meeting-contribution must not livelock the beat ───
+
+describe("checkMeetingContribution — obsolete beat path must not steal the beat", () => {
+  // A meeting stuck in "collecting" (e.g. meetings disabled, so the pipeline
+  // never advances it). The beat-driven contribution handler is a no-op
+  // ("collected directly by pipeline"), so surfacing it as action_needed wastes
+  // every beat and livelocks the agent — observed live: a CEO looped ~5+ beats
+  // doing nothing while Sprint 2 sat completed and sprint_create never fired.
+  const collectingMeeting = [{
+    id: "meeting_1",
+    title: "Daily sync",
+    status: "collecting",
+    participantAgentIds: ["agent_ceo"],
+    contributions: [],
+  }] as unknown as AgentBeatContext["recentMeetings"];
+
+  it("does NOT surface meeting_contribution as action_needed (the pipeline collects contributions)", () => {
+    const ctx = makeCtx({ role: "ceo", agentId: "agent_ceo", recentMeetings: collectingMeeting });
+    const result = runChecklist(ctx);
+    const meetingAction = result.results.find((r) => r.dispatch?.kind === "meeting_contribution");
+    assert.equal(meetingAction, undefined, "a collecting meeting must not produce a no-op meeting_contribution action");
+  });
+
+  it("a stuck collecting meeting does NOT starve sprint_create on a completed sprint (livelock regression)", () => {
+    const ctx = makeCtx({
+      role: "ceo",
+      agentId: "agent_ceo",
+      currentSprint: makeSprint({ status: "completed" }),
+      recentMeetings: collectingMeeting,
+    });
+    const result = runChecklist(ctx);
+    assert.notEqual(result.primaryAction?.dispatch?.kind, "meeting_contribution", "beat must not be consumed by the no-op meeting handler");
+    assert.ok(
+      result.primaryAction?.suggestedAction?.toLowerCase().includes("sprint_create"),
+      `CEO must be routed to sprint_create, got: ${JSON.stringify(result.primaryAction)}`,
+    );
+  });
+});
+
 // ── Tests: CTO escalation checklist ─────────────────────────
 
 describe("CTO checklist — checkEscalationPending", () => {
