@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ChatMessage, CompanySnapshot } from "@arceus/contracts";
 import { getRoleSoul, getAgentSkills } from "@arceus/company-runtime";
 import { structuredCompletion, LlmTruncatedOutputError } from "../infra/azure-openai.js";
+import { buildBoardDirectivesBlock } from "./board-directives.js";
 
 const strategyRoleSchema = z.enum(["ceo", "cto", "pm", "developer", "tester", "ui_designer", "marketing", "skills_lead"]);
 // Mandatory hierarchy floor. Enforced deterministically after the LLM returns
@@ -390,7 +391,7 @@ function buildSprintRetrospectiveContext(snapshot: CompanySnapshot): string {
 }
 
 function buildSnapshotContext(snapshot: CompanySnapshot, executionStatus?: string) {
-  return [
+  const lines = [
     `Stage: ${inferCeoStage(snapshot, executionStatus)}`,
     `Company name: ${snapshot.company.name}`,
     `Company status: ${snapshot.company.status}`,
@@ -407,7 +408,13 @@ function buildSnapshotContext(snapshot: CompanySnapshot, executionStatus?: strin
     `Recent meetings: ${summarizeMeetings(snapshot)}`,
     "Recent boardroom chat:",
     summarizeChatMessages(snapshot.chatMessages),
-  ].join("\n");
+  ];
+  // Standing board directives — distilled from the board's own messages so they
+  // survive past the recent-chat window. The CEO must honor these every sprint
+  // and flag conflicts rather than silently overriding (see board-directives.ts).
+  const directives = buildBoardDirectivesBlock(snapshot.chatMessages);
+  if (directives) lines.push("", directives);
+  return lines.join("\n");
 }
 
 /**
