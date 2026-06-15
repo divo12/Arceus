@@ -48,6 +48,7 @@ import { cpHydrateTrustScores } from "../persistence/control-plane/index.js";
 import { flush } from "../persistence/mutations/index.js";
 import { initSkillEvolution } from "../skills/evolution.js";
 import { startSkillScheduler } from "../skills/scheduler.js";
+import { startHealthProbeScheduler } from "../orchestration/health-probe-scheduler.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { installObservabilitySinks } from "./observability.js";
 import { initWorkspaceAndPersistence } from "./workspace-init.js";
@@ -103,6 +104,9 @@ export async function startServer(app: FastifyInstance): Promise<void> {
   // skill-registry write-through callbacks are wired before the boot-time
   // seeding inside initWorkspaceAndPersistence runs.
   startSkillScheduler();
+  // Recurring between-sprints product health probe — opt-in (HEALTH_PROBE_ENABLED),
+  // no-op otherwise. Findings route to the CEO as next-sprint suggestions.
+  startHealthProbeScheduler();
 
   await flush();
   if (orchestratorConfig.demoMode) {
