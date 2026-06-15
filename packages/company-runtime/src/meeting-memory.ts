@@ -12,7 +12,7 @@ import type {
   CompanySnapshot,
   MemoryUnit,
 } from "@arceus/contracts";
-import { filterMemorableFacts } from "./memory-quality.js";
+import { filterMemorableFacts, dedupeFactsByContent } from "./memory-quality.js";
 
 // ── Transcript Assembly ────────────────────────────────────
 
@@ -146,9 +146,9 @@ export async function extractMeetingMemories(
 
     if (facts.length === 0) continue;
 
-    // Component 6: gate low-signal / low-confidence facts out before they become
-    // permanent memory noise that degrades later recall.
-    const memorable = filterMemorableFacts(facts);
+    // Component 6: gate low-signal / low-confidence facts out, then collapse
+    // near-duplicates (UPDATE-not-APPEND) before they become permanent memory.
+    const memorable = dedupeFactsByContent(filterMemorableFacts(facts));
     if (memorable.length === 0) continue;
 
     const memories: MemoryUnit[] = memorable.map((fact) => ({

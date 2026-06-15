@@ -43,3 +43,19 @@ export function filterMemorableFacts<T extends MemorableFactLike>(facts: readonl
 export function isSubstantiveMemoryContent(content: string): boolean {
   return (content ?? "").trim().length >= MIN_MEMORY_CONTENT_CHARS;
 }
+
+/**
+ * Collapse near-duplicate facts (same content modulo case/punctuation) so a
+ * re-stated fact doesn't become two memories — UPDATE-not-APPEND, applied to a
+ * single extraction batch. Keeps the highest-confidence copy, preserves order.
+ */
+export function dedupeFactsByContent<T extends MemorableFactLike>(facts: readonly T[]): T[] {
+  const byKey = new Map<string, T>();
+  for (const f of facts) {
+    const key = (f.content ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (!existing || f.confidence > existing.confidence) byKey.set(key, f);
+  }
+  return [...byKey.values()];
+}

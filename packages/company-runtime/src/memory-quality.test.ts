@@ -13,6 +13,7 @@ import {
   isWorthRemembering,
   filterMemorableFacts,
   isSubstantiveMemoryContent,
+  dedupeFactsByContent,
   MIN_MEMORY_CONFIDENCE,
   MIN_MEMORY_CONTENT_CHARS,
 } from "./memory-quality.js";
@@ -64,6 +65,25 @@ test("isSubstantiveMemoryContent gates trivial role-memory writes (no confidence
   assert.equal(isSubstantiveMemoryContent("   "), false);
   assert.equal(isSubstantiveMemoryContent("ok"), false);
   assert.equal(isSubstantiveMemoryContent("The auth flow now uses magic links."), true);
+});
+
+test("dedupeFactsByContent collapses near-identical facts, keeping the most confident", () => {
+  const deduped = dedupeFactsByContent([
+    { content: "Use a dark theme", confidence: 0.7 },
+    { content: "use a dark theme.", confidence: 0.9 },
+    { content: "The product targets designers", confidence: 0.8 },
+  ]);
+  assert.equal(deduped.length, 2);
+  const dark = deduped.find((f) => /dark theme/i.test(f.content));
+  assert.equal(dark?.confidence, 0.9, "the higher-confidence duplicate wins");
+});
+
+test("dedupeFactsByContent keeps genuinely distinct facts", () => {
+  const facts = [
+    { content: "Use a dark theme", confidence: 0.8 },
+    { content: "Use a light sidebar", confidence: 0.8 },
+  ];
+  assert.equal(dedupeFactsByContent(facts).length, 2);
 });
 
 test("thresholds are sane", () => {
