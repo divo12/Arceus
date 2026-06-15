@@ -170,6 +170,30 @@ test("findDirectiveConflicts does NOT flag two avoids on the same topic (they ag
   assert.deepEqual(conflicts, []);
 });
 
+test("findDirectiveConflicts flags opposing VALUES on the same topic (dark vs light theme)", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Always use a dark theme", "always", "m1"),
+    directive("Use a light theme everywhere", "prefer", "m2"),
+  ]);
+  assert.equal(conflicts.length, 1);
+});
+
+test("findDirectiveConflicts flags minimal-vs-detailed on the same topic", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Keep the copy minimal", "prefer", "m1"),
+    directive("Make the copy detailed", "prefer", "m2"),
+  ]);
+  assert.equal(conflicts.length, 1);
+});
+
+test("findDirectiveConflicts does NOT flag the same value on different topics (dark theme vs dark sidebar)", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Always use a dark theme", "always", "m1"),
+    directive("Always use a dark sidebar", "always", "m2"),
+  ]);
+  assert.deepEqual(conflicts, []);
+});
+
 test("renderBoardDirectivesBlock surfaces a CONFLICT warning when directives contradict", () => {
   const block = renderBoardDirectivesBlock([
     directive("Never add a signup wall", "avoid", "m1"),

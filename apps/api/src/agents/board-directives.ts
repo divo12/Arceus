@@ -142,10 +142,42 @@ function topicOverlap(a: string, b: string): number {
 }
 
 /**
- * Detect directives that contradict each other: same topic, opposing polarity
- * (one prohibits what the other requires). Pure heuristic — covers the clear
- * "never X" vs "always/use X" case. Fuzzy value conflicts ("dark" vs "light"
- * theme) are left to a future LLM layer.
+ * Mutually-exclusive value words common in product/design directives. Two
+ * same-topic directives that pick opposite ends of a pair contradict even when
+ * their polarity agrees ("always use a DARK theme" vs "use a LIGHT theme").
+ */
+const OPPOSING_VALUE_PAIRS: readonly (readonly [string, string])[] = [
+  ["dark", "light"],
+  ["minimal", "detailed"],
+  ["minimal", "maximal"],
+  ["mobile", "desktop"],
+  ["free", "paid"],
+  ["simple", "complex"],
+  ["light", "heavy"],
+  ["compact", "spacious"],
+  ["serious", "playful"],
+];
+
+/** Same topic but opposite VALUE from a known mutually-exclusive pair. */
+function valueConflict(a: BoardDirective, b: BoardDirective): boolean {
+  const ta = topicTokens(a.statement);
+  const tb = topicTokens(b.statement);
+  for (const [x, y] of OPPOSING_VALUE_PAIRS) {
+    const opposed = (ta.has(x) && tb.has(y)) || (ta.has(y) && tb.has(x));
+    if (!opposed) continue;
+    // Require shared topic beyond the value words themselves (so "dark theme"
+    // vs "dark sidebar" — same value, different topic — does NOT trip).
+    const sharedTopic = [...ta].some((t) => t !== x && t !== y && tb.has(t));
+    if (sharedTopic) return true;
+  }
+  return false;
+}
+
+/**
+ * Detect directives that contradict each other:
+ *  - opposing POLARITY on the same topic ("never X" vs "always/use X"), or
+ *  - opposing VALUE on the same topic ("dark theme" vs "light theme").
+ * Pure heuristic. Fully fuzzy semantic conflicts are still left to a future LLM.
  */
 export function findDirectiveConflicts(directives: readonly BoardDirective[]): DirectiveConflict[] {
   const out: DirectiveConflict[] = [];
@@ -153,9 +185,10 @@ export function findDirectiveConflicts(directives: readonly BoardDirective[]): D
     for (let j = i + 1; j < directives.length; j++) {
       const a = directives[i];
       const b = directives[j];
-      if (!opposingPolarity(a.kind, b.kind)) continue;
-      if (topicOverlap(a.statement, b.statement) >= 0.6) {
+      if (opposingPolarity(a.kind, b.kind) && topicOverlap(a.statement, b.statement) >= 0.6) {
         out.push({ a, b, reason: "opposing instructions on the same topic" });
+      } else if (valueConflict(a, b)) {
+        out.push({ a, b, reason: "opposing values on the same topic" });
       }
     }
   }
