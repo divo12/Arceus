@@ -50,8 +50,11 @@ next. Ranked by value ÷ effort; only the ideas Arceus doesn't already have.
 5. **Recurring health probe** — extend the flow-tester (currently sprint-finalize only)
    to a scheduled probe of live previews → CEO next-sprint suggestions.
 
-6. **KNOW/INFER/GUESS + problem-classification** — a prompt-discipline seed skill for
-   CEO/reviewers (pairs with the superpowers skills).
+7. **Epistemic discipline seed skill** ✅ DONE (4b899d0) — .arceus/skills-seed/epistemic-discipline (role: ceo/cto/pm/tester): classify the problem TYPE first + tag every claim KNOW/INFER/GUESS. Flows through the seed→registry→materialize pipeline. TDD: seed-contract test (resolvable roles + KNOW/INFER/GUESS body).
+
+---
+
+**ALL 7 ROADMAP COMPONENTS SHIPPED + DEPLOYED.** The board-directives feature (1-5) + memory-write gate (6) + epistemic-discipline skill (7) are complete. Remaining open follow-ups are refinements (LLM directive extractor, fuzzy value conflicts, recurring health probe).
 
 ## Explicitly NOT doing (out of scope / already have)
 - Firecracker microVMs, revenue-aware auto-rollback, BYO-MCP marketplace, vertical
