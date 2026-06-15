@@ -16,8 +16,13 @@ import {
   extractBoardDirectives,
   dedupeDirectivesToLatest,
   renderBoardDirectivesBlock,
+  findDirectiveConflicts,
   type BoardDirective,
 } from "./board-directives.js";
+
+function directive(statement: string, kind: BoardDirective["kind"], id = "m"): BoardDirective {
+  return { key: statement.toLowerCase(), statement, kind, sourceMessageId: id, createdAt: "2026-06-15T00:00:00.000Z" };
+}
 
 type Msg = { id: string; role: string; content: string; createdAt: string };
 const msg = (over: Partial<Msg> & { id: string; content: string }): Msg => ({
@@ -118,4 +123,69 @@ test("buildCeoOperatingPrompt adds no directives block when board gave none", ()
   snapshot.chatMessages = [boardChat("m1", "How's progress looking?")];
   const prompt = buildCeoOperatingPrompt(snapshot);
   assert.doesNotMatch(prompt, /Standing board directives/i);
+});
+
+// ── Component 2: contradiction detection ──
+
+test("findDirectiveConflicts flags opposite-polarity directives on the same topic", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Never add a signup wall", "avoid", "m1"),
+    directive("Always add a signup wall", "always", "m2"),
+  ]);
+  assert.equal(conflicts.length, 1);
+  assert.ok(/signup wall/i.test(conflicts[0].a.statement));
+  assert.ok(/signup wall/i.test(conflicts[0].b.statement));
+});
+
+test("findDirectiveConflicts flags avoid-vs-prefer on the same topic", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Avoid stock photos", "avoid", "m1"),
+    directive("Use stock photos for the hero", "prefer", "m2"),
+  ]);
+  assert.equal(conflicts.length, 1);
+});
+
+test("findDirectiveConflicts does NOT flag agreeing directives (both positive)", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Always use a dark theme", "always", "m1"),
+    directive("Use a dark theme everywhere", "prefer", "m2"),
+  ]);
+  assert.deepEqual(conflicts, []);
+});
+
+test("findDirectiveConflicts does NOT flag unrelated directives", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Always use a dark theme", "always", "m1"),
+    directive("Never add a signup wall", "avoid", "m2"),
+  ]);
+  assert.deepEqual(conflicts, []);
+});
+
+test("findDirectiveConflicts does NOT flag two avoids on the same topic (they agree)", () => {
+  const conflicts = findDirectiveConflicts([
+    directive("Never add a signup wall", "avoid", "m1"),
+    directive("Avoid any signup wall", "avoid", "m2"),
+  ]);
+  assert.deepEqual(conflicts, []);
+});
+
+test("renderBoardDirectivesBlock surfaces a CONFLICT warning when directives contradict", () => {
+  const block = renderBoardDirectivesBlock([
+    directive("Never add a signup wall", "avoid", "m1"),
+    directive("Always add a signup wall", "always", "m2"),
+  ]);
+  // Specific to the new pairing logic (the generic block already says "conflict"):
+  assert.match(block, /CONFLICTING|⚠/);
+  assert.match(block, / vs /, "must pair the two conflicting directives");
+});
+
+test("buildCeoOperatingPrompt surfaces a directive conflict from the board chat", () => {
+  const snapshot = createEmptyCompanySnapshot();
+  snapshot.chatMessages = [
+    boardChat("m1", "Never add a signup wall."),
+    boardChat("m2", "Actually, always add a signup wall on the landing page."),
+  ];
+  const prompt = buildCeoOperatingPrompt(snapshot);
+  assert.match(prompt, /CONFLICTING board directives/i);
+  assert.match(prompt, / vs /);
 });

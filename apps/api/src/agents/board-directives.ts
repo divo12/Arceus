@@ -98,6 +98,70 @@ export function dedupeDirectivesToLatest(directives: readonly BoardDirective[]):
   return [...latest.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+// ── Contradiction detection (Component 2) ──
+
+export interface DirectiveConflict {
+  a: BoardDirective;
+  b: BoardDirective;
+  reason: string;
+}
+
+// Words that carry no topic meaning — directive triggers + common filler. Used
+// to reduce a directive to its salient subject so two phrasings of the same
+// topic ("add a signup wall" / "any signup wall") compare equal.
+const TOPIC_STOPWORDS: ReadonlySet<string> = new Set([
+  "always", "never", "avoid", "stop", "prefer", "use", "using", "add", "adding", "make", "made",
+  "sure", "ensure", "keep", "keeping", "it", "should", "must", "need", "needs", "to", "has", "have",
+  "the", "a", "an", "any", "all", "of", "for", "on", "in", "into", "and", "or", "do", "not", "dont",
+  "cannot", "cant", "everywhere", "every", "across", "entire", "whole", "please", "i", "want", "wed",
+  "would", "like", "we", "you", "our", "your", "be", "is", "are", "with", "that", "this", "no", "longer",
+]);
+
+function topicTokens(statement: string): Set<string> {
+  return new Set(
+    statement
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 1 && !TOPIC_STOPWORDS.has(w)),
+  );
+}
+
+/** True when exactly one of the two directives is a prohibition (avoid). */
+function opposingPolarity(a: DirectiveKind, b: DirectiveKind): boolean {
+  return (a === "avoid") !== (b === "avoid");
+}
+
+function topicOverlap(a: string, b: string): number {
+  const ta = topicTokens(a);
+  const tb = topicTokens(b);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  return inter / Math.min(ta.size, tb.size);
+}
+
+/**
+ * Detect directives that contradict each other: same topic, opposing polarity
+ * (one prohibits what the other requires). Pure heuristic — covers the clear
+ * "never X" vs "always/use X" case. Fuzzy value conflicts ("dark" vs "light"
+ * theme) are left to a future LLM layer.
+ */
+export function findDirectiveConflicts(directives: readonly BoardDirective[]): DirectiveConflict[] {
+  const out: DirectiveConflict[] = [];
+  for (let i = 0; i < directives.length; i++) {
+    for (let j = i + 1; j < directives.length; j++) {
+      const a = directives[i];
+      const b = directives[j];
+      if (!opposingPolarity(a.kind, b.kind)) continue;
+      if (topicOverlap(a.statement, b.statement) >= 0.6) {
+        out.push({ a, b, reason: "opposing instructions on the same topic" });
+      }
+    }
+  }
+  return out;
+}
+
 const KIND_LABEL: Record<DirectiveKind, string> = {
   always: "ALWAYS",
   avoid: "AVOID",
@@ -110,13 +174,25 @@ export function renderBoardDirectivesBlock(directives: readonly BoardDirective[]
   const deduped = dedupeDirectivesToLatest(directives).slice(0, max);
   if (deduped.length === 0) return "";
   const lines = deduped.map((d) => `- [${KIND_LABEL[d.kind]}] ${d.statement}`);
-  return [
+  const block = [
     "## Standing board directives (honor these across ALL sprints)",
     "The board gave these durable instructions. Treat them as hard constraints on every sprint you plan.",
     ...lines,
     "",
     "If a new request CONFLICTS with one of these, do NOT silently override it — flag the conflict to the board and ask which wins.",
-  ].join("\n");
+  ];
+
+  // Component 2: if the directives themselves contradict each other, the CEO
+  // must NOT pick one silently — surface the clash and ask the board to resolve.
+  const conflicts = findDirectiveConflicts(deduped);
+  if (conflicts.length > 0) {
+    block.push(
+      "",
+      "### ⚠ CONFLICTING board directives — resolve with the board BEFORE planning",
+      ...conflicts.map((c) => `- "${c.a.statement}" vs "${c.b.statement}" — ask the board which one wins.`),
+    );
+  }
+  return block.join("\n");
 }
 
 /** Convenience: extract + render in one call from a chat-message list. */
