@@ -34,3 +34,12 @@ export function isWorthRemembering(fact: MemorableFactLike): boolean {
 export function filterMemorableFacts<T extends MemorableFactLike>(facts: readonly T[]): T[] {
   return facts.filter(isWorthRemembering);
 }
+
+/**
+ * Content-only variant for write paths that carry no confidence score (e.g.
+ * structured role-memory modifications from meeting effects). Drops empty /
+ * trivially short content so it never pollutes role memory.
+ */
+export function isSubstantiveMemoryContent(content: string): boolean {
+  return (content ?? "").trim().length >= MIN_MEMORY_CONTENT_CHARS;
+}

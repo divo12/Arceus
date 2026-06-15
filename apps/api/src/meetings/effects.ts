@@ -1,5 +1,6 @@
 import type { AgentIdentity, Task } from "@arceus/contracts";
 import { uniqueStrings } from "@arceus/task-engine";
+import { isSubstantiveMemoryContent } from "@arceus/company-runtime";
 import { updateTask } from "../persistence/mutations/index.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
@@ -96,6 +97,9 @@ function applyTaskModification(
 }
 
 async function applyMemoryModification(companyId: string, modification: MemoryModificationInput): Promise<void> {
+  // Memory-write discipline (extends Component 6): never write trivial / empty
+  // content into structured role memory.
+  if (!isSubstantiveMemoryContent(modification.content)) return;
   switch (modification.modificationType) {
     case "current_focus":
       await enrichRoleMemory(companyId, modification.role, { currentFocus: [modification.content] });

@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import {
   isWorthRemembering,
   filterMemorableFacts,
+  isSubstantiveMemoryContent,
   MIN_MEMORY_CONFIDENCE,
   MIN_MEMORY_CONTENT_CHARS,
 } from "./memory-quality.js";
@@ -56,6 +57,13 @@ test("filterMemorableFacts keeps only the worthwhile facts", () => {
   const kept = filterMemorableFacts(facts);
   assert.equal(kept.length, 1);
   assert.match(kept[0].content, /freelance designers/);
+});
+
+test("isSubstantiveMemoryContent gates trivial role-memory writes (no confidence field)", () => {
+  assert.equal(isSubstantiveMemoryContent(""), false);
+  assert.equal(isSubstantiveMemoryContent("   "), false);
+  assert.equal(isSubstantiveMemoryContent("ok"), false);
+  assert.equal(isSubstantiveMemoryContent("The auth flow now uses magic links."), true);
 });
 
 test("thresholds are sane", () => {
