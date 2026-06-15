@@ -156,8 +156,9 @@ interface BeatRenderContext {
 
 const RECENT_ARTIFACT_LIMIT = 50;
 const MAX_AGENT_MEMORY_UNITS = 100;
-/** Recent chat rows scanned for standing board directives (board-role only). */
-const RECENT_BOARD_MESSAGE_LIMIT = 60;
+/** Board-owner messages scanned for standing directives. Board chat is sparse,
+ * so a high cap effectively covers the whole history — directives never age out. */
+const DURABLE_BOARD_DIRECTIVE_LIMIT = 300;
 
 /**
  * Single batch fetch per beat. Parallelises every entity load via
@@ -180,7 +181,7 @@ export async function loadBeatRenderContext(
     tasksRepo.listByCompanyHydrated(db, companyId),
     artifactsRepo.listArtifactsByCompany(db, companyId, RECENT_ARTIFACT_LIMIT),
     memorySummariesRepo.listByCompany(db, companyId),
-    boardMessagesRepo.listBoardMessages(db, companyId, RECENT_BOARD_MESSAGE_LIMIT),
+    boardMessagesRepo.listBoardRoleMessages(db, companyId, DURABLE_BOARD_DIRECTIVE_LIMIT),
   ]);
   const boardMessages: BeatBoardMessageSlice[] = boardRows.map((row) => {
     const m = boardMessagesRepo.rowToChatMessage(row);

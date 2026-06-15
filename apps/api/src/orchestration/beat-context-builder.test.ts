@@ -95,6 +95,7 @@ function setupRepoMocks(opts: {
   }));
   mock.module("@arceus/db/src/repos/board_messages.js", () => ({
     listBoardMessages: opts.listBoardMessagesSpy ?? mock(async () => []),
+    listBoardRoleMessages: opts.listBoardMessagesSpy ?? mock(async () => []),
     rowToChatMessage: (row: unknown) => row,
   }));
   mock.module("../workspace/preview.js", () => ({ getLocalPreviewState: () => ({ status: "idle" }) }));
@@ -142,6 +143,24 @@ describe("loadBeatRenderContext (B.3 batch fetch)", () => {
     expect(ctx.roleMemoryUnits).toBeNull();
     /** No memory-units query because the role isn't on the roster. */
     expect(spies.listUnits).not.toHaveBeenCalled();
+  });
+
+  it("sources standing board directives from the durable board-role query and surfaces them to any role", async () => {
+    const oldDirective = {
+      id: "bm_old",
+      role: "board",
+      content: "Always use a dark theme across the whole product.",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    setupRepoMocks({ listBoardMessagesSpy: mock(async () => [oldDirective]) });
+
+    const mod = await import(`./beat-context-builder.js?t=${Date.now()}`);
+    const ctx = await mod.loadBeatRenderContext(COMPANY_UUID, "developer");
+    expect(ctx.boardMessages.length).toBe(1);
+
+    const state = mod.renderCompanyState(ctx);
+    expect(state.includes("Standing board directives")).toBe(true);
+    expect(/dark theme/i.test(state)).toBe(true);
   });
 });
 

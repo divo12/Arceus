@@ -39,6 +39,26 @@ export async function listBoardMessages(
     .limit(limit);
 }
 
+/**
+ * Board-OWNER messages only (`role='board'`), chronological. Board messages are
+ * sparse (the human owner), so this can scan the company's whole history and
+ * still be cheap. Used to extract standing board directives DURABLY — the
+ * general `listBoardMessages` recent-window ages out an early directive once
+ * agent/CEO/system chatter fills the most recent rows.
+ */
+export async function listBoardRoleMessages(
+  db: DbClient,
+  companyId: string,
+  limit = 300,
+): Promise<BoardMessage[]> {
+  return db
+    .select()
+    .from(boardMessages)
+    .where(and(eq(boardMessages.companyId, toDbId(companyId)), eq(boardMessages.role, "board")))
+    .orderBy(asc(boardMessages.createdAt))
+    .limit(limit);
+}
+
 // ── Hydration: DB row ↔ contracts.ChatMessage (Phase 4E) ─────────
 
 /** Pure transform from DB row to contracts.ChatMessage. */
