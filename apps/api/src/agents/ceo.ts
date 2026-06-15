@@ -361,9 +361,16 @@ function buildSprintRetrospectiveContext(snapshot: CompanySnapshot): string {
   }
 
   if (followUpTasks.length > 0) {
-    lines.push("", "### Follow-up suggestions from task planner (not yet executed)");
+    lines.push("", "### Suggestions to consider for the NEXT sprint (not yet executed)");
+    lines.push("Fold the worthwhile ones into your next sprint_proposal. Live product-review findings (from examining the shipped product in a real browser) are especially actionable — propose concrete fixes for them.");
     for (const t of followUpTasks) {
       lines.push(`- ${t.title} → ${t.assignedRole} (${t.priority})`);
+      // Surface the actual browser-review findings so the CEO can propose
+      // concrete improvements, not just see a title.
+      if (t.title.startsWith("Flow-test suggestion")) {
+        const review = t.description.split("Browser-agent review:")[1]?.trim();
+        if (review) lines.push(`  Review findings: ${review.slice(0, 600).replace(/\s+/g, " ")}`);
+      }
     }
   }
 
