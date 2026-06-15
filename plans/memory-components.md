@@ -44,7 +44,7 @@ next. Ranked by value ÷ effort; only the ideas Arceus doesn't already have.
 
 5. **Durable board directives** ✅ DONE (2c118e1) — listBoardRoleMessages (role='board' only, cap 300) feeds directive extraction in loadBeatRenderContext, so an early directive never ages out behind agent/CEO chatter. TDD: beat-context test proves an OLD directive still surfaces.
 
-6. **Memory-write discipline** — the "would another agent need this?" test +
+6. **Memory-write discipline** ✅ DONE (3f757cb) — isWorthRemembering / filterMemorableFacts (company-runtime/memory-quality.ts) drops empty/too-short (<10 char) + low-confidence (<0.35) extracted facts before they become permanent Hippocampus memory; wired into extractMeetingMemories. TDD 7/7. ORIGINAL note: the "would another agent need this?" test +
    UPDATE-vs-APPEND + compress-when-full, applied to role-memory / handoff writes.
 
 5. **Recurring health probe** — extend the flow-tester (currently sprint-finalize only)
