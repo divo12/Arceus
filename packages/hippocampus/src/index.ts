@@ -8,6 +8,7 @@ export * from "./backends/embedding";
 export * from "./backends/pgvector/index.js";
 export * from "./engines/retrieval";
 export * from "./engines/hybrid-rank";
+export * from "./engines/retention";
 export * from "./engines/extractor";
 export * from "./engines/action-decider";
 export * from "./engines/habit-matcher";

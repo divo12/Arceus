@@ -38,6 +38,7 @@ import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as memoryUnitsRepo from "@arceus/db/src/repos/memory_units.js";
 import * as sprintsRepo from "@arceus/db/src/repos/sprints.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
+import { selectMemoriesToRetain } from "@arceus/hippocampus";
 import type { Role } from "../../../../.opencode/agent/config.js";
 import { getAllowedArceusTools } from "../../../../.opencode/agent/config.js";
 import { getLocalPreviewState } from "../workspace/preview.js";
@@ -156,6 +157,13 @@ interface BeatRenderContext {
 
 const RECENT_ARTIFACT_LIMIT = 50;
 const MAX_AGENT_MEMORY_UNITS = 100;
+/**
+ * Over-fetch pool for value-ranked retention. We pull up to this many of the
+ * agent's memories, then keep the MAX_AGENT_MEMORY_UNITS most VALUABLE (durable
+ * decisions over transient notes) rather than just the newest — so a standing
+ * decision isn't silently evicted by a burst of recent progress notes.
+ */
+const AGENT_MEMORY_RETENTION_POOL = 300;
 /** Board-owner messages scanned for standing directives. Board chat is sparse,
  * so a high cap effectively covers the whole history — directives never age out. */
 const DURABLE_BOARD_DIRECTIVE_LIMIT = 300;
@@ -198,8 +206,13 @@ export async function loadBeatRenderContext(
   const memorySummaries = summaries.map(memorySummariesRepo.rowToSummary);
 
   const roleAgent = agents.find((a) => a.role === role) ?? null;
-  const memoryUnitRows = roleAgent
-    ? await memoryUnitsRepo.listMemoryUnitsByAgent(db, roleAgent.id, undefined, MAX_AGENT_MEMORY_UNITS)
+  const memoryPool = roleAgent
+    ? await memoryUnitsRepo.listMemoryUnitsByAgent(db, roleAgent.id, undefined, AGENT_MEMORY_RETENTION_POOL)
+    : null;
+  // Keep the most valuable memories within budget (durable decisions survive a
+  // burst of recent low-value notes), newest-first for the render slices below.
+  const memoryUnitRows = memoryPool
+    ? selectMemoriesToRetain(memoryPool, MAX_AGENT_MEMORY_UNITS)
     : null;
   const roleMemoryUnits: BeatMemoryUnitSlice[] | null = memoryUnitRows
     ? memoryUnitRows.map((row) => ({
