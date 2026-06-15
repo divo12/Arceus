@@ -126,6 +126,11 @@ export interface RetrievalOptions {
    * vectors alone (unchanged behavior).
    */
   queryText?: string;
+  /**
+   * Reference time (epoch ms) for expiry filtering. Defaults to Date.now();
+   * injectable for deterministic tests.
+   */
+  now?: number;
 }
 
 export type ScoredMemory = MemoryUnit & {

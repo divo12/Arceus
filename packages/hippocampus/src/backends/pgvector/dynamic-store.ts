@@ -61,6 +61,9 @@ export class PgVectorDynamicStore
           eq(memoryUnits.agentId, extractUuid(agentId)),
           eq(memoryUnits.type, "dynamic"),
           isNull(memoryUnits.deletedAt),
+          // Exclude temporal facts past their expiry. GC soft-deletes them
+          // eventually; this keeps them out of recall in the meantime.
+          sql`(${memoryUnits.expiresAt} IS NULL OR ${memoryUnits.expiresAt} > now())`,
         ),
       )
       .orderBy(desc(decayedScore))

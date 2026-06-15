@@ -66,6 +66,26 @@ export function applyBoosts(
 }
 
 // ---------------------------------------------------------------------------
+// Expiry — drop temporal memories past their lifetime
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a memory is still within its lifetime at `now` (epoch ms).
+ *
+ * A null/absent `expiresAt` never expires. An unparseable timestamp is treated
+ * as live — we never silently drop a memory because of a malformed field; the
+ * authoritative cleanup is the store's GC, this is fail-open defense-in-depth so
+ * an expired temporal fact can't leak into recall between GC sweeps (and so the
+ * GC-less in-memory fallback store gets expiry semantics at all).
+ */
+export function isMemoryLive(unit: { expiresAt: string | null }, now: number): boolean {
+  if (!unit.expiresAt) return true;
+  const t = Date.parse(unit.expiresAt);
+  if (Number.isNaN(t)) return true;
+  return t > now;
+}
+
+// ---------------------------------------------------------------------------
 // Keyword fusion — hybrid lexical + semantic ranking via RRF
 // ---------------------------------------------------------------------------
 
@@ -215,8 +235,16 @@ export function rankAndSelect(
 
   if (candidates.length === 0) return [];
 
+  // Step 0: Drop temporal memories past their expiry. The store's GC is the
+  // authoritative sweep, but it runs periodically — this keeps an already-
+  // expired fact out of recall in the window before GC catches it (and gives
+  // the GC-less in-memory fallback store expiry semantics at all).
+  const now = opts.now ?? Date.now();
+  const live = candidates.filter((c) => isMemoryLive(c, now));
+  if (live.length === 0) return [];
+
   // Step 1: Apply tier and scope boosts
-  let boosted = applyBoosts(candidates, agentContainer, opts);
+  let boosted = applyBoosts(live, agentContainer, opts);
 
   // Step 2: Fuse the keyword-overlap signal into the semantic ranking (no-op
   // unless a query is supplied and at least one candidate matches its terms).
