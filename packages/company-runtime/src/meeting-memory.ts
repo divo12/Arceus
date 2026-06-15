@@ -12,6 +12,7 @@ import type {
   CompanySnapshot,
   MemoryUnit,
 } from "@arceus/contracts";
+import { filterMemorableFacts } from "./memory-quality.js";
 
 // ── Transcript Assembly ────────────────────────────────────
 
@@ -145,7 +146,12 @@ export async function extractMeetingMemories(
 
     if (facts.length === 0) continue;
 
-    const memories: MemoryUnit[] = facts.map((fact) => ({
+    // Component 6: gate low-signal / low-confidence facts out before they become
+    // permanent memory noise that degrades later recall.
+    const memorable = filterMemorableFacts(facts);
+    if (memorable.length === 0) continue;
+
+    const memories: MemoryUnit[] = memorable.map((fact) => ({
       id: `memory_${crypto.randomUUID()}`,
       companyId: snap.company.id,
       agentId,

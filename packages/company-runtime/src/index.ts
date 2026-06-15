@@ -128,4 +128,5 @@ export { MeetingPipeline } from "./meeting-pipeline";
 export type { MeetingPipelineDeps } from "./meeting-pipeline";
 export { assembleMeetingTranscript, extractMeetingMemories } from "./meeting-memory";
 export type { MeetingFactExtractor, MeetingExtractedFact, MeetingMemoryResult } from "./meeting-memory";
+export { isWorthRemembering, filterMemorableFacts, MIN_MEMORY_CONFIDENCE, MIN_MEMORY_CONTENT_CHARS } from "./memory-quality";
 
