@@ -69,6 +69,11 @@ function deriveKey(statement: string): string {
   return k.replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
 
+// An informational question is NOT a directive even when it contains a trigger
+// word ("how do I USE the dashboard?"). Recognised by an interrogative opener on
+// a clause that ends in "?".
+const INFORMATIONAL_QUESTION_RE = /^(how|what|why|when|where|who|whom|whose|which|is|are|was|were|do|does|did|can|could|should|would|will)\b/i;
+
 /** Extract directives from board-role messages. Pure. */
 export function extractBoardDirectives(
   messages: readonly BoardMessageLike[],
@@ -76,8 +81,13 @@ export function extractBoardDirectives(
   const out: BoardDirective[] = [];
   for (const m of messages) {
     if (m.role !== "board") continue;
-    const sentences = m.content.split(/[.!?\n]+/).map(clean).filter(Boolean);
-    for (const sentence of sentences) {
+    // Split into clauses but KEEP the terminator so we can tell questions apart.
+    const clauses = m.content.match(/[^.!?\n]+[.!?]*/g) ?? [];
+    for (const rawClause of clauses) {
+      const isQuestion = /\?\s*$/.test(rawClause);
+      const sentence = clean(rawClause);
+      if (!sentence) continue;
+      if (isQuestion && INFORMATIONAL_QUESTION_RE.test(sentence)) continue;
       const kind = classify(sentence);
       if (!kind) continue;
       const key = deriveKey(sentence);

@@ -54,6 +54,20 @@ test("extracts preference + constraint phrasings", () => {
   assert.equal(out.find((d) => /stock photos/i.test(d.statement))?.kind, "avoid");
 });
 
+test("ignores informational QUESTIONS even when they contain a trigger word like 'use'", () => {
+  assert.deepEqual(extractBoardDirectives([msg({ id: "q1", content: "How do I use the dashboard?" })]), []);
+  assert.deepEqual(extractBoardDirectives([msg({ id: "q2", content: "What theme should we use?" })]), []);
+  assert.deepEqual(extractBoardDirectives([msg({ id: "q3", content: "Why is the checkout slow?" })]), []);
+});
+
+test("extracts the command but skips a trailing question in the same message", () => {
+  const out = extractBoardDirectives([
+    msg({ id: "m1", content: "Always use a dark theme. How does the theme picker work?" }),
+  ]);
+  assert.equal(out.length, 1);
+  assert.match(out[0].statement, /dark theme/i);
+});
+
 test("ignores non-board roles and non-directive chatter", () => {
   const out = extractBoardDirectives([
     msg({ id: "a1", role: "ceo", content: "Always ship fast." }),
