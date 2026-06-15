@@ -119,6 +119,13 @@ export interface RetrievalOptions {
   tierBoost: { static: number; dynamic: number };
   /** Scope boost when memory container matches the agent's container */
   scopeBoost: number;
+  /**
+   * Optional raw query/task text. When set, a keyword-overlap ranking is fused
+   * with the semantic ranking (RRF) so exact-term matches aren't lost to
+   * higher-similarity but lexically-unrelated candidates. Omit to rank on
+   * vectors alone (unchanged behavior).
+   */
+  queryText?: string;
 }
 
 export type ScoredMemory = MemoryUnit & {

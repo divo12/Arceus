@@ -1,4 +1,5 @@
 import { cosineSimilarity } from "../backends/embedding.js";
+import { reciprocalRankFusion, keywordOverlapScore } from "./hybrid-rank.js";
 import type { MemoryUnit } from "@arceus/contracts";
 import type { RetrievalOptions, ScoredMemory } from "../types.js";
 
@@ -62,6 +63,47 @@ export function applyBoosts(
 
     return { ...c, boostedScore };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Keyword fusion — hybrid lexical + semantic ranking via RRF
+// ---------------------------------------------------------------------------
+
+/**
+ * Fuse a keyword-overlap signal into the boosted (semantic) ranking using
+ * Reciprocal Rank Fusion, so a candidate that exactly matches the task's terms
+ * is lifted even if its vector similarity is only middling.
+ *
+ * Returns a NEW array with each candidate's `boostedScore` replaced by its fused
+ * score. Safe no-ops — input returned unchanged — when:
+ *   - `queryText` is empty/whitespace (no lexical signal to add), or
+ *   - no candidate shares any content term with the query (fusion would be a
+ *     uniform rescale that only distorts the existing semantic order).
+ */
+export function fuseKeywordSignal<T extends RawCandidate & { boostedScore: number }>(
+  candidates: T[],
+  queryText: string,
+): T[] {
+  if (!queryText?.trim() || candidates.length === 0) return candidates;
+
+  const kw = candidates.map((c) =>
+    keywordOverlapScore(queryText, `${c.content} ${c.summary ?? ""}`),
+  );
+  if (kw.every((s) => s === 0)) return candidates; // no lexical signal → leave semantic order intact
+
+  const semanticList = [...candidates]
+    .sort((a, b) => b.boostedScore - a.boostedScore)
+    .map((c) => c.id);
+  const keywordList = candidates
+    .map((c, i) => ({ id: c.id, score: kw[i] }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.id);
+
+  const fusedById = new Map(
+    reciprocalRankFusion([semanticList, keywordList]).map((f) => [f.id, f.score]),
+  );
+  return candidates.map((c) => ({ ...c, boostedScore: fusedById.get(c.id) ?? 0 }));
 }
 
 // ---------------------------------------------------------------------------
@@ -174,11 +216,17 @@ export function rankAndSelect(
   if (candidates.length === 0) return [];
 
   // Step 1: Apply tier and scope boosts
-  const boosted = applyBoosts(candidates, agentContainer, opts);
+  let boosted = applyBoosts(candidates, agentContainer, opts);
 
-  // Step 2: Sort by boosted score descending (pre-filter for MMR)
+  // Step 2: Fuse the keyword-overlap signal into the semantic ranking (no-op
+  // unless a query is supplied and at least one candidate matches its terms).
+  if (opts.queryText) {
+    boosted = fuseKeywordSignal(boosted, opts.queryText);
+  }
+
+  // Step 3: Sort by (possibly fused) boosted score descending (pre-filter for MMR)
   boosted.sort((a, b) => b.boostedScore - a.boostedScore);
 
-  // Step 3: MMR selection
+  // Step 4: MMR selection
   return selectByMMR(boosted, opts.topK, opts.lambda);
 }

@@ -119,7 +119,9 @@ export class HippocampusService implements HippocampusGateway {
     taskDescription: string,
     retrievalOptions?: Partial<RetrievalOptions>,
   ): Promise<PreparedAgentContext> {
-    const opts = { ...DEFAULT_RETRIEVAL_OPTIONS, ...retrievalOptions };
+    // Default the keyword-fusion query to the task description so exact-term
+    // matches survive vector ranking; an explicit caller-supplied queryText wins.
+    const opts = { ...DEFAULT_RETRIEVAL_OPTIONS, queryText: taskDescription, ...retrievalOptions };
     const candidateLimit = opts.topK * opts.overFetch;
 
     // Embed + fetch candidates + habits + priming in parallel
