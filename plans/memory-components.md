@@ -26,9 +26,19 @@ next. Ranked by value ÷ effort; only the ideas Arceus doesn't already have.
      buildCeoOperatingPrompt surfaces the conflict). Pure heuristic; fuzzy value
      conflicts (dark-vs-light theme) deferred to a future LLM layer.
 
-3. **Per-role context assembly** — Hippocampus recall already does embed → vector →
-   MMR. Add agent-aware *formatting* so each role gets context filtered for its needs
-   (dev→tech, designer→brand/design). (RRF/hybrid is marginal — MMR already there.)
+3. **Board directives → every role's beat** ✅ DONE (9ea2a3e)
+   - `renderCompanyState` (the role-agnostic per-beat renderer in beat-context-builder.ts)
+     now injects `buildBoardDirectivesBlock` so developer/designer/PM/tester all honor
+     the owner's standing constraints + see conflicts, not just the CEO. `loadBeatRenderContext`
+     gained a bounded board_messages fetch in its Promise.all batch. TDD 3/3 + existing
+     beat-context-builder.test.ts 5/5 (added board_messages mock). Touches every beat →
+     live regression-watched.
+   - NOTE superseded: the original #3 idea (Hippocampus per-role retrieval formatting) is
+     deferred — MMR recall already exists; lower ROI than fanning directives to all roles.
+
+   _Follow-up (#4 candidate):_ durable directives — board_messages stores ALL chat roles,
+   so the recent-N window can drop an early board directive. A board-ROLE-only query makes
+   directives survive indefinitely.
 
 4. **Memory-write discipline** — the "would another agent need this?" test +
    UPDATE-vs-APPEND + compress-when-full, applied to role-memory / handoff writes.
