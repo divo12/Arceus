@@ -68,37 +68,8 @@ function setupMocks(opts: MockSetup) {
   }));
 }
 
-describe("updateRoleMemory", () => {
-  it("replaces currentFocus and persists via upsert with companyId threaded through", async () => {
-    const upsertSpy = mock(async () => undefined);
-    setupMocks({ upsertSpy });
-
-    const { updateRoleMemory } = await import(`./operations.js?t=${Date.now()}`);
-    await updateRoleMemory(COMPANY_UUID, "developer", ["new focus 1", "new focus 2"], FAKE_DB);
-
-    expect(upsertSpy).toHaveBeenCalledTimes(1);
-    const persistedSummary = (upsertSpy.mock.calls[0] as unknown as [unknown, typeof EXISTING_SUMMARY, string])[1];
-    expect(persistedSummary.currentFocus).toEqual(["new focus 1", "new focus 2"]);
-    expect(persistedSummary.recentLearnings).toEqual(EXISTING_SUMMARY.recentLearnings);
-    expect(persistedSummary.openBlockers).toEqual(EXISTING_SUMMARY.openBlockers);
-    /** companyId in slot 2. */
-    const callArgs = upsertSpy.mock.calls[0] as unknown as [unknown, unknown, string];
-    expect(callArgs[2]).toBe(COMPANY_UUID);
-  });
-
-  it("no-ops when the role has no agent", async () => {
-    const upsertSpy = mock(async () => undefined);
-    setupMocks({ upsertSpy, findAgentByRoleResult: null });
-
-    const { updateRoleMemory } = await import(`./operations.js?t=${Date.now()}`);
-    await updateRoleMemory(COMPANY_UUID, "developer", ["foo"], FAKE_DB);
-
-    expect(upsertSpy).not.toHaveBeenCalled();
-  });
-});
-
 describe("enrichRoleMemory", () => {
-  it("merges new entries with existing ones and dedupes", async () => {
+  it("merges new KNOWLEDGE entries with existing ones, dedupes, and leaves continuity fields untouched", async () => {
     const upsertSpy = mock(async () => undefined);
     setupMocks({ upsertSpy });
 
@@ -107,8 +78,8 @@ describe("enrichRoleMemory", () => {
       COMPANY_UUID,
       "developer",
       {
-        currentFocus: ["new focus", "existing focus"], // dup with existing
-        recentLearnings: ["new learning"],
+        recentLearnings: ["new learning", "existing learning"], // dup with existing
+        activePatterns: ["new pattern"],
       },
       FAKE_DB,
     );
@@ -116,12 +87,15 @@ describe("enrichRoleMemory", () => {
     expect(upsertSpy).toHaveBeenCalledTimes(1);
     const persistedSummary = (upsertSpy.mock.calls[0] as unknown as [unknown, typeof EXISTING_SUMMARY, string])[1];
 
-    /** New focus first, dup with existing collapses (uniqueStrings preserves first occurrence). */
-    expect(persistedSummary.currentFocus).toEqual(["new focus", "existing focus"]);
+    /** New entry first, dup with existing collapses (uniqueStrings preserves first occurrence). */
     expect(persistedSummary.recentLearnings).toEqual(["new learning", "existing learning"]);
-    /** Untouched fields stay equal. */
-    expect(persistedSummary.activePatterns).toEqual(EXISTING_SUMMARY.activePatterns);
+    expect(persistedSummary.activePatterns).toEqual(["new pattern", "existing pattern"]);
+    /** Continuity fields (now owned by the task heartbeat) are never written here. */
+    expect(persistedSummary.currentFocus).toEqual(EXISTING_SUMMARY.currentFocus);
     expect(persistedSummary.openBlockers).toEqual(EXISTING_SUMMARY.openBlockers);
+    /** companyId in slot 2. */
+    const callArgs = upsertSpy.mock.calls[0] as unknown as [unknown, unknown, string];
+    expect(callArgs[2]).toBe(COMPANY_UUID);
   });
 
   it("creates a fresh summary when no row exists for the agent yet", async () => {
@@ -139,30 +113,14 @@ describe("enrichRoleMemory", () => {
     expect(upsertSpy).toHaveBeenCalledTimes(1);
     const persistedSummary = (upsertSpy.mock.calls[0] as unknown as [unknown, typeof EXISTING_SUMMARY, string])[1];
     expect(persistedSummary.importantDecisions).toEqual(["use repos directly"]);
-    expect(persistedSummary.currentFocus).toEqual([]);
-  });
-});
-
-describe("clearRoleBlockers", () => {
-  it("removes the matching entries (trimmed compare) and leaves the rest", async () => {
-    const upsertSpy = mock(async () => undefined);
-    setupMocks({ upsertSpy });
-
-    const { clearRoleBlockers } = await import(`./operations.js?t=${Date.now()}`);
-    /** Inputs have whitespace; the impl trims for compare against trimmed memory entries. */
-    await clearRoleBlockers(COMPANY_UUID, "developer", [" A blocker ", "stale-with-spaces"], FAKE_DB);
-
-    expect(upsertSpy).toHaveBeenCalledTimes(1);
-    const persistedSummary = (upsertSpy.mock.calls[0] as unknown as [unknown, typeof EXISTING_SUMMARY, string])[1];
-    expect(persistedSummary.openBlockers).toEqual(["B blocker"]);
   });
 
-  it("no-ops when blockersToClear is empty (skips the agent lookup entirely)", async () => {
+  it("no-ops when the role has no agent", async () => {
     const upsertSpy = mock(async () => undefined);
-    setupMocks({ upsertSpy });
+    setupMocks({ upsertSpy, findAgentByRoleResult: null });
 
-    const { clearRoleBlockers } = await import(`./operations.js?t=${Date.now()}`);
-    await clearRoleBlockers(COMPANY_UUID, "developer", [], FAKE_DB);
+    const { enrichRoleMemory } = await import(`./operations.js?t=${Date.now()}`);
+    await enrichRoleMemory(COMPANY_UUID, "developer", { recentLearnings: ["foo"] }, FAKE_DB);
 
     expect(upsertSpy).not.toHaveBeenCalled();
   });

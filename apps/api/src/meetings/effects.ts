@@ -1,13 +1,13 @@
 import type { AgentIdentity, Task } from "@arceus/contracts";
-import { uniqueStrings } from "@arceus/task-engine";
 import { isSubstantiveMemoryContent } from "@arceus/company-runtime";
+import { applyHeartbeatUpdate } from "../orchestration/task-heartbeat.js";
 import { updateTask } from "../persistence/mutations/index.js";
 import { getDb } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { audit } from "../observability/audit-ledger.js";
 import { swallowAndAudit } from "../observability/swallow.js";
-import { enrichRoleMemory, clearRoleBlockers } from "../memory/operations.js";
+import { enrichRoleMemory } from "../memory/operations.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import type { TaskModificationInput, MemoryModificationInput, MeetingAgendaInput, MeetingDecisionInput, MeetingLearningInput } from "../orchestration/state.js";
 
@@ -43,13 +43,12 @@ function applyTaskModification(
       assignedRole: modification.assignedRole ?? task.assignedRole,
       assignedAgentId: modification.assignedRole ? assignedAgent?.id ?? null : task.assignedAgentId,
       priority: modification.priority ?? task.priority,
-      plannerState:
+      // A meeting decomposing the task further adds to its heartbeat's Next list
+      // (the per-task continuity store), so the owner picks it up next beat.
+      heartbeat:
         modification.modificationType === "decompose_further"
-          ? {
-              ...task.plannerState,
-              planSteps: uniqueStrings([...task.plannerState.planSteps, modification.details], 12),
-            }
-          : task.plannerState,
+          ? applyHeartbeatUpdate(task.heartbeat, { next: [...task.heartbeat.next, modification.details] }, new Date().toISOString())
+          : task.heartbeat,
       executorState: {
         ...task.executorState,
         results: [...task.executorState.results, `meeting:${modification.modificationType}:${modification.details}`].slice(-50),
@@ -101,24 +100,18 @@ async function applyMemoryModification(companyId: string, modification: MemoryMo
   // content into structured role memory.
   if (!isSubstantiveMemoryContent(modification.content)) return;
   switch (modification.modificationType) {
-    case "current_focus":
-      await enrichRoleMemory(companyId, modification.role, { currentFocus: [modification.content] });
-      break;
     case "recent_learning":
       await enrichRoleMemory(companyId, modification.role, { recentLearnings: [modification.content] });
       break;
     case "active_pattern":
       await enrichRoleMemory(companyId, modification.role, { activePatterns: [modification.content] });
       break;
-    case "open_blocker":
-      await enrichRoleMemory(companyId, modification.role, { openBlockers: [modification.content] });
-      break;
     case "important_decision":
       await enrichRoleMemory(companyId, modification.role, { importantDecisions: [modification.content] });
       break;
-    case "clear_blocker":
-      await clearRoleBlockers(companyId, modification.role, [modification.content]);
-      break;
+    // current_focus / open_blocker / clear_blocker are intentionally NOT persisted:
+    // per-task continuity (focus + blockers) now lives in the task heartbeat, so
+    // writing them into role memory would re-fork the continuity store.
   }
 }
 

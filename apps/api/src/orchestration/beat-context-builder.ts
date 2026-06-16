@@ -460,19 +460,15 @@ function renderRecentArtifacts(ctx: BeatRenderContext, limit: number): string {
   return lines.join("\n");
 }
 
-function renderRoleMemory(ctx: BeatRenderContext): string {
+export function renderRoleMemory(ctx: BeatRenderContext): string {
   if (!ctx.roleAgent) return "## Role Memory\n\n_No agent found._";
   const mem = ctx.memorySummaries.find((m) => m.agentId === ctx.roleAgent!.id);
   if (!mem) return "## Role Memory\n\n_No memory entries._";
+  // Continuity (Focus/Blockers) now lives in the per-task heartbeat — Role Memory
+  // carries only role-level KNOWLEDGE that outlives any single task.
   const lines = ["## Role Memory", ""];
-  if (mem.currentFocus.length > 0) {
-    lines.push("**Focus:** " + mem.currentFocus.join(", "));
-  }
   if (mem.recentLearnings.length > 0) {
     lines.push("**Learnings:** " + mem.recentLearnings.join("; "));
-  }
-  if (mem.openBlockers.length > 0) {
-    lines.push("**Blockers:** " + mem.openBlockers.join("; "));
   }
   return lines.join("\n");
 }

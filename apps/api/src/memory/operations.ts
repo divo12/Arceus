@@ -11,10 +11,8 @@ import { getDb, type DbClient } from "@arceus/db";
 import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 
-const FOCUS_LIMIT = 6;
 const LEARNINGS_LIMIT = 8;
 const PATTERNS_LIMIT = 6;
-const BLOCKERS_LIMIT = 6;
 const DECISIONS_LIMIT = 8;
 
 /** Default summary used when an agent has no memory_summaries row yet. */
@@ -52,66 +50,35 @@ async function mutateRoleMemory(
   return next;
 }
 
-/** Replace an agent's currentFocus memory with the given entries. */
-export async function updateRoleMemory(
-  companyId: string,
-  role: AgentIdentity["role"],
-  currentFocus: string[],
-  db: DbClient = getDb(),
-): Promise<void> {
-  await mutateRoleMemory(companyId, role, (memory) => ({
-    ...memory,
-    currentFocus: uniqueStrings(currentFocus, FOCUS_LIMIT),
-    updatedAt: new Date().toISOString(),
-  }), db);
-}
-
-/** Merge new entries into an agent's memory fields. */
+/**
+ * Merge new entries into an agent's role-level KNOWLEDGE memory.
+ *
+ * Continuity fields (currentFocus / openBlockers) are deliberately NOT writable
+ * here — per-task focus + blockers now live in the task heartbeat, so role memory
+ * carries only knowledge that outlives a single task. The stored continuity
+ * columns are left untouched (inert).
+ */
 export async function enrichRoleMemory(
   companyId: string,
   role: AgentIdentity["role"],
   update: {
-    currentFocus?: string[];
     recentLearnings?: string[];
     activePatterns?: string[];
-    openBlockers?: string[];
     importantDecisions?: string[];
   },
   db: DbClient = getDb(),
 ): Promise<void> {
   await mutateRoleMemory(companyId, role, (memory) => ({
     ...memory,
-    currentFocus: update.currentFocus
-      ? uniqueStrings([...update.currentFocus, ...memory.currentFocus], FOCUS_LIMIT)
-      : memory.currentFocus,
     recentLearnings: update.recentLearnings
       ? uniqueStrings([...update.recentLearnings, ...memory.recentLearnings], LEARNINGS_LIMIT)
       : memory.recentLearnings,
     activePatterns: update.activePatterns
       ? uniqueStrings([...update.activePatterns, ...memory.activePatterns], PATTERNS_LIMIT)
       : memory.activePatterns,
-    openBlockers: update.openBlockers
-      ? uniqueStrings([...update.openBlockers, ...memory.openBlockers], BLOCKERS_LIMIT)
-      : memory.openBlockers,
     importantDecisions: update.importantDecisions
       ? uniqueStrings([...update.importantDecisions, ...memory.importantDecisions], DECISIONS_LIMIT)
       : memory.importantDecisions,
-    updatedAt: new Date().toISOString(),
-  }), db);
-}
-
-/** Remove specific blockers from an agent's openBlockers list. */
-export async function clearRoleBlockers(
-  companyId: string,
-  role: AgentIdentity["role"],
-  blockersToClear: string[],
-  db: DbClient = getDb(),
-): Promise<void> {
-  if (blockersToClear.length === 0) return;
-  const normalized = new Set(blockersToClear.map((item) => item.trim()));
-  await mutateRoleMemory(companyId, role, (memory) => ({
-    ...memory,
-    openBlockers: memory.openBlockers.filter((item) => !normalized.has(item.trim())),
     updatedAt: new Date().toISOString(),
   }), db);
 }

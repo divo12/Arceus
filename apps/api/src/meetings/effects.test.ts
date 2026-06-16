@@ -103,7 +103,7 @@ describe("applyMeetingEffects (B.2 read migration)", () => {
       COMPANY_UUID,
       [],
       [
-        { role: "developer", modificationType: "current_focus", content: "Implementing the auth flow" },
+        { role: "developer", modificationType: "active_pattern", content: "Use repository pattern for data access" },
         { role: "developer", modificationType: "recent_learning", content: "Magic links need a 7-day token" },
         { role: "tester", modificationType: "important_decision", content: "Ship without email verification" },
       ],
