@@ -27,7 +27,7 @@ import { applyGovernanceToMutation } from "../skills/governance.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { triggerEscalationMeeting } from "../orchestration/reactive.js";
 import { getProductDir, type Artifact } from "../orchestration/state.js";
-import { applyHeartbeatUpdate, type HeartbeatUpdate } from "../orchestration/task-heartbeat.js";
+import { applyHeartbeatUpdate, heartbeatForTransition, type HeartbeatUpdate } from "../orchestration/task-heartbeat.js";
 import { getDb } from "@arceus/db";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import { hippocampus } from "../memory/extractors.js";
@@ -357,6 +357,15 @@ export async function setTaskStatus(taskId: string, status: Task["status"], feed
         ...task.verifierState,
         feedback: feedback ?? task.verifierState.feedback,
       },
+      // Auto-maintain the per-task heartbeat from the lifecycle so it reflects
+      // reality (claim→doing, block→blocked, complete→done) without depending on
+      // the agent calling task_set_heartbeat.
+      heartbeat: heartbeatForTransition(
+        task.heartbeat,
+        status,
+        { title: task.title, objective: task.plannerState?.objective, feedback },
+        new Date().toISOString(),
+      ),
     };
   });
   const prev = captured.prev;

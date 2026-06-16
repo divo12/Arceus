@@ -72,6 +72,43 @@ export function applyHeartbeatUpdate(
   return { done, doing, next, blocked, updatedAt: now };
 }
 
+/** Inputs the lifecycle needs to phrase a transition's heartbeat update. */
+export interface HeartbeatTransitionContext {
+  title: string;
+  objective?: string;
+  feedback?: string | null;
+}
+
+/**
+ * Auto-maintain the heartbeat from a task status transition, so the checklist
+ * reflects reality without the agent calling task_set_heartbeat:
+ *  - in_progress (claim/resume): set `doing` if empty; clear any stale blocker.
+ *  - blocked: record the blocker reason (the key continuity case).
+ *  - completed / verifying: append a ✓ done line; clear doing + blocked.
+ *  - failed: append a ✗ done line (with reason); clear doing.
+ * Other statuses (created/planned/cancelled) leave the heartbeat untouched.
+ */
+export function heartbeatForTransition(
+  hb: HeartbeatChecklist,
+  status: string,
+  ctx: HeartbeatTransitionContext,
+  now: string,
+): HeartbeatChecklist {
+  switch (status) {
+    case "in_progress":
+      return applyHeartbeatUpdate(hb, { doing: hb.doing ?? (ctx.objective || ctx.title), blocked: null }, now);
+    case "blocked":
+      return applyHeartbeatUpdate(hb, { blocked: ctx.feedback || "Blocked (no reason given)" }, now);
+    case "verifying":
+    case "completed":
+      return applyHeartbeatUpdate(hb, { done: [`✓ ${ctx.title}`], doing: null, blocked: null }, now);
+    case "failed":
+      return applyHeartbeatUpdate(hb, { done: [`✗ ${ctx.title}${ctx.feedback ? `: ${ctx.feedback}` : ""}`], doing: null }, now);
+    default:
+      return hb;
+  }
+}
+
 /** True when the checklist carries no content worth rendering. */
 export function isHeartbeatEmpty(hb: HeartbeatChecklist): boolean {
   return hb.done.length === 0 && hb.next.length === 0 && !hb.doing && !hb.blocked;
