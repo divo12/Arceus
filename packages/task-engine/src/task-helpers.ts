@@ -8,6 +8,7 @@ import type {
   AgentIdentity,
   Sprint,
 } from "@arceus/contracts";
+import { defaultHeartbeat } from "@arceus/contracts";
 
 /** ISO-8601 timestamp of the current moment. */
 export function nowIso(): string {
@@ -97,6 +98,7 @@ export function createWorkflowTask(
     plannerState: emptyPlannerState(problemStatement),
     executorState: emptyExecutorState(),
     verifierState: emptyVerifierState(),
+    heartbeat: defaultHeartbeat(),
     costCents: 0,
     iterationCount: 0,
     maxIterations: 3,

@@ -16,6 +16,7 @@ import type {
   Approval,
   DailySyncBrief,
 } from "@arceus/contracts";
+import { defaultHeartbeat } from "@arceus/contracts";
 
 // ── Execute Decisions ──────────────────────────────────────
 
@@ -76,6 +77,7 @@ export async function executeMeetingDecisions(
           artifactIds: [],
           localPreviewUrl: null,
           plannerState: { objective: "", planSteps: [], selectedTools: [], currentStepIndex: 0 },
+          heartbeat: defaultHeartbeat(),
           executorState: { currentCommand: null, commandsExecuted: [], results: [] },
           verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
           costCents: 0,

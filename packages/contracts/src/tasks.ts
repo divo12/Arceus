@@ -70,6 +70,20 @@ export const plannerStateSchema = z.object({
   currentStepIndex: z.number().int().nonnegative()
 });
 
+/**
+ * Per-task living checklist — the agent rewrites it at beat end and reads it on
+ * claim so a multi-beat or blocked task resumes instead of restarting. `done`
+ * accumulates; `doing`/`next`/`blocked` are the current snapshot. Replaces the
+ * append-only `plannerState.planSteps` continuity trail.
+ */
+export const heartbeatChecklistSchema = z.object({
+  done: z.array(z.string()).default([]),
+  doing: z.string().nullable().default(null),
+  next: z.array(z.string()).default([]),
+  blocked: z.string().nullable().default(null),
+  updatedAt: z.string().nullable().default(null),
+});
+
 export const executorStateSchema = z.object({
   currentCommand: z.string().nullable(),
   commandsExecuted: z.array(z.string()),
@@ -105,6 +119,7 @@ export const taskSchema = z.object({
   plannerState: plannerStateSchema,
   executorState: executorStateSchema,
   verifierState: verifierStateSchema,
+  heartbeat: heartbeatChecklistSchema.default({}),
   costCents: z.number().int().nonnegative(),
   iterationCount: z.number().int().nonnegative().default(0),
   maxIterations: z.number().int().positive().default(3),
@@ -161,6 +176,13 @@ export const feedbackRoundSchema = z.object({
   artifactIds: z.array(z.string()),
   createdAt: z.string()
 });
+
+export type HeartbeatChecklist = z.infer<typeof heartbeatChecklistSchema>;
+
+/** Canonical empty heartbeat — the single source for task constructors and hydration defaults. */
+export function defaultHeartbeat(): HeartbeatChecklist {
+  return { done: [], doing: null, next: [], blocked: null, updatedAt: null };
+}
 
 export type PlannerState = z.infer<typeof plannerStateSchema>;
 export type ExecutorState = z.infer<typeof executorStateSchema>;

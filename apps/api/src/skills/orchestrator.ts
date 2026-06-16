@@ -37,6 +37,7 @@ import { addArtifactSync, attachArtifactToTask } from "../tasks/mutations.js";
 import { upsertTask } from "../persistence/mutations/index.js";
 import { gitShowFileAtTag } from "./git.js";
 import type { Task } from "@arceus/contracts";
+import { defaultHeartbeat } from "@arceus/contracts";
 import type { SkillEvolveJob } from "@arceus/db/src/repos/skill_evolve_jobs.js";
 
 const MAX_REVISION_CYCLES = 2;
@@ -264,6 +265,7 @@ async function createApplyProposalTask(args: {
     artifactIds: [],
     localPreviewUrl: null,
     plannerState: { objective: args.summary, planSteps: [], selectedTools: [], currentStepIndex: 0 },
+    heartbeat: defaultHeartbeat(),
     executorState: { currentCommand: null, commandsExecuted: [], results: [] },
     verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
     costCents: 0,
@@ -525,6 +527,7 @@ async function runRollbackShortCircuit(job: SkillEvolveJob): Promise<PipelineRes
     artifactIds: [],
     localPreviewUrl: null,
     plannerState: { objective: summary, planSteps: [], selectedTools: [], currentStepIndex: 0 },
+    heartbeat: defaultHeartbeat(),
     executorState: { currentCommand: null, commandsExecuted: [], results: [] },
     verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
     costCents: 0,

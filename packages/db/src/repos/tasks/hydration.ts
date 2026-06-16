@@ -15,7 +15,9 @@ import type {
   PlannerState,
   ExecutorState,
   VerifierState,
+  HeartbeatChecklist,
 } from "@arceus/contracts";
+import { defaultHeartbeat } from "@arceus/contracts";
 import { tasks } from "../../schema/tasks.js";
 import { artifacts } from "../../schema/artifacts.js";
 import type { DbClient } from "../_helpers.js";
@@ -36,6 +38,7 @@ interface TaskBody {
   plannerState?: PlannerState;
   executorState?: ExecutorState;
   verifierState?: VerifierState;
+  heartbeat?: HeartbeatChecklist;
   incomingArtifactIds?: string[];
   /** Phase 3C — preserve friendly id strings so hydration round-trips. */
   friendlyIds?: FriendlyIds;
@@ -47,6 +50,8 @@ const DEFAULT_PLANNER: PlannerState = {
   selectedTools: [],
   currentStepIndex: 0,
 };
+
+const DEFAULT_HEARTBEAT: HeartbeatChecklist = defaultHeartbeat();
 
 const DEFAULT_EXECUTOR: ExecutorState = {
   currentCommand: null,
@@ -106,6 +111,7 @@ export function rowToTask(row: Task, refs: TaskRefs): ContractTask {
     plannerState: body.plannerState ?? DEFAULT_PLANNER,
     executorState: body.executorState ?? DEFAULT_EXECUTOR,
     verifierState: body.verifierState ?? DEFAULT_VERIFIER,
+    heartbeat: body.heartbeat ?? DEFAULT_HEARTBEAT,
     costCents: row.costCents,
     iterationCount: row.iterationCount,
     maxIterations: row.maxIterations,
@@ -149,6 +155,7 @@ export function taskToInsert(task: ContractTask): NewTask {
       plannerState: task.plannerState,
       executorState: task.executorState,
       verifierState: task.verifierState,
+      heartbeat: task.heartbeat,
       incomingArtifactIds: task.incomingArtifactIds,
       friendlyIds: {
         id: task.id,

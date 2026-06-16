@@ -14,6 +14,7 @@ import { setTaskVerified } from "../../tasks/helpers.js";
 import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/mutations/index.js";
 import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
+import { defaultHeartbeat } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 import { readTaskHybrid, persistTask, CLAIM_FAILURES } from "./task-persistence.js";
@@ -227,6 +228,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       artifactIds: [],
       localPreviewUrl: null,
       plannerState: { objective: problemStatement, planSteps: [], selectedTools: [], currentStepIndex: 0 },
+      heartbeat: defaultHeartbeat(),
       executorState: { currentCommand: null, commandsExecuted: [], results: [] },
       verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
       costCents: 0,
@@ -704,6 +706,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       artifactIds: [],
       localPreviewUrl: null,
       plannerState: { objective: body.bugDescription, planSteps: [], selectedTools: [], currentStepIndex: 0 },
+      heartbeat: defaultHeartbeat(),
       executorState: { currentCommand: null, commandsExecuted: [], results: [] },
       verifierState: { isVerified: false, feedback: null, verifiedByAgentId: null },
       costCents: 0,
