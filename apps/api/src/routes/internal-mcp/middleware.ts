@@ -50,7 +50,7 @@ const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9:_.\-]{8,128}$/;
  * Names match the tool keys produced by routeToTool() in
  * route-to-tool.ts.
  *
- * Includes task_append_plan_step and task_update_progress (formerly
+ * Includes task_set_heartbeat and task_update_progress (formerly
  * excluded as "narration only"). In practice these ARE the model
  * actively committing plan state mid-beat — and excluding them was
  * killing legitimate developer/designer beats via the
@@ -64,7 +64,7 @@ const ACTION_TOOLS_RESETTING_READ_LOOP = new Set<string>([
   "task_block",
   "task_report_bug",
   "task_verify",
-  "task_append_plan_step",
+  "task_set_heartbeat",
   "task_update_progress",
   "artifact_create",
   "artifact_persist",

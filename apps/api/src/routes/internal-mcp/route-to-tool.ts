@@ -21,7 +21,7 @@ const TOOL_MAP: Record<string, string> = {
   "POST /api/internal/v1/tasks/:taskId/verification": "task_verify",
   "POST /api/internal/v1/tasks/:taskId/results": "task_append_result",
   "POST /api/internal/v1/tasks/:taskId/commands": "task_append_command",
-  "POST /api/internal/v1/tasks/:taskId/plan-steps": "task_append_plan_step",
+  "POST /api/internal/v1/tasks/:taskId/heartbeat": "task_set_heartbeat",
   "POST /api/internal/v1/tasks/:taskId/progress": "task_update_progress",
   "POST /api/internal/v1/tasks/:taskId/preview-url": "task_set_preview_url",
   "POST /api/internal/v1/tasks/:taskId/artifacts": "task_attach_artifact",

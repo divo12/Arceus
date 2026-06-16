@@ -33,6 +33,7 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
 import { buildBoardDirectivesBlock } from "../agents/board-directives.js";
+import { renderHeartbeat } from "./task-heartbeat.js";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as memoryUnitsRepo from "@arceus/db/src/repos/memory_units.js";
@@ -391,7 +392,7 @@ function summarizeShownTasks(
     });
 }
 
-function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
+export function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
   const tasks = ctx.tasks.filter(
     (t) => t.assignedRole === role && OPEN_TASK_STATUSES.includes(t.status),
   );
@@ -431,21 +432,18 @@ function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): string {
       const reason = t.verifierState.feedback;
       lines.push(`  🔁 Previously blocked: "${reason}" — re-claim to retry.`);
     }
-    // Progress trail: plan steps written by prior beats (the agent's own
-    // task_append_plan_step calls + the beat-end outcome line stamped by
-    // run-beat). Until now this was write-only — agents appended steps no
-    // later beat ever saw, so every beat on a multi-beat task started
-    // amnesiac and re-derived context from scratch (the over-read
-    // pathology). Rendered for ANY open task with steps, not just
-    // in_progress: a reaped beat's claim is released back to `planned`,
-    // and that trail is exactly what the next claimant needs.
-    const steps = t.plannerState?.planSteps ?? [];
-    if (steps.length > 0) {
-      lines.push("  Previously on this task:");
-      for (const step of steps.slice(-5)) {
-        lines.push(`    • ${step}`);
+    // Heartbeat: the agent's living Done/Doing/Next/Blocked checklist, rewritten
+    // at beat end and read here on claim, so a multi-beat or blocked task resumes
+    // instead of restarting amnesiac. Rendered for ANY open task that has one: a
+    // reaped beat's claim is released back to `planned`, and this is exactly what
+    // the next claimant needs.
+    const heartbeatMd = t.heartbeat ? renderHeartbeat(t.heartbeat) : "";
+    if (heartbeatMd) {
+      lines.push("  Heartbeat (your running checklist — update it before ending the beat):");
+      for (const hbLine of heartbeatMd.split("\n")) {
+        lines.push(`    ${hbLine}`);
       }
-      lines.push("  Continue from where this trail ends — do NOT redo completed steps.");
+      lines.push("  Continue from where this leaves off — do NOT redo Done items.");
     }
   }
   return lines.join("\n");

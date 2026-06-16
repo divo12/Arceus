@@ -5,7 +5,7 @@ import {
   setTaskStatus,
   appendTaskResult,
   appendTaskCommand,
-  appendTaskPlanStep,
+  setTaskHeartbeat,
   setTaskPreviewUrl,
   attachArtifactToTask,
   hydrateTaskFromSpec,
@@ -127,8 +127,11 @@ const claimBody = z.object({
   reason: z.string().min(1).max(1000),
 });
 
-const appendPlanStepBody = z.object({
-  step: z.string().min(1).max(1000),
+const heartbeatBody = z.object({
+  done: z.array(z.string().max(1000)).max(20).optional(),
+  doing: z.string().max(1000).nullable().optional(),
+  next: z.array(z.string().max(1000)).max(20).optional(),
+  blocked: z.string().max(1000).nullable().optional(),
 });
 
 const progressBody = z.object({
@@ -421,15 +424,15 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     return cacheAndSend(req, reply, 200, success(`Command appended to ${taskId}.`, { taskId }));
   });
 
-  // POST /tasks/:taskId/plan-steps
-  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/plan-steps`, async (req, reply) => {
-    const body = parseOrFail(appendPlanStepBody, req.body, reply);
+  // POST /tasks/:taskId/heartbeat
+  app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/heartbeat`, async (req, reply) => {
+    const body = parseOrFail(heartbeatBody, req.body, reply);
     if (!body) return reply;
     const { taskId } = req.params;
     if (!(await findTask(taskId))) { sendNotFound(reply, `Task ${taskId}`); return; }
 
-    await appendTaskPlanStep(taskId, body.step);
-    return cacheAndSend(req, reply, 200, success(`Plan step appended to ${taskId}.`, { taskId }));
+    await setTaskHeartbeat(taskId, body);
+    return cacheAndSend(req, reply, 200, success(`Heartbeat updated for ${taskId}.`, { taskId }));
   });
 
   // PATCH /tasks/:taskId/progress
@@ -620,7 +623,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     return cacheAndSend(req, reply, 200, success(
       `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,
       { taskId, status: "in_progress", claimedBy: mcp.role, reason: body.reason },
-      { nextActions: ["arceus_task_append_plan_step", "arceus_task_update_progress"] }
+      { nextActions: ["arceus_task_set_heartbeat", "arceus_task_update_progress"] }
     ));
   });
 
@@ -638,29 +641,25 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
         return;
       }
 
-      // Build progress data from task's planner/executor state
-      const planSteps = task.plannerState?.planSteps?.map((s, i) => ({
-        ts: task.createdAt,
-        step: typeof s === "string" ? s : String(s),
-        index: i,
-      })) ?? [];
+      // Build progress data from the task's heartbeat checklist + executor state.
+      const heartbeat = task.heartbeat;
 
       const commands = task.executorState?.commandsExecuted?.map((c) => ({
         ts: task.createdAt,
         cmd: typeof c === "string" ? c : String(c),
       })) ?? [];
 
-      const totalSteps = planSteps.length || 1;
-      const completedSteps = commands.length;
+      const totalSteps = heartbeat.done.length + heartbeat.next.length || 1;
+      const completedSteps = heartbeat.done.length;
       const percentComplete = Math.min(Math.round((completedSteps / totalSteps) * 100), 100);
 
       return cacheAndSend(req, reply, 200, success(`Task ${taskId} with progress.`, {
         task,
         progress: {
-          planSteps,
+          heartbeat,
           commands,
           percentComplete,
-          lastAppendedAt: task.executorState?.commandsExecuted?.length ? new Date().toISOString() : null,
+          lastAppendedAt: heartbeat.updatedAt,
         },
       }));
     },

@@ -288,7 +288,7 @@ const STALL_NUDGE_TEXT =
  * paperclip's status-update discipline). When a beat approaches its hard
  * cap, inject a user-role message telling the agent to checkpoint NOW —
  * finish the smallest shippable piece, task_complete/task_block with
- * evidence, and leave a plan step saying where it stopped. Converts
+ * evidence, and update the heartbeat saying where it stopped. Converts
  * "guillotined mid-edit at the cap" (observed: 6 developer beats killed
  * at 10:00 before their serialize phase on 2026-06-11) into a clean,
  * scoreable ending.
@@ -314,7 +314,7 @@ const WRAP_UP_MIN_CAP_MS = 8 * 60 * 1000;
 const WRAP_UP_TEXT =
   "[system] About 2 minutes remain in this beat before the hard cap. Your in-progress step was paused to deliver this — your context and all landed work are intact. " +
   "Do NOT start anything new and do NOT re-read files. Finish or commit the smallest shippable piece, then call task_complete with evidence (or task_block with the reason), " +
-  "and append a plan step saying exactly where you stopped so the next beat continues cleanly.";
+  "and call task_set_heartbeat (done/doing/next/blocked) saying exactly where you stopped so the next beat continues cleanly.";
 
 /**
  * Sessions with a stall-nudge in flight. run-beat consults this so the

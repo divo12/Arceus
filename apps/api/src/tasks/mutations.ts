@@ -27,6 +27,7 @@ import { applyGovernanceToMutation } from "../skills/governance.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { triggerEscalationMeeting } from "../orchestration/reactive.js";
 import { getProductDir, type Artifact } from "../orchestration/state.js";
+import { applyHeartbeatUpdate, type HeartbeatUpdate } from "../orchestration/task-heartbeat.js";
 import { getDb } from "@arceus/db";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import { hippocampus } from "../memory/extractors.js";
@@ -292,20 +293,17 @@ export function hydrateTaskFromSpec(taskId: string, spec: {
   );
 }
 
-/** Append a plan step to the task's planner state (deduped, newest 12 kept). Awaitable. */
-export async function appendTaskPlanStep(taskId: string, step: string): Promise<void> {
-  await swallowAndReport("task.append_plan_step", () =>
+/**
+ * Apply an agent's heartbeat update to the task — the per-task living checklist
+ * it rewrites at beat end and reads on claim. `done` accumulates; `doing`/`next`/
+ * `blocked` are the current snapshot. Replaces the append-only planSteps trail.
+ * Awaitable.
+ */
+export async function setTaskHeartbeat(taskId: string, update: HeartbeatUpdate): Promise<void> {
+  await swallowAndReport("task.set_heartbeat", () =>
     updateTask(taskId, (task) => ({
       ...task,
-      plannerState: {
-        ...task.plannerState,
-        // Keep the NEWEST 12, not the first 12 — `uniqueStrings(…, 12)`
-        // truncated the tail, so once a long-running task filled up,
-        // every later append (including the beat-end outcome trail) was
-        // silently dropped. planSteps is a progress log; the oldest
-        // entries are the right ones to age out.
-        planSteps: uniqueStrings([...task.plannerState.planSteps, step], Number.MAX_SAFE_INTEGER).slice(-12),
-      },
+      heartbeat: applyHeartbeatUpdate(task.heartbeat, update, new Date().toISOString()),
     })),
     { detail: { taskId } },
   );

@@ -33,7 +33,7 @@ import { updateTrustScore } from "../governance/trust.js";
 import { persistSkillUsageEvent } from "../skills/usage-persistence.js";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { getDb } from "@arceus/db";
-import { setTaskStatus, appendTaskPlanStep } from "../tasks/mutations.js";
+import { setTaskStatus, setTaskHeartbeat } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 import { getHeadSha } from "../workspace/git-ops.js";
@@ -539,8 +539,10 @@ export async function runBeat(input: {
         `${toolCalls} tool calls, ${Math.round(tokensUsed / 1000)}k tokens` +
         (lastNote ? ` — last note: "${lastNote}"` : "");
       for (const tid of harvestTaskIds) {
-        // appendTaskPlanStep swallows + reports its own failures.
-        await appendTaskPlanStep(tid, outcome);
+        // Beat-end safety stamp into the heartbeat's done-log (accumulates), so
+        // continuity survives even if the agent didn't write its own heartbeat.
+        // setTaskHeartbeat swallows + reports its own failures.
+        await setTaskHeartbeat(tid, { done: [outcome] });
       }
     }
 
