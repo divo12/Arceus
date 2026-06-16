@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { workspaceManager } from "../../workspace/manager.js";
 import { probePreviewHealth, startLocalPreview } from "../../workspace/preview.js";
+import { ensureDepsInstalled } from "../../workspace/ensure-deps.js";
 import {
   getHealth,
   recordPreview,
@@ -338,9 +339,22 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     const { skipPreview, timeoutMs } = body ?? {};
 
     const failures: { category: string; errors: string[] }[] = [];
+    const cwd = workspaceManager.getLocalPath(req.mcp!.companyId);
+
+    // Install deps first if missing — otherwise `tsc` reports a cascade of
+    // "cannot find module 'hono'" + implicit-any errors that aren't real code
+    // problems, blocking the task and spawning a wasteful bug-fix detour.
+    const deps = await ensureDepsInstalled(cwd, 180_000);
+    if (deps.error) {
+      recordTypecheck(false, [`dependency install failed: ${deps.error}`]);
+      return cacheAndSend(req, reply, 200, success(
+        "Baseline failed (dependency install).",
+        { ok: false, failures: [{ category: "install", errors: [deps.error] }], ranAt: new Date().toISOString() },
+      ));
+    }
 
     // Typecheck
-    const tsc = await runTsc(workspaceManager.getLocalPath(req.mcp!.companyId), timeoutMs ?? 60_000);
+    const tsc = await runTsc(cwd, timeoutMs ?? 60_000);
     recordTypecheck(tsc.ok, tsc.errors);
     if (!tsc.ok) failures.push({ category: "typecheck", errors: tsc.errors.slice(0, 3) });
 

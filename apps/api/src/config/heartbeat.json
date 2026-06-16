@@ -5,9 +5,9 @@
   "executionMode": "heartbeat",
 
   "schedulerIntervalMs": 5000,
-  "$comment_concurrency": "maxConcurrentBeats = global ceiling across ALL tenants (safety valve so 20 tenants × 2-per-company can't open 40 Azure requests). maxConcurrentBeatsPerCompany = per-tenant slot pool — one company's hung beat cannot starve another's. Total in-flight = min(global, sum of per-company active). Lowered from 8/2 to 4/1 under multi-tenant load: gpt-5.4-mini Azure deployment was hitting TPM saturation at 4+ concurrent beats, manifesting as `totalTokens: 0` silent stalls rather than 429s. Bump these back up after either (a) Azure quota increase, or (b) deployment split (chat vs beats).",
-  "maxConcurrentBeats": 4,
-  "maxConcurrentBeatsPerCompany": 1,
+  "$comment_concurrency": "maxConcurrentBeats = global ceiling across ALL tenants (safety valve so 20 tenants × 2-per-company can't open 40 Azure requests). maxConcurrentBeatsPerCompany = per-tenant slot pool — one company's hung beat cannot starve another's. Total in-flight = min(global, sum of per-company active). History: 8/2 → 4/1 under multi-tenant load when the gpt-5.4-mini Azure deployment hit TPM saturation at 4+ concurrent beats (`totalTokens: 0` silent stalls). Raised to 6/2 on gpt-5.2 to parallelise independent-role work within a sprint (~2× faster sprint wall-clock) — gpt-5.2 has more TPM headroom. WATCH for `totalTokens:0` stalls; if they reappear, drop per-company back to 1 (env: ARCEUS_HEARTBEAT_MAX_CONCURRENT_PER_COMPANY=1) and/or split the Azure deployment (chat vs beats). Overridable live via env without a redeploy.",
+  "maxConcurrentBeats": 6,
+  "maxConcurrentBeatsPerCompany": 2,
 
   "$comment_roleIntervals": "Minimum gap between same-role beats. Halved across the board for fail-fast: when an SSE-watchdog stall kills a beat at 60s, the role waits roleInterval ms before retrying. Old values made retries take 60-120s extra after a stall; new values cut that to 20-30s. Per-company concurrency cap (1) prevents this from increasing Azure TPM pressure — only ONE beat per tenant fires at a time regardless of role intervals.",
   "roleIntervals": {
