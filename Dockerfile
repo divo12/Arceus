@@ -35,6 +35,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
 COPY packages/hippocampus/package.json packages/hippocampus/
 COPY packages/company-runtime/package.json packages/company-runtime/
+COPY packages/prompts/package.json packages/prompts/
 COPY packages/runtime-shared/package.json packages/runtime-shared/
 COPY packages/task-engine/package.json packages/task-engine/
 COPY packages/arceus-mcp/package.json packages/arceus-mcp/
@@ -111,7 +112,7 @@ RUN npm install -g opencode-ai@${OPENCODE_VERSION} tsx@${TSX_VERSION}
 # not a headless browser probe — the browser-probe path repeatedly hit
 # environment friction (missing libglib OS deps, root-owned browsers
 # path / outDir → EACCES) and added a heavy image dependency for little
-# gain. See packages/company-runtime/src/employee-prompts/tester.ts.
+# gain. See packages/prompts/src/roles/tester.ts.
 
 # Copy hoisted node_modules + workspace tree + compiled API.
 COPY --from=build --chown=arceus:arceus /app/node_modules ./node_modules
