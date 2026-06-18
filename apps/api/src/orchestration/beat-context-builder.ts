@@ -34,6 +34,8 @@ import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
 import { buildBoardDirectivesBlock } from "../agents/board-directives.js";
 import { renderHeartbeat } from "./task-heartbeat.js";
+import { dedupeAssembled } from "./prompt-dedup.js";
+import { getRoleSoul } from "@arceus/company-runtime";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
 import * as memorySummariesRepo from "@arceus/db/src/repos/memory_summaries.js";
 import * as memoryUnitsRepo from "@arceus/db/src/repos/memory_units.js";
@@ -735,7 +737,9 @@ async function renderStateForAgent(role: Role, companyId: string): Promise<strin
     renderLastProgressNotes(ctx, 5),
     renderBeatProcedure(ctx, role),
   ];
-  return sections.join("\n\n---\n\n");
+  // Collapse instructions the role soul (sent separately as the system message)
+  // already states, so the assembled user prompt doesn't repeat them.
+  return dedupeAssembled(sections, getRoleSoul(role)?.systemPrompt ?? "");
 }
 
 /**
@@ -780,23 +784,30 @@ export async function prepareBeatRender(
     renderLastProgressNotes(ctx, 5),
     renderBeatProcedure(ctx, role),
   ];
-  const stateText = baseSections.join("\n\n---\n\n");
+  // De-dup against the role soul (sent separately as the system message) so the
+  // user prompt doesn't restate what the soul already says, or repeat a sentence
+  // across its own sections.
+  const soulText = getRoleSoul(role)?.systemPrompt ?? "";
+  const stateText = dedupeAssembled(baseSections, soulText);
 
   const unifiedPrompt = task
-    ? [
-        renderIncomingHandoffsBanner(incomingHandoffs),
-        renderTaskContext(task),
-        renderWorkspaceContext(companyId, manifest),
-        renderCompanyState(ctx),
-        renderBudget(ctx),
-        renderSprintHistory(ctx),
-        renderOpenTasksForRole(ctx, role),
-        renderRecentArtifacts(ctx, 10),
-        renderRoleMemory(ctx),
-        renderIncomingHandoffsSection(incomingHandoffs),
-        renderLastProgressNotes(ctx, 5),
-        await renderUpstreamArtifacts(companyId, task),
-      ].filter(Boolean).join("\n\n---\n\n")
+    ? dedupeAssembled(
+        [
+          renderIncomingHandoffsBanner(incomingHandoffs),
+          renderTaskContext(task),
+          renderWorkspaceContext(companyId, manifest),
+          renderCompanyState(ctx),
+          renderBudget(ctx),
+          renderSprintHistory(ctx),
+          renderOpenTasksForRole(ctx, role),
+          renderRecentArtifacts(ctx, 10),
+          renderRoleMemory(ctx),
+          renderIncomingHandoffsSection(incomingHandoffs),
+          renderLastProgressNotes(ctx, 5),
+          await renderUpstreamArtifacts(companyId, task),
+        ].filter(Boolean),
+        soulText,
+      )
     : null;
 
   return {
