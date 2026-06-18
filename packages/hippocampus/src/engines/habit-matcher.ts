@@ -9,7 +9,7 @@
  */
 
 import type { Habit } from "@arceus/contracts";
-export { HABIT_MATCHER_SYSTEM_PROMPT } from "./prompts/loader.js";
+export { HABIT_MATCHER_SYSTEM_PROMPT } from "@arceus/prompts";
 
 /**
  * Build the user-side prompt listing the task description and all candidate habits

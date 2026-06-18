@@ -268,7 +268,7 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   }
 
   // Write per-role prompt .txt files from the TS source-of-truth
-  // (packages/company-runtime/src/employee-prompts/<role>.ts → DEVELOPER_PROMPT
+  // (packages/prompts/src/roles/<role>.ts → DEVELOPER_PROMPT
   // etc, exposed via getRoleSoul()). These files are referenced from each
   // agent's .md frontmatter (prompt: "{file:./.opencode/prompts/<role>-soul.txt}")
   // and OpenCode reads them when assembling the agent's persona prompt.

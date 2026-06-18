@@ -19,6 +19,8 @@ import {
   createHippocampusService,
   buildExtractionUserPrompt,
   buildActionDecisionUserPrompt,
+  EXTRACTION_SYSTEM_PROMPT,
+  ACTION_DECISION_SYSTEM_PROMPT,
   HABIT_MATCHER_SYSTEM_PROMPT,
   buildHabitMatcherUserPrompt,
   createPgVectorStores,
@@ -61,19 +63,9 @@ export const habitMatcherSchema = z.object({
   habit_ids: z.array(z.string()),
 });
 
-// ---------------------------------------------------------------------------
-// Inline system prompts (one per primitive — no shared session, by design)
-// ---------------------------------------------------------------------------
-
-const EXTRACTION_SYSTEM_PROMPT =
-  "You extract structured facts from an agent's task output. Return facts with type " +
-  "(static, dynamic, or procedural), a 0-1 confidence score, and temporal markers. " +
-  "Respond with JSON matching the requested schema — no prose, no explanation.";
-
-const ACTION_DECISION_SYSTEM_PROMPT =
-  "You decide whether a new fact should ADD, UPDATE, DELETE, or be ignored (NONE) " +
-  "against a list of existing memories. Explain your reasoning, especially for " +
-  "UPDATE and DELETE. Respond with JSON matching the requested schema.";
+// System prompts (EXTRACTION_SYSTEM_PROMPT, ACTION_DECISION_SYSTEM_PROMPT,
+// HABIT_MATCHER_SYSTEM_PROMPT) are the canonical ones from @arceus/prompts,
+// re-exported via @arceus/hippocampus — no inline duplicates here.
 
 // ---------------------------------------------------------------------------
 // Hippocampus-injected LLM primitives

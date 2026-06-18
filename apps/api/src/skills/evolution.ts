@@ -41,7 +41,7 @@ import {
   ROA_SYSTEM_PROMPT,
   REVISION_SYSTEM_PROMPT,
   SYNTHESIS_SYSTEM_PROMPT,
-} from "./prompts/loader.js";
+} from "@arceus/prompts";
 
 // ── Zod schemas for LLM structured output ────────────────
 

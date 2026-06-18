@@ -12,6 +12,7 @@
   "dependencies": {
     "@arceus/contracts": "file:../contracts",
     "@arceus/db": "file:../db",
+    "@arceus/prompts": "file:../prompts",
     "@huggingface/transformers": "^4.0.1",
     "uuid": "^10.0.0"
   }

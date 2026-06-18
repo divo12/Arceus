@@ -6,7 +6,7 @@
  * package stays decoupled from the API layer (Azure OpenAI, etc.).
  */
 
-export { EXTRACTION_SYSTEM_PROMPT, MEETING_EXTRACTION_PROMPT } from "./prompts/loader.js";
+export { EXTRACTION_SYSTEM_PROMPT, MEETING_EXTRACTION_PROMPT } from "@arceus/prompts";
 
 /**
  * Build the user-side prompt for fact extraction, combining agent role, task title,

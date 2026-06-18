@@ -9,7 +9,7 @@
  */
 
 import type { MemoryUnit } from "@arceus/contracts";
-export { ACTION_DECISION_SYSTEM_PROMPT } from "./prompts/loader.js";
+export { ACTION_DECISION_SYSTEM_PROMPT } from "@arceus/prompts";
 
 /**
  * Build the user-side prompt for action decision, presenting the new fact

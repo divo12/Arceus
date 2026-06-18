@@ -8,7 +8,7 @@ import {
   UI_DESIGNER_PROMPT,
   MARKETING_PROMPT,
   SKILLS_LEAD_PROMPT,
-} from "./employee-prompts";
+} from "@arceus/prompts";
 
 export const ROLE_SOULS: Record<RoleSoul["role"], RoleSoul> = {
   ceo: {
