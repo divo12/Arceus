@@ -7,6 +7,7 @@ export {
   emptyExecutorState,
   emptyVerifierState,
   createWorkflowTask,
+  assignableRole,
   attachChildTask,
   isTaskReady,
   taskSortWeight,

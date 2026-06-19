@@ -61,6 +61,16 @@ export function emptyVerifierState(): VerifierState {
 /**
  * Create a new Task object. Pure factory — does not persist.
  */
+/**
+ * The role a task may actually be EXECUTED by. The CEO is orchestrate-only
+ * (read-only, no `task_claim`), so it can never claim/work a task — assigning
+ * one to it deadlocks the sprint behind a task no one will ever do. Route any
+ * ceo-assigned task to the PM (product scope/definition is the PM's job).
+ */
+export function assignableRole(role: AgentIdentity["role"]): AgentIdentity["role"] {
+  return role === "ceo" ? "pm" : role;
+}
+
 export function createWorkflowTask(
   snapshot: CompanySnapshot,
   kind: Task["kind"],
@@ -74,7 +84,9 @@ export function createWorkflowTask(
   status: Task["status"],
   sprintId?: string | null,
 ): Task {
-  const agent = getAgentByRole(snapshot, role);
+  // Never let an executable task land on the orchestrate-only CEO.
+  const effectiveRole = assignableRole(role);
+  const agent = getAgentByRole(snapshot, effectiveRole);
 
   return {
     id: `task_${crypto.randomUUID()}`,
@@ -88,7 +100,7 @@ export function createWorkflowTask(
     definitionOfDone,
     status,
     priority,
-    assignedRole: role,
+    assignedRole: effectiveRole,
     assignedAgentId: agent?.id ?? null,
     parentTaskId: null,
     dependsOnTaskIds: [],

@@ -590,11 +590,14 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   //
   // CEO is otherwise woken only on real strategic triggers: pending
   // approvals, roadmap (no/done sprint), or active meetings.
-  // checkAssignedTasks LAST so the CEO still prioritises strategic triggers
-  // (approvals, roadmap) but never idles when a task is actually assigned to it.
-  // Without it, a planner-assigned CEO task (e.g. "Lock v1 Product Semantics")
-  // is orphaned forever and the sprint deadlocks behind it (live 2026-06-19).
-  ceo: [checkMeetingContribution, checkPendingApprovals, checkSprintHealth, checkRoadmap, checkAssignedTasks],
+  // CEO is deliberately WITHOUT checkAssignedTasks: it is orchestrate-only
+  // (read-only, no `task_claim`), so it physically cannot claim/work a task.
+  // Giving it checkAssignedTasks made it thrash (live 2026-06-19: 116 noop
+  // `task` calls trying to find a missing task_claim, then fail). Executable
+  // tasks must never be assigned to the CEO in the first place — enforced at
+  // task creation by assignableRole() (task-engine). The CEO acts only on real
+  // strategic triggers: pending approvals, roadmap (no/done sprint), meetings.
+  ceo: [checkMeetingContribution, checkPendingApprovals, checkSprintHealth, checkRoadmap],
   cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkSprintHealth, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],

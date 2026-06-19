@@ -14,6 +14,7 @@ import { setTaskVerified } from "../../tasks/helpers.js";
 import { updateTask, updateTaskProgress, upsertTask } from "../../persistence/mutations/index.js";
 import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
+import { assignableRole } from "@arceus/task-engine";
 import { defaultHeartbeat } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
@@ -223,7 +224,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       definitionOfDone: body.definitionOfDone ?? [],
       status: "created",
       priority: body.priority ?? "medium",
-      assignedRole: (body.assignedRole ?? "developer") as Task["assignedRole"],
+      assignedRole: assignableRole((body.assignedRole ?? "developer") as Task["assignedRole"]),
       assignedAgentId: null,
       parentTaskId: body.parentTaskId ?? null,
       dependsOnTaskIds: body.dependsOnTaskIds ?? [],
@@ -247,7 +248,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
       taskId,
       companyId: req.mcp!.companyId,
       sprintId: task.sprintId ?? null,
-      assignedRole: (task.assignedRole ?? req.mcp!.role),
+      assignedRole: assignableRole(task.assignedRole ?? req.mcp!.role),
       ts: Date.now(),
     });
 
