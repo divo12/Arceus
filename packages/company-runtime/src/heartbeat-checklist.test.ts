@@ -256,3 +256,39 @@ describe("CTO checklist — checkEscalationPending", () => {
     assert.equal(result.primaryAction.dispatch?.kind, "sprint_review.cto_escalation_review");
   });
 });
+
+describe("CEO must work a task assigned to it (deadlock regression)", () => {
+  // Live deadlock 2026-06-19 (ToneDock): the planner assigned a product-definition
+  // task to role=ceo ("Lock v1 Product Semantics"). The CEO checklist lacked
+  // checkAssignedTasks, so every beat returned "all checks OK" → idle (0 tokens),
+  // the CEO never worked the task, and the whole sprint deadlocked behind it.
+  it("surfaces a claimable planned task owned by the CEO as action_needed", () => {
+    const ctx = makeCtx({
+      role: "ceo",
+      agentId: "agent_ceo",
+      currentSprint: makeSprint({ status: "executing" }),
+      tasks: [
+        makeTask({ assignedRole: "ceo", assignedAgentId: null, status: "planned", title: "Lock v1 Product Semantics" }),
+      ],
+    });
+    const result = runChecklist(ctx);
+    assert.ok(result.hasActionNeeded, "CEO with a claimable assigned task must not be idle");
+    assert.ok(
+      result.primaryAction?.suggestedAction?.includes("Lock v1 Product Semantics"),
+      `CEO must be routed to work its task, got: ${JSON.stringify(result.primaryAction)}`,
+    );
+  });
+
+  it("stays idle when the CEO owns no actionable task (normal case unchanged)", () => {
+    const ctx = makeCtx({
+      role: "ceo",
+      agentId: "agent_ceo",
+      currentSprint: makeSprint({ status: "executing" }),
+      tasks: [
+        makeTask({ assignedRole: "developer", assignedAgentId: null, status: "planned" }),
+      ],
+    });
+    const result = runChecklist(ctx);
+    assert.equal(result.hasActionNeeded, false, "CEO with no own task should still idle during execution");
+  });
+});

@@ -590,7 +590,11 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   //
   // CEO is otherwise woken only on real strategic triggers: pending
   // approvals, roadmap (no/done sprint), or active meetings.
-  ceo: [checkMeetingContribution, checkPendingApprovals, checkSprintHealth, checkRoadmap],
+  // checkAssignedTasks LAST so the CEO still prioritises strategic triggers
+  // (approvals, roadmap) but never idles when a task is actually assigned to it.
+  // Without it, a planner-assigned CEO task (e.g. "Lock v1 Product Semantics")
+  // is orphaned forever and the sprint deadlocks behind it (live 2026-06-19).
+  ceo: [checkMeetingContribution, checkPendingApprovals, checkSprintHealth, checkRoadmap, checkAssignedTasks],
   cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkSprintHealth, checkBuildStatus, checkDevProgress, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
