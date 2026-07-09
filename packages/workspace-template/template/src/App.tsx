@@ -66,7 +66,7 @@ export default function App() {
         <header className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Notes</h1>
           <p className="text-sm text-muted-foreground">
-            Full-stack starter — notes persist on the server (SQLite), and the ✨ button summarises them with AI.
+            Full-stack starter — notes persist via the server (local SQLite or Turso in production), and the ✨ button summarises them with AI.
           </p>
         </header>
 

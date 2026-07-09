@@ -26,19 +26,16 @@ export const previewConfig = {
   portMax: readNumberEnv("ARCEUS_PREVIEW_PORT_MAX", 3299),
 
   /**
-   * Public apex domain for preview URLs. The preview-proxy hook routes
-   * any `<slug>.<publicDomain>` host (excluding reserved subdomains
-   * like `app`, `api`, `www`, `admin`) to the local preview server.
-   * URL construction in `preview.ts` builds
-   * `https://<companySlug>.<publicDomain>` so each company gets its
-   * own vanity subdomain. Empty string disables the proxy entirely.
+   * Public apex domain for product URLs. The preview-proxy hook routes
+   * `<name>.<company_hash>.<publicDomain>` (and legacy `<slug>.<domain>`)
+   * to the local preview/static server. URL construction builds
+   * `https://<name>.<hash>.arceus.sh`. Empty string disables the proxy.
    */
   publicDomain: readOptionalEnv("ARCEUS_PREVIEW_PUBLIC_DOMAIN", ""),
 
   /**
    * Optional fixed base URL for preview links — overrides the
-   * per-company-slug pattern. Useful when you want a single
-   * `https://preview.arceus.sh` URL instead of `<slug>.arceus.sh`.
+   * per-company host pattern. Useful for a single shared preview host.
    * If both this and publicDomain are set, publicBaseUrl wins.
    */
   publicBaseUrl: readOptionalEnv("ARCEUS_PREVIEW_PUBLIC_BASE_URL", ""),

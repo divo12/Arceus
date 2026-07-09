@@ -156,6 +156,69 @@ export const registerWorkspaceTools = (
     }
   );
 
+  server.registerTool(
+    "workspace_run_flow_test",
+    {
+      description:
+        "Drive the live preview in a real browser via the flow-tester agent. " +
+        "Returns {passed, verdict, final_url}. Required for viewable-task verification. " +
+        "Omit url to use the task preview or the running workspace preview.",
+      inputSchema: {
+        url: z.string().url().optional().describe("Preview URL to test. Omit to resolve from task/preview."),
+        goal: z.string().min(1).max(4000).optional().describe("Optional product-specific goal for the browser agent."),
+        maxSteps: z.number().int().min(5).max(10).optional(),
+        taskId: z.string().optional().describe("Resolve preview URL from this task when url is omitted."),
+      },
+    },
+    async ({ url, goal, maxSteps, taskId }) => {
+      const body = { url, goal, maxSteps, taskId };
+      const res = await client.request<ToolResult>({
+        method: "POST",
+        path: `${WORKSPACES}/flow-test`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "workspace_run_flow_test", body),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "workspace_deploy_production",
+    {
+      description:
+        "Build and publish the product to https://<name>.<company_hash>.arceus.sh. " +
+        "Returns {url, mode}. Call after verification so the board gets a real site URL.",
+      inputSchema: {
+        announce: z.boolean().optional().describe("Post the live URL to the board chat. Default true."),
+      },
+    },
+    async ({ announce }) => {
+      const body = { announce };
+      const res = await client.request<ToolResult>({
+        method: "POST",
+        path: `${WORKSPACES}/deploy-production`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "workspace_deploy_production", body),
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
+  server.registerTool(
+    "workspace_get_production_url",
+    {
+      description: "Read the company's live site URL (https://<name>.<hash>.arceus.sh).",
+      inputSchema: {},
+    },
+    async () => {
+      const res = await client.request<ToolResult>({
+        method: "GET",
+        path: `${WORKSPACES}/production-url`,
+      });
+      return toMcpContent(res.data);
+    }
+  );
+
   // Dream/Chorus-style durable checklist — workspace TODO.md (not the DB heartbeat field).
   server.registerTool(
     "todo_write",

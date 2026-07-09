@@ -6,4 +6,5 @@ dist-ssr
 .DS_Store
 *.log
 data
+.arceus/turso.json
 .design-systems

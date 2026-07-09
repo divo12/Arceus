@@ -669,6 +669,7 @@ export const ArceusPlugin: Plugin = async () => {
           "workspace_diff_against_criteria",
           "workspace_collect_evidence",
           "workspace_capture_browser_probe",
+          "workspace_run_flow_test",
         ]);
         if (WORKSPACE_PATH_ARG_TOOLS.has(input.tool) && a) {
           if (typeof a.cwd === "string") a.cwd = scopePath(a.cwd);

@@ -2,7 +2,9 @@
 
 This workspace was scaffolded by Arceus at company bootstrap. The stack:
 
-- **Vite 5** — dev server + bundler. `pnpm dev` to start.
+- **Vite 5** — dev server + bundler. `npm run dev` to start.
+- **Hono** — `server/index.ts` serves `/api/*` (Vite in dev; Vercel `api/index.ts` in prod).
+- **SQLite** — local `data/app.db` via `node:sqlite`; production uses Turso when `TURSO_DATABASE_URL` is set.
 - **React 18** — UI library.
 - **TypeScript 5** — strict mode on.
 - **Tailwind 3** — utility-first CSS. Config in `tailwind.config.js`.

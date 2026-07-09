@@ -173,16 +173,16 @@ export const ROLE_CAPABILITIES: Record<Role, RoleRuntimeCapabilities> = {
   skills_lead: { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: true,  respondsToFreeformChecklistActions: false },
 };
 
-/** Azure OpenAI deployment per role. CEO uses a higher-capability model; everyone else shares the worker pool. */
+/** Azure OpenAI deployment per role. All employees use the CEO-class (gpt-5.2) pool. */
 export const ROLE_DEPLOYMENT_MODEL: Record<Role, string> = {
   ceo:         "azure/ceo-deployment",
-  cto:         "azure/worker-deployment",
-  pm:          "azure/worker-deployment",
-  developer:   "azure/worker-deployment",
-  tester:      "azure/worker-deployment",
-  ui_designer: "azure/worker-deployment",
-  marketing:   "azure/worker-deployment",
-  skills_lead: "azure/worker-deployment",
+  cto:         "azure/ceo-deployment",
+  pm:          "azure/ceo-deployment",
+  developer:   "azure/ceo-deployment",
+  tester:      "azure/ceo-deployment",
+  ui_designer: "azure/ceo-deployment",
+  marketing:   "azure/ceo-deployment",
+  skills_lead: "azure/ceo-deployment",
 };
 
 /** Initial agent status assigned at hire time. CEO boots as "running" because the company is led from the top. */

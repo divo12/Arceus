@@ -12,11 +12,23 @@
 import { bootstrapCompanyTx, deriveCompanyNameFromIdea, type BootstrapInput } from "../companies/bootstrap.js";
 import { buildSnapshotView } from "./snapshot-view.js";
 import { workspaceManager } from "../workspace/manager.js";
+import { tursoConfigured } from "../config/turso.js";
+import { ensureCompanyTursoDb } from "../workspace/turso-provision.js";
 
 /** Bootstrap a company from explicit inputs and provision a workspace directory. */
 export async function bootstrapCompanyWithWorkspace(input: BootstrapInput) {
   const { company } = await bootstrapCompanyTx(input);
   const { warnings } = await workspaceManager.provision(company.id);
+
+  // Best-effort: create Turso DB early so production deploy already has creds.
+  if (tursoConfigured()) {
+    const productDir = workspaceManager.getLocalPath(company.id);
+    const turso = await ensureCompanyTursoDb({ companyId: company.id, productDir });
+    if (!turso.ok) {
+      warnings.push(`Turso provision skipped: ${turso.error}`);
+    }
+  }
+
   // Snapshot view assembled fresh from canonical so downstream consumers
   // (CEO chat, strategy generation) see the just-committed rows.
   const snapshot = await buildSnapshotView(company.id);

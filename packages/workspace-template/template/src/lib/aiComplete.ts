@@ -1,9 +1,9 @@
 /**
  * aiComplete — call an LLM from your product with ZERO setup.
  *
- * No API key, no backend, no SDK. Arceus runs the AI Gateway on the same
- * origin your product is served from (`/api/ai/complete`): it holds the
- * provider key server-side, meters usage against your company budget, and
+ * No API key, no backend, no SDK. Call `/api/ai/complete` same-origin —
+ * on Vercel that path rewrites to the Arceus API (Railway), which holds
+ * the provider key, meters usage against your company budget, and
  * returns the model's reply. Just import and call:
  *
  *   import { aiPrompt } from "@/lib/aiComplete";

@@ -122,6 +122,9 @@ export const ALL_ARCEUS_TOOLS = [
   // Workspace role-custom (Spec 28 Phase H)
   "workspace_run_typecheck",
   "workspace_capture_browser_probe",
+  "workspace_run_flow_test",
+  "workspace_deploy_production",
+  "workspace_get_production_url",
   "workspace_collect_evidence",
   "workspace_run_acceptance_suite",
   "workspace_diff_against_criteria",
@@ -163,7 +166,7 @@ const denyRest = (allowed: ToolVisibility): ToolVisibility => {
 export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   ceo: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Board-facing CEO that refines ideas, proposes strategy, and requests approvals.",
     promptFile: "./.opencode/prompts/ceo-soul.txt",
     permission: { edit: "deny", bash: { "*": "deny" }, webfetch: "allow" },
@@ -208,11 +211,12 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       chat_emit_card: true,
       // Strategy — CEO provisions agents via tool call after board approval
       strategy_apply: true,
+      workspace_get_production_url: true,
     }),
   },
   cto: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Technical lead that decomposes strategy into architecture and execution plans.",
     promptFile: "./.opencode/prompts/cto-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
@@ -235,6 +239,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       sprint_run_final_gate: true,
       workspace_get_build_health: true,
       workspace_verify_baseline: true,
+      workspace_deploy_production: true,
+      workspace_get_production_url: true,
       meeting_get: true,
       meeting_contribute: true,
       approval_get: true,
@@ -246,7 +252,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   pm: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Product manager focused on scope control, backlog discipline, and meeting synthesis.",
     promptFile: "./.opencode/prompts/pm-soul.txt",
     permission: { edit: "deny", bash: { "*": "deny" }, webfetch: "allow" },
@@ -282,7 +288,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   developer: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Execution-focused builder that produces a runnable local workspace.",
     promptFile: "./.opencode/prompts/developer-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
@@ -306,6 +312,8 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       workspace_get_build_health: true,
       workspace_check_exports: true,
       workspace_verify_baseline: true,
+      workspace_deploy_production: true,
+      workspace_get_production_url: true,
       task_attach_artifact: true,
       artifact_get: true,
       artifact_list_sprint: true,
@@ -316,7 +324,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   tester: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Quality specialist that validates apps and services through browser, accessibility, and smoke testing workflows.",
     promptFile: "./.opencode/prompts/tester-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },
@@ -337,6 +345,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       sprint_get_active: true,
       sprint_run_qa_gate: true,
       workspace_capture_browser_probe: true,
+      workspace_run_flow_test: true,
       workspace_collect_evidence: true,
       workspace_run_acceptance_suite: true,
       workspace_diff_against_criteria: true,
@@ -350,7 +359,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   ui_designer: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Design specialist that creates visual direction, UX guidance, and interface critique.",
     promptFile: "./.opencode/prompts/ui-designer-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "deny" }, webfetch: "allow" },
@@ -375,7 +384,7 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
   },
   marketing: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Launch specialist that prepares positioning, campaigns, and distribution-ready copy.",
     promptFile: "./.opencode/prompts/marketing-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "deny" }, webfetch: "allow" },
@@ -397,11 +406,12 @@ export const ROLE_CONFIGS: Record<Role, RoleAgentConfig> = {
       sprint_get_active: true,
       meeting_contribute: true,
       company_get_summary: true,
+      workspace_get_production_url: true,
     }),
   },
   skills_lead: {
     mode: "primary",
-    model: "azure/gpt-5.4-mini",
+    model: "azure/gpt-5.2",
     description: "Operational specialist that authors and maintains reusable skills for the company.",
     promptFile: "./.opencode/prompts/skills-lead-soul.txt",
     permission: { edit: "allow", write: "allow", bash: { "*": "allow" }, webfetch: "allow" },

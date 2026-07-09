@@ -16,10 +16,11 @@ import type { Task, RoleType } from "@arceus/contracts";
 import { observability } from "@arceus/contracts";
 import { assignableRole } from "@arceus/task-engine";
 import { defaultHeartbeat } from "@arceus/contracts";
-import { failure, success, type ErrorCause } from "./envelope.js";
+import { causeToStatus, failure, success, type ErrorCause } from "./envelope.js";
 import { cacheSuccessfulResponse } from "./middleware.js";
 import { readTaskHybrid, persistTask, CLAIM_FAILURES } from "./task-persistence.js";
 import { getLocalPreviewState } from "../../workspace/preview.js";
+import { evaluateCompletionGate } from "../../tasks/completion-gate.js";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { swallowAndReport } from "../../observability/swallow.js";
@@ -106,6 +107,11 @@ const patchTaskBody = z.object({
   assignedAgentId: z.string().nullable().optional(),
   referenceArtifactIds: z.array(z.string()).max(10).optional(),
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field required." });
+
+const completionBody = z.object({
+  evidenceArtifactIds: z.array(z.string().min(1)).max(20).optional(),
+  summary: z.string().max(2000).optional(),
+});
 
 const blockBody = z.object({
   reason: z.string().min(1).max(1000),
@@ -320,6 +326,9 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
 
   // POST /tasks/:taskId/completion
   app.post<{ Params: { taskId: string } }>(`${TASK_BASE}/:taskId/completion`, async (req, reply) => {
+    const body = parseOrFail(completionBody, req.body ?? {}, reply);
+    if (!body) return reply;
+
     const { taskId } = req.params;
     const existing = await findTask(taskId);
     if (!existing) {
@@ -334,6 +343,30 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     // longer owns this task's claim. Catches stranded-beat late
     // arrivals before they overwrite the legitimate owner's state.
     if (await rejectIfNotOwner(req, reply, taskId)) return reply;
+
+    const role = req.mcp!.role;
+    const enforceBuild = role === "developer" || role === "tester";
+    const gate = await evaluateCompletionGate({
+      task: existing,
+      companyId: req.mcp!.companyId,
+      evidenceArtifactIds: body?.evidenceArtifactIds,
+      enforceBuild,
+    });
+    if (!gate.ok) {
+      const status = causeToStatus[gate.cause] ?? 422;
+      return reply.code(status).send(
+        failure(gate.summary, gate.cause, "never", gate.stopWhen, {
+          nextActions: ["arceus_artifact_create", "arceus_workspace_verify_baseline", "arceus_workspace_start_preview"],
+        }),
+      );
+    }
+
+    // Attach any newly supplied evidence ids before flipping status.
+    for (const artifactId of gate.evidenceArtifactIds) {
+      if (!existing.artifactIds.includes(artifactId)) {
+        await attachArtifactToTask(taskId, artifactId);
+      }
+    }
 
     await setTaskStatus(taskId, "completed");
     // Spec 31 Phase 7.B.5 — read unblocked dependents from canonical instead
@@ -350,7 +383,12 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     // see the persistTask race analysis.
     return cacheAndSend(req, reply, 200, success(
       `Task ${taskId} marked completed.`,
-      { taskId, status: "completed", unblockedDependents: unblocked },
+      {
+        taskId,
+        status: "completed",
+        unblockedDependents: unblocked,
+        evidenceArtifactIds: gate.evidenceArtifactIds,
+      },
       { nextActions: ["arceus_task_append_result", "arceus_artifact_create"] }
     ));
   });

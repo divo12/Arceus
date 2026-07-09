@@ -3,3 +3,5 @@ export { persistenceConfig } from "./persistence";
 export { previewConfig } from "./preview";
 export { runtimeConfig, ensureDeployment, type DeploymentKey } from "./runtime";
 export { serverConfig } from "./server";
+export { vercelConfig, vercelConfigured } from "./vercel";
+export { tursoConfig, tursoConfigured } from "./turso";

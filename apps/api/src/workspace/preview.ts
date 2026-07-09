@@ -7,6 +7,11 @@ import { previewConfig } from "../config/index.js";
 import { getDb } from "@arceus/db";
 import { findCompanyById } from "@arceus/db/src/repos/companies.js";
 import { withKeyedLock } from "./async-queue.js";
+import {
+  buildSitePublicUrl,
+  siteHostLabel,
+  slugifySiteName,
+} from "./site-url.js";
 
 /**
  * Per-tenant preview engine.
@@ -16,8 +21,8 @@ import { withKeyedLock } from "./async-queue.js";
  * from `previewConfig.portMin..portMax`. Two users running their
  * products no longer fight over a single host port — they sit on
  * different ports simultaneously, and the proxy in `preview-proxy.ts`
- * routes `<slug>.<publicDomain>` to the right slot via the slug→port
- * registry populated when each preview starts.
+ * routes `<name>.<company_hash>.<publicDomain>` to the right slot via
+ * the host-label→port registry populated when each preview starts.
  *
  * Public API takes an optional `companyId`. Native multi-tenant: there is no
  * global active-company fallback — when omitted, the operation no-ops / returns
@@ -47,9 +52,8 @@ function resolveCompanyId(explicit: string | null | undefined): string | null {
  *   1. `ARCEUS_PREVIEW_PUBLIC_BASE_URL` if set — fixed URL like
  *      `https://preview.arceus.sh`. Useful when you don't want
  *      per-company subdomains.
- *   2. `<companySlug>.<ARCEUS_PREVIEW_PUBLIC_DOMAIN>` if `publicDomain`
- *      is set and the company exists in canonical. Each company gets
- *      its own vanity subdomain (e.g. `https://quill.arceus.sh`).
+ *   2. `<name>.<company_hash>.<ARCEUS_PREVIEW_PUBLIC_DOMAIN>` if
+ *      `publicDomain` is set (e.g. `https://quill.a1b2c3d4.arceus.sh`).
  *   3. Fallback: `http://<publicHost>:<port>` — legacy local URL,
  *      now using the company's allocated per-tenant port.
  */
@@ -62,12 +66,14 @@ async function buildPreviewPublicBaseUrl(companyId: string, slot: PreviewSlot): 
       const row = await findCompanyById(getDb(), companyId);
       const name = row?.name?.trim();
       if (name) {
-        const slug = slugifyCompanyName(name);
-        // Cache slug → companyId so the proxy can resolve incoming
-        // requests for `<slug>.<domain>` back to a port without a
-        // round-trip to canonical on every request.
-        slugToCompanyId.set(slug, companyId);
-        return `https://${slug}.${previewConfig.publicDomain}`;
+        // Canonical: `<name>.<company_hash>.arceus.sh`
+        const label = siteHostLabel(name, companyId);
+        // Cache label → companyId so the proxy can resolve incoming
+        // requests without a round-trip to canonical on every request.
+        // Also register the legacy short slug for back-compat during rollout.
+        slugToCompanyId.set(label, companyId);
+        slugToCompanyId.set(slugifySiteName(name), companyId);
+        return buildSitePublicUrl(name, companyId, previewConfig.publicDomain);
       }
     } catch {
       // best-effort: fall through to default subdomain on DB error
@@ -75,32 +81,6 @@ async function buildPreviewPublicBaseUrl(companyId: string, slot: PreviewSlot): 
     return `https://preview.${previewConfig.publicDomain}`;
   }
   return `http://${previewConfig.publicHost}:${slot.state.port}`;
-}
-
-/**
- * Slugify a company name to the SHORT brand form for the vanity
- * subdomain.
- *
- * CEO strategies are verbose descriptors — "AquaGrid B2B Marketplace
- * for Water Bottle Brands" is a legitimate strategy_title that we
- * adopt as `companies.name` for display (see applyStrategyTx). But
- * the slug only needs the brand, not the descriptor — visitors don't
- * want `aquagrid-b2b-marketplace-for-water-bottle-brands.arceus.sh`,
- * they want `aquagrid-b2b.arceus.sh`.
- *
- * Heuristic: lowercase, split on non-alphanumeric, take the first 2
- * tokens (covers common shapes like "AquaGrid B2B", "Acme Corp",
- * "Notion Clone", and degenerate single-word cases). Two tokens
- * preserves enough context to disambiguate sibling brands ("Acme
- * Marketplace" vs "Acme Studio") without leaking the whole pitch.
- */
-function slugifyCompanyName(name: string): string {
-  const tokens = name
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-  if (tokens.length === 0) return "preview";
-  return tokens.slice(0, 2).join("-");
 }
 
 type PreviewStatus = "idle" | "starting" | "ready" | "error";
@@ -1033,4 +1013,52 @@ export function getPreviewTargetForSlug(slug: string): { companyId: string; port
   const port = portsByCompany.get(companyId);
   if (port === undefined) return null;
   return { companyId, port };
+}
+
+/**
+ * Serve a static production build directory on the company's allocated
+ * port and register its public `<name>.<hash>.arceus.sh` URL.
+ * Used by production deploy after `npm run build`.
+ */
+export async function publishStaticSite(
+  companyId: string,
+  rootDir: string,
+): Promise<LocalPreviewState> {
+  const id = resolveCompanyId(companyId);
+  if (!id) {
+    return syntheticIdleState();
+  }
+  const slot = getOrCreateSlot(id);
+  return withKeyedLock(previewLockKey(id), async () => {
+    await stopLocalPreviewUnlocked(slot);
+
+    if (!existsSync(join(rootDir, "index.html"))) {
+      slot.state.status = "error";
+      slot.state.lastError = `Static root missing index.html: ${rootDir}`;
+      return slot.state;
+    }
+
+    try {
+      await startStaticPreviewServer(slot, rootDir);
+    } catch (err) {
+      slot.state.status = "error";
+      slot.state.lastError = `Static server failed: ${err instanceof Error ? err.message : String(err)}`;
+      return slot.state;
+    }
+
+    const publicBaseUrl = await buildPreviewPublicBaseUrl(slot.companyId, slot);
+    slot.state.status = "ready";
+    slot.state.url = publicBaseUrl;
+    slot.state.entryUrl = publicBaseUrl;
+    slot.state.validationUrl = publicBaseUrl;
+    slot.state.validationStrategy = "root-url";
+    slot.state.targetKind = "browser";
+    slot.state.runtime = "static";
+    slot.state.framework = "static";
+    slot.state.command = `static-serve ${rootDir}`;
+    slot.state.targetPath = rootDir;
+    slot.state.startedAt = new Date().toISOString();
+    slot.state.lastError = null;
+    return slot.state;
+  });
 }

@@ -1,25 +1,16 @@
 /**
- * Preview proxy — forwards requests for `<slug>.arceus.sh` to the local
- * preview server on `previewConfig.host:previewConfig.port`.
+ * Preview / production-site proxy — forwards requests for
+ * `<name>.<company_hash>.arceus.sh` (and legacy `<slug>.arceus.sh`)
+ * to the local preview/static server on the company's allocated port.
  *
- * Why this exists: the preview server runs on a private port inside
- * the Railway container (default 127.0.0.1:3210). The user's browser
- * cannot reach 127.0.0.1 on Railway, so the URL the backend reports
- * back to the chat is unreachable. Wildcard DNS (*.arceus.sh) plus
- * a Railway custom domain on this API service routes the public
- * subdomain to port 4000 (this Fastify instance); this hook then
- * proxies the request to the preview server's port internally.
+ * Why this exists: the product server runs on a private port inside
+ * the Railway container. The user's browser cannot reach 127.0.0.1 on
+ * Railway, so the URL the backend reports back to the board is
+ * unreachable without this hop. Wildcard DNS (*.arceus.sh) plus a
+ * Railway custom domain on this API service routes the public host to
+ * port 4000; this hook then proxies to the tenant port internally.
  *
- * Reserved subdomains (app, api, www, admin) bypass the proxy and
- * fall through to normal API routing — `app.arceus.sh` keeps going
- * to Vercel via more-specific DNS, but if Railway ever sees a request
- * for one of those, we don't want to silently 502 because the
- * preview server didn't recognize the path.
- *
- * The hook fires on `onRequest` (before any body parsing or auth
- * preHandlers) and uses `reply.hijack()` to take ownership of the
- * raw response, piping the upstream HTTP response through directly.
- * This preserves streaming responses, content-types, headers, etc.
+ * Reserved subdomains (app, api, www, admin) bypass the proxy.
  */
 import http from "node:http";
 import { Socket } from "node:net";
@@ -27,18 +18,10 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { IncomingMessage } from "node:http";
 import { previewConfig } from "../config/index.js";
 import { getPreviewTargetForSlug } from "../workspace/preview.js";
-
-const RESERVED_SUBDOMAINS = new Set(["app", "api", "www", "admin"]);
+import { siteSubdomainOf } from "../workspace/site-url.js";
 
 export function previewSubdomainOf(host: string): string | null {
-  const apex = previewConfig.publicDomain.toLowerCase();
-  const lower = host.toLowerCase().split(":")[0] ?? "";
-  const suffix = `.${apex}`;
-  if (!lower.endsWith(suffix)) return null;
-  const slug = lower.slice(0, lower.length - suffix.length);
-  if (!slug || slug.includes(".")) return null;
-  if (RESERVED_SUBDOMAINS.has(slug)) return null;
-  return slug;
+  return siteSubdomainOf(host, previewConfig.publicDomain);
 }
 
 /**

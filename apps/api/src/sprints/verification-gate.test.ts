@@ -84,6 +84,25 @@ describe("runVerificationGate", () => {
     assert.ok("previewResult" in result, "previewResult key should exist");
   });
 
+  it("final gate skips browser when FLOW_TESTER_URL unset", async () => {
+    const prev = process.env.FLOW_TESTER_URL;
+    delete process.env.FLOW_TESTER_URL;
+    try {
+      const result = await runVerificationGate(productDir, "final");
+      assert.ok(result.browserResult, "browserResult should be present on final");
+      assert.equal(result.browserResult.skipped, true, "browser gate should skip when unconfigured");
+      assert.equal(result.browserResult.ran, false);
+    } finally {
+      if (prev !== undefined) process.env.FLOW_TESTER_URL = prev;
+      else delete process.env.FLOW_TESTER_URL;
+    }
+  });
+
+  it("pre_review gate does not include browserResult", async () => {
+    const result = await runVerificationGate(productDir, "pre_review");
+    assert.equal(result.browserResult, undefined);
+  });
+
   it("non-existent product dir returns passed (skip gate)", async () => {
     const result = await runVerificationGate("/nonexistent/dir/xyz", "final");
     assert.equal(result.passed, true, "should skip gate for missing dir");

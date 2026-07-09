@@ -12,7 +12,8 @@
  * bug_fix, and no agent is woken to act on them mid-sprint.
  *
  * Dormant until `FLOW_TESTER_URL` is set. Fail-open: never blocks or fails
- * sprint finalization.
+ * sprint finalization. (The hard browser gate lives in verification-gate.ts
+ * for the final sprint review phase.)
  */
 import { createWorkflowTask } from "@arceus/task-engine";
 import type { CompanySnapshot, Task } from "@arceus/contracts";
@@ -21,32 +22,13 @@ import { buildDirectiveChecklistForQA } from "../agents/board-directives.js";
 import { upsertTask, appendChatMessage } from "../persistence/mutations/index.js";
 import { emitEmployeeActivity } from "../observability/activity.js";
 import { swallowAndAudit } from "../observability/swallow.js";
+import {
+  callFlowTester,
+  flowTesterConfigured,
+  verdictFailed,
+} from "./flow-tester-client.js";
 
-const FLOW_TESTER_URL = (process.env.FLOW_TESTER_URL ?? "").replace(/\/+$/, "");
-const FLOW_TESTER_TOKEN = process.env.FLOW_TESTER_TOKEN ?? "";
-const FLOW_TEST_TIMEOUT_MS = 240_000;
-
-/** True when the flow-tester service is configured (env present). */
-export function flowTesterConfigured(): boolean {
-  return FLOW_TESTER_URL.length > 0;
-}
-
-interface FlowTestReport {
-  ok?: boolean;
-  is_successful?: boolean | null;
-  verdict?: string;
-  action_trace?: unknown[];
-  final_url?: string;
-}
-
-export function verdictFailed(report: FlowTestReport): boolean {
-  const v = (report.verdict ?? "").trim();
-  if (report.is_successful === false) return true;
-  if (/VERDICT:\s*FAIL/i.test(v)) return true;
-  if (/DESIGN:\s*basic/i.test(v)) return true;
-  if (/ISSUES:/i.test(v) && !/ISSUES:\s*(none|n\/a)/i.test(v)) return true;
-  return false;
-}
+export { flowTesterConfigured, verdictFailed } from "./flow-tester-client.js";
 
 /**
  * Build the CEO-facing suggestion task from a browser review verdict.
@@ -116,7 +98,7 @@ export async function runFlowTestAndReport(args: {
   sprintNumber: number;
   previewUrl: string;
 }): Promise<void> {
-  if (!FLOW_TESTER_URL) return; // not configured — no-op
+  if (!flowTesterConfigured()) return; // not configured — no-op
   const { companyId, sprintId, sprintNumber, previewUrl } = args;
 
   await swallowAndAudit("flow_test.sprint", async () => {
@@ -139,21 +121,15 @@ export async function runFlowTestAndReport(args: {
       "reviewing_product",
     );
 
-    const res = await fetch(`${FLOW_TESTER_URL}/flow-test`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(FLOW_TESTER_TOKEN ? { Authorization: `Bearer ${FLOW_TESTER_TOKEN}` } : {}),
-      },
-      body: JSON.stringify({ url: previewUrl, goal, max_steps: 8 }),
-      signal: AbortSignal.timeout(FLOW_TEST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      emitEmployeeActivity("ceo", "error", `Could not review the live product for sprint ${sprintNumber} (service ${res.status})`, { detail: { sprintId, previewUrl } });
+    let report;
+    try {
+      report = await callFlowTester({ url: previewUrl, goal, maxSteps: 8 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      emitEmployeeActivity("ceo", "error", `Could not review the live product for sprint ${sprintNumber} (${msg})`, { detail: { sprintId, previewUrl } });
       return;
     }
 
-    const report = (await res.json()) as FlowTestReport;
     const verdict = (report.verdict ?? "").trim();
     const failed = verdictFailed(report);
 

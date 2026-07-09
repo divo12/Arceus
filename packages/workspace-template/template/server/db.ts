@@ -1,32 +1,14 @@
 /**
- * Per-tenant persistence — real SQLite via Node's built-in `node:sqlite`
- * (no native module to compile, no external service). The database file
- * lives at `data/app.db` in the workspace and survives restarts. This file
- * runs ONLY on the server (imported by the Hono app), never in the browser.
+ * Per-tenant persistence — SQLite dialect in both environments:
  *
- * Design your data model here: add `CREATE TABLE` statements to `migrate()`
- * and export typed query helpers. Keep ALL SQL in this module so the rest of
- * the server just calls functions.
+ *   Local / preview:  Node built-in `node:sqlite` → file at `data/app.db`
+ *   Production (Vercel): Turso / libSQL when `TURSO_DATABASE_URL` is set
+ *
+ * Keep ALL SQL in this module. Helpers are async so both drivers share one API.
+ * This file runs ONLY on the server (imported by the Hono app), never in the browser.
  */
-import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-
-const dataDir = join(process.cwd(), "data");
-mkdirSync(dataDir, { recursive: true });
-
-const db = new DatabaseSync(join(dataDir, "app.db"));
-
-function migrate(): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS notes (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      text       TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `);
-}
-migrate();
 
 export interface Note {
   id: number;
@@ -34,16 +16,118 @@ export interface Note {
   created_at: string;
 }
 
-export function listNotes(): Note[] {
-  return db.prepare("SELECT id, text, created_at FROM notes ORDER BY id DESC").all() as unknown as Note[];
+type SqlArgs = (string | number | null | bigint)[];
+
+interface DbDriver {
+  exec(sql: string): Promise<void>;
+  all<T>(sql: string, args?: SqlArgs): Promise<T[]>;
+  run(
+    sql: string,
+    args?: SqlArgs,
+  ): Promise<{ lastInsertRowid: number; changes: number }>;
 }
 
-export function createNote(text: string): Note {
+function tursoConfigured(): boolean {
+  const url = process.env.TURSO_DATABASE_URL?.trim();
+  return Boolean(url && (url.startsWith("libsql://") || url.startsWith("https://")));
+}
+
+async function createTursoDriver(): Promise<DbDriver> {
+  const { createClient } = await import("@libsql/client");
+  const client = createClient({
+    url: process.env.TURSO_DATABASE_URL!,
+    authToken: process.env.TURSO_AUTH_TOKEN,
+  });
+  return {
+    async exec(sql) {
+      await client.executeMultiple(sql);
+    },
+    async all<T>(sql, args = []) {
+      const result = await client.execute({ sql, args });
+      return result.rows;
+    },
+    async run(sql, args = []) {
+      const result = await client.execute({ sql, args });
+      return {
+        lastInsertRowid: Number(result.lastInsertRowid ?? 0),
+        changes: result.rowsAffected,
+      };
+    },
+  };
+}
+
+async function createLocalDriver(): Promise<DbDriver> {
+  const { DatabaseSync } = await import("node:sqlite");
+  // Preview/local: workspace data/. On Vercel without Turso (misconfig),
+  // fall back to /tmp so the function can at least start.
+  const dataDir = process.env.VERCEL
+    ? join("/tmp", "arceus-data")
+    : join(process.cwd(), "data");
+  mkdirSync(dataDir, { recursive: true });
+  const db = new DatabaseSync(join(dataDir, "app.db"));
+  return {
+    async exec(sql) {
+      db.exec(sql);
+    },
+    async all<T>(sql, args = []) {
+      return db.prepare(sql).all(...args) as unknown as T[];
+    },
+    async run(sql, args = []) {
+      const result = db.prepare(sql).run(...args);
+      return {
+        lastInsertRowid: Number(result.lastInsertRowid),
+        changes: Number(result.changes),
+      };
+    },
+  };
+}
+
+let driverPromise: Promise<DbDriver> | null = null;
+
+function getDriver(): Promise<DbDriver> {
+  if (!driverPromise) {
+    driverPromise = tursoConfigured() ? createTursoDriver() : createLocalDriver();
+  }
+  return driverPromise;
+}
+
+async function migrate(): Promise<void> {
+  const db = await getDriver();
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      text       TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+}
+
+let migrated = false;
+async function ensureMigrated(): Promise<DbDriver> {
+  const db = await getDriver();
+  if (!migrated) {
+    await migrate();
+    migrated = true;
+  }
+  return db;
+}
+
+export async function listNotes(): Promise<Note[]> {
+  const db = await ensureMigrated();
+  return db.all<Note>("SELECT id, text, created_at FROM notes ORDER BY id DESC");
+}
+
+export async function createNote(text: string): Promise<Note> {
+  const db = await ensureMigrated();
   const created_at = new Date().toISOString();
-  const result = db.prepare("INSERT INTO notes (text, created_at) VALUES (?, ?)").run(text, created_at);
-  return { id: Number(result.lastInsertRowid), text, created_at };
+  const result = await db.run("INSERT INTO notes (text, created_at) VALUES (?, ?)", [
+    text,
+    created_at,
+  ]);
+  return { id: result.lastInsertRowid, text, created_at };
 }
 
-export function deleteNote(id: number): void {
-  db.prepare("DELETE FROM notes WHERE id = ?").run(id);
+export async function deleteNote(id: number): Promise<void> {
+  const db = await ensureMigrated();
+  await db.run("DELETE FROM notes WHERE id = ?", [id]);
 }

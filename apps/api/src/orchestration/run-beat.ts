@@ -281,7 +281,10 @@ export async function runBeat(input: {
         `pick up exactly where your trail ends. Current state follows.\n\n${stateText}`
       : stateText;
     const soul = ROLE_SOULS[input.role].systemPrompt;
-    const deployment = ensureDeployment("workerDeployment");
+    // All employee beats use the CEO-class deployment (gpt-5.2). Craft
+    // quality for websites depends on model power across designer, developer,
+    // tester, and planning roles — not only the CEO chat path.
+    const deployment = ensureDeployment("ceoDeployment");
 
     const opencode = await getOpencode();
     const completionPromise = registerPromptCompletion(sessionId, HARD_CAP_MS);

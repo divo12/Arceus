@@ -11,6 +11,7 @@ import { getLocalPreviewState, startLocalPreview } from "../workspace/preview.js
 import { workspaceManager } from "../workspace/manager.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { runFlowTestAndReport } from "../orchestration/flow-test.js";
+import { deployProduction } from "../workspace/production-deploy.js";
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
 import { swallowAndAudit } from "../observability/swallow.js";
 import {
@@ -231,8 +232,22 @@ export async function finalizeSprintCompletion(
     }
   }
 
+  // Production deploy — build + publish to <name>.<company_hash>.arceus.sh
+  // so the board gets a real customer URL. Awaited so the browser flow-test
+  // hits the live site; deploy failures are audited and do not abort finalize.
+  await swallowAndAudit("production_deploy.sprint", async () => {
+    const deployed = await deployProduction({
+      companyId,
+      sprintNumber: sprint.number,
+      announce: true,
+    });
+    if (deployed.ok && deployed.url) {
+      previewUrlForTest = deployed.url;
+    }
+  }, { companyId, detail: { sprintId } });
+
   // Real browser flow-test of the just-finalized product (services/flow-tester).
-  // Fire-and-forget: an LLM agent drives the live preview, judges whether the
+  // Fire-and-forget: an LLM agent drives the live site, judges whether the
   // core flow works + whether the UI is god-tier, and spawns a fix task on
   // failure. Dormant unless FLOW_TESTER_URL is configured; never blocks finalize.
   if (previewUrlForTest) {

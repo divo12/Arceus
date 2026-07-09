@@ -4,7 +4,11 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { workspaceManager } from "../../workspace/manager.js";
-import { probePreviewHealth, startLocalPreview } from "../../workspace/preview.js";
+import {
+  getLocalPreviewState,
+  probePreviewHealth,
+  startLocalPreview,
+} from "../../workspace/preview.js";
 import { ensureDepsInstalled } from "../../workspace/ensure-deps.js";
 import {
   getHealth,
@@ -12,6 +16,15 @@ import {
   recordTypecheck,
 } from "../../workspace/build-health.js";
 import { applyTodoWrite } from "../../workspace/todo-write.js";
+import {
+  callFlowTester,
+  flowTesterConfigured,
+  verdictFailed,
+} from "../../orchestration/flow-tester-client.js";
+import {
+  deployProduction,
+  getProductionUrl,
+} from "../../workspace/production-deploy.js";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -91,6 +104,17 @@ const verifyBaselineBody = z.object({
   skipPreview: z.boolean().optional(),
   timeoutMs: z.number().int().min(1000).max(120_000).optional(),
 }).optional();
+
+const flowTestBody = z.object({
+  url: z.string().url().optional(),
+  goal: z.string().min(1).max(4000).optional(),
+  maxSteps: z.number().int().min(5).max(10).optional(),
+  taskId: z.string().min(1).optional(),
+});
+
+const deployProductionBody = z.object({
+  announce: z.boolean().optional(),
+});
 
 const parseTscErrors = (output: string): string[] => {
   const re = /^(.+?\(\d+,\d+\):\s+error\s+TS\d+:.+)$/gm;
@@ -337,6 +361,130 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       missing.length === 0 ? "All expected exports found." : `Missing ${missing.length} export(s).`,
       { modulePath: body.modulePath, found, missing, ok: missing.length === 0 },
     ));
+  });
+
+  // POST /workspaces/deploy-production — build + publish to <name>.<hash>.arceus.sh
+  app.post(`${WORKSPACE_BASE}/deploy-production`, async (req, reply) => {
+    const body = parseOrFail(deployProductionBody, req.body ?? {}, reply);
+    if (!body) return reply;
+
+    const companyId = req.mcp!.companyId;
+    const result = await deployProduction({
+      companyId,
+      announce: body.announce ?? true,
+    });
+
+    if (!result.ok) {
+      return reply.code(422).send(
+        failure(
+          result.error ?? "Production deploy failed.",
+          "baseline_failed",
+          "never",
+          "build_passes",
+        ),
+      );
+    }
+
+    return cacheAndSend(
+      req,
+      reply,
+      200,
+      success(`Production site live at ${result.url}.`, {
+        url: result.url,
+        hostLabel: result.hostLabel,
+        mode: result.mode,
+        productionUrl: result.url,
+        deploymentUrl: result.deploymentUrl,
+      }),
+    );
+  });
+
+  // GET /workspaces/production-url — board-facing live site URL
+  app.get(`${WORKSPACE_BASE}/production-url`, async (req, reply) => {
+    const companyId = req.mcp!.companyId;
+    const url = await getProductionUrl(companyId);
+    const preview = getLocalPreviewState(companyId);
+    const live = preview.url ?? preview.entryUrl ?? url;
+    return cacheAndSend(
+      req,
+      reply,
+      200,
+      success(live ? `Production URL: ${live}` : "No production URL yet.", {
+        productionUrl: live,
+        previewStatus: preview.status,
+      }),
+    );
+  });
+
+  // POST /workspaces/flow-test — real-browser QA via services/flow-tester
+  app.post(`${WORKSPACE_BASE}/flow-test`, async (req, reply) => {
+    const body = parseOrFail(flowTestBody, req.body ?? {}, reply);
+    if (!body) return reply;
+
+    if (!flowTesterConfigured()) {
+      return reply.code(503).send(
+        failure(
+          "Browser flow-tester is not configured (FLOW_TESTER_URL).",
+          "upstream",
+          "never",
+          "workspace_available",
+        ),
+      );
+    }
+
+    let url = body.url ?? null;
+    if (!url && body.taskId) {
+      const task = await tasksRepo.findByIdHydrated(getDb(), body.taskId);
+      if (!task) {
+        return reply.code(404).send(
+          failure(`Task ${body.taskId} not found.`, "not_found", "never", "resource_created"),
+        );
+      }
+      url = task.localPreviewUrl ?? null;
+    }
+    if (!url) {
+      const preview = getLocalPreviewState(req.mcp!.companyId);
+      url = preview.validationUrl ?? preview.entryUrl ?? preview.url ?? null;
+    }
+    if (!url) {
+      return reply.code(422).send(
+        failure(
+          "No preview URL available. Pass url, or ensure preview is running / task has localPreviewUrl.",
+          "validation",
+          "never",
+          "payload_fixed",
+        ),
+      );
+    }
+
+    try {
+      const report = await callFlowTester({
+        url,
+        goal: body.goal,
+        maxSteps: body.maxSteps ?? 8,
+      });
+      const failed = verdictFailed(report);
+      return cacheAndSend(
+        req,
+        reply,
+        200,
+        success(failed ? "Browser flow-test FAILED." : "Browser flow-test PASSED.", {
+          url,
+          passed: !failed,
+          ok: report.ok ?? null,
+          is_successful: report.is_successful ?? null,
+          verdict: report.verdict ?? null,
+          final_url: report.final_url ?? null,
+          title: report.title ?? null,
+          // Omit screenshot_b64 from MCP responses — too large for agent context.
+        }),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "flow-test failed";
+      return reply.code(503).send(
+        failure(message, "upstream", "safe", "workspace_available"),
+      );
+    }
   });
 
   // POST /workspaces/todo-write — dream-style markdown checklist (Chorus resume protocol)

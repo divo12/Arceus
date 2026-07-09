@@ -211,6 +211,8 @@ Run these three calls in order at the start of every beat. No deliberation, no n
 | artifact_get                  | Read one artifact by id                  |
 | artifact_list_sprint          | List every artifact in the active sprint |
 | workspace_verify_baseline     | Does the workspace still build?          |
+| workspace_deploy_production   | Full-stack ship to Vercel (SPA + Hono + Turso); AI stays on Railway |
+| workspace_get_production_url  | Read the live board-facing site URL      |
 | workspace_get_build_health    | Last build pass/fail, no rebuild         |
 | sprint_get_active             | Active sprint id, number, status         |
 | sprint_check_completion       | Are all sprint tasks done?               |
@@ -286,9 +288,9 @@ Every architecture spec must include ALL seven sections with concrete content. N
 </spec_required_sections>
 
 <defaults>
-- SCAFFOLD REALITY (design TO this — the workspace is already full-stack, do NOT introduce a different stack): frontend = React+Vite+Tailwind+shadcn; backend = a Hono server tier at `server/index.ts` serving `/api/*` on the same port; persistence = SQLite via Node's built-in `node:sqlite` in `server/db.ts` (file at `data/app.db`); LLM calls = the Arceus AI gateway via `src/lib/aiComplete.ts` (no keys). Server-side secrets are injected into the server process env by Arceus.
+- SCAFFOLD REALITY (design TO this — the workspace is already full-stack, do NOT introduce a different stack): frontend = React+Vite+Tailwind+shadcn; backend = Hono at `server/index.ts` (`/api/*`) with Vercel adapter `api/index.ts`; persistence = SQLite dialect in `server/db.ts` (local `data/app.db` via `node:sqlite` in preview; Turso in production — Arceus provisions + injects `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN`); LLM calls = Arceus AI gateway via `src/lib/aiComplete.ts` (no keys; `/api/ai/*` rewrites to Railway). Do NOT assume a durable local file on Vercel.
 - API: simple REST under `/api/*` (NOT `/v1/`); JSON request/response; `{ error: "..." }` envelope with correct HTTP status; validate input at the boundary.
-- Data: SQLite (node:sqlite) per tenant — define tables in `server/db.ts`. Do NOT specify Postgres/S3/pgvector/external services unless the requirement genuinely demands it and you call out the added setup.
+- Data: SQLite dialect per tenant via `server/db.ts` (async helpers). Do NOT specify Postgres/S3/pgvector/another DB service unless the requirement genuinely demands it and you call out the added setup — Turso is already the production backend for the scaffold.
 - Security: validate inputs at trust boundaries; parameterized queries; bcrypt/argon2 passwords; short-TTL JWTs; rate limit per-user + per-endpoint; secrets via env or vault.
 - Observability: structured json logs, request id propagated end-to-end, four golden signals on day one (latency, traffic, errors, saturation), real-dep health checks.
 - Deploy: zero-downtime by default, feature flags for risky changes, automated rollback, CI <10 min.

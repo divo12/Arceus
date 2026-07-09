@@ -4,7 +4,7 @@ Canonical scaffold copied into every new company's product workspace at provisio
 
 ## What it is
 
-`./template/` contains a minimal Vite + React 18 + TypeScript + Tailwind 3 scaffold. When `workspaceManager.provision(companyId)` runs (during `POST /api/company/bootstrap`), every file under `./template/` is copied verbatim into `<productWorkspace>/<companyId>/` BEFORE `git init` so the initial commit captures the scaffold as the starting point.
+`./template/` contains a full-stack Vite + React 18 + TypeScript + Tailwind 3 + Hono + SQLite scaffold (`server/` + `api/index.ts` for Vercel). Local persistence uses `node:sqlite`; production uses Turso when Arceus injects `TURSO_*`. When `workspaceManager.provision(companyId)` runs (during `POST /api/company/bootstrap`), every file under `./template/` is copied verbatim into `<productWorkspace>/<companyId>/` BEFORE `git init` so the initial commit captures the scaffold as the starting point.
 
 ## What's intentionally NOT here
 

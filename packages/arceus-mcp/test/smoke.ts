@@ -57,7 +57,10 @@ const main = async (): Promise<void> => {
 
   // Phase 3: tools make real HTTP calls — with no server running this returns a network error.
   // The key assertion is that the response is NOT a stub envelope.
-  const result = await client.callTool({ name: "task_complete", arguments: { taskId: "t_smoke" } }).catch((e) => e as Error);
+  const result = await client.callTool({
+    name: "task_complete",
+    arguments: { taskId: "t_smoke", evidenceArtifactIds: ["artifact_smoke"] },
+  }).catch((e) => e as Error);
   const isError = result instanceof Error;
   const textContent = !isError && Array.isArray(result.content)
     ? result.content.find((c) => (c as { type?: string }).type === "text")

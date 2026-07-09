@@ -52,6 +52,14 @@ export async function registerCors(app: FastifyInstance): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean);
 
+  // Product sites on Vercel (`https://<name>.<hash>.arceus.sh`) call the
+  // AI gateway on Railway. Allow any https origin under the preview apex
+  // in addition to the explicit allow-list.
+  const productApex = (process.env.ARCEUS_PREVIEW_PUBLIC_DOMAIN ?? "")
+    .toLowerCase()
+    .replace(/^\.+/, "")
+    .replace(/\/+$/, "");
+
   await app.register(cors, {
     origin: (origin, cb) => {
       // No origin (curl, server-to-server, native Node clients) — allow.
@@ -64,6 +72,17 @@ export async function registerCors(app: FastifyInstance): Promise<void> {
       if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
         cb(null, true);
         return;
+      }
+      if (productApex) {
+        try {
+          const u = new URL(origin);
+          if (u.protocol === "https:" && (u.hostname === productApex || u.hostname.endsWith(`.${productApex}`))) {
+            cb(null, true);
+            return;
+          }
+        } catch {
+          // fall through
+        }
       }
       cb(new Error(`CORS: origin '${origin}' not in ARCEUS_ALLOWED_ORIGINS`), false);
     },

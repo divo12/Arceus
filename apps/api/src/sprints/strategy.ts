@@ -169,16 +169,12 @@ export async function applyStrategyTx(
 
   // Replace the placeholder company name (signup defaulted it to the
   // user's displayName / email local-part — see auth.routes.ts) with
-  // the CEO-chosen strategy title. The preview proxy's vanity subdomain
-  // slug derives from `companies.name` via slugifyCompanyName(); without
-  // this overwrite, every tenant's preview URL would be
-  // `<userDisplayName>.arceus.sh` regardless of what the board picked
-  // in CEO chat. The strategy title IS the chosen company identity at
-  // this point in the funnel, so adopt it as the canonical name.
-  // (The OLD displayName-derived slug stays cached in the in-memory
-  // slugToCompanyId map but is harmless — the new buildPreviewPublic-
-  // BaseUrl call on the next workspace_start_preview registers the
-  // fresh slug, and the stale entry just sits unused until restart.)
+  // the CEO-chosen strategy title. Public site URLs are
+  // `<name>.<company_hash>.arceus.sh` where name derives from
+  // `companies.name` — without this overwrite every tenant would be
+  // `<userDisplayName>.<hash>.arceus.sh` regardless of what the board
+  // picked. The strategy title IS the chosen company identity at this
+  // point in the funnel, so adopt it as the canonical name.
   const updatedCompany: Company = {
     ...currentCompany,
     status: "active",

@@ -51,6 +51,7 @@ const ERROR_CAUSES = [
   // Spec 27 — workspace/execution causes
   "preview_unavailable",
   "baseline_failed",
+  "missing_evidence",
   "execution_locked",
   "invalid_next_action",
   "tool_retired",
@@ -96,7 +97,8 @@ export const causeToStatus: Record<ErrorCause, number> = {
   meeting_not_open: 409,
   persistence_failed: 500,
   preview_unavailable: 503,
-  baseline_failed: 200,
+  baseline_failed: 422,
+  missing_evidence: 422,
   execution_locked: 409,
   invalid_next_action: 400,
   tool_retired: 410,

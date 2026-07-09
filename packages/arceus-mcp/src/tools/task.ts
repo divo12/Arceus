@@ -15,14 +15,25 @@ export const registerTaskTools = (
   server.registerTool(
     "task_complete",
     {
-      description: "Mark a task completed. Triggers board notifications and unblocks dependents.",
-      inputSchema: { taskId: z.string() },
+      description:
+        "Mark a task completed. Requires evidenceArtifactIds; server re-checks typecheck/preview for code tasks.",
+      inputSchema: {
+        taskId: z.string(),
+        evidenceArtifactIds: z
+          .array(z.string())
+          .min(1)
+          .max(20)
+          .describe("Artifact ids proving the work (code/output/qa_report). Required."),
+        summary: z.string().max(2000).optional(),
+      },
     },
-    async ({ taskId }) => {
+    async ({ taskId, evidenceArtifactIds, summary }) => {
+      const body = { evidenceArtifactIds, summary };
       const res = await client.request<ToolResult>({
         method: "POST",
         path: `${TASKS}/${taskId}/completion`,
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_complete", { taskId }),
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_complete", { taskId, evidenceArtifactIds }),
       });
       return toMcpContent(res.data);
     }
