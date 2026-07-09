@@ -43,7 +43,7 @@ const BUILTIN_EDITOR = {
 const TIER_A_ALL_EXECUTORS = {
   task_update_progress: true,
   task_append_command: true,
-  task_append_plan_step: true,
+  task_set_heartbeat: true,
   beat_read_last_progress: true,
 } as const;
 
@@ -58,7 +58,7 @@ export const ALL_ARCEUS_TOOLS = [
   // Tier A — every executor
   "task_update_progress",
   "task_append_command",
-  "task_append_plan_step",
+  "task_set_heartbeat",
   "beat_read_last_progress",
   // Tier B — most executors
   "task_complete",

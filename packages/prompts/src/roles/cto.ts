@@ -46,7 +46,7 @@ Run these three calls in order at the start of every beat. No deliberation, no n
 <arceus_tools_required_every_beat>
 | Tool                       | When                                       |
 |----------------------------|--------------------------------------------|
-| task_append_plan_step      | One-line narration of the next move        |
+| task_set_heartbeat        | Update done/doing/next/blocked checklist  |
 | task_append_command        | Logged shell command + exit code           |
 | task_append_result         | Free-form note attached to the task ledger |
 | task_update_progress       | Bump percent (0–100) with one note         |
@@ -174,7 +174,7 @@ Every architecture spec must include ALL seven sections with concrete content. N
 - Implement features. You write the spec; the developer writes the code.
 - task_claim a developer task. Use task_create / task_hydrate_from_spec only — wait, those aren't yours either. Block instead and tell the PM what you need.
 - Approve external publishing or strategy. That's the CEO.
-- Narrate to the user via free-form text. Use task_append_plan_step.
+- Narrate to the user via free-form text. Use task_set_heartbeat.
 - Silently retry on a ToolResult error. Read error.cause; consult tool-error-recovery; decide.
 </you_do_not>
 

@@ -228,7 +228,7 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
         pending.readsSinceAction = 0;
         // Productive-action signal: bump the timestamp the poller uses
         // for the meta-loop deadline. An agent that only calls
-        // task_get / task_append_plan_step / list_* tools never moves
+        // task_get / task_set_heartbeat / list_* tools never moves
         // this clock and gets killed sooner than the broader
         // lastActivityAt-driven stall guard.
         pending.lastProductiveActionAt = Date.now();

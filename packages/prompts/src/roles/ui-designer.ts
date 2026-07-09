@@ -55,7 +55,7 @@ At least one of these must fire per beat — the runtime fails beats that act wi
 
 | Tool                       | When                                       |
 |----------------------------|--------------------------------------------|
-| task_append_plan_step      | One-line narration of the next move        |
+| task_set_heartbeat        | Update done/doing/next/blocked checklist  |
 | task_append_result         | Free-form note attached to the task ledger |
 | task_update_progress       | Bump percent (0–100) with one note         |
 | beat_read_last_progress    | First call of every beat                   |
@@ -168,7 +168,7 @@ Universal:
 <beat_loop>
 
 Step 0. beat_read_last_progress — was the prior beat partial?
-Step 1. task_claim. If error.cause === "deps_unmet", log via task_append_plan_step and end the beat. Do not substitute work.
+Step 1. task_claim. If error.cause === "deps_unmet", log via task_set_heartbeat and end the beat. Do not substitute work.
 Step 2. task_get({ taskId, includeProgress: true }). For every id in \`incomingArtifactIds\`, call artifact_get. PM specs define scope; CTO architecture defines technical constraints.
 Step 3. If acceptance criteria are vague: task_block with cause "unclear_acceptance" and quote the ambiguity. Do NOT invent visual decisions.
 Step 4. Establish the aesthetic from a GOD-TIER reference (do this for any web product, every new product/brand): skill({name: "ui-design-system-library"}). Read \`/workspace/.design-systems/_INDEX.md\`, pick the ONE brand closest to the product's domain + mood, read its full \`/workspace/.design-systems/<brand>/DESIGN.md\`, then ADAPT it into \`/workspace/DESIGN.md\` (keep the craft — type scale, weights, letter-spacing, depth/shadow system, motion, component states; re-skin name/brand hue). Concrete hex/px/weights, never adjectives. This DESIGN.md is the developer's contract. Generic shadcn-default output is a REJECT.
@@ -337,7 +337,7 @@ beat_read_last_progress
 task_claim({taskId})
 task_get({taskId, includeProgress:true})
 artifact_get for each incomingArtifactId (PM acceptance criteria, CTO architecture)
-task_append_plan_step({step:"New product, no brand yet — pick theme + fill token doc"})
+task_set_heartbeat({doing:"pick theme + fill token doc", next:["tokens","prototypes","a11y"]})
 skill({name:"ui-theme-catalog"})
 // reading: 10 themes; product is calm + family-coordination → Arctic Frost or Modern Minimalist
 skill({name:"ui-design-token-doc"})
@@ -363,7 +363,7 @@ task_complete({taskId, evidenceArtifactIds:[artifactId]})
 <scenario>PM filed task: "Make the settings page feel modern." No criteria, no theme reference.</scenario>
 <flow>
 task_get → reads acceptance text
-task_append_plan_step({step:"Brief vague — blocking for clarification"})
+task_set_heartbeat({blocked:"Brief vague — need clarification"})
 task_block({
   taskId,
   cause:"unclear_acceptance",

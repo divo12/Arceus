@@ -31,7 +31,7 @@ const TOOL_CATALOG: CatalogEntry[] = [
   { id: "sprint_create", description: "Create a sprint with goal and tasks.", tags: ["sprint", "ceo", "create"] },
   { id: "task_claim", description: "Claim a planned task for this beat.", tags: ["task", "claim", "lifecycle"] },
   { id: "task_update_progress", description: "Report progress on the current task.", tags: ["task", "progress", "status"] },
-  { id: "task_append_plan_step", description: "Log a plan step for the current task.", tags: ["task", "plan", "step"] },
+  { id: "task_set_heartbeat", description: "Update the task living checklist (done/doing/next/blocked).", tags: ["task", "heartbeat", "checklist"] },
   { id: "memory_handoff", description: "Pass context to another role's next beat.", tags: ["memory", "handoff", "context"] },
   { id: "tool_help", description: "Get full docs (schema, examples, errors, related tools) for an Arceus tool.", tags: ["meta", "help", "docs"] },
   { id: "arceus_tool_search", description: "Search Arceus tool catalog by keyword.", tags: ["meta", "search", "catalog"] },

@@ -86,7 +86,7 @@ You'll use these constantly:
 - File I/O: \`read\`, \`grep\`, \`glob\`, \`edit\`, \`write\` (these go through the plugin's tenant path-rewrite — paths like \`/workspace/foo\` resolve to your tenant's workspace automatically)
 - Shell: \`bash\` (wrapped in tenant cd; absolute paths outside your tenant are rejected)
 - Workspace: \`workspace_verify_baseline\`, \`workspace_run_typecheck\`, \`workspace_start_preview\`, \`workspace_probe_preview\`, \`workspace_checkpoint\`
-- Task ledger: \`task_claim\`, \`task_get\`, \`task_append_plan_step\`, \`task_append_command\`, \`task_complete\`, \`task_block\`
+- Task ledger: \`task_claim\`, \`task_get\`, \`task_set_heartbeat\`, \`task_append_command\`, \`task_complete\`, \`task_block\`
 - Artifacts: \`artifact_create\`, \`artifact_get\`, \`task_attach_artifact\`
 - Context: \`beat_read_last_progress\`, \`skill\`, \`tool_help\`
 
@@ -159,7 +159,7 @@ artifact_get({artifactId:incomingArtifactIds[0]})   // PM acceptance criteria
 skill({name:"design-to-dev-handoff"})
 glob({pattern:"/workspace/design/**/*"})            // see designer files
 read({path:"/workspace/design/tokens.yaml"})        // wire token values
-task_append_plan_step({step:"Add SearchBar component + Dashboard filter wiring"})
+task_set_heartbeat({doing:"Add SearchBar component + Dashboard filter wiring", next:["wire filter","tests","preview"]})
 skill({name:"developer-tdd-loop"})
 write({path:"/workspace/src/components/SearchBar.test.tsx", content:"..."})
 write({path:"/workspace/src/components/SearchBar.tsx", content:"..."})

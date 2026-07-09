@@ -227,21 +227,25 @@ export const registerTaskTools = (
   );
 
   server.registerTool(
-    "task_append_plan_step",
+    "task_set_heartbeat",
     {
       description:
-        "Log a plan step for the current task. Call before each major action so the system tracks your approach.",
+        "Update the task's living checklist (done/doing/next/blocked). Call as you progress so the next beat resumes cleanly.",
       inputSchema: {
         taskId: z.string(),
-        step: z.string().max(1000).describe("Description of the plan step (e.g. 'write LoginForm.tsx')"),
+        done: z.array(z.string().max(1000)).max(20).optional().describe("Steps finished this beat (appended to log)"),
+        doing: z.string().max(1000).nullable().optional().describe("What you are working on right now"),
+        next: z.array(z.string().max(1000)).max(20).optional().describe("Upcoming steps (replaces prior next)"),
+        blocked: z.string().max(1000).nullable().optional().describe("Blocker reason, or null to clear"),
       },
     },
-    async ({ taskId, step }) => {
+    async ({ taskId, done, doing, next, blocked }) => {
+      const body = { done, doing, next, blocked };
       const res = await client.request<ToolResult>({
         method: "POST",
-        path: `${TASKS}/${taskId}/plan-steps`,
-        body: { step },
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_append_plan_step", { taskId, step }),
+        path: `${TASKS}/${taskId}/heartbeat`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_set_heartbeat", { taskId, ...body }),
       });
       return toMcpContent(res.data);
     }
