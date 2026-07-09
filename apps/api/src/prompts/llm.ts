@@ -314,7 +314,7 @@ const WRAP_UP_MIN_CAP_MS = 8 * 60 * 1000;
 const WRAP_UP_TEXT =
   "[system] About 2 minutes remain in this beat before the hard cap. Your in-progress step was paused to deliver this — your context and all landed work are intact. " +
   "Do NOT start anything new and do NOT re-read files. Finish or commit the smallest shippable piece, then call task_complete with evidence (or task_block with the reason), " +
-  "and call task_set_heartbeat (done/doing/next/blocked) saying exactly where you stopped so the next beat continues cleanly.";
+  "and call todo_write to check off finished steps (and add any remaining unchecked steps) in TODO.md so the next beat continues cleanly.";
 
 /**
  * Sessions with a stall-nudge in flight. run-beat consults this so the

@@ -227,31 +227,6 @@ export const registerTaskTools = (
   );
 
   server.registerTool(
-    "task_set_heartbeat",
-    {
-      description:
-        "Update the task's living checklist (done/doing/next/blocked). Call as you progress so the next beat resumes cleanly.",
-      inputSchema: {
-        taskId: z.string(),
-        done: z.array(z.string().max(1000)).max(20).optional().describe("Steps finished this beat (appended to log)"),
-        doing: z.string().max(1000).nullable().optional().describe("What you are working on right now"),
-        next: z.array(z.string().max(1000)).max(20).optional().describe("Upcoming steps (replaces prior next)"),
-        blocked: z.string().max(1000).nullable().optional().describe("Blocker reason, or null to clear"),
-      },
-    },
-    async ({ taskId, done, doing, next, blocked }) => {
-      const body = { done, doing, next, blocked };
-      const res = await client.request<ToolResult>({
-        method: "POST",
-        path: `${TASKS}/${taskId}/heartbeat`,
-        body,
-        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "task_set_heartbeat", { taskId, ...body }),
-      });
-      return toMcpContent(res.data);
-    }
-  );
-
-  server.registerTool(
     "task_append_command",
     {
       description:

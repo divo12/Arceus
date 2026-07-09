@@ -624,7 +624,7 @@ export default async function internalMcpTasksRoutes(app: FastifyInstance): Prom
     return cacheAndSend(req, reply, 200, success(
       `Task ${taskId} claimed by ${mcp.role ?? "agent"}.`,
       { taskId, status: "in_progress", claimedBy: mcp.role, reason: body.reason },
-      { nextActions: ["arceus_task_set_heartbeat", "arceus_task_update_progress"] }
+      { nextActions: ["arceus_todo_write", "arceus_task_update_progress"] }
     ));
   });
 

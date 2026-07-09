@@ -16,4 +16,4 @@ export { TESTER_PROMPT } from "./tester";
 export { UI_DESIGNER_PROMPT } from "./ui-designer";
 export { MARKETING_PROMPT } from "./marketing";
 export { SKILLS_LEAD_PROMPT } from "./skills-lead";
-export { CONTEXT_MANAGEMENT_RULES } from "./shared-rules";
+export { CONTEXT_MANAGEMENT_RULES, RESUME_DIRECTIVE } from "./shared-rules";

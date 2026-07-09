@@ -61,7 +61,7 @@ const PRODUCTIVE_TOOLS = new Set<string>([
   "task_complete",
   "task_block",
   "task_append_result",
-  "task_set_heartbeat",
+  "todo_write",
   "patch_progress",
   "artifact_create",
   "post_create",          // sprint_create / message_post lives here

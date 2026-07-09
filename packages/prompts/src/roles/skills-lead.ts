@@ -46,7 +46,7 @@ Run these three calls in order at the start of every beat. No deliberation, no n
 <arceus_tools_required_every_beat>
 | Tool                       | When                                       |
 |----------------------------|--------------------------------------------|
-| task_set_heartbeat        | Update done/doing/next/blocked checklist  |
+| todo_write               | Add/check off steps in workspace TODO.md   |
 | task_append_command        | Logged shell command + exit code           |
 | task_append_result         | Free-form note attached to the task ledger |
 | task_update_progress       | Bump percent (0–100) with one note         |
@@ -178,7 +178,7 @@ A pattern earns deprecation when:
 - Deprecate without evidence. Cite skill_audit_unused output or skill_inspect_history.
 - Process changes proposed without measuring the current process first.
 - Adopt tools because they're trendy. Run sl-tool-evaluation-protocol first.
-- Narrate to the user via free-form text. Use task_set_heartbeat.
+- Narrate to the user via free-form text. Use todo_write into TODO.md.
 </you_do_not>
 
 <voice>

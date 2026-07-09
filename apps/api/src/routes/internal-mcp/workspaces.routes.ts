@@ -11,6 +11,7 @@ import {
   recordPreview,
   recordTypecheck,
 } from "../../workspace/build-health.js";
+import { applyTodoWrite } from "../../workspace/todo-write.js";
 import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -78,6 +79,12 @@ const previewProbeBody = z.object({
 const checkExportsBody = z.object({
   modulePath: z.string().min(1),
   expectedExports: z.array(z.string().min(1)).min(1).max(50),
+});
+
+const todoWriteBody = z.object({
+  item: z.string().min(1).max(1000),
+  checked: z.boolean().optional().default(false),
+  path: z.string().min(1).max(200).optional().default("TODO.md"),
 });
 
 const verifyBaselineBody = z.object({
@@ -330,6 +337,45 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
       missing.length === 0 ? "All expected exports found." : `Missing ${missing.length} export(s).`,
       { modulePath: body.modulePath, found, missing, ok: missing.length === 0 },
     ));
+  });
+
+  // POST /workspaces/todo-write — dream-style markdown checklist (Chorus resume protocol)
+  app.post(`${WORKSPACE_BASE}/todo-write`, async (req, reply) => {
+    const body = parseOrFail(todoWriteBody, req.body ?? {}, reply);
+    if (!body) return reply;
+
+    const companyId = req.mcp?.companyId;
+    if (!companyId) {
+      return reply.code(409).send(
+        failure(
+          "Company workspace not provisioned yet.",
+          "conflict",
+          "never",
+          "company_bootstrapped",
+        ),
+      );
+    }
+
+    const workspaceRoot = workspaceManager.getLocalPath(companyId);
+    try {
+      const result = await applyTodoWrite(workspaceRoot, body);
+      return cacheAndSend(
+        req,
+        reply,
+        200,
+        success(result.content, {
+          changed: result.changed,
+          summary: result.summary,
+          path: result.relativePath,
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "todo_write failed";
+      const cause: ErrorCause = message.includes("escapes") ? "validation" : "upstream";
+      return reply.code(cause === "validation" ? 422 : 503).send(
+        failure(message, cause, "never", cause === "validation" ? "payload_fixed" : "workspace_available"),
+      );
+    }
   });
 
   // POST /workspaces/verify-baseline — composite typecheck + preview probe

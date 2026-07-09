@@ -50,13 +50,12 @@ const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9:_.\-]{8,128}$/;
  * Names match the tool keys produced by routeToTool() in
  * route-to-tool.ts.
  *
- * Includes task_set_heartbeat and task_update_progress (formerly
- * excluded as "narration only"). In practice these ARE the model
- * actively committing plan state mid-beat — and excluding them was
- * killing legitimate developer/designer beats via the
- * no_productive_action watchdog (now disabled in llm.ts) after they
- * had only emitted plan-step + progress updates. Treat any MCP write
- * as a productive action.
+ * Includes todo_write and task_update_progress (formerly excluded as
+ * "narration only"). In practice these ARE the model actively committing
+ * plan state mid-beat — and excluding them was killing legitimate
+ * developer/designer beats via the no_productive_action watchdog (now
+ * disabled in llm.ts) after they had only emitted checklist + progress
+ * updates. Treat any MCP write as a productive action.
  */
 const ACTION_TOOLS_RESETTING_READ_LOOP = new Set<string>([
   "task_claim",
@@ -64,7 +63,7 @@ const ACTION_TOOLS_RESETTING_READ_LOOP = new Set<string>([
   "task_block",
   "task_report_bug",
   "task_verify",
-  "task_set_heartbeat",
+  "todo_write",
   "task_update_progress",
   "artifact_create",
   "artifact_persist",
@@ -228,7 +227,7 @@ export const mcpRequestContext: McpHook = async (req, reply) => {
         pending.readsSinceAction = 0;
         // Productive-action signal: bump the timestamp the poller uses
         // for the meta-loop deadline. An agent that only calls
-        // task_get / task_set_heartbeat / list_* tools never moves
+        // task_get / todo_write / list_* tools never moves
         // this clock and gets killed sooner than the broader
         // lastActivityAt-driven stall guard.
         pending.lastProductiveActionAt = Date.now();

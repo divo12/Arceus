@@ -89,6 +89,7 @@ const TOOL_MAP: Record<string, string> = {
   "GET /api/internal/v1/workspace/build-health": "workspace_check_build_health",
   "GET /api/internal/v1/workspace/exports": "workspace_check_exports",
   "GET /api/internal/v1/workspace/baseline": "workspace_verify_baseline",
+  "POST /api/internal/v1/workspaces/todo-write": "todo_write",
 };
 
 const lastSegment = (url: string): string => {

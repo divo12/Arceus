@@ -33,7 +33,6 @@ import * as agentsRepo from "@arceus/db/src/repos/agents.js";
 import * as artifactsRepo from "@arceus/db/src/repos/artifacts.js";
 import * as boardMessagesRepo from "@arceus/db/src/repos/board_messages.js";
 import { buildBoardDirectivesBlock } from "../agents/board-directives.js";
-import { renderHeartbeat } from "./task-heartbeat.js";
 import { dedupeAssembled } from "./prompt-dedup.js";
 import { getRoleSoul } from "@arceus/company-runtime";
 import * as companiesRepo from "@arceus/db/src/repos/companies.js";
@@ -51,6 +50,7 @@ import {
   formatRelativeTime,
   type WorkspaceManifestEntry,
 } from "../workspace/manifest.js";
+import { readTodoChecklist } from "../workspace/todo-write.js";
 import { resolveIncomingArtifacts } from "../prompts/artifacts.js";
 import { getProductDir } from "./state.js";
 import { computeTrustBand } from "../governance/trust.js";
@@ -434,21 +434,28 @@ export function renderOpenTasksForRole(ctx: BeatRenderContext, role: Role): stri
       const reason = t.verifierState.feedback;
       lines.push(`  🔁 Previously blocked: "${reason}" — re-claim to retry.`);
     }
-    // Heartbeat: the agent's living Done/Doing/Next/Blocked checklist, rewritten
-    // at beat end and read here on claim, so a multi-beat or blocked task resumes
-    // instead of restarting amnesiac. Rendered for ANY open task that has one: a
-    // reaped beat's claim is released back to `planned`, and this is exactly what
-    // the next claimant needs.
-    const heartbeatMd = t.heartbeat ? renderHeartbeat(t.heartbeat) : "";
-    if (heartbeatMd) {
-      lines.push("  Heartbeat (your running checklist — update it before ending the beat):");
-      for (const hbLine of heartbeatMd.split("\n")) {
-        lines.push(`    ${hbLine}`);
-      }
-      lines.push("  Continue from where this leaves off — do NOT redo Done items.");
-    }
   }
   return lines.join("\n");
+}
+
+/**
+ * Chorus-style: surface workspace TODO.md in the beat briefing so the agent
+ * resumes without rediscovering. Cap length so a huge checklist can't blow
+ * the prompt budget.
+ */
+async function renderTodoChecklist(companyId: string): Promise<string> {
+  const productDir = getProductDir(companyId);
+  const body = await readTodoChecklist(productDir);
+  if (!body?.trim()) return "";
+  const lines = body.trimEnd().split("\n");
+  const capped = lines.length > 80 ? [...lines.slice(0, 80), "… (truncated)"] : lines;
+  return [
+    "## TODO.md (durable checklist — resume from here)",
+    "Read this first. Reconcile with `git status` / artifacts, then continue unchecked steps via `todo_write`.",
+    "```",
+    ...capped,
+    "```",
+  ].join("\n");
 }
 
 function renderRecentArtifacts(ctx: BeatRenderContext, limit: number): string {
@@ -775,9 +782,12 @@ export async function prepareBeatRender(
   // a hint and re-verified with glob storms (36 globs/beat observed).
   const manifest = await walkWorkspaceManifest(productDir, { maxDepth: 4, maxEntries: 120 });
 
+  const todoMd = await renderTodoChecklist(companyId);
+
   const baseSections = [
     renderCompanyState(ctx),
     renderWorkspaceContext(companyId, manifest),
+    todoMd,
     renderOpenTasksForRole(ctx, role),
     renderRecentArtifacts(ctx, 10),
     renderRoleMemory(ctx),
@@ -796,6 +806,7 @@ export async function prepareBeatRender(
           renderIncomingHandoffsBanner(incomingHandoffs),
           renderTaskContext(task),
           renderWorkspaceContext(companyId, manifest),
+          todoMd,
           renderCompanyState(ctx),
           renderBudget(ctx),
           renderSprintHistory(ctx),

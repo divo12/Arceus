@@ -155,4 +155,28 @@ export const registerWorkspaceTools = (
       return toMcpContent(res.data);
     }
   );
+
+  // Dream/Chorus-style durable checklist — workspace TODO.md (not the DB heartbeat field).
+  server.registerTool(
+    "todo_write",
+    {
+      description:
+        "Add a TODO item or mark one done in the workspace markdown checklist (default TODO.md). List steps up front; check each off the moment it is done.",
+      inputSchema: {
+        item: z.string().min(1).max(1000).describe("The TODO item text (without the checkbox prefix)."),
+        checked: z.boolean().optional().describe("Whether the item is done. Default false (add unchecked)."),
+        path: z.string().min(1).max(200).optional().describe("Checklist file within the workspace. Default TODO.md."),
+      },
+    },
+    async ({ item, checked, path }) => {
+      const body = { item, checked: checked ?? false, path: path ?? "TODO.md" };
+      const res = await client.request<ToolResult>({
+        method: "POST",
+        path: `${WORKSPACES}/todo-write`,
+        body,
+        idempotencyKey: deriveIdempotencyKey(ctx.beatId, "todo_write", body),
+      });
+      return toMcpContent(res.data);
+    }
+  );
 };

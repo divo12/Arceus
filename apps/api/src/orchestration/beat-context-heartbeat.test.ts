@@ -1,9 +1,8 @@
 /**
- * The per-task heartbeat checklist renders into the agent's beat context, so a
- * multi-beat or blocked task resumes from its Done/Doing/Next/Blocked instead of
- * the append-only "Previously on this task" planSteps trail it replaces.
- * renderCompanyState is the role-agnostic per-beat renderer → testable over a
- * fixture (no DB).
+ * Agent-facing progress tracking moved from the per-task DB heartbeat field
+ * to dream/Chorus-style workspace TODO.md (via todo_write). renderOpenTasksForRole
+ * must NOT re-surface the old Done/Doing/Next/Blocked block — resume lives in
+ * TODO.md injected separately by prepareBeatRender.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +35,7 @@ function ctxWithTask(heartbeat: unknown, planSteps: string[] = []): Ctx {
   } as unknown as Ctx;
 }
 
-test("renderOpenTasksForRole renders the task heartbeat (Done/Doing/Next/Blocked)", () => {
+test("renderOpenTasksForRole no longer renders the DB heartbeat checklist (TODO.md owns resume)", () => {
   const out = renderOpenTasksForRole(ctxWithTask({
     done: ["wrote the schema"],
     doing: "wiring the route",
@@ -44,14 +43,10 @@ test("renderOpenTasksForRole renders the task heartbeat (Done/Doing/Next/Blocked
     blocked: "waiting on the API key",
     updatedAt: "2026-06-16T12:00:00.000Z",
   }), "developer");
-  assert.match(out, /Done/);
-  assert.match(out, /wrote the schema/);
-  assert.match(out, /Doing/);
-  assert.match(out, /wiring the route/);
-  assert.match(out, /Next/);
-  assert.match(out, /write tests/);
-  assert.match(out, /Blocked/);
-  assert.match(out, /waiting on the API key/);
+  assert.match(out, /Build the API/);
+  assert.doesNotMatch(out, /Heartbeat \(your running checklist/);
+  assert.doesNotMatch(out, /wrote the schema/);
+  assert.doesNotMatch(out, /wiring the route/);
 });
 
 test("renderOpenTasksForRole no longer renders the planSteps 'Previously on this task' trail", () => {

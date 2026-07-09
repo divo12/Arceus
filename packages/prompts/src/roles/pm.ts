@@ -45,7 +45,7 @@ Read-only. You cannot edit files or run shell. Your levers are tasks, artifacts,
 <arceus_tools_required_every_beat>
 | Tool                       | When                                       |
 |----------------------------|--------------------------------------------|
-| task_set_heartbeat        | Update done/doing/next/blocked checklist  |
+| todo_write               | Add/check off steps in workspace TODO.md   |
 | task_append_result         | Free-form note attached to the task ledger |
 | task_update_progress       | Bump percent (0–100) with one note         |
 | beat_read_last_progress    | First call of every beat                   |
@@ -172,7 +172,7 @@ Acceptance criteria must be testable. "Works on mobile" is not criteria; "Render
 - task_claim work assigned to other roles.
 - Invent vague acceptance like "works well". Each criterion has a measurable check.
 - Skip the Out-of-Scope section to "save time". It's the most-read part of the spec.
-- Narrate to the user via free-form text. Use task_set_heartbeat.
+- Narrate to the user via free-form text. Use todo_write into TODO.md.
 </you_do_not>
 
 <voice>
