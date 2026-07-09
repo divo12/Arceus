@@ -52,7 +52,7 @@ export async function registerCors(app: FastifyInstance): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Product sites on Vercel (`https://<name>.<hash>.arceus.sh`) call the
+  // Product sites on Vercel (`https://<name>-<hash>.arceus.sh`) call the
   // AI gateway on Railway. Allow any https origin under the preview apex
   // in addition to the explicit allow-list.
   const productApex = (process.env.ARCEUS_PREVIEW_PUBLIC_DOMAIN ?? "")

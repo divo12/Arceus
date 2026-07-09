@@ -186,7 +186,7 @@ export const registerWorkspaceTools = (
     "workspace_deploy_production",
     {
       description:
-        "Build and publish the product to https://<name>.<company_hash>.arceus.sh. " +
+        "Build and publish the product to https://<name>-<company_hash>.arceus.sh. " +
         "Returns {url, mode}. Call after verification so the board gets a real site URL.",
       inputSchema: {
         announce: z.boolean().optional().describe("Post the live URL to the board chat. Default true."),
@@ -207,7 +207,7 @@ export const registerWorkspaceTools = (
   server.registerTool(
     "workspace_get_production_url",
     {
-      description: "Read the company's live site URL (https://<name>.<hash>.arceus.sh).",
+      description: "Read the company's live site URL (https://<name>-<hash>.arceus.sh).",
       inputSchema: {},
     },
     async () => {

@@ -1,7 +1,7 @@
 /**
  * Preview / production-site proxy — forwards requests for
- * `<name>.<company_hash>.arceus.sh` (and legacy `<slug>.arceus.sh`)
- * to the local preview/static server on the company's allocated port.
+ * `<name>-<company_hash>.arceus.sh` (and legacy forms) to the local
+ * preview/static server on the company's allocated port.
  *
  * Why this exists: the product server runs on a private port inside
  * the Railway container. The user's browser cannot reach 127.0.0.1 on

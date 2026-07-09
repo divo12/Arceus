@@ -232,7 +232,7 @@ export async function finalizeSprintCompletion(
     }
   }
 
-  // Production deploy — build + publish to <name>.<company_hash>.arceus.sh
+  // Production deploy — build + publish to <name>-<company_hash>.arceus.sh
   // so the board gets a real customer URL. Awaited so the browser flow-test
   // hits the live site; deploy failures are audited and do not abort finalize.
   await swallowAndAudit("production_deploy.sprint", async () => {

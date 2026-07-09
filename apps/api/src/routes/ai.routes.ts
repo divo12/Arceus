@@ -5,7 +5,7 @@
  * Lets a company's product call the LLM without ever holding an API key.
  * The company is resolved SERVER-SIDE from JWT, Host, or Origin/Referer
  * (Vercel rewrites `/api/ai/*` to Railway — Host becomes the API apex,
- * so Origin carries `<name>.<hash>.arceus.sh`). Azure key stays server-side;
+ * so Origin carries `<name>-<hash>.arceus.sh`). Azure key stays server-side;
  * spend is metered + budget-capped per company.
  */
 import type { FastifyInstance } from "fastify";

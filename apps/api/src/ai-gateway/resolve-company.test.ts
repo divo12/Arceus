@@ -8,7 +8,7 @@ describe("AI gateway host resolution helpers", () => {
     const id = "company_abc";
     const label = siteHostLabel("Quill Notes", id);
     const hash = companyHash(id);
-    assert.equal(label, `quill-notes.${hash}`);
+    assert.equal(label, `quill-notes-${hash}`);
     assert.equal(
       siteSubdomainOf(`${label}.arceus.sh`, "arceus.sh"),
       label,

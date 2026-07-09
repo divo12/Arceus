@@ -3,7 +3,7 @@
  *
  * Order:
  * 1. Authenticated JWT companyId (if present on the request)
- * 2. Preview-proxy host (`<name>.<hash>.arceus.sh` when traffic hits Railway directly)
+ * 2. Preview-proxy host (`<name>-<hash>.arceus.sh` when traffic hits Railway directly)
  * 3. Origin / Referer host — required when Vercel rewrites `/api/ai/*` to Railway
  *    (Host becomes api.arceus.sh; the product host is only in Origin)
  * 4. DB slug lookup for the host label (survives process restarts; preview registry is in-memory)
@@ -34,7 +34,7 @@ async function companyFromHost(host: string): Promise<string | null> {
   const fromPreview = getPreviewTargetForSlug(label)?.companyId ?? null;
   if (fromPreview) return fromPreview;
 
-  // Durable: companies.slug stores `<name>.<hash>` after deploy
+  // Durable: companies.slug stores `<name>-<hash>` after deploy
   try {
     const row = await findCompanyBySlug(getDb(), label);
     if (row) return fromDbId(row.id, row.friendlyId);

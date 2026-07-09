@@ -21,7 +21,7 @@ import {
  * from `previewConfig.portMin..portMax`. Two users running their
  * products no longer fight over a single host port — they sit on
  * different ports simultaneously, and the proxy in `preview-proxy.ts`
- * routes `<name>.<company_hash>.<publicDomain>` to the right slot via
+ * routes `<name>-<company_hash>.<publicDomain>` to the right slot via
  * the host-label→port registry populated when each preview starts.
  *
  * Public API takes an optional `companyId`. Native multi-tenant: there is no
@@ -52,8 +52,8 @@ function resolveCompanyId(explicit: string | null | undefined): string | null {
  *   1. `ARCEUS_PREVIEW_PUBLIC_BASE_URL` if set — fixed URL like
  *      `https://preview.arceus.sh`. Useful when you don't want
  *      per-company subdomains.
- *   2. `<name>.<company_hash>.<ARCEUS_PREVIEW_PUBLIC_DOMAIN>` if
- *      `publicDomain` is set (e.g. `https://quill.a1b2c3d4.arceus.sh`).
+ *   2. `<name>-<company_hash>.<ARCEUS_PREVIEW_PUBLIC_DOMAIN>` if
+ *      `publicDomain` is set (e.g. `https://quill-a1b2c3d4.arceus.sh`).
  *   3. Fallback: `http://<publicHost>:<port>` — legacy local URL,
  *      now using the company's allocated per-tenant port.
  */
@@ -66,7 +66,7 @@ async function buildPreviewPublicBaseUrl(companyId: string, slot: PreviewSlot): 
       const row = await findCompanyById(getDb(), companyId);
       const name = row?.name?.trim();
       if (name) {
-        // Canonical: `<name>.<company_hash>.arceus.sh`
+        // Canonical: `<name>-<company_hash>.arceus.sh`
         const label = siteHostLabel(name, companyId);
         // Cache label → companyId so the proxy can resolve incoming
         // requests without a round-trip to canonical on every request.
@@ -630,8 +630,8 @@ export async function probePreviewHealth(timeoutMsOrCompanyId?: number | string 
   const id = resolveCompanyId(companyId);
   const state = id ? getOrCreateSlot(id).state : syntheticIdleState();
 
-  const url = state.validationUrl ?? state.entryUrl ?? state.url;
-  if (!url || state.status !== "ready") {
+  const publicUrl = state.validationUrl ?? state.entryUrl ?? state.url;
+  if (!publicUrl || state.status !== "ready") {
     return {
       reachable: false,
       statusCode: null,
@@ -641,10 +641,21 @@ export async function probePreviewHealth(timeoutMsOrCompanyId?: number | string 
       bodySnippet: null,
     };
   }
+  // Probe the local tenant port — not the public vanity URL. Public hosts
+  // round-trip through Railway edge/DNS/TLS; local is what the completion
+  // gate actually needs to know (is the product server up?).
+  let probeUrl = `http://${previewConfig.host}:${state.port}/`;
+  try {
+    const parsed = new URL(publicUrl);
+    const pathAndQuery = `${parsed.pathname || "/"}${parsed.search}`;
+    probeUrl = `http://${previewConfig.host}:${state.port}${pathAndQuery}`;
+  } catch {
+    // keep root probe
+  }
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => { controller.abort(); }, timeoutMs);
-    const res = await fetch(url, { method: "GET", signal: controller.signal, headers: { "Accept": "text/html,*/*" } });
+    const res = await fetch(probeUrl, { method: "GET", signal: controller.signal, headers: { "Accept": "text/html,*/*" } });
     clearTimeout(timer);
 
     if (!res.ok) {
@@ -1017,7 +1028,7 @@ export function getPreviewTargetForSlug(slug: string): { companyId: string; port
 
 /**
  * Serve a static production build directory on the company's allocated
- * port and register its public `<name>.<hash>.arceus.sh` URL.
+ * port and register its public `<name>-<hash>.arceus.sh` URL.
  * Used by production deploy after `npm run build`.
  */
 export async function publishStaticSite(

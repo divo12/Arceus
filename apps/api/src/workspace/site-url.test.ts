@@ -22,21 +22,26 @@ describe("site-url", () => {
     assert.equal(companyHash("company_abc-123"), h);
   });
 
-  it("builds <name>.<hash>.arceus.sh", () => {
+  it("builds <name>-<hash>.arceus.sh (single DNS label)", () => {
     const id = "company_test_id";
     const hash = companyHash(id);
     assert.equal(
       buildSitePublicUrl("Quill Notes", id, "arceus.sh"),
-      `https://quill-notes.${hash}.arceus.sh`,
+      `https://quill-notes-${hash}.arceus.sh`,
     );
-    assert.equal(siteHostLabel("Quill Notes", id), `quill-notes.${hash}`);
+    assert.equal(siteHostLabel("Quill Notes", id), `quill-notes-${hash}`);
   });
 
-  it("parses canonical and legacy hosts", () => {
+  it("parses canonical, legacy nested, and legacy short hosts", () => {
     const hash = companyHash("company_x");
     assert.equal(
+      siteSubdomainOf(`quill-${hash}.arceus.sh`, "arceus.sh"),
+      `quill-${hash}`,
+    );
+    // Legacy nested form normalizes to the single-label key
+    assert.equal(
       siteSubdomainOf(`quill.${hash}.arceus.sh`, "arceus.sh"),
-      `quill.${hash}`,
+      `quill-${hash}`,
     );
     assert.equal(siteSubdomainOf("quill.arceus.sh", "arceus.sh"), "quill");
     assert.equal(siteSubdomainOf("app.arceus.sh", "arceus.sh"), null);

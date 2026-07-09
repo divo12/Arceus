@@ -33,7 +33,7 @@ const TOOL_CATALOG: CatalogEntry[] = [
   { id: "task_update_progress", description: "Report progress on the current task.", tags: ["task", "progress", "status"] },
   { id: "todo_write", description: "Add or check off a step in the workspace TODO.md checklist.", tags: ["workspace", "todo", "checklist"] },
   { id: "workspace_run_flow_test", description: "Drive the live preview in a real browser (flow-tester agent).", tags: ["workspace", "preview", "browser", "qa", "tester"] },
-  { id: "workspace_deploy_production", description: "Build + publish to <name>.<hash>.arceus.sh.", tags: ["workspace", "deploy", "production", "cto"] },
+  { id: "workspace_deploy_production", description: "Build + publish to <name>-<hash>.arceus.sh.", tags: ["workspace", "deploy", "production", "cto"] },
   { id: "workspace_get_production_url", description: "Read the live production site URL.", tags: ["workspace", "deploy", "production"] },
   { id: "memory_handoff", description: "Pass context to another role's next beat.", tags: ["memory", "handoff", "context"] },
   { id: "tool_help", description: "Get full docs (schema, examples, errors, related tools) for an Arceus tool.", tags: ["meta", "help", "docs"] },

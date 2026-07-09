@@ -27,9 +27,10 @@ export const previewConfig = {
 
   /**
    * Public apex domain for product URLs. The preview-proxy hook routes
-   * `<name>.<company_hash>.<publicDomain>` (and legacy `<slug>.<domain>`)
-   * to the local preview/static server. URL construction builds
-   * `https://<name>.<hash>.arceus.sh`. Empty string disables the proxy.
+   * `<name>-<company_hash>.<publicDomain>` (and legacy forms) to the local
+   * preview/static server. URL construction builds
+   * `https://<name>-<hash>.arceus.sh` (single DNS label — Railway wildcards
+   * cannot match nested `*.*.domain`). Empty string disables the proxy.
    */
   publicDomain: readOptionalEnv("ARCEUS_PREVIEW_PUBLIC_DOMAIN", ""),
 

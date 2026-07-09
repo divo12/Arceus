@@ -1,9 +1,13 @@
 /**
  * Public site URL helpers for company products on *.arceus.sh.
  *
- * Canonical form: `https://<name>.<company_hash>.arceus.sh`
+ * Canonical form: `https://<name>-<company_hash>.arceus.sh`
  *   - name: short brand slug from company name (first 1–2 tokens)
  *   - company_hash: stable 8-char hex derived from company id
+ *
+ * Single DNS label (not `name.hash`) so Railway/Namecheap `*.arceus.sh`
+ * wildcards match. Nested wildcards (`*.*.arceus.sh`) are not supported
+ * by Railway — see https://docs.railway.com/networking/domains.
  */
 
 import { createHash } from "node:crypto";
@@ -26,9 +30,9 @@ export function slugifySiteName(name: string): string {
   return tokens.slice(0, 2).join("-");
 }
 
-/** Host label: `<name>.<company_hash>` (no apex domain). */
+/** Host label: `<name>-<company_hash>` (no apex domain). */
 export function siteHostLabel(companyName: string, companyId: string): string {
-  return `${slugifySiteName(companyName)}.${companyHash(companyId)}`;
+  return `${slugifySiteName(companyName)}-${companyHash(companyId)}`;
 }
 
 /** Full public URL when an apex domain is configured. */
@@ -43,8 +47,11 @@ export function buildSitePublicUrl(
 
 /**
  * Parse a Host header against the apex domain.
- * Accepts `<name>.<hash>.apex` (canonical) or legacy `<slug>.apex`.
- * Returns the full subdomain label used as the registry key, or null.
+ * Accepts:
+ *   - canonical `<name>-<hash>.apex`
+ *   - legacy nested `<name>.<hash>.apex` (normalized to `<name>-<hash>`)
+ *   - legacy short `<slug>.apex`
+ * Returns the registry key (host label), or null.
  */
 export function siteSubdomainOf(host: string, publicDomain: string): string | null {
   const apex = publicDomain.toLowerCase().replace(/^\.+/, "");
@@ -62,12 +69,12 @@ export function siteSubdomainOf(host: string, publicDomain: string): string | nu
     return parts[0];
   }
   if (parts.length === 2) {
-    // Canonical: name.hash — hash is 8 hex chars.
+    // Legacy nested: name.hash → normalize to name-hash
     const [name, hash] = parts;
     if (!name || RESERVED.has(name)) return null;
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) return null;
     if (!/^[a-f0-9]{8}$/.test(hash)) return null;
-    return rest;
+    return `${name}-${hash}`;
   }
   return null;
 }

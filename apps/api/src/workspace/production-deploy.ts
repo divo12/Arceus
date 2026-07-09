@@ -1,6 +1,6 @@
 /**
  * Production deploy — publish the product workspace to Vercel
- * at `https://<name>.<company_hash>.arceus.sh`.
+ * at `https://<name>-<company_hash>.arceus.sh`.
  *
  * Full stack on Vercel:
  *   - Vite SPA (static)

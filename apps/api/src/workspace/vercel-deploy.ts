@@ -1,6 +1,6 @@
 /**
  * Deploy a company product (Vite + Hono) to Vercel and attach
- * `<name>.<company_hash>.arceus.sh` as the production domain.
+ * `<name>-<company_hash>.arceus.sh` as the production domain.
  *
  * Uploads the full project source (not only dist) so Vercel builds the
  * SPA and runs `api/index.ts` as the Hono serverless function.

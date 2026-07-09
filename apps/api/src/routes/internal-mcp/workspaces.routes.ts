@@ -363,7 +363,7 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     ));
   });
 
-  // POST /workspaces/deploy-production — build + publish to <name>.<hash>.arceus.sh
+  // POST /workspaces/deploy-production — build + publish to <name>-<hash>.arceus.sh
   app.post(`${WORKSPACE_BASE}/deploy-production`, async (req, reply) => {
     const body = parseOrFail(deployProductionBody, req.body ?? {}, reply);
     if (!body) return reply;
