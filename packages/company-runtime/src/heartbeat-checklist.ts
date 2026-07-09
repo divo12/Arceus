@@ -598,7 +598,7 @@ const ROLE_CHECKLISTS: Record<AgentIdentity["role"], CheckFn[]> = {
   // task creation by assignableRole() (task-engine). The CEO acts only on real
   // strategic triggers: pending approvals, roadmap (no/done sprint), meetings.
   ceo: [checkMeetingContribution, checkPendingApprovals, checkSprintHealth, checkRoadmap],
-  cto: [checkEscalationPending, checkMeetingContribution, checkReviewQueue, checkSprintHealth, checkBuildStatus, checkDevProgress, checkAssignedTasks],
+  cto: [checkEscalationPending, checkMeetingContribution, checkSprintHealth, checkAssignedTasks],
   pm: [checkMeetingContribution, checkScopeControl, checkSprintHealth, checkAssignedTasks],
   developer: [checkMeetingContribution, checkSprintHealth, checkAssignedTasks, checkDependenciesMet, checkBuildStatus],
   // Tester only fires at sprint-end now. Per-task verifying is handled by

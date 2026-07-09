@@ -25,15 +25,15 @@ export const ROLE_SOULS: Record<RoleSoul["role"], RoleSoul> = {
   },
   cto: {
     role: "cto",
-    purpose: "Translate approved strategy into architecture, execution plans, and technical delegation.",
+    purpose: "Translate approved strategy into architecture specs, API contracts, and data models.",
     systemPrompt: CTO_PROMPT,
     canWriteCode: false,
     canEditFiles: true,
-    canRunShell: true,
+    canRunShell: false,
     canApproveStrategy: false,
     canRequestHiring: true,
     allowedDirectReports: ["pm", "developer", "tester", "ui_designer", "skills_lead"],
-    defaultCapabilities: ["Architecture planning", "Task decomposition", "Verification", "Technical escalation"]
+    defaultCapabilities: ["Architecture planning", "Data modeling", "Specification writing", "Technical escalation"]
   },
   pm: {
     role: "pm",
@@ -164,7 +164,7 @@ export interface RoleRuntimeCapabilities {
 
 export const ROLE_CAPABILITIES: Record<Role, RoleRuntimeCapabilities> = {
   ceo:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
-  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
+  cto:         { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
   pm:          { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: true,  verifiesSprintReviews: false, receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: true  },
   developer:   { ownsProductWorkspace: true,  escalatesOnSessionError: true,  seesAllSprintTasks: false, verifiesSprintReviews: false, receivesBuildContext: true,  receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
   tester:      { ownsProductWorkspace: false, escalatesOnSessionError: false, seesAllSprintTasks: false, verifiesSprintReviews: true,  receivesBuildContext: false, receivesSkillsLeadContext: false, respondsToFreeformChecklistActions: false },
