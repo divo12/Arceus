@@ -243,51 +243,37 @@ export function buildGateFailureBugFields(
 
   const isBuild = gateResult.buildResult && gateResult.buildResult.exitCode !== 0;
   const isTest = gateResult.testResult && gateResult.testResult.exitCode !== 0;
-  const isBrowser =
-    !!gateResult.browserResult &&
-    !gateResult.browserResult.skipped &&
-    !gateResult.browserResult.passed;
 
   const stderr = isBuild
     ? gateResult.buildResult!.stderr
     : isTest
       ? gateResult.testResult!.stderr
-      : isBrowser
-        ? (gateResult.browserResult!.verdict ?? gateResult.browserResult!.error ?? "Browser flow-test failed")
-        : "Unknown failure";
+      : "Unknown failure";
 
   const title = isBuild
     ? "Fix build failure"
     : isTest
       ? "Fix test suite failure"
-      : isBrowser
-        ? "Fix browser flow-test failure"
-        : "Fix verification gate failure";
+      : "Fix verification gate failure";
 
   const problemStatement = isBuild
     ? "Build fails with compilation errors"
     : isTest
       ? "Test suite fails"
-      : isBrowser
-        ? "Real-browser flow-test failed (core flow broken, basic design, or concrete issues)"
-        : "Verification gate failed";
+      : "Verification gate failed";
 
   const deliverable = isBuild
     ? "Project builds cleanly"
     : isTest
       ? "All tests pass"
-      : isBrowser
-        ? "Core user flow passes in a real browser with non-basic design"
-        : "Verification gate passes";
+      : "Verification gate passes";
 
   const definitionOfDone = [
     isBuild
       ? "`npm run build` exits with code 0"
       : isTest
         ? "`npm run test` exits with code 0"
-        : isBrowser
-          ? "Browser flow-test returns VERDICT: PASS with no concrete ISSUES"
-          : "Final verification gate passes",
+        : "Final verification gate passes",
   ];
 
   return {

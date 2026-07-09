@@ -11,7 +11,7 @@ trigger: task is ready for QA verification
 2. **Probe the preview** — `workspace_probe_preview` / `workspace_get_preview_url`; confirm it responds.
 3. **Run tests:**
    - Automated: invoke the project test suite. Capture exit code.
-   - Browser (viewable tasks): `workspace_run_flow_test` against the preview. Cite VERDICT / WORKS / ISSUES / DESIGN. Optional: `workspace_capture_browser_probe` for screenshot/DOM evidence.
+   - Browser (viewable tasks): `workspace_run_flow_test` against the preview (pass `taskId`). Cite VERDICT / WORKS / ISSUES / DESIGN. Optional: `workspace_capture_browser_probe` for screenshot/DOM evidence.
 4. **On pass:** call `task_verify({ taskId, verifiedBy })` where `verifiedBy` is
    a short string summarising how you verified — include the probed preview URL,
    the tests run, the flow-test verdict, and which acceptance criteria passed. Example:
@@ -22,7 +22,7 @@ trigger: task is ready for QA verification
    Put structured evidence (test logs, screenshots) into an artifact via
    `artifact_create` and reference its ID in `verifiedBy` if it helps the
    reviewer.
-5. **On fail:** call `task_block({ taskId, reason })` and file a follow-up task via `task_create` (if you have permission) or flag it in the artifact.
+5. **On flow-test FAIL:** the platform auto-creates a developer `bug_fix` (`bugTaskId` in the tool result). Cite it in your QA report, then `task_block` this QA task waiting on that fix. Do **not** create a duplicate bug task yourself.
 
 **Rigor rules:**
 - Never rubber-stamp. If acceptance criteria can't be objectively checked, block with "criteria ambiguous".

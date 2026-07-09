@@ -17,8 +17,5 @@ export * from "./memory/loader";
 // Skill-evolution system prompts (attribution, mutation, discovery, TGA, …).
 export * from "./skills/loader";
 
-// Code-review (post-developer-beat adversarial reviewer).
-export * from "./code-review";
-
 // Internal agents (facilitator meeting synthesis/resolution/brief).
 export * from "./internal-agents";

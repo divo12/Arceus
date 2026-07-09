@@ -75,14 +75,6 @@ export const verificationGateResultSchema = z.object({
     statusCode: z.number().nullable(),
     error: z.string().nullable(),
   }).nullable().optional(),
-  /** Real-browser flow-tester result (final phase only, when FLOW_TESTER_URL is set). */
-  browserResult: z.object({
-    ran: z.boolean(),
-    passed: z.boolean(),
-    skipped: z.boolean(),
-    verdict: z.string().nullable(),
-    error: z.string().nullable(),
-  }).nullable().optional(),
   phase: z.enum(["pre_review", "final"]),
   timestamp: z.string(),
 });

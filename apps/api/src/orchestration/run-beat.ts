@@ -36,9 +36,6 @@ import { getDb } from "@arceus/db";
 import { setTaskStatus, setTaskHeartbeat } from "../tasks/mutations.js";
 import { emitEmployeeActivity, shortBeat } from "../observability/activity.js";
 import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
-import { getHeadSha } from "../workspace/git-ops.js";
-import { workspaceManager } from "../workspace/manager.js";
-import { reviewBeatAndAutoFix } from "./code-review.js";
 import { checkSprintCompletion } from "../sprints/lifecycle.js";
 
 // Aligned with beatTimeoutMs in config/heartbeat.json (15 min).
@@ -96,19 +93,6 @@ export async function runBeat(input: {
   const beatStartedAt = Date.now();
   startBeatTokenAccumulator(beatId);
   startBeatToolCallAccumulator(beatId);
-
-  // Spec 18 — capture the workspace HEAD before a developer beat so the
-  // post-beat code review can diff exactly what THIS beat wrote. Read-only
-  // and best-effort (null on a repo with no commits → that beat is skipped,
-  // the next one has a baseline). Developer beats only.
-  let reviewBeforeSha: string | null = null;
-  if (input.role === "developer") {
-    reviewBeforeSha = (await swallowAndReport(
-      "code_review.before_sha",
-      () => getHeadSha(workspaceManager.getLocalPath(input.companyId)),
-      { companyId: input.companyId, agentRole: input.role, beatId },
-    )) ?? null;
-  }
 
   // Sprint progression (gate-free self-heal) — finalize a fully-completed
   // sprint DETERMINISTICALLY at the start of a CEO beat, rather than
@@ -547,23 +531,6 @@ export async function runBeat(input: {
         // setTaskHeartbeat swallows + reports its own failures.
         await setTaskHeartbeat(tid, { done: [outcome] });
       }
-    }
-
-    // Spec 18 — non-blocking code review of what this developer beat
-    // wrote. Fire-and-forget: it commits + diffs the workspace, reviews
-    // the diff with a cheap LLM, and on critical/high findings auto-spawns
-    // a bug_fix task the heartbeat picks up (gate-free auto-fix loop). It
-    // NEVER awaits in the beat path or affects this beat's verdict — the
-    // review runs in parallel with subsequent beats; git-ops' per-workspace
-    // lock serializes its commit safely against the next beat.
-    if (input.role === "developer" && verdict === "pass" && reviewBeforeSha) {
-      void reviewBeatAndAutoFix({
-        companyId: input.companyId,
-        beatId,
-        taskId: harvestTaskIds[0] ?? null,
-        taskTitle: `beat ${shortBeat(beatId)}`,
-        beforeSha: reviewBeforeSha,
-      });
     }
 
     // F7 — park or retire the session. A beat that leaves its task

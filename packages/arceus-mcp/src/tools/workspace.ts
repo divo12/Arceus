@@ -161,8 +161,9 @@ export const registerWorkspaceTools = (
     {
       description:
         "Drive the live preview in a real browser via the flow-tester agent. " +
-        "Returns {passed, verdict, final_url}. Required for viewable-task verification. " +
-        "Omit url to use the task preview or the running workspace preview.",
+        "Returns {passed, verdict, final_url, bugTaskId?}. On FAIL the platform " +
+        "auto-spawns a developer bug_fix — cite bugTaskId and task_block QA. " +
+        "Required for viewable-task verification. Pass taskId when possible.",
       inputSchema: {
         url: z.string().url().optional().describe("Preview URL to test. Omit to resolve from task/preview."),
         goal: z.string().min(1).max(4000).optional().describe("Optional product-specific goal for the browser agent."),

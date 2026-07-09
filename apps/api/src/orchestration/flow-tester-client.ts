@@ -1,8 +1,8 @@
 /**
  * Thin HTTP client for services/flow-tester.
  *
- * Shared by the sprint final gate, the tester MCP tool, and the post-finalize
- * CEO suggestion path. Dormant unless FLOW_TESTER_URL is set.
+ * Used by the tester MCP tool (workspace_run_flow_test) during the sprint.
+ * Dormant unless FLOW_TESTER_URL is set.
  */
 
 const DEFAULT_TIMEOUT_MS = 240_000;

@@ -21,6 +21,7 @@ import {
   flowTesterConfigured,
   verdictFailed,
 } from "../../orchestration/flow-tester-client.js";
+import { spawnFlowTestBugFix } from "../../orchestration/flow-test-bug.js";
 import {
   deployProduction,
   getProductionUrl,
@@ -416,7 +417,9 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
     );
   });
 
-  // POST /workspaces/flow-test — real-browser QA via services/flow-tester
+  // POST /workspaces/flow-test — real-browser QA via services/flow-tester.
+  // Tester-owned during the sprint. On FAIL, auto-spawns a developer bug_fix
+  // from the verdict (deduped) so the heartbeat can fix the product.
   app.post(`${WORKSPACE_BASE}/flow-test`, async (req, reply) => {
     const body = parseOrFail(flowTestBody, req.body ?? {}, reply);
     if (!body) return reply;
@@ -464,20 +467,37 @@ export default async function internalMcpWorkspacesRoutes(app: FastifyInstance):
         maxSteps: body.maxSteps ?? 8,
       });
       const failed = verdictFailed(report);
+      let bugTaskId: string | null = null;
+      if (failed) {
+        bugTaskId = await spawnFlowTestBugFix({
+          companyId: req.mcp!.companyId,
+          sourceTaskId: body.taskId ?? null,
+          previewUrl: url,
+          report,
+        });
+      }
       return cacheAndSend(
         req,
         reply,
         200,
-        success(failed ? "Browser flow-test FAILED." : "Browser flow-test PASSED.", {
-          url,
-          passed: !failed,
-          ok: report.ok ?? null,
-          is_successful: report.is_successful ?? null,
-          verdict: report.verdict ?? null,
-          final_url: report.final_url ?? null,
-          title: report.title ?? null,
-          // Omit screenshot_b64 from MCP responses — too large for agent context.
-        }),
+        success(
+          failed
+            ? bugTaskId
+              ? `Browser flow-test FAILED — developer fix task ${bugTaskId} created.`
+              : "Browser flow-test FAILED — open Flow-test fix task already exists."
+            : "Browser flow-test PASSED.",
+          {
+            url,
+            passed: !failed,
+            ok: report.ok ?? null,
+            is_successful: report.is_successful ?? null,
+            verdict: report.verdict ?? null,
+            final_url: report.final_url ?? null,
+            title: report.title ?? null,
+            bugTaskId,
+            // Omit screenshot_b64 from MCP responses — too large for agent context.
+          },
+        ),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "flow-test failed";

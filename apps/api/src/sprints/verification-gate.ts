@@ -3,7 +3,8 @@
  *
  * Runs `npm run build` and `npm run test` in the product workspace and returns
  * structured results.  Used in the pre-review gate (build only) and final gate
- * (build + test + preview + browser flow-test when configured).
+ * (build + test + preview). Browser QA is tester-owned during the sprint via
+ * workspace_run_flow_test — not part of this gate.
  */
 
 import { execFile } from "node:child_process";
@@ -11,11 +12,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { VerificationGateResult } from "@arceus/contracts";
 import { probePreviewHealth, getLocalPreviewState } from "../workspace/preview.js";
-import {
-  callFlowTester,
-  flowTesterConfigured,
-  verdictFailed,
-} from "../orchestration/flow-tester-client.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -151,58 +147,6 @@ export async function runVerificationGate(
     result.previewResult = { reachable: false, statusCode: null, error: "Preview not started or not configured" };
     if (phase === "final") {
       result.passed = false;
-    }
-  }
-
-  // ── Browser flow-test gate (final phase only) ─────────────
-  // Hard gate when FLOW_TESTER_URL is set and preview is reachable.
-  // Skip (don't fail) when the service is not configured — local/dev without
-  // the browser agent still need a green final gate.
-  if (phase === "final") {
-    if (!flowTesterConfigured()) {
-      result.browserResult = {
-        ran: false,
-        passed: true,
-        skipped: true,
-        verdict: null,
-        error: "FLOW_TESTER_URL not configured — browser gate skipped",
-      };
-    } else if (!result.previewResult?.reachable || !previewUrl) {
-      result.browserResult = {
-        ran: false,
-        passed: false,
-        skipped: false,
-        verdict: null,
-        error: "Preview unreachable — cannot run browser flow-test",
-      };
-      result.passed = false;
-    } else {
-      try {
-        const report = await callFlowTester({
-          url: previewUrl,
-          goal: "Exercise the core user flows of this product. Confirm the main path works end-to-end.",
-          maxSteps: 8,
-        });
-        const failed = verdictFailed(report);
-        result.browserResult = {
-          ran: true,
-          passed: !failed,
-          skipped: false,
-          verdict: (report.verdict ?? "").slice(0, 2000) || null,
-          error: null,
-        };
-        if (failed) result.passed = false;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "flow-tester call failed";
-        result.browserResult = {
-          ran: false,
-          passed: false,
-          skipped: false,
-          verdict: null,
-          error: message,
-        };
-        result.passed = false;
-      }
     }
   }
 
