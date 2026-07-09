@@ -158,6 +158,14 @@ function syncOpencodeConfigToWorkspace(mergedConfig: Record<string, unknown>) {
   };
   mergedConfig.plugin = ["./.opencode/plugin/arceus.ts"];
 
+  // Flow-tester runs up to ~200s; default MCP tool timeout (~60–120s) returns
+  // -32001 before the API responds. experimental.mcp_timeout is the global knob
+  // OpenCode honors for MCP callTool (see opencode#8478, #25509).
+  mergedConfig.experimental = {
+    ...((mergedConfig.experimental) ?? {}),
+    mcp_timeout: 270_000,
+  };
+
   // Permission floor: NEVER let OpenCode block a beat on an interactive
   // permission prompt. Every permission key defaults to "ask"; an "ask"
   // pauses the tool for human approval, but this is a HEADLESS server
