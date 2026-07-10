@@ -27,7 +27,7 @@ export const sprintSnapshots = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("sprint_snapshots_git_tag_idx").on(table.gitTag),
+    uniqueIndex("sprint_snapshots_company_git_tag_idx").on(table.companyId, table.gitTag),
     index("sprint_snapshots_company_sprint_number_idx").on(
       table.companyId,
       table.sprintNumber,

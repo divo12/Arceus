@@ -162,6 +162,13 @@
       "when": 1778760000000,
       "tag": "0023_users_company_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1778840000000,
+      "tag": "0024_sprint_snapshots_company_git_tag_idx",
+      "breakpoints": true
     }
   ]
 }

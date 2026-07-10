@@ -12,7 +12,7 @@ import { workspaceManager } from "../workspace/manager.js";
 import { emitReactive } from "../orchestration/reactive.js";
 import { deployProduction } from "../workspace/production-deploy.js";
 import { runCrossSprintTransfer } from "../skills/cross-sprint.js";
-import { swallowAndAudit } from "../observability/swallow.js";
+import { swallowAndAudit, swallowAndReport } from "../observability/swallow.js";
 import {
   sprintCompletionGate,
   getExecutionStatus,
@@ -24,6 +24,25 @@ import { getDb } from "@arceus/db";
 import * as tasksRepo from "@arceus/db/src/repos/tasks/index.js";
 import { recordMeeting } from "../meetings/recording.js";
 import { approvePendingBoardApprovals } from "../memory/handoffs.js";
+
+const IMPLEMENTATION_TERMINAL_STATUSES = new Set<Task["status"]>(["completed", "cancelled", "failed"]);
+
+/** Implementation tasks that gate sprint finalization (excludes follow-up / bug-fix work). */
+export function isImplementationTask(task: Task): boolean {
+  return task.kind !== "follow_up" && task.kind !== "bug_fix";
+}
+
+/** Non-terminal implementation tasks still open in a sprint. */
+export function listOpenImplementationTasks(
+  snapshot: { tasks: Task[] },
+  sprintId: string,
+): Task[] {
+  return snapshot.tasks.filter(
+    (t) => t.sprintId === sprintId
+      && isImplementationTask(t)
+      && !IMPLEMENTATION_TERMINAL_STATUSES.has(t.status),
+  );
+}
 
 /**
  * Checks if all employee tasks in the current sprint have reached terminal status.
@@ -54,18 +73,16 @@ export async function checkSprintCompletion(companyId: string): Promise<boolean>
   if (!currentSprint || currentSprint.status === "completed" || currentSprint.status === "reviewing") return false;
 
   const sprintTasks = snapshot.tasks.filter(
-    (t) => t.sprintId === currentSprintId && t.kind !== "follow_up" && t.kind !== "bug_fix",
+    (t) => t.sprintId === currentSprintId && isImplementationTask(t),
   );
   if (sprintTasks.length === 0) return false;
 
-  const allTerminal = sprintTasks.every((t) =>
-    ["completed", "cancelled", "failed"].includes(t.status),
-  );
-  if (!allTerminal) {
-    const statusCounts = { completed: 0, planned: 0, in_progress: 0, failed: 0, cancelled: 0, created: 0 } as Record<string, number>;
+  const openTasks = listOpenImplementationTasks(snapshot, currentSprintId);
+  if (openTasks.length > 0) {
+    const statusCounts = { completed: 0, planned: 0, in_progress: 0, failed: 0, cancelled: 0, created: 0, blocked: 0 } as Record<string, number>;
     sprintTasks.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
-    emitEmployeeActivity("system", "context", `Sprint ${currentSprint.number} completion check: NOT all terminal — ${JSON.stringify(statusCounts)}`, {
-      detail: { sprintNumber: currentSprint.number, totalTasks: sprintTasks.length, statusCounts },
+    emitEmployeeActivity("system", "context", `Sprint ${currentSprint.number} completion check: NOT all terminal — ${openTasks.length} open — ${JSON.stringify(statusCounts)}`, {
+      detail: { sprintNumber: currentSprint.number, totalTasks: sprintTasks.length, openTasks: openTasks.length, statusCounts },
     });
     return false;
   }
@@ -231,13 +248,32 @@ export async function finalizeSprintCompletion(
   // so the board gets a real customer URL. Deploy failures are audited and
   // do not abort finalize. Browser QA runs during the sprint via the tester
   // (workspace_run_flow_test), not after finalize.
-  await swallowAndAudit("production_deploy.sprint", async () => {
-    await deployProduction({
-      companyId,
-      sprintNumber: sprint.number,
-      announce: true,
-    });
-  }, { companyId, detail: { sprintId } });
+  const deployResult = await swallowAndReport(
+    "production_deploy.sprint",
+    () =>
+      deployProduction({
+        companyId,
+        sprintNumber: sprint.number,
+        announce: true,
+      }),
+    { companyId, detail: { sprintId } },
+  );
+  if (deployResult && !deployResult.ok) {
+    emitEmployeeActivity(
+      "system",
+      "error",
+      `Production deploy failed: ${deployResult.error ?? "unknown error"}`,
+      {
+        detail: {
+          sprintId,
+          sprintNumber: sprint.number,
+          mode: deployResult.mode,
+          hostLabel: deployResult.hostLabel,
+          buildLog: deployResult.buildLog?.slice(0, 500) ?? null,
+        },
+      },
+    );
+  }
 
   const sprintTasks = snapshot.tasks.filter(
     (t) => t.sprintId === sprintId && t.kind !== "follow_up",

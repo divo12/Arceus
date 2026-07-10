@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, and } from "drizzle-orm";
 import { sprintSnapshots } from "../schema/sprint_snapshots.js";
 import type { DbClient } from "./_helpers.js";
 
@@ -26,12 +26,13 @@ export async function listSnapshotsByCompany(
 
 export async function findSnapshotByTag(
   db: DbClient,
+  companyId: string,
   gitTag: string,
 ): Promise<SprintSnapshot | null> {
   const [row] = await db
     .select()
     .from(sprintSnapshots)
-    .where(eq(sprintSnapshots.gitTag, gitTag))
+    .where(and(eq(sprintSnapshots.companyId, companyId), eq(sprintSnapshots.gitTag, gitTag)))
     .limit(1);
   return row ?? null;
 }

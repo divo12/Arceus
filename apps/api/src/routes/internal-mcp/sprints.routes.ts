@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { createSprintWithTasks } from "../../sprints/proposals.js";
-import { finalizeSprintCompletion } from "../../sprints/lifecycle.js";
+import { finalizeSprintCompletion, listOpenImplementationTasks } from "../../sprints/lifecycle.js";
 import { buildSnapshotView } from "../../orchestration/snapshot-view.js";
 import { observability } from "@arceus/contracts";
 import { failure, success, type ErrorCause } from "./envelope.js";
@@ -292,6 +292,17 @@ export default async function internalMcpSprintsRoutes(app: FastifyInstance): Pr
       if (sprint.status === "completed") {
         return reply.code(409).send(failure(`Sprint ${sprintId} already finalized.`, "conflict", "never", "state_reset"));
         return;
+      }
+
+      const openTasks = listOpenImplementationTasks(snapshot, sprintId);
+      if (openTasks.length > 0) {
+        const preview = openTasks.slice(0, 3).map((t) => `${t.title} [${t.status}]`).join("; ");
+        return reply.code(409).send(failure(
+          `Cannot finalize sprint ${sprint.number}: ${openTasks.length} implementation task(s) still open (${preview}${openTasks.length > 3 ? "; …" : ""}).`,
+          "conflict",
+          "never",
+          "all_implementation_tasks_terminal",
+        ));
       }
 
       // Persist sprint completion to DB + run side effects (snapshot tag, graph emit, etc.)
