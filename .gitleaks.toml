@@ -1,0 +1,20 @@
+# Gitleaks config — https://github.com/gitleaks/gitleaks
+# Extends the built-in ruleset and allowlists Arceus's known-safe,
+# non-secret dev fallbacks so a scan doesn't fail on them.
+title = "Arceus gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe non-secrets: dev-only fallback tokens, env-var defaults, lockfiles, example env files"
+regexes = [
+  '''arceus-dev-token''',
+  '''arceus-dev-jwt-secret-change-this!''',
+  '''POSTGRES_PASSWORD:-arceus''',
+]
+paths = [
+  '''package-lock\.json''',
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.docker\.example$''',
+]

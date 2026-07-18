@@ -107,6 +107,25 @@ jobs:
       - name: Run silent-catch lint
         run: bun scripts/check-no-silent-catch.ts
 
+  # ── Job 6: secret scan (gitleaks) ─────────────────────────────────
+  # Scans the FULL git history (fetch-depth: 0) for committed secrets on
+  # every push/PR. Rules = default set + .gitleaks.toml allowlist. Fails
+  # the job (blocks merge) if any credential lands in a commit.
+  #
+  # gitleaks-action is free for personal + public repos. If Arceus later
+  # moves under a GitHub organization, add a (free) GITLEAKS_LICENSE repo
+  # secret — see https://github.com/gitleaks/gitleaks-action#readme.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ── Note: db:explain-audit is intentionally NOT in CI ─────────────
   # The EXPLAIN audit needs a live Postgres + the canonical seed loaded.
   # Spinning up a `services: postgres:16` container, applying migrations,

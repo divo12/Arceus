@@ -4,7 +4,10 @@ dist/
 coverage/
 *.log
 .env
-.env.local
+.env.*
+# …but keep the committed example env files (safe to publish)
+!.env.example
+!.env.docker.example
 
 # folders for local development
 product/

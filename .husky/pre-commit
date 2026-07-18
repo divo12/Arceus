@@ -3,9 +3,10 @@
 #
 # Runs in this order:
 #   1. lint-staged   → eslint --fix on staged TS/JS files (fast, scoped)
-#   2. silent-catch  → repo-wide grep for bare swallows (fast, ~1s)
-#   3. typecheck     → tsc --noEmit across all workspaces (slow, ~10–30s)
-#   4. drift test    → schema-vs-snapshot agreement (fast, <1s)
+#   2. gitleaks      → secret scan of staged changes (fast, best-effort)
+#   3. silent-catch  → repo-wide grep for bare swallows (fast, ~1s)
+#   4. typecheck     → tsc --noEmit across all workspaces (slow, ~10–30s)
+#   5. drift test    → schema-vs-snapshot agreement (fast, <1s)
 #
 # Order matters: cheap fast checks first so the slow typecheck doesn't
 # run if a basic lint fails.
@@ -15,16 +16,24 @@
 
 set -e
 
-echo "[1/4] lint-staged…"
+echo "[1/5] lint-staged…"
 npx lint-staged
 
-echo "[2/4] silent-catch lint…"
+echo "[2/5] gitleaks secret scan…"
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --config .gitleaks.toml
+else
+  echo "  ⚠ gitleaks not installed — skipping local scan (CI still enforces it)."
+  echo "    Install: brew install gitleaks   (or see https://github.com/gitleaks/gitleaks)"
+fi
+
+echo "[3/5] silent-catch lint…"
 bun scripts/check-no-silent-catch.ts
 
-echo "[3/4] workspace typecheck…"
+echo "[4/5] workspace typecheck…"
 npm run typecheck
 
-echo "[4/4] schema drift test…"
+echo "[5/5] schema drift test…"
 bun test packages/db/tests/drift.test.ts
 
 echo "✓ pre-commit checks passed."
